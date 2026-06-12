@@ -311,8 +311,37 @@ export default function DespachoPagina() {
       console.warn('Histórico Releasit no guardado:', e?.message)
     }
 
-    // 2) Cargar ventas (solo confirmados + ayuda)
-    const ventas = paraDespacho.map(p => ({
+    // 2) ANTI-DUPLICADOS: la referencia (#XXXX) identifica cada pedido.
+    //    Si ya existe en ventas → duplicado (no se carga). Distinta ref = venta nueva.
+    const refs = paraDespacho.map(p => p.n_referencia).filter(Boolean)
+    let refsExistentes = new Set()
+    try {
+      const { data } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs)
+      refsExistentes = new Set((data || []).map(d => String(d.n_referencia)))
+    } catch (e) { /* si falla la consulta, seguimos sin filtro de BD */ }
+
+    const vistos = new Set()
+    const nuevas = []
+    const duplicados = []
+    for (const p of paraDespacho) {
+      const ref = String(p.n_referencia)
+      if (refsExistentes.has(ref) || vistos.has(ref)) {
+        duplicados.push(ref)
+      } else {
+        vistos.add(ref)
+        nuevas.push(p)
+      }
+    }
+
+    if (!nuevas.length) {
+      setResultado({ ok: 0, fail: 0, duplicados })
+      setCargando(false)
+      toast(`Todas ya estaban cargadas (${duplicados.length} duplicados)`, 'error')
+      return
+    }
+
+    // 3) Cargar solo las ventas nuevas (confirmados + ayuda)
+    const ventas = nuevas.map(p => ({
       fecha: p.fecha,
       producto_nombre: p.producto_nombre,
       cantidad: p.cantidad,
@@ -336,9 +365,9 @@ export default function DespachoPagina() {
       if (error) fail += Math.min(50, ventas.length - i)
       else ok += Math.min(50, ventas.length - i)
     }
-    setResultado({ ok, fail })
+    setResultado({ ok, fail, duplicados })
     setCargando(false)
-    if (ok > 0) toast(`${ok} ventas cargadas`, 'success')
+    if (ok > 0) toast(`${ok} ventas cargadas${duplicados.length ? ` · ${duplicados.length} duplicados omitidos` : ''}`, 'success')
     if (fail > 0) toast(`${fail} fallaron`, 'error')
   }
 
@@ -525,8 +554,18 @@ export default function DespachoPagina() {
             {paraDespacho.length} pedidos como pendiente (solo confirmados + ayuda)
           </div>
           {resultado ? (
-            <div style={{ fontSize: 12, color: 'var(--green)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-              <CheckCircle size={14} /> {resultado.ok} cargadas {resultado.fail > 0 && <span style={{ color: 'var(--red)' }}>· {resultado.fail} fallaron</span>}
+            <div>
+              {resultado.ok > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--green)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  <CheckCircle size={14} /> {resultado.ok} cargadas {resultado.fail > 0 && <span style={{ color: 'var(--red)' }}>· {resultado.fail} fallaron</span>}
+                </div>
+              )}
+              {resultado.duplicados && resultado.duplicados.length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--yellow)', marginTop: 6, lineHeight: 1.4 }}>
+                  ⚠ {resultado.duplicados.length} duplicado(s) ya cargado(s), omitidos:<br />
+                  <span style={{ color: 'var(--text-muted)' }}>{resultado.duplicados.map(r => `#${r}`).join(', ')}</span>
+                </div>
+              )}
             </div>
           ) : (
             <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={cargarVentas} disabled={cargando || !paraDespacho.length}>

@@ -186,15 +186,51 @@ export default function ImportarPage() {
     if (!ventasFinal.length) { toast('No hay ventas para importar', 'error'); return }
     setLoading(true)
     try {
+      // ANTI-DUPLICADOS: filtrar por referencia ya existente en ventas.
+      // Ventas con referencia vacía (carga manual) se usa huella cliente+producto+ciudad.
+      const refs = ventasFinal.map(v => v.n_referencia).filter(Boolean)
+      let refsExistentes = new Set()
+      if (refs.length) {
+        try {
+          const { data } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs)
+          refsExistentes = new Set((data || []).map(d => String(d.n_referencia)))
+        } catch (e) { /* sin filtro de BD si falla */ }
+      }
+
+      const vistos = new Set()
+      const huellas = new Set()
+      const nuevas = []
+      const duplicados = []
+      for (const v of ventasFinal) {
+        const ref = v.n_referencia ? String(v.n_referencia) : ''
+        const huella = `${(v.cliente_nombre||'').toLowerCase()}|${(v.producto_nombre||'').toLowerCase()}|${v.cantidad}|${(v.ciudad||'').toLowerCase()}`
+        const esDupRef = ref && (refsExistentes.has(ref) || vistos.has(ref))
+        const esDupHuella = !ref && huellas.has(huella)  // solo aplica si NO hay referencia
+        if (esDupRef || esDupHuella) {
+          duplicados.push(ref || huella)
+        } else {
+          if (ref) vistos.add(ref)
+          else huellas.add(huella)
+          nuevas.push(v)
+        }
+      }
+
+      if (!nuevas.length) {
+        setResultado({ insertados: 0, fallidos: 0, total: 0, duplicados: duplicados.length, refsDup: duplicados })
+        setLoading(false)
+        toast(`Todas ya estaban cargadas (${duplicados.length} duplicados)`, 'error')
+        return
+      }
+
       let insertados = 0, fallidos = 0
-      for (let i = 0; i < ventasFinal.length; i += 50) {
-        const lote = ventasFinal.slice(i, i + 50).map(({ estado_releasit, ...v }) => v)
+      for (let i = 0; i < nuevas.length; i += 50) {
+        const lote = nuevas.slice(i, i + 50).map(({ estado_releasit, ...v }) => v)
         const { error } = await supabase.from('ventas').insert(lote)
         if (error) fallidos += lote.length
         else insertados += lote.length
       }
-      setResultado({ insertados, fallidos, total: ventasFinal.length })
-      if (insertados > 0) toast(`${insertados} ventas importadas`, 'success')
+      setResultado({ insertados, fallidos, total: nuevas.length, duplicados: duplicados.length, refsDup: duplicados })
+      if (insertados > 0) toast(`${insertados} ventas importadas${duplicados.length ? ` · ${duplicados.length} duplicados omitidos` : ''}`, 'success')
       if (fallidos > 0) toast(`${fallidos} ventas fallaron`, 'error')
     } catch (err) {
       toast('Error al importar: ' + err.message, 'error')
@@ -372,6 +408,11 @@ export default function ImportarPage() {
             <div style={{ fontSize: 12, marginTop: 3 }}>
               {resultado.insertados} ventas importadas · {resultado.fallidos} fallidas · Total: {resultado.total}
             </div>
+            {resultado.duplicados > 0 && (
+              <div style={{ fontSize: 12, marginTop: 4, color: 'var(--yellow)' }}>
+                ⚠ {resultado.duplicados} duplicado(s) ya cargado(s), omitidos: {(resultado.refsDup || []).filter(r => r && !r.includes('|')).map(r => `#${r}`).join(', ') || '(carga manual sin referencia)'}
+              </div>
+            )}
           </div>
         </div>
       )}
