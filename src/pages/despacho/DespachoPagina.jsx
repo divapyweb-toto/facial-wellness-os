@@ -1,5 +1,7 @@
 // src/pages/despacho/DespachoPagina.jsx
 import { useState, useRef, useMemo } from 'react'
+import * as XLSX from 'xlsx'
+import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, convertMillimetersToTwip } from 'docx'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X, Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp } from 'lucide-react'
@@ -127,56 +129,85 @@ function mapearPedido(row) {
   return { n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion, telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado, cfg, despachar: cfg.despachar, faltantes }
 }
 
-// ─── Generar Excel CSV (formato Punto a Punto AC) ────────
-function generarExcel(pedidos) {
+// ─── Generar y descargar Cabecera XLSX (formato Punto a Punto AC) ─
+function descargarCabeceraXLSX(pedidos) {
   const headers = ['NOMBRE','CIUDAD','DIRECCIÓN','TELÉFONO','TIPO DE PRODUCTO','CANTIDAD DE BULTOS','PRIORIDAD','FORMA DE PAGO','IMPORTE','N° REFERENCIA','DESCRIPCION']
-  const filas = pedidos.map(p => [
-    p.cliente_nombre, p.ciudad, p.direccion, p.telefono,
-    getTipo(p.producto_nombre), '1', '', 'efectivo a cobrar',
-    p.total, p.n_referencia, getDesc(p.producto_nombre, p.cantidad)
-  ])
-  const csv = [headers, ...filas].map(f => f.map(c => `"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n')
-  return '\ufeff' + csv
+  const aoa = [headers]
+  pedidos.forEach(p => {
+    const refNum = parseInt(p.n_referencia)
+    aoa.push([
+      p.cliente_nombre, p.ciudad, p.direccion, p.telefono,
+      getTipo(p.producto_nombre),
+      1,                          // CANTIDAD DE BULTOS = siempre 1
+      null,                       // PRIORIDAD = vacío
+      'efectivo a cobrar',
+      p.total,                    // IMPORTE como número
+      isNaN(refNum) ? p.n_referencia : refNum,
+      getDesc(p.producto_nombre, p.cantidad),
+    ])
+  })
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  ws['!cols'] = [{wch:28},{wch:15},{wch:40},{wch:15},{wch:20},{wch:15},{wch:12},{wch:18},{wch:12},{wch:12},{wch:35}]
+  // Teléfono como texto (mantiene el 0 inicial)
+  pedidos.forEach((p, i) => {
+    const cell = 'D' + (i + 2)
+    if (ws[cell]) { ws[cell].t = 's'; ws[cell].z = '@' }
+  })
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Entregas')
+  const refs = pedidos.map(p => p.n_referencia).filter(Boolean)
+  XLSX.writeFile(wb, `Cabecera_${refs[0]}-${refs[refs.length-1]}.xlsx`)
 }
 
-// ─── Generar Guías HTML 15×10cm ──────────────────────────
-function generarGuias(pedidos) {
-  const guias = pedidos.map(p => `
-<div class="guia">
-  <div class="remitente">
-    <div class="titulo">FACIAL WELLNESS</div>
-    <div class="sub">CIUDAD DEL ESTE</div>
-    <div class="sub">CI: 6.103.233 &nbsp;|&nbsp; NRO: 0985-914-500</div>
-  </div>
-  <div class="linea"></div>
-  <div class="titulo-dest">DATOS DEL DESTINATARIO</div>
-  <div class="linea"></div>
-  <div class="datos">
-    <div class="dato"><b>Nombre:</b> ${p.cliente_nombre||'—'}</div>
-    <div class="dato"><b>Ciudad:</b> ${p.ciudad||'—'}</div>
-    <div class="dato"><b>Dirección:</b> ${p.direccion||'—'}</div>
-    <div class="dato"><b>Teléfono:</b> ${p.telefono||'—'}</div>
-    <div class="dato prod"><b>Producto:</b> ${getTipo(p.producto_nombre)} ×${p.cantidad||1}</div>
-    <div class="dato"><b>A cobrar:</b> ${formatGs(p.total)}</div>
-    <div class="dato"><b>Ref:</b> #${p.n_referencia}</div>
-  </div>
-</div>`).join('\n')
+// ─── Generar y descargar Guías DOCX 15×10cm ──────────────
+async function descargarGuiasDOCX(pedidos) {
+  const P = (text, size, bold = false) => new Paragraph({
+    alignment: AlignmentType.CENTER,
+    children: [new TextRun({ text, bold, size: size * 2 })],
+    spacing: { after: 40 },
+  })
+  const VACIO = () => new Paragraph({ children: [new TextRun({ text: '' })] })
 
-  return `<!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8"><title>Guías Facial Wellness</title>
-<style>
-  @page{size:10cm 15cm;margin:0}
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;background:white}
-  .guia{width:10cm;height:15cm;padding:.4cm;text-align:center;page-break-after:always;display:flex;flex-direction:column;justify-content:center;align-items:center;border:1.5px solid #000}
-  .titulo{font-size:22pt;font-weight:bold;letter-spacing:1px}
-  .sub{font-size:10pt;margin-top:.1cm}
-  .linea{border-top:2px solid #000;width:100%;margin:.3cm 0}
-  .titulo-dest{font-size:12pt;font-weight:bold}
-  .datos{width:100%;text-align:left;margin-top:.2cm}
-  .dato{font-size:11pt;margin:.18cm 0;line-height:1.3}
-  .prod{font-size:12pt;font-weight:bold;margin-top:.3cm}
-</style></head><body>${guias}</body></html>`
+  const children = []
+  pedidos.forEach((p, i) => {
+    children.push(
+      P('FACIAL WELLNESS', 18, true),
+      P('CIUDAD DEL ESTE', 14),
+      P('CI: 6.103.233', 14),
+      P('NRO: 0985-914-500', 14),
+      VACIO(),
+      P('DATOS DEL DESTINATARIO', 14, true),
+      VACIO(),
+      P(`Nombre: ${p.cliente_nombre || '—'}`, 12),
+      P(`Ciudad: ${p.ciudad || '—'}`, 12),
+      P(`Dirección: ${p.direccion || '—'}`, 12),
+      P(`Teléfono: ${p.telefono || '—'}`, 12),
+      P(`Producto: ${getTipo(p.producto_nombre)} ×${p.cantidad || 1}`, 12),
+    )
+    if (i < pedidos.length - 1) children.push(new Paragraph({ children: [new PageBreak()] }))
+  })
+
+  const doc = new Document({
+    sections: [{
+      properties: {
+        page: {
+          size: { width: convertMillimetersToTwip(100), height: convertMillimetersToTwip(150) },
+          margin: {
+            top: convertMillimetersToTwip(3), bottom: convertMillimetersToTwip(3),
+            left: convertMillimetersToTwip(3), right: convertMillimetersToTwip(3),
+          },
+        },
+      },
+      children,
+    }],
+  })
+
+  const blob = await Packer.toBlob(doc)
+  const refs = pedidos.map(p => p.n_referencia).filter(Boolean)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `Guias_${refs[0]}-${refs[refs.length-1]}.docx`; a.click()
+  URL.revokeObjectURL(url)
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -312,23 +343,19 @@ export default function DespachoPagina() {
   }
 
   const descargarExcel = () => {
-    const refs = paraDespacho.map(p => p.n_referencia).filter(Boolean)
-    const blob = new Blob([generarExcel(paraDespacho)], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `Cabecera_${refs[0]}-${refs[refs.length-1]}.csv`; a.click()
-    URL.revokeObjectURL(url)
-    toast('Cabecera Excel descargada', 'success')
+    if (!paraDespacho.length) return
+    descargarCabeceraXLSX(paraDespacho)
+    toast('Cabecera Excel (.xlsx) descargada', 'success')
   }
 
-  const descargarGuiasDoc = () => {
-    const refs = paraDespacho.map(p => p.n_referencia).filter(Boolean)
-    const blob = new Blob([generarGuias(paraDespacho)], { type: 'text/html;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `Guias_${refs[0]}-${refs[refs.length-1]}.html`; a.click()
-    URL.revokeObjectURL(url)
-    toast('Guías descargadas — abrí con Chrome e imprimí', 'success')
+  const descargarGuiasDoc = async () => {
+    if (!paraDespacho.length) return
+    try {
+      await descargarGuiasDOCX(paraDespacho)
+      toast('Guías Word (.docx) descargadas', 'success')
+    } catch (e) {
+      toast('Error generando las guías: ' + e.message, 'error')
+    }
   }
 
   const reset = () => { setTodos([]); setResultado(null); setStep('upload'); setBusqueda(''); setNombreArchivo('') }
@@ -368,7 +395,7 @@ export default function DespachoPagina() {
         {[
           { icon: ShoppingBag, color: 'var(--purple)', bg: 'var(--purple-dim)', title: '1. Carga ventas', desc: 'Solo confirmados y ayuda — como pendiente' },
           { icon: FileSpreadsheet, color: 'var(--green)', bg: 'var(--green-dim)', title: '2. Cabecera Excel', desc: 'Solo los que se despachan — formato Punto a Punto AC' },
-          { icon: FileText, color: 'var(--accent)', bg: 'var(--accent-dim)', title: '3. Guías Word', desc: 'Solo los que se despachan — 15×10cm para imprimir' },
+          { icon: FileText, color: 'var(--accent)', bg: 'var(--accent-dim)', title: '3. Guías Word', desc: 'Solo los que se despachan — Word 15×10cm para imprimir' },
         ].map((item, i) => (
           <div key={i} className="card card-sm" style={{ textAlign: 'center' }}>
             <div style={{ width: 40, height: 40, borderRadius: 10, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px' }}>
@@ -517,7 +544,7 @@ export default function DespachoPagina() {
             {paraDespacho.length} filas — formato exacto Punto a Punto AC
           </div>
           <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={descargarExcel} disabled={!paraDespacho.length}>
-            <Download size={13} /> Descargar CSV
+            <Download size={13} /> Descargar Excel
           </button>
         </div>
 
@@ -527,7 +554,7 @@ export default function DespachoPagina() {
           </div>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Guías Word</div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
-            {paraDespacho.length} guías 15×10cm — abrí en Chrome e imprimí
+            {paraDespacho.length} guías 15×10cm en Word — abrí e imprimí
           </div>
           <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={descargarGuiasDoc} disabled={!paraDespacho.length}>
             <Download size={13} /> Descargar Guías
