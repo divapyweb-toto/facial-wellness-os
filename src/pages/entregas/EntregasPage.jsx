@@ -30,6 +30,18 @@ function normalizarRef(ref) {
   return String(ref).replace(/[#\s]/g, '').trim()
 }
 
+// Normaliza teléfono igual que Despacho, para poder cruzar con las ventas
+function limpiarTel(tel) {
+  if (!tel) return ''
+  let t = String(tel).replace(/[\s\-()]/g, '')
+  if (t.startsWith('+5950')) t = '0' + t.slice(5)
+  else if (t.startsWith('+595')) t = '0' + t.slice(4)
+  else if (t.startsWith('5950')) t = '0' + t.slice(4)
+  else if (t.startsWith('595')) t = '0' + t.slice(3)
+  if (t && !t.startsWith('0')) t = '0' + t
+  return t
+}
+
 function categorizar(estado) {
   const e = (estado || '').toLowerCase()
   if (e.includes('entregado')) return 'entregado'
@@ -79,6 +91,7 @@ function combinar(paqData, gesData) {
     const ref = normalizarRef((p && p['NroGuiaRef']) ? p['NroGuiaRef'] : (g ? g['NroGuiaRef'] : ''))
     const ciudad = ((g ? g['Ciudad'] : (p ? p['Ciudad'] : '')) || '').trim()
     const mensajero = (g ? g['Recurso'] : '') || ''
+    const telefono = limpiarTel(g ? g['Telefono'] : '')
     const motivo = (p ? p['Motivo'] : (g ? g['Motivo'] : '')) || ''
     const producto = (g ? (g['Descripcion'] || g['Tipodeproducto']) : (p ? p['TipoPaquete'] : '')) || ''
     const fIng = toISODate(g ? g['FechaIng'] : (p ? p['Fecha Ingreso'] : null))
@@ -106,6 +119,7 @@ function combinar(paqData, gesData) {
       fecha_rendido: fRendido,
       dias_rendicion: diasRendicion,
       mensajero,
+      telefono,
       ciudad,
       producto,
       mes: (fEnt || fIng || '').slice(0, 7),
@@ -133,6 +147,7 @@ export default function EntregasPage() {
   const [filtroCat, setFiltroCat] = useState('todos')
   const [guardando, setGuardando] = useState(false)
   const [guardado, setGuardado] = useState(false)
+  const [resultadoGuardado, setResultadoGuardado] = useState(null)
 
   const merged = useMemo(() => {
     if (!paqData && !gesData) return []
@@ -254,22 +269,60 @@ export default function EntregasPage() {
         const { error } = await supabase.from('entregas').upsert(lote, { onConflict: 'nro_guia_pap' })
         if (!error) ok += lote.length
       }
-      // 2) Actualizar estado de las ventas que matchean por referencia (no crítico)
+
+      // 2) Actualizar estado de ventas — MATCH EN CASCADA: referencia → teléfono.
+      //    Meses con #XXXX matchean por referencia (100% preciso).
+      //    Meses viejos sin #XXXX matchean por teléfono normalizado.
+      //    Solo se tocan entregados/devueltos; los en proceso quedan como están.
+      let porRef = 0, porTel = 0, sinMatch = 0
       try {
-        for (const m of merged.filter(x => x.n_referencia)) {
-          await supabase.from('ventas').update({ estado: m.categoria === 'entregado' ? 'entregado' : m.categoria === 'devuelto' ? 'devuelto' : 'en_camino' }).eq('n_referencia', m.n_referencia)
+        const { data: ventas } = await supabase
+          .from('ventas')
+          .select('id, n_referencia, telefono, estado')
+        if (ventas && ventas.length) {
+          const idxRef = new Map()
+          const idxTel = new Map()
+          ventas.forEach(v => {
+            if (v.n_referencia) idxRef.set(String(v.n_referencia), v)
+            const t = limpiarTel(v.telefono)
+            if (t) { if (!idxTel.has(t)) idxTel.set(t, []); idxTel.get(t).push(v) }
+          })
+
+          const usadas = new Set()
+          const updates = []
+          for (const m of merged) {
+            if (m.categoria === 'en_proceso') continue
+            const nuevoEstado = m.categoria === 'entregado' ? 'entregado' : 'devuelto'
+            // a) por referencia
+            if (m.n_referencia && idxRef.has(m.n_referencia)) {
+              const v = idxRef.get(m.n_referencia)
+              if (!usadas.has(v.id)) { updates.push({ id: v.id, estado: nuevoEstado }); usadas.add(v.id); porRef++; continue }
+            }
+            // b) por teléfono (si no hubo match por ref)
+            if (m.telefono && idxTel.has(m.telefono)) {
+              const cand = idxTel.get(m.telefono).filter(v => !usadas.has(v.id))
+              if (cand.length) { updates.push({ id: cand[0].id, estado: nuevoEstado }); usadas.add(cand[0].id); porTel++; continue }
+            }
+            sinMatch++
+          }
+
+          for (const u of updates) {
+            await supabase.from('ventas').update({ estado: u.estado }).eq('id', u.id)
+          }
         }
-      } catch (e) { /* silencioso */ }
+      } catch (e) { console.warn('No se actualizaron estados de ventas:', e?.message) }
 
       setGuardado(true)
-      toast(`${ok} entregas guardadas en el sistema`, 'success')
+      setResultadoGuardado({ ok, porRef, porTel, sinMatch })
+      const totalAct = porRef + porTel
+      toast(`${ok} entregas guardadas · ${totalAct} ventas actualizadas`, 'success')
     } catch (err) {
       toast('Error guardando: ' + err.message, 'error')
     }
     setGuardando(false)
   }
 
-  const reset = () => { setPaqData(null); setGesData(null); setBusqueda(''); setFiltroCat('todos'); setGuardado(false) }
+  const reset = () => { setPaqData(null); setGesData(null); setBusqueda(''); setFiltroCat('todos'); setGuardado(false); setResultadoGuardado(null) }
 
   // ── UPLOAD ──────────────────────────────────────────────
   if (!stats) return (
@@ -342,6 +395,25 @@ export default function EntregasPage() {
           <button className="btn btn-ghost btn-sm" onClick={reset}><X size={13} /> Otro</button>
         </div>
       </div>
+
+      {/* Resultado del guardado: cuántas ventas se actualizaron y cómo */}
+      {resultadoGuardado && (
+        <div className="alert alert-success">
+          <CheckCircle size={15} />
+          <div>
+            <div style={{ fontWeight: 600 }}>{resultadoGuardado.ok} entregas guardadas · {resultadoGuardado.porRef + resultadoGuardado.porTel} ventas actualizadas</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>
+              {resultadoGuardado.porRef > 0 && <span>{resultadoGuardado.porRef} por referencia (#XXXX)</span>}
+              {resultadoGuardado.porRef > 0 && resultadoGuardado.porTel > 0 && <span> · </span>}
+              {resultadoGuardado.porTel > 0 && <span>{resultadoGuardado.porTel} por teléfono</span>}
+              {resultadoGuardado.sinMatch > 0 && <span style={{ color: 'var(--yellow)' }}> · {resultadoGuardado.sinMatch} sin coincidencia en ventas</span>}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              Las ventas pasaron de "Pendiente" a "Entregado" o "Devuelto". Revisá la sección Ventas.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Alerta si tasa de devolución alta */}
       {stats.devueltos / stats.total > 0.25 && (
