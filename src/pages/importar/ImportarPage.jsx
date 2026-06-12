@@ -15,24 +15,41 @@ const SHOPIFY_COLUMNS = {
   'Billing Name': 'cliente_nombre',
 }
 
+// ─── Parser CSV robusto (maneja saltos de línea dentro de celdas) ──
 function parseCSV(text) {
-  const lines = text.split('\n').filter(l => l.trim())
-  if (lines.length < 2) return []
-  const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim())
-  return lines.slice(1).map(line => {
-    const values = []
-    let current = ''
-    let inQuotes = false
-    for (const char of line) {
-      if (char === '"') inQuotes = !inQuotes
-      else if (char === ',' && !inQuotes) { values.push(current.trim()); current = '' }
-      else current += char
+  const rows = []
+  let row = [], cell = '', inQuotes = false
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    const next = text[i + 1]
+    if (ch === '"') {
+      if (inQuotes && next === '"') { cell += '"'; i++ }
+      else inQuotes = !inQuotes
+    } else if (ch === ',' && !inQuotes) {
+      row.push(cell); cell = ''
+    } else if (ch === '\n' && !inQuotes) {
+      row.push(cell); cell = ''
+      if (row.some(c => c.trim())) rows.push(row)
+      row = []
+    } else if (ch === '\n') {
+      cell += ch  // ← \n dentro de campo entre comillas (Note Attributes multilínea)
+    } else {
+      cell += ch
     }
-    values.push(current.trim())
-    const obj = {}
-    headers.forEach((h, i) => { obj[h] = values[i] || '' })
-    return obj
-  })
+  }
+  row.push(cell)
+  if (row.some(c => c.trim())) rows.push(row)
+
+  if (rows.length < 2) return []
+  const headers = rows[0].map(h => h.trim())
+  return rows.slice(1)
+    .map(vals => {
+      const obj = {}
+      headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim() })
+      return obj
+    })
+    .filter(obj => obj['Name'] && obj['Name'].startsWith('#'))
 }
 
 function mapShopifyRow(row) {
