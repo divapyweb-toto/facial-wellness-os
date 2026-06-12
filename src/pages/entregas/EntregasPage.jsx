@@ -84,6 +84,12 @@ function combinar(paqData, gesData) {
     const fIng = toISODate(g ? g['FechaIng'] : (p ? p['Fecha Ingreso'] : null))
     const fEnt = toISODate(g ? g['FechaEnt'] : (p ? p['FechaEvento'] : null))
 
+    // Tesorería: ¿la plata ya te llegó? (solo si el reporte se exportó con "Incluir Tesorería")
+    const estadoDepTesor = (g ? g['EstadoDepTesor'] : '') || ''
+    const rendido = estadoDepTesor === 'Rendido Tesorero'
+    const fRendido = toISODate(g ? g['FechaDepositoTesoreroCliente'] : null)
+    const diasRendicion = (rendido && cat === 'entregado') ? diasEntre(fEnt, fRendido) : null
+
     out.push({
       nro_guia_pap: guia,
       n_referencia: ref,
@@ -96,6 +102,9 @@ function combinar(paqData, gesData) {
       fecha_ingreso: fIng,
       fecha_entrega: fEnt,
       dias_entrega: cat === 'entregado' ? diasEntre(fIng, fEnt) : null,
+      rendido,
+      fecha_rendido: fRendido,
+      dias_rendicion: diasRendicion,
       mensajero,
       ciudad,
       producto,
@@ -146,6 +155,15 @@ export default function EntregasPage() {
     const dias = entregados.map(m => m.dias_entrega).filter(d => d != null)
     const diasProm = dias.length ? (dias.reduce((a, b) => a + b, 0) / dias.length) : null
 
+    // Tesorería / flujo de caja: cuánto ya te rindió PaP vs cuánto te debe
+    const rendidos = entregados.filter(m => m.rendido)
+    const entregadosSinRendir = entregados.filter(m => !m.rendido)
+    const montoRendido = rendidos.reduce((s, m) => s + m.importe, 0)
+    const montoPendienteCobro = entregadosSinRendir.reduce((s, m) => s + m.importe, 0)
+    const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null)
+    const diasRendicionProm = diasRend.length ? (diasRend.reduce((a, b) => a + b, 0) / diasRend.length) : null
+    const hayTesoreria = merged.some(m => m.rendido || m.fecha_rendido)
+
     // por ciudad
     const ciudadMap = {}
     merged.forEach(m => {
@@ -184,6 +202,8 @@ export default function EntregasPage() {
       margenNeto: cobrado - costoEnvios,
       perdidaTotal: perdidoProd + costoEnviosDevueltos,
       diasProm, porCiudad, porMensajero, motivos, distribucion,
+      montoRendido, montoPendienteCobro, diasRendicionProm, hayTesoreria,
+      rendidos: rendidos.length, entregadosSinRendir: entregadosSinRendir.length,
       conRef: merged.filter(m => m.n_referencia).length,
     }
   }, [merged])
@@ -384,6 +404,35 @@ export default function EntregasPage() {
           El margen logístico es antes de restar el costo de tu producto (CMV). La pérdida por devoluciones ({formatGs(stats.perdidaTotal)}) es el golpe real: producto que volvió sin venderse + el envío que igual pagaste.
         </p>
       </div>
+
+      {/* Flujo de caja con PaP (solo si el reporte incluye Tesorería) */}
+      {stats.hayTesoreria && (
+        <div className="card">
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Truck size={15} color="var(--accent)" /> Flujo de caja con Punto a Punto
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
+            PaP cobra al cliente y la plata pasa por mensajero → supervisor → tesorero antes de llegarte.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+            <div style={{ padding: 12, background: 'var(--green-dim)', borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>✅ Ya depositado a vos</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.montoRendido)}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.rendidos} pedidos rendidos</div>
+            </div>
+            <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10, border: '1px solid var(--yellow)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>⏳ PaP te debe todavía</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--yellow)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.montoPendienteCobro)}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.entregadosSinRendir} entregados sin rendir</div>
+            </div>
+            <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>⏱ Tiempo de cobro</div>
+              <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-display)' }}>{stats.diasRendicionProm ? `${stats.diasRendicionProm.toFixed(1)} días` : '—'}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>De la entrega al depósito</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Distribución + Ciudad */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 12 }}>
