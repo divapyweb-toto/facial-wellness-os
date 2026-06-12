@@ -256,6 +256,31 @@ export default function DespachoPagina() {
     if (!paraDespacho.length) return
     setCargando(true)
     let ok = 0, fail = 0
+
+    // 1) Guardar histórico Releasit completo (los 4 estados) para Analytics.
+    //    Upsert por n_referencia → no duplica aunque cargues el mismo CSV 2 veces.
+    //    Si la tabla pedidos_releasit no existe todavía, no rompe la carga de ventas.
+    try {
+      const histRegistros = todos
+        .filter(p => p.n_referencia)
+        .map(p => ({
+          n_referencia: p.n_referencia,
+          fecha: p.fecha,
+          mes: (p.fecha || '').slice(0, 7),
+          estado_releasit: p.estado_releasit,
+          total: p.total,
+          producto: getTipo(p.producto_nombre),
+          ciudad: p.ciudad,
+        }))
+      const { error: errHist } = await supabase
+        .from('pedidos_releasit')
+        .upsert(histRegistros, { onConflict: 'n_referencia' })
+      if (errHist) console.warn('Histórico Releasit no guardado:', errHist.message)
+    } catch (e) {
+      console.warn('Histórico Releasit no guardado:', e?.message)
+    }
+
+    // 2) Cargar ventas (solo confirmados + ayuda)
     const ventas = paraDespacho.map(p => ({
       fecha: p.fecha,
       producto_nombre: p.producto_nombre,
