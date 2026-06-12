@@ -92,6 +92,7 @@ function combinar(paqData, gesData) {
     const ciudad = ((g ? g['Ciudad'] : (p ? p['Ciudad'] : '')) || '').trim()
     const mensajero = (g ? g['Recurso'] : '') || ''
     const telefono = limpiarTel(g ? g['Telefono'] : '')
+    const nombreCliente = ((g ? g['Nombre'] : (p ? p['Nombre'] : '')) || '').trim()
     const motivo = (p ? p['Motivo'] : (g ? g['Motivo'] : '')) || ''
     const producto = (g ? (g['Descripcion'] || g['Tipodeproducto']) : (p ? p['TipoPaquete'] : '')) || ''
     const fIng = toISODate(g ? g['FechaIng'] : (p ? p['Fecha Ingreso'] : null))
@@ -120,6 +121,7 @@ function combinar(paqData, gesData) {
       dias_rendicion: diasRendicion,
       mensajero,
       telefono,
+      nombre_cliente: nombreCliente,
       ciudad,
       producto,
       mes: (fEnt || fIng || '').slice(0, 7),
@@ -270,52 +272,86 @@ export default function EntregasPage() {
         if (!error) ok += lote.length
       }
 
-      // 2) Actualizar estado de ventas — MATCH EN CASCADA: referencia → teléfono.
-      //    Meses con #XXXX matchean por referencia (100% preciso).
-      //    Meses viejos sin #XXXX matchean por teléfono normalizado.
+      // 2) Actualizar estado de ventas — MATCH EN CASCADA multi-criterio.
+      //    Niveles, del más preciso al más amplio:
+      //      a) por referencia #XXXX (meses que sí la tienen → exacto)
+      //      b) por teléfono (desempate por monto si hay varias con el mismo número)
+      //      c) por nombre + monto (fallback cuando no hay teléfono que matchee)
       //    Solo se tocan entregados/devueltos; los en proceso quedan como están.
-      let porRef = 0, porTel = 0, sinMatch = 0
+      let porRef = 0, porTel = 0, porNombre = 0, sinMatch = 0
+      let diagnostico = null
       try {
-        const { data: ventas } = await supabase
+        const { data: ventas, error: errSel } = await supabase
           .from('ventas')
-          .select('id, n_referencia, telefono, estado')
-        if (ventas && ventas.length) {
+          .select('id, n_referencia, cliente_telefono, cliente_nombre, ciudad, total, estado')
+        if (errSel) { diagnostico = 'No pude leer las ventas: ' + errSel.message }
+        else if (!ventas || !ventas.length) { diagnostico = 'La consulta de ventas vino vacía (¿permisos?)' }
+        else {
           const idxRef = new Map()
-          const idxTel = new Map()
-          ventas.forEach(v => {
-            if (v.n_referencia) idxRef.set(String(v.n_referencia), v)
-            const t = limpiarTel(v.telefono)
-            if (t) { if (!idxTel.has(t)) idxTel.set(t, []); idxTel.get(t).push(v) }
-          })
+          ventas.forEach(v => { if (v.n_referencia) idxRef.set(String(v.n_referencia), v) })
 
           const usadas = new Set()
           const updates = []
+
           for (const m of merged) {
             if (m.categoria === 'en_proceso') continue
             const nuevoEstado = m.categoria === 'entregado' ? 'entregado' : 'devuelto'
+            let venta = null, metodo = null
+
             // a) por referencia
             if (m.n_referencia && idxRef.has(m.n_referencia)) {
               const v = idxRef.get(m.n_referencia)
-              if (!usadas.has(v.id)) { updates.push({ id: v.id, estado: nuevoEstado }); usadas.add(v.id); porRef++; continue }
+              if (!usadas.has(v.id)) { venta = v; metodo = 'ref' }
             }
-            // b) por teléfono (si no hubo match por ref)
-            if (m.telefono && idxTel.has(m.telefono)) {
-              const cand = idxTel.get(m.telefono).filter(v => !usadas.has(v.id))
-              if (cand.length) { updates.push({ id: cand[0].id, estado: nuevoEstado }); usadas.add(cand[0].id); porTel++; continue }
+            // b) por teléfono (+ desempate por monto)
+            if (!venta && m.telefono) {
+              const mismoTel = ventas.filter(v => limpiarTel(v.cliente_telefono) === m.telefono && !usadas.has(v.id))
+              if (mismoTel.length === 1) { venta = mismoTel[0]; metodo = 'tel' }
+              else if (mismoTel.length > 1) {
+                const mismoMonto = mismoTel.filter(v => Number(v.total) === Number(m.importe))
+                venta = (mismoMonto.length ? mismoMonto[0] : mismoTel[0]); metodo = 'tel'
+              }
             }
-            sinMatch++
+            // c) por nombre + monto
+            if (!venta && m.nombre_cliente && m.importe) {
+              const nom = m.nombre_cliente.toLowerCase().trim()
+              const cand = ventas.filter(v => (v.cliente_nombre || '').toLowerCase().trim() === nom && Number(v.total) === Number(m.importe) && !usadas.has(v.id))
+              if (cand.length) { venta = cand[0]; metodo = 'nombre' }
+            }
+
+            if (venta) {
+              updates.push({ id: venta.id, estado: nuevoEstado })
+              usadas.add(venta.id)
+              if (metodo === 'ref') porRef++
+              else if (metodo === 'tel') porTel++
+              else porNombre++
+            } else {
+              sinMatch++
+            }
           }
 
+          // Aplicar updates contando fallos y capturando el primer error real
+          let updFail = 0, primerError = null
           for (const u of updates) {
-            await supabase.from('ventas').update({ estado: u.estado }).eq('id', u.id)
+            const { error: errUpd } = await supabase.from('ventas').update({ estado: u.estado }).eq('id', u.id)
+            if (errUpd) { updFail++; if (!primerError) primerError = errUpd.message }
+          }
+          if (updFail > 0) {
+            diagnostico = `${updFail} actualizaciones fallaron. Error: ${primerError}`
+            porRef = Math.max(0, porRef); porTel = Math.max(0, porTel) // no descontamos, solo informamos
+          }
+          // Si encontró matches pero ninguno se aplicó, avisar con detalle
+          if ((porRef + porTel + porNombre) === 0 && merged.some(m => m.categoria !== 'en_proceso')) {
+            const conTel = ventas.filter(v => v.cliente_telefono).length
+            diagnostico = diagnostico || `No hubo coincidencias. Ventas en BD: ${ventas.length}, con teléfono: ${conTel}. Revisá si los teléfonos coinciden.`
           }
         }
-      } catch (e) { console.warn('No se actualizaron estados de ventas:', e?.message) }
+      } catch (e) { diagnostico = 'Error inesperado: ' + (e?.message || e) }
 
       setGuardado(true)
-      setResultadoGuardado({ ok, porRef, porTel, sinMatch })
-      const totalAct = porRef + porTel
-      toast(`${ok} entregas guardadas · ${totalAct} ventas actualizadas`, 'success')
+      setResultadoGuardado({ ok, porRef, porTel, porNombre, sinMatch, diagnostico })
+      const totalAct = porRef + porTel + porNombre
+      toast(diagnostico ? `Guardado con avisos — mirá el detalle` : `${ok} entregas · ${totalAct} ventas actualizadas`, diagnostico ? 'error' : 'success')
     } catch (err) {
       toast('Error guardando: ' + err.message, 'error')
     }
@@ -398,19 +434,28 @@ export default function EntregasPage() {
 
       {/* Resultado del guardado: cuántas ventas se actualizaron y cómo */}
       {resultadoGuardado && (
-        <div className="alert alert-success">
-          <CheckCircle size={15} />
+        <div className={`alert alert-${resultadoGuardado.diagnostico ? 'warning' : 'success'}`}>
+          {resultadoGuardado.diagnostico ? <AlertTriangle size={15} /> : <CheckCircle size={15} />}
           <div>
-            <div style={{ fontWeight: 600 }}>{resultadoGuardado.ok} entregas guardadas · {resultadoGuardado.porRef + resultadoGuardado.porTel} ventas actualizadas</div>
+            <div style={{ fontWeight: 600 }}>{resultadoGuardado.ok} entregas guardadas · {resultadoGuardado.porRef + resultadoGuardado.porTel + resultadoGuardado.porNombre} ventas actualizadas</div>
             <div style={{ fontSize: 12, marginTop: 4 }}>
-              {resultadoGuardado.porRef > 0 && <span>{resultadoGuardado.porRef} por referencia (#XXXX)</span>}
-              {resultadoGuardado.porRef > 0 && resultadoGuardado.porTel > 0 && <span> · </span>}
+              {resultadoGuardado.porRef > 0 && <span>{resultadoGuardado.porRef} por referencia</span>}
+              {resultadoGuardado.porRef > 0 && (resultadoGuardado.porTel > 0 || resultadoGuardado.porNombre > 0) && <span> · </span>}
               {resultadoGuardado.porTel > 0 && <span>{resultadoGuardado.porTel} por teléfono</span>}
-              {resultadoGuardado.sinMatch > 0 && <span style={{ color: 'var(--yellow)' }}> · {resultadoGuardado.sinMatch} sin coincidencia en ventas</span>}
+              {resultadoGuardado.porTel > 0 && resultadoGuardado.porNombre > 0 && <span> · </span>}
+              {resultadoGuardado.porNombre > 0 && <span>{resultadoGuardado.porNombre} por nombre+monto</span>}
+              {resultadoGuardado.sinMatch > 0 && <span style={{ color: 'var(--yellow)' }}> · {resultadoGuardado.sinMatch} sin coincidencia</span>}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              Las ventas pasaron de "Pendiente" a "Entregado" o "Devuelto". Revisá la sección Ventas.
-            </div>
+            {resultadoGuardado.diagnostico && (
+              <div style={{ fontSize: 12, marginTop: 6, color: 'var(--yellow)', background: 'var(--bg-hover)', padding: 8, borderRadius: 6 }}>
+                ⚠ {resultadoGuardado.diagnostico}
+              </div>
+            )}
+            {!resultadoGuardado.diagnostico && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                Las ventas pasaron de "Pendiente" a "Entregado" o "Devuelto". Revisá la sección Ventas.
+              </div>
+            )}
           </div>
         </div>
       )}
