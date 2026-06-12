@@ -3,7 +3,7 @@ import { useAuth } from '../../lib/AuthContext'
 import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
-  Users, Calculator, Upload, BarChart3, PackageCheck
+  Users, Calculator, Upload, BarChart3, PackageCheck, MapPin
 } from 'lucide-react'
 
 const navMain = [
@@ -15,6 +15,7 @@ const navMain = [
   { to: '/finanzas', icon: DollarSign, label: 'Finanzas' },
   { to: '/rendicion', icon: Truck, label: 'Rendición' },
   { to: '/despacho', icon: PackageCheck, label: 'Despacho' },
+  { to: '/entregas', icon: MapPin, label: 'Entregas' },
 ]
 
 const navHerramientas = [

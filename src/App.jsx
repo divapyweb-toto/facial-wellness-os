@@ -16,6 +16,7 @@ import CalculadoraPage from './pages/calculadora/CalculadoraPage'
 import ImportarPage from './pages/importar/ImportarPage'
 import AnalyticsPage from './pages/analytics/AnalyticsPage'
 import DespachoPagina from './pages/despacho/DespachoPagina'
+import EntregasPage from './pages/entregas/EntregasPage'
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth()
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="finanzas" element={<FinanzasPage />} />
           <Route path="rendicion" element={<RendicionPage />} />
           <Route path="despacho" element={<DespachoPagina />} />
+          <Route path="entregas" element={<EntregasPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="calculadora" element={<CalculadoraPage />} />
           <Route path="importar" element={<ImportarPage />} />
