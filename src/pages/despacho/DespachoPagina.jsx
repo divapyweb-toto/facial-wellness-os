@@ -1,16 +1,71 @@
 // src/pages/despacho/DespachoPagina.jsx
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
-import { Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X, Download, Eye } from 'lucide-react'
+import { Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X, Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp } from 'lucide-react'
+
+// ═══════════════════════════════════════════════════════════
+// PARSER CSV ROBUSTO — maneja \r\n, comillas RFC 4180 y saltos
+// de línea dentro de celdas (Note Attributes de Releasit COD)
+// ═══════════════════════════════════════════════════════════
+function parseCSVRobust(text) {
+  const input = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const rows = []
+  let row = [], cell = '', q = false
+  for (let i = 0; i < input.length; i++) {
+    const c = input[i], n = input[i + 1]
+    if (q) {
+      if (c === '"' && n === '"') { cell += '"'; i++ }
+      else if (c === '"') q = false
+      else cell += c
+    } else {
+      if (c === '"') q = true
+      else if (c === ',') { row.push(cell); cell = '' }
+      else if (c === '\n') { row.push(cell); cell = ''; if (row.some(x => x.trim())) rows.push(row); row = [] }
+      else cell += c
+    }
+  }
+  if (cell || row.length) { row.push(cell); if (row.some(x => x.trim())) rows.push(row) }
+  if (rows.length < 2) return []
+  const headers = rows[0].map(h => h.trim())
+  return rows.slice(1).map(vals => {
+    const o = {}
+    headers.forEach((h, i) => { o[h] = (vals[i] || '').trim() })
+    return o
+  }).filter(o => o['Name'] && o['Name'].startsWith('#'))
+}
+
+// ─── Extraer un dato del campo Note Attributes ───────────
+function extraerNota(notas, clave) {
+  if (!notas) return ''
+  for (const linea of notas.split('\n')) {
+    const l = linea.trim()
+    if (l.toLowerCase().includes(clave.toLowerCase())) {
+      const i = l.indexOf(':')
+      if (i >= 0) return l.slice(i + 1).trim()
+    }
+  }
+  return ''
+}
+
+function limpiarTel(tel) {
+  if (!tel) return ''
+  let t = String(tel).replace(/[\s\-()]/g, '')
+  if (t.startsWith('+5950')) t = '0' + t.slice(5)
+  else if (t.startsWith('+595')) t = '0' + t.slice(4)
+  else if (t.startsWith('5950')) t = '0' + t.slice(4)
+  else if (t.startsWith('595')) t = '0' + t.slice(3)
+  if (t && !t.startsWith('0')) t = '0' + t
+  return t
+}
 
 // ─── Clasificar estado Releasit ──────────────────────────
 function clasificarEstado(tags, cancelledAt) {
-  const t = tags || ''
-  if (t.includes('CANCELADO') || cancelledAt) return 'cancelado'
-  if (t.includes('CONFIRMADO')) return 'confirmado'
-  if (t.includes('AYUDA') || t.includes('HELP')) return 'ayuda'
-  if (t.includes('Confirmation Pending') || t.includes('Pending')) return 'pending'
+  const t = (tags || '').toLowerCase()
+  if (t.includes('cancelado') || cancelledAt) return 'cancelado'
+  if (t.includes('confirmado')) return 'confirmado'
+  if (t.includes('ayuda') || t.includes('help')) return 'ayuda'
+  if (t.includes('confirmation pending') || t.includes('pending')) return 'pending'
   return 'pending'
 }
 
@@ -21,35 +76,14 @@ const ESTADO_CONFIG = {
   cancelado:  { label: '❌ Cancelado',  color: 'var(--red)',    despachar: false },
 }
 
-// ─── Helpers ─────────────────────────────────────────────
-function extraerNota(notas, clave) {
-  if (!notas) return ''
-  for (const linea of notas.split('\n')) {
-    if (linea.toLowerCase().includes(clave.toLowerCase())) {
-      const partes = linea.split(':')
-      if (partes.length >= 2) return partes.slice(1).join(':').trim()
-    }
-  }
-  return ''
-}
-
-function limpiarTel(tel) {
-  if (!tel) return ''
-  let t = tel.replace(/\s+/g, '')
-  if (t.startsWith('+5950')) return '0' + t.slice(5)
-  if (t.startsWith('+595')) return '0' + t.slice(4)
-  if (t.startsWith('595')) return '0' + t.slice(3)
-  return t
-}
-
 function getTipo(nombre) {
   const n = (nombre || '').toLowerCase()
+  if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return 'Pack Gudair'
   if (n.includes('tira') || n.includes('nasal')) return 'Tiras nasales'
   if (n.includes('raspador') || n.includes('lengua') || n.includes('limpiador')) return 'Raspador de lengua'
   if (n.includes('parche') || n.includes('bucal')) return 'Parche Bucal'
   if (n.includes('jaw') || n.includes('mandíbula') || n.includes('ejercitador')) return 'JawFlex Pro'
   if (n.includes('botella') || n.includes('flexible')) return 'Botella Flexible'
-  if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return 'Pack Gudair'
   if (n.includes('bebird')) return 'Bebird Pro'
   return nombre || 'Producto'
 }
@@ -57,95 +91,43 @@ function getTipo(nombre) {
 function getDesc(nombre, cantidad) {
   const n = (nombre || '').toLowerCase()
   const u = parseInt(cantidad) || 1
+  if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return `Pack Gudair (${u} unidad${u > 1 ? 'es' : ''})`
   if (n.includes('tira') || n.includes('nasal')) return 'Tiras nasales (30 unidades)'
   if (n.includes('raspador') || n.includes('lengua') || n.includes('limpiador')) return 'Limpiador de Lengua Facial Wellness'
   if (n.includes('parche') || n.includes('bucal')) return 'Parches bucales (30 unidades)'
   if (n.includes('jaw') || n.includes('mandíbula') || n.includes('ejercitador')) return `Ejercitadores de Mandíbula - Pack ${u}x JawFlex Pro`
   if (n.includes('botella') || n.includes('flexible')) return u > 1 ? `Botella Flexible Flow 500 x${u}` : 'Botella Flexible Flow 500 Negro'
-  if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return `Pack Gudair (${u} unidad${u > 1 ? 'es' : ''})`
   if (n.includes('bebird')) return 'Bebird Pro - Limpiador de Oídos'
   return `${nombre} (${u} unidad${u > 1 ? 'es' : ''})`
 }
 
-// ─── Parser CSV robusto (maneja saltos de línea dentro de celdas) ──
-function parseCSVRobust(text) {
-  const rows = []
-  let row = [], cell = '', inQuotes = false
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    const next = text[i + 1]
-    if (ch === '"') {
-      if (inQuotes && next === '"') { cell += '"'; i++ }
-      else inQuotes = !inQuotes
-    } else if (ch === ',' && !inQuotes) {
-      row.push(cell); cell = ''
-    } else if (ch === '\n' && !inQuotes) {
-      row.push(cell); cell = ''
-      if (row.some(c => c.trim())) rows.push(row)
-      row = []
-    } else if (ch === '\n') {
-      cell += ch  // ← \n dentro de campo entre comillas (Note Attributes multilínea)
-    } else {
-      cell += ch
-    }
-  }
-  row.push(cell)
-  if (row.some(c => c.trim())) rows.push(row)
-
-  if (rows.length < 2) return []
-  const headers = rows[0].map(h => h.trim())
-  return rows.slice(1)
-    .map(vals => {
-      const obj = {}
-      headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim() })
-      return obj
-    })
-    .filter(obj => obj['Name'] && obj['Name'].startsWith('#'))
-}
-
+// ─── Mapear una fila del CSV a un pedido limpio ──────────
 function mapearPedido(row) {
   const notas = row['Note Attributes'] || ''
-  const tags = row['Tags'] || ''
-  const cancelledAt = row['Cancelled at'] || ''
-  const estado = clasificarEstado(tags, cancelledAt)
+  const estado = clasificarEstado(row['Tags'], row['Cancelled at'])
   const cfg = ESTADO_CONFIG[estado]
-
   const fecha = (row['Created at'] || '').split(' ')[0] || new Date().toISOString().split('T')[0]
   const ref = (row['Name'] || '').replace('#', '').trim()
-  const nombre = (row['Billing Name'] || row['Shipping Name'] || '').replace(/\s*-\s*$/, '').trim()
-
-  const ciudadNota = extraerNota(notas, 'ciudad')
-  const ciudad = ciudadNota || row['Shipping City'] || ''
-
-  const dirPrincipal = extraerNota(notas, 'Dirección principal')
-  const referencia = extraerNota(notas, 'Referencia')
-  const direccion = dirPrincipal ? (referencia ? `${dirPrincipal}, ${referencia}` : dirPrincipal) : (row['Shipping Address1'] || '')
-
-  const telNota = extraerNota(notas, 'Teléfono') || extraerNota(notas, 'Telefono')
-  const telefono = limpiarTel(telNota || row['Billing Phone'] || row['Shipping Phone'] || '')
-
-  const productoNombre = row['Lineitem name'] || ''
+  const nombre = (extraerNota(notas, 'Nombre y apellido') || row['Billing Name'] || row['Shipping Name'] || '').replace(/\s*-\s*$/, '').trim()
+  const ciudad = extraerNota(notas, 'ciudad') || (row['Shipping City'] !== '-' ? row['Shipping City'] : '') || ''
+  const departamento = extraerNota(notas, 'departamento') || ''
+  const dir = extraerNota(notas, 'Dirección principal') || (row['Shipping Address1'] !== '-' ? row['Shipping Address1'] : '') || ''
+  const refDir = extraerNota(notas, 'Referencia') || ''
+  const direccion = dir ? (refDir ? `${dir} (${refDir})` : dir) : refDir
+  const telefono = limpiarTel(extraerNota(notas, 'Teléfono') || extraerNota(notas, 'whatsapp') || row['Phone'] || row['Billing Phone'] || '')
+  const producto_nombre = row['Lineitem name'] || ''
   const cantidad = parseInt(row['Lineitem quantity']) || 1
-  const total = parseInt(row['Total']) || 0
-
-  return {
-    n_referencia: ref,
-    cliente_nombre: nombre,
-    ciudad,
-    direccion,
-    telefono,
-    producto_nombre: productoNombre,
-    cantidad,
-    total,
-    fecha,
-    estado_releasit: estado,
-    cfg,
-    despachar: cfg.despachar,
+  const total = parseInt((row['Total'] || '0').replace(/[^0-9]/g, '')) || 0
+  const faltantes = []
+  if (cfg.despachar) {
+    if (!nombre) faltantes.push('nombre')
+    if (!telefono) faltantes.push('teléfono')
+    if (!direccion) faltantes.push('dirección')
   }
+  return { n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion, telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado, cfg, despachar: cfg.despachar, faltantes }
 }
 
-// ─── Generar Excel CSV ────────────────────────────────────
+// ─── Generar Excel CSV (formato Punto a Punto AC) ────────
 function generarExcel(pedidos) {
   const headers = ['NOMBRE','CIUDAD','DIRECCIÓN','TELÉFONO','TIPO DE PRODUCTO','CANTIDAD DE BULTOS','PRIORIDAD','FORMA DE PAGO','IMPORTE','N° REFERENCIA','DESCRIPCION']
   const filas = pedidos.map(p => [
@@ -157,7 +139,7 @@ function generarExcel(pedidos) {
   return '\ufeff' + csv
 }
 
-// ─── Generar Guías HTML ───────────────────────────────────
+// ─── Generar Guías HTML 15×10cm ──────────────────────────
 function generarGuias(pedidos) {
   const guias = pedidos.map(p => `
 <div class="guia">
@@ -175,6 +157,8 @@ function generarGuias(pedidos) {
     <div class="dato"><b>Dirección:</b> ${p.direccion||'—'}</div>
     <div class="dato"><b>Teléfono:</b> ${p.telefono||'—'}</div>
     <div class="dato prod"><b>Producto:</b> ${getTipo(p.producto_nombre)} ×${p.cantidad||1}</div>
+    <div class="dato"><b>A cobrar:</b> ${formatGs(p.total)}</div>
+    <div class="dato"><b>Ref:</b> #${p.n_referencia}</div>
   </div>
 </div>`).join('\n')
 
@@ -190,42 +174,80 @@ function generarGuias(pedidos) {
   .linea{border-top:2px solid #000;width:100%;margin:.3cm 0}
   .titulo-dest{font-size:12pt;font-weight:bold}
   .datos{width:100%;text-align:left;margin-top:.2cm}
-  .dato{font-size:11pt;margin:.2cm 0;line-height:1.3}
-  .prod{font-size:12pt;font-weight:bold;margin-top:.35cm}
+  .dato{font-size:11pt;margin:.18cm 0;line-height:1.3}
+  .prod{font-size:12pt;font-weight:bold;margin-top:.3cm}
 </style></head><body>${guias}</body></html>`
 }
 
-// ─── Componente ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// COMPONENTE
+// ═══════════════════════════════════════════════════════════
 export default function DespachoPagina() {
   const { toast } = useToast()
   const fileRef = useRef()
-  const [todos, setTodos] = useState([]) // todos los pedidos del CSV
+  const [todos, setTodos] = useState([])
   const [cargando, setCargando] = useState(false)
   const [resultado, setResultado] = useState(null)
   const [step, setStep] = useState('upload')
+  const [busqueda, setBusqueda] = useState('')
+  const [nombreArchivo, setNombreArchivo] = useState('')
 
-  const paraDespacho = todos.filter(p => p.despachar)
-  const excluidos = todos.filter(p => !p.despachar)
+  const paraDespacho = useMemo(() => todos.filter(p => p.despachar), [todos])
+  const excluidos = useMemo(() => todos.filter(p => !p.despachar), [todos])
 
-  // Stats
-  const stats = {
+  const stats = useMemo(() => ({
     confirmados: todos.filter(p => p.estado_releasit === 'confirmado').length,
     ayuda: todos.filter(p => p.estado_releasit === 'ayuda').length,
     pending: todos.filter(p => p.estado_releasit === 'pending').length,
     cancelados: todos.filter(p => p.estado_releasit === 'cancelado').length,
     total: todos.length,
-  }
+    valorDespacho: paraDespacho.reduce((s, p) => s + p.total, 0),
+    ticketProm: paraDespacho.length ? Math.round(paraDespacho.reduce((s, p) => s + p.total, 0) / paraDespacho.length) : 0,
+  }), [todos, paraDespacho])
+
+  // Desglose por producto (para preparar bultos)
+  const porProducto = useMemo(() => {
+    const m = {}
+    paraDespacho.forEach(p => { const t = getTipo(p.producto_nombre); m[t] = (m[t] || 0) + p.cantidad })
+    return Object.entries(m).sort((a, b) => b[1] - a[1])
+  }, [paraDespacho])
+
+  // Desglose por ciudad
+  const porCiudad = useMemo(() => {
+    const m = {}
+    paraDespacho.forEach(p => { const c = p.ciudad || 'Sin ciudad'; m[c] = (m[c] || 0) + 1 })
+    return Object.entries(m).sort((a, b) => b[1] - a[1])
+  }, [paraDespacho])
+
+  // Pedidos a despachar con datos faltantes
+  const conFaltantes = useMemo(() => paraDespacho.filter(p => p.faltantes.length > 0), [paraDespacho])
+
+  // Tabla filtrada por búsqueda
+  const tablaFiltrada = useMemo(() => {
+    if (!busqueda.trim()) return todos
+    const q = busqueda.toLowerCase()
+    return todos.filter(p =>
+      p.cliente_nombre.toLowerCase().includes(q) ||
+      p.ciudad.toLowerCase().includes(q) ||
+      p.n_referencia.includes(q) ||
+      p.telefono.includes(q) ||
+      getTipo(p.producto_nombre).toLowerCase().includes(q)
+    )
+  }, [todos, busqueda])
 
   const handleFile = (file) => {
     if (!file?.name.endsWith('.csv')) { toast('Solo archivos .csv', 'error'); return }
+    setNombreArchivo(file.name)
     const reader = new FileReader()
     reader.onload = (e) => {
       const rows = parseCSVRobust(e.target.result)
       const mapped = rows.map(mapearPedido).filter(p => p.producto_nombre)
-      if (!mapped.length) { toast('No se encontraron pedidos válidos', 'error'); return }
+      if (!mapped.length) { toast('No se encontraron pedidos válidos en el CSV', 'error'); return }
       setTodos(mapped)
       setStep('preview')
       setResultado(null)
+      setBusqueda('')
+      toast(`${mapped.length} pedidos procesados`, 'success')
     }
     reader.readAsText(file)
   }
@@ -284,7 +306,7 @@ export default function DespachoPagina() {
     toast('Guías descargadas — abrí con Chrome e imprimí', 'success')
   }
 
-  const reset = () => { setTodos([]); setResultado(null); setStep('upload') }
+  const reset = () => { setTodos([]); setResultado(null); setStep('upload'); setBusqueda(''); setNombreArchivo('') }
 
   // ── UPLOAD ──────────────────────────────────────────────
   if (step === 'upload') return (
@@ -292,7 +314,7 @@ export default function DespachoPagina() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Despacho</h1>
-          <p className="page-subtitle">CSV de Shopify → carga ventas + cabecera Excel + guías Word</p>
+          <p className="page-subtitle">CSV de Shopify → carga ventas + cabecera Excel + guías 15×10cm</p>
         </div>
       </div>
       <div className="card">
@@ -341,53 +363,54 @@ export default function DespachoPagina() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Despacho</h1>
-          <p className="page-subtitle">{todos.length} pedidos procesados del CSV</p>
+          <p className="page-subtitle">{nombreArchivo} · {todos.length} pedidos procesados</p>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={reset}><X size={13} /> Cargar otro CSV</button>
       </div>
 
-      {/* Estadísticas */}
+      {/* Alerta de datos faltantes */}
+      {conFaltantes.length > 0 && (
+        <div className="alert alert-warning">
+          <AlertTriangle size={15} />
+          <div>
+            <div style={{ fontWeight: 600 }}>{conFaltantes.length} pedido(s) a despachar con datos faltantes</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>
+              {conFaltantes.map(p => `#${p.n_referencia} (falta ${p.faltantes.join(', ')})`).join(' · ')}
+            </div>
+            <div style={{ fontSize: 11, marginTop: 4, color: 'var(--text-muted)' }}>Revisá estos antes de generar las guías o el Excel.</div>
+          </div>
+        </div>
+      )}
+
+      {/* KPIs principales */}
       <div className="kpi-grid">
-        <div className="kpi-card">
-          <div className="kpi-label">Total en CSV</div>
-          <div className="kpi-value">{stats.total}</div>
-          <div className="kpi-sub">Pedidos analizados</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">✅ Confirmados</div>
-          <div className="kpi-value green">{stats.confirmados}</div>
-          <div className="kpi-sub">Se despachan</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">💬 Ayuda</div>
-          <div className="kpi-value" style={{ color: 'var(--purple)' }}>{stats.ayuda}</div>
-          <div className="kpi-sub">Se despachan</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">⚠ Pendiente</div>
-          <div className="kpi-value yellow">{stats.pending}</div>
-          <div className="kpi-sub">NO se despachan</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">❌ Cancelados</div>
-          <div className="kpi-value red">{stats.cancelados}</div>
-          <div className="kpi-sub">NO se despachan</div>
-        </div>
         <div className="kpi-card">
           <div className="kpi-label">📦 Para despachar</div>
           <div className="kpi-value accent">{paraDespacho.length}</div>
           <div className="kpi-sub">Confirmados + Ayuda</div>
         </div>
+        <div className="kpi-card">
+          <div className="kpi-label">💰 Valor a cobrar</div>
+          <div className="kpi-value green">{formatGs(stats.valorDespacho)}</div>
+          <div className="kpi-sub">Total COD a despachar</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">🎯 Ticket promedio</div>
+          <div className="kpi-value">{formatGs(stats.ticketProm)}</div>
+          <div className="kpi-sub">Por pedido</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">📊 Tasa confirmación</div>
+          <div className="kpi-value accent">{stats.total ? Math.round((stats.confirmados + stats.ayuda) / stats.total * 100) : 0}%</div>
+          <div className="kpi-sub">{stats.confirmados + stats.ayuda} de {stats.total}</div>
+        </div>
       </div>
 
-      {/* Tasa de confirmación */}
+      {/* Barra de estados */}
       {stats.total > 0 && (
         <div className="card card-sm">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Tasa de confirmación</span>
-            <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--accent)', fontFamily: 'var(--font-display)' }}>
-              {Math.round((stats.confirmados + stats.ayuda) / stats.total * 100)}%
-            </span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Distribución de estados</span>
           </div>
           <div style={{ height: 8, background: 'var(--bg-hover)', borderRadius: 4, overflow: 'hidden', display: 'flex' }}>
             <div style={{ width: `${stats.confirmados / stats.total * 100}%`, background: 'var(--green)', transition: 'width 0.5s' }} />
@@ -406,6 +429,34 @@ export default function DespachoPagina() {
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: l.color, flexShrink: 0 }} />
                 <span style={{ color: 'var(--text-secondary)' }}>{l.label}</span>
               </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Desglose producto + ciudad */}
+      {paraDespacho.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="card card-sm">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, marginBottom: 12 }}>
+              <Package size={15} color="var(--accent)" /> Bultos a preparar
+            </div>
+            {porProducto.map(([prod, cant], i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < porProducto.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{prod}</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--accent)', fontFamily: 'var(--font-display)' }}>{cant} u</span>
+              </div>
+            ))}
+          </div>
+          <div className="card card-sm">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, marginBottom: 12 }}>
+              <MapPin size={15} color="var(--green)" /> Por ciudad
+            </div>
+            {porCiudad.slice(0, 6).map(([ciudad, cant], i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < Math.min(porCiudad.length, 6) - 1 ? '1px solid var(--border)' : 'none' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{ciudad}</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--green)', fontFamily: 'var(--font-display)' }}>{cant}</span>
+              </div>
             ))}
           </div>
         </div>
@@ -459,12 +510,21 @@ export default function DespachoPagina() {
         </div>
       </div>
 
-      {/* Tabla — TODOS los pedidos */}
+      {/* Tabla con búsqueda */}
       <div className="card" style={{ padding: 0 }}>
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Eye size={14} color="var(--text-muted)" />
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Todos los pedidos del CSV</span>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Todos los pedidos</span>
+          <div style={{ position: 'relative', marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+            <Search size={13} color="var(--text-muted)" style={{ position: 'absolute', left: 9 }} />
+            <input
+              value={busqueda}
+              onChange={e => setBusqueda(e.target.value)}
+              placeholder="Buscar nombre, ciudad, ref..."
+              style={{ padding: '6px 10px 6px 28px', fontSize: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', width: 200 }}
+            />
+          </div>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
             {paraDespacho.length} se despachan · {excluidos.length} excluidos
           </span>
         </div>
@@ -485,11 +545,14 @@ export default function DespachoPagina() {
               </tr>
             </thead>
             <tbody>
-              {todos.map((p, i) => (
+              {tablaFiltrada.map((p, i) => (
                 <tr key={i} style={{ opacity: p.despachar ? 1 : 0.45 }}>
-                  <td className="mono">{p.n_referencia}</td>
+                  <td className="mono">#{p.n_referencia}</td>
                   <td className="muted" style={{ fontSize: 11 }}>{p.fecha}</td>
-                  <td style={{ fontWeight: 500 }}>{p.cliente_nombre || '—'}</td>
+                  <td style={{ fontWeight: 500 }}>
+                    {p.cliente_nombre || '—'}
+                    {p.faltantes.length > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--yellow)' }} title={`Falta ${p.faltantes.join(', ')}`}>⚠</span>}
+                  </td>
                   <td className="muted">{p.ciudad || '—'}</td>
                   <td className="muted">{p.telefono || '—'}</td>
                   <td style={{ fontSize: 12 }}>{getTipo(p.producto_nombre)}</td>
