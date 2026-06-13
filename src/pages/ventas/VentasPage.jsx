@@ -151,7 +151,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
       ...form,
       producto_nombre: productoSel.nombre,
       precio_unit: total,
-      total,
+      total: total + envioCliente, // lo que paga el cliente, incluye envío (grupo A) — igual que Shopify
       costo_prod: productoSel.costo_unit * form.cantidad,
       costo_envio: costoEnvio,
       envio_cliente: envioCliente,
@@ -203,17 +203,25 @@ function NuevaVentaModal({ onClose, onSaved }) {
             </div>
           </div>
 
-          {productoSel && (
-            <div style={{ background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.2)', borderRadius: 8, padding: '12px 16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>Precio calculado automáticamente</span>
-                <span style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{formatGs(total)}</span>
+          {productoSel && (() => {
+            const envSel = metodosEnvio.find(m => m.id === form.metodo_envio_id)
+            const envioCli = productoSel.grupo_envio === 'A' ? (envSel?.costo_cliente || 29000) : 0
+            const costoEnv = envSel?.costo_propio || 27000
+            const costoProd = productoSel.costo_unit * form.cantidad
+            const totalCliente = total + envioCli
+            const margenEst = totalCliente - costoProd - costoEnv
+            return (
+              <div style={{ background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.2)', borderRadius: 8, padding: '12px 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>Total que paga el cliente{envioCli > 0 ? ' (con envío)' : ''}</span>
+                  <span style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{formatGs(totalCliente)}</span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
+                  Producto: {formatGs(total)}{envioCli > 0 ? ` + envío ${formatGs(envioCli)}` : ''} · Costo: {formatGs(costoProd)} · Grupo: {productoSel.grupo_envio} · Margen est.: {formatGs(margenEst)}
+                </div>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
-                Costo: {formatGs(productoSel.costo_unit * form.cantidad)} · Grupo: {productoSel.grupo_envio} · Margen est.: {formatGs(total - productoSel.costo_unit * form.cantidad - 27000)}
-              </div>
-            </div>
-          )}
+            )
+          })()}
 
           <div className="form-grid">
             <div className="form-group">

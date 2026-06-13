@@ -125,7 +125,6 @@ function enriquecerConProducto(v, productos) {
     producto_id: p.id,
     producto_nombre: p.nombre, // normaliza al nombre del catálogo (stock + analytics consistentes)
     costo_prod: (p.costo_unit || 0) * (v.cantidad || 1),
-    envio_cliente: p.grupo_envio === 'A' ? (v.envio_cliente || 29000) : 0,
     _sinProducto: false,
   }
 }

@@ -59,7 +59,7 @@ export default function ReportesPage() {
     ;(ventas || []).forEach(v => {
       if (!porProducto[v.producto_nombre]) porProducto[v.producto_nombre] = { nombre: v.producto_nombre, ventas: 0, entregados: 0, devueltos: 0, ingresos: 0 }
       porProducto[v.producto_nombre].ventas++
-      if (v.estado === 'entregado') { porProducto[v.producto_nombre].entregados++; porProducto[v.producto_nombre].ingresos += v.ganancia_neta }
+      if (v.estado === 'entregado') { porProducto[v.producto_nombre].entregados++; porProducto[v.producto_nombre].ingresos += (v.ganancia_neta || 0) }
       if (v.estado === 'devuelto') porProducto[v.producto_nombre].devueltos++
     })
     const porProductoArr = Object.values(porProducto).map(p => {
@@ -74,7 +74,7 @@ export default function ReportesPage() {
       const fechaStr = `${year}-${month}-${String(d).padStart(2, '0')}`
       const ventasDia = entregadas.filter(v => v.fecha === fechaStr)
       if (ventasDia.length > 0 || d <= new Date().getDate()) {
-        porDia.push({ dia: d, ventas: ventasDia.reduce((s, v) => s + v.total, 0), neto: ventasDia.reduce((s, v) => s + v.ganancia_neta, 0), cantidad: ventasDia.length })
+        porDia.push({ dia: d, ventas: ventasDia.reduce((s, v) => s + v.total, 0), neto: ventasDia.reduce((s, v) => s + (v.ganancia_neta || 0), 0), cantidad: ventasDia.length })
       }
     }
 
@@ -85,7 +85,7 @@ export default function ReportesPage() {
     const entregadasPrev = (ventasPrev || []).filter(v => v.estado === 'entregado')
     const comparativa = {
       ventasBrutas: entregadasPrev.reduce((s, v) => s + v.total, 0),
-      ingresosNetos: entregadasPrev.reduce((s, v) => s + v.ganancia_neta, 0),
+      ingresosNetos: entregadasPrev.reduce((s, v) => s + (v.ganancia_neta || 0), 0),
       paquetes: (ventasPrev || []).length,
       entregados: entregadasPrev.length,
       devueltos: (ventasPrev || []).filter(v => v.estado === 'devuelto').length,
@@ -160,22 +160,33 @@ export default function ReportesPage() {
     const peorDia = [...porDiaSemana].filter(d => d.total >= 3).sort((a, b) => b.devolucion - a.devolucion)[0]
     if (peorDia && peorDia.devolucion >= 45) alertas.push({ tipo: 'patron', texto: `Los pedidos del ${peorDia.dia} se devuelven ${peorDia.devolucion}%. Evaluá no despachar ese día o reforzar la confirmación.` })
 
-    const ingresosNetosCalc = entregadas.reduce((s, v) => s + v.ganancia_neta, 0)
-    const ventasBrutasCalc = entregadas.reduce((s, v) => s + v.total, 0)
+    const sumE = (f) => entregadas.reduce((s, v) => s + (f(v) || 0), 0)
+    const ventasBrutasCalc = sumE(v => v.total)                 // lo cobrado (entregadas) — ya incluye el envío
+    const cogsEntregadas = sumE(v => v.costo_prod)              // costo de mercadería entregada
+    const fleteEntregadas = sumE(v => v.costo_envio)            // flete pagado al courier (entregadas)
+    // Ingreso neto de entregadas = total − costo prod − flete  (ya es ganancia_neta; el envío ya viene en total)
+    const ingresosNetosCalc = sumE(v => v.ganancia_neta)
+    // Tu regla: pendientes también generan costo de venta (mercadería que salió); devueltas NO
+    const cogsPendientes = pendientes.reduce((s, v) => s + (v.costo_prod || 0), 0)
+    const costoVentaTotal = cogsEntregadas + cogsPendientes
     // Flete perdido: las devoluciones igual te cuestan el envío (COD)
     const fleteDevoluciones = devueltas.reduce((s, v) => s + (v.costo_envio || 0), 0)
+    // Utilidad realizada (solo entregadas, correcta contablemente)
+    const utilidadRealizada = ingresosNetosCalc - totalGastos - fleteDevoluciones
+    // Utilidad según TU modelo: además resta el costo de la mercadería pendiente
+    const utilidadNetaCalc = utilidadRealizada - cogsPendientes
 
     setDatos({
       mes, ventasBrutas: ventasBrutasCalc,
       ingresosNetos: ingresosNetosCalc,
       totalGastos, totalGastoAds, fleteDevoluciones,
-      // Margen REAL = ganancia neta / ventas brutas (no promedio de margen_pct, que ignora el envío)
+      cogsEntregadas, cogsPendientes, costoVentaTotal, fleteEntregadas,
+      // Margen real = ingreso neto / ventas brutas
       margenPct: ventasBrutasCalc ? (ingresosNetosCalc / ventasBrutasCalc) * 100 : 0,
       paquetesEnviados: (ventas || []).length,
       entregados: entregadas.length, devueltos: devueltas.length, pendientesCount: pendientes.length,
       tasaEntrega: (ventas || []).length ? (entregadas.length / (ventas || []).length) * 100 : 0,
-      // Utilidad = ingresos netos − gastos − flete perdido en devoluciones
-      utilidadNeta: ingresosNetosCalc - totalGastos - fleteDevoluciones,
+      utilidadNeta: utilidadNetaCalc, utilidadRealizada,
       porProducto: porProductoArr,
       porDia, campanas: campanas || [],
       ventas: ventas || [],
@@ -332,10 +343,10 @@ export default function ReportesPage() {
           {/* KPIs grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
             {[
-              { label: 'Ventas brutas', value: formatGs(datos.ventasBrutas), sub: 'Solo entregadas', color: 'var(--text-primary)' },
-              { label: 'Ingresos netos', value: formatGs(datos.ingresosNetos), sub: 'Después de envíos', color: 'var(--green)' },
-              { label: 'Margen %', value: formatPct(datos.margenPct), sub: 'Ganancia neta / ventas', color: datos.margenPct > 40 ? 'var(--green)' : 'var(--yellow)' },
-              { label: 'Utilidad neta', value: formatGs(datos.utilidadNeta), sub: 'Ingresos − gastos − flete dev.', color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' },
+              { label: 'Ventas brutas', value: formatGs(datos.ventasBrutas), sub: 'Cobrado (entregadas)', color: 'var(--text-primary)' },
+              { label: 'Costo de venta', value: formatGs(datos.costoVentaTotal), sub: 'Mercadería entreg. + pend.', color: 'var(--red)' },
+              { label: 'Margen %', value: formatPct(datos.margenPct), sub: 'Ingreso neto / ventas', color: datos.margenPct > 40 ? 'var(--green)' : 'var(--yellow)' },
+              { label: 'Utilidad neta', value: formatGs(datos.utilidadNeta), sub: 'Después de todo', color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' },
               { label: 'Paquetes enviados', value: datos.paquetesEnviados, sub: `${datos.entregados} entregados`, color: 'var(--text-primary)' },
               { label: 'Devoluciones', value: datos.devueltos, sub: `${formatGs(datos.fleteDevoluciones)} en flete perdido`, color: datos.devueltos > 10 ? 'var(--red)' : 'var(--yellow)' },
               { label: 'Tasa de entrega', value: formatPct(datos.tasaEntrega), sub: 'Sobre total enviado', color: datos.tasaEntrega > 60 ? 'var(--green)' : 'var(--red)' },
@@ -347,6 +358,35 @@ export default function ReportesPage() {
                 <div className="kpi-sub">{k.sub}</div>
               </div>
             ))}
+          </div>
+
+          {/* Desglose de utilidad (P&L) */}
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
+              Cómo se arma tu utilidad
+            </div>
+            <div style={{ padding: '6px 20px' }}>
+              {[
+                { l: 'Ingresos cobrados (entregadas, con envío)', v: datos.ventasBrutas, signo: '+' },
+                { l: 'Costo de mercadería entregada', v: datos.cogsEntregadas, signo: '−' },
+                { l: 'Flete pagado al courier (entregadas)', v: datos.fleteEntregadas, signo: '−' },
+                { l: 'Costo de mercadería pendiente (no cobrada)', v: datos.cogsPendientes, signo: '−' },
+                { l: 'Flete perdido en devoluciones', v: datos.fleteDevoluciones, signo: '−' },
+                { l: 'Gastos del mes', v: datos.totalGastos, signo: '−' },
+              ].filter(r => r.v !== undefined).map((r, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 13 }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>{r.l}</span>
+                  <span style={{ fontWeight: 600, color: r.signo === '−' ? 'var(--red)' : 'var(--text-primary)' }}>{r.signo} {formatGs(r.v)}</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0 10px', fontSize: 14 }}>
+                <span style={{ fontWeight: 700 }}>Utilidad neta</span>
+                <span style={{ fontWeight: 800, color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' }}>{formatGs(datos.utilidadNeta)}</span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', paddingBottom: 12, lineHeight: 1.5 }}>
+                Nota: la utilidad resta el costo de la mercadería pendiente (tu criterio). Si mirás solo lo ya cobrado e ignorás las pendientes, la <b>utilidad realizada</b> del mes es {formatGs(datos.utilidadRealizada)}. La diferencia es mercadería que ya salió pero todavía no cobraste.
+              </div>
+            </div>
           </div>
 
           {/* Comparativa con mes anterior */}
