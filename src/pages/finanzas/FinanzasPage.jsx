@@ -3,15 +3,23 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
-import { Plus, X, DollarSign, TrendingDown, TrendingUp, BarChart3 } from 'lucide-react'
+import { Plus, X, DollarSign, TrendingDown, TrendingUp, BarChart3, Edit2, Trash2, Save } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
 const CATEGORIAS = ['Publicidad', 'Logística', 'Operativo', 'Personal', 'Impuestos', 'Otro']
 
-function NuevoGastoModal({ onClose, onSaved }) {
+function GastoModal({ gasto, onClose, onSaved }) {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
-  const [form, setForm] = useState({
+  const esEdicion = !!gasto
+  const [form, setForm] = useState(gasto ? {
+    fecha: gasto.fecha || new Date().toISOString().split('T')[0],
+    categoria: gasto.categoria || 'Publicidad',
+    concepto: gasto.concepto || '',
+    monto: gasto.monto ?? '',
+    mes: gasto.mes || (gasto.fecha ? gasto.fecha.substring(0, 7) : new Date().toISOString().substring(0, 7)),
+    presupuestado: gasto.presupuestado ?? '',
+  } : {
     fecha: new Date().toISOString().split('T')[0],
     categoria: 'Publicidad',
     concepto: '',
@@ -23,13 +31,17 @@ function NuevoGastoModal({ onClose, onSaved }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
-    const { error } = await supabase.from('gastos').insert({
+    const payload = {
       ...form,
-      monto: parseInt(form.monto),
+      monto: parseInt(form.monto) || 0,
       presupuestado: parseInt(form.presupuestado) || 0,
-    })
+      mes: (form.fecha || '').substring(0, 7) || form.mes,
+    }
+    const { error } = esEdicion
+      ? await supabase.from('gastos').update(payload).eq('id', gasto.id)
+      : await supabase.from('gastos').insert(payload)
     if (error) toast('Error al guardar', 'error')
-    else { toast('Gasto registrado', 'success'); onSaved(); onClose() }
+    else { toast(esEdicion ? 'Gasto actualizado' : 'Gasto registrado', 'success'); onSaved(); onClose() }
     setLoading(false)
   }
 
@@ -37,7 +49,7 @@ function NuevoGastoModal({ onClose, onSaved }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-header">
-          <h2 className="modal-title">Registrar gasto</h2>
+          <h2 className="modal-title">{esEdicion ? 'Editar gasto' : 'Registrar gasto'}</h2>
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -75,7 +87,7 @@ function NuevoGastoModal({ onClose, onSaved }) {
           <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancelar</button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Guardando...' : 'Registrar gasto'}
+              <Save size={14} /> {loading ? 'Guardando...' : esEdicion ? 'Guardar cambios' : 'Registrar gasto'}
             </button>
           </div>
         </form>
@@ -90,7 +102,14 @@ export default function FinanzasPage() {
   const [ventasPorMes, setVentasPorMes] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [editando, setEditando] = useState(null)
   const [filtroMes, setFiltroMes] = useState(new Date().toISOString().substring(0, 7))
+
+  const eliminarGasto = async (id) => {
+    if (!confirm('¿Eliminar este gasto?')) return
+    await supabase.from('gastos').delete().eq('id', id)
+    cargar()
+  }
 
   const cargar = useCallback(async () => {
     setLoading(true)
@@ -136,8 +155,9 @@ export default function FinanzasPage() {
   })
 
   const mesesDisponibles = []
+  const _hoy = new Date()
   for (let i = 0; i < 6; i++) {
-    const d = new Date(); d.setMonth(d.getMonth() - i)
+    const d = new Date(_hoy.getFullYear(), _hoy.getMonth() - i, 1)
     mesesDisponibles.push({
       value: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
       label: d.toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }),
@@ -237,11 +257,12 @@ export default function FinanzasPage() {
               <th>Monto real</th>
               <th>Presupuestado</th>
               <th>Diferencia</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {gastos.length === 0 ? (
-              <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 40 }}>
+              <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 40 }}>
                 Sin gastos registrados este mes
               </td></tr>
             ) : gastos.map(g => {
@@ -256,6 +277,12 @@ export default function FinanzasPage() {
                   <td style={{ color: dif !== null ? (dif >= 0 ? 'var(--green)' : 'var(--red)') : undefined, fontWeight: 500 }}>
                     {dif !== null ? `${dif >= 0 ? '+' : ''}${formatGs(dif)}` : '—'}
                   </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 2 }}>
+                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditando(g)} style={{ color: 'var(--accent)' }} title="Editar"><Edit2 size={13} /></button>
+                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => eliminarGasto(g.id)} style={{ color: 'var(--red)', opacity: 0.6 }} title="Eliminar"><Trash2 size={13} /></button>
+                    </div>
+                  </td>
                 </tr>
               )
             })}
@@ -263,7 +290,8 @@ export default function FinanzasPage() {
         </table>
       </div>
 
-      {showModal && <NuevoGastoModal onClose={() => setShowModal(false)} onSaved={cargar} />}
+      {showModal && <GastoModal onClose={() => setShowModal(false)} onSaved={cargar} />}
+      {editando && <GastoModal gasto={editando} onClose={() => setEditando(null)} onSaved={cargar} />}
     </div>
   )
 }

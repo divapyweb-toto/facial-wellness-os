@@ -50,15 +50,18 @@ export default function AnalyticsPage() {
     const calcMetricas = (ventas) => {
       const entregadas = ventas.filter(v => v.estado === 'entregado')
       const devueltas = ventas.filter(v => v.estado === 'devuelto')
+      const vbruto = entregadas.reduce((s, v) => s + v.total, 0)
+      const ineto = entregadas.reduce((s, v) => s + v.ganancia_neta, 0)
       return {
-        ventasBrutas: entregadas.reduce((s, v) => s + v.total, 0),
-        ingresosNetos: entregadas.reduce((s, v) => s + v.ganancia_neta, 0),
+        ventasBrutas: vbruto,
+        ingresosNetos: ineto,
         paquetes: ventas.length,
         entregados: entregadas.length,
         devueltos: devueltas.length,
         tasaEntrega: ventas.length ? Math.round(entregadas.length / ventas.length * 100) : 0,
-        margenPct: entregadas.length ? entregadas.reduce((s, v) => s + parseFloat(v.margen_pct || 0), 0) / entregadas.length : 0,
-        ticketPromedio: entregadas.length ? Math.round(entregadas.reduce((s, v) => s + v.total, 0) / entregadas.length) : 0,
+        // Margen real ponderado (incluye flete) — consistente con Reportes y Dashboard
+        margenPct: vbruto ? (ineto / vbruto) * 100 : 0,
+        ticketPromedio: entregadas.length ? Math.round(vbruto / entregadas.length) : 0,
       }
     }
     setMesMes({ actual: calcMetricas(vActual || []), anterior: calcMetricas(vAnterior || []) })
@@ -234,7 +237,7 @@ export default function AnalyticsPage() {
                     { label: 'Paquetes enviados', actual: mesMes.actual.paquetes, anterior: mesMes.anterior.paquetes, av: mesMes.actual.paquetes, ant: mesMes.anterior.paquetes },
                     { label: 'Tasa de entrega', actual: `${mesMes.actual.tasaEntrega}%`, anterior: `${mesMes.anterior.tasaEntrega}%`, av: mesMes.actual.tasaEntrega, ant: mesMes.anterior.tasaEntrega },
                     { label: 'Devoluciones', actual: mesMes.actual.devueltos, anterior: mesMes.anterior.devueltos, av: mesMes.actual.devueltos, ant: mesMes.anterior.devueltos, invertido: true },
-                    { label: 'Margen promedio', actual: `${mesMes.actual.margenPct.toFixed(1)}%`, anterior: `${mesMes.anterior.margenPct.toFixed(1)}%`, av: mesMes.actual.margenPct, ant: mesMes.anterior.margenPct },
+                    { label: 'Margen real', actual: `${mesMes.actual.margenPct.toFixed(1)}%`, anterior: `${mesMes.anterior.margenPct.toFixed(1)}%`, av: mesMes.actual.margenPct, ant: mesMes.anterior.margenPct },
                     { label: 'Ticket promedio', actual: formatGs(mesMes.actual.ticketPromedio), anterior: formatGs(mesMes.anterior.ticketPromedio), av: mesMes.actual.ticketPromedio, ant: mesMes.anterior.ticketPromedio },
                   ].map((row, i) => (
                     <tr key={i}>

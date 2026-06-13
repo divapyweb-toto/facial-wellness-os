@@ -97,6 +97,46 @@ function mapShopifyRow(row) {
   }
 }
 
+// ─── Multiproducto: valor de un line item (precio × cantidad) ───
+function precioLineaShopify(row) {
+  const p = parseInt((row['Lineitem price'] || '0').toString().replace(/[^0-9]/g, '')) || 0
+  const q = parseInt(row['Lineitem quantity']) || 1
+  return p * q
+}
+
+// Agrupa filas de Shopify por pedido. Las filas SIN Name son líneas extra del
+// pedido anterior (Shopify pone una fila por producto). Devuelve 1 venta por
+// pedido usando como producto el line item de MAYOR valor, y reporta los pedidos
+// con varios productos para avisar (no se pierden en silencio).
+function agruparPedidosShopify(filas) {
+  const grupos = []
+  let actual = null
+  for (const row of filas) {
+    const name = (row['Name'] || '').trim()
+    if (name.startsWith('#')) { actual = { cab: row, lineas: [row] }; grupos.push(actual) }
+    else if (actual && (row['Lineitem name'] || '').trim()) actual.lineas.push(row)
+  }
+  const ventas = []
+  const multi = []
+  for (const g of grupos) {
+    const base = mapShopifyRow(g.cab) // datos del cliente + Total del pedido
+    let mejor = g.lineas[0], mejorVal = -1
+    for (const ln of g.lineas) {
+      const val = precioLineaShopify(ln)
+      if (val > mejorVal) { mejorVal = val; mejor = ln }
+    }
+    ventas.push({
+      ...base,
+      producto_nombre: (mejor['Lineitem name'] || base.producto_nombre || 'Sin nombre').trim(),
+      cantidad: parseInt(mejor['Lineitem quantity']) || 1,
+    })
+    if (g.lineas.length > 1) {
+      multi.push({ ref: base.n_referencia, productos: g.lineas.map(l => (l['Lineitem name'] || '').trim()).filter(Boolean) })
+    }
+  }
+  return { ventas, multi }
+}
+
 // ─── Match de producto del catálogo por nombre ──────────────
 // Resuelve costo_prod y producto_id buscando el producto del catálogo
 // que corresponde al nombre que viene de Shopify (que suele ser más largo/sucio).
@@ -168,17 +208,23 @@ export default function ImportarPage() {
       .then(({ data }) => setProductos(data || []))
   }, [])
 
+  // Agrupar pedidos Shopify (maneja pedidos con varios productos)
+  const shopifyAgrupado = useMemo(() => {
+    if (formato !== 'shopify' || !filasRaw.length) return { ventas: [], multi: [] }
+    return agruparPedidosShopify(filasRaw)
+  }, [filasRaw, formato])
+
   // Mapear todas las filas según formato + enriquecer con producto del catálogo
   const todasMapeadas = useMemo(() => {
     if (!filasRaw.length) return []
     let base
     if (formato === 'shopify') {
-      base = filasRaw.filter(r => r['Name'] && r['Name'].startsWith('#')).map(mapShopifyRow)
+      base = shopifyAgrupado.ventas
     } else {
       base = filasRaw.map(mapGenericoRow).filter(v => v.producto_nombre && v.producto_nombre !== 'Sin nombre')
     }
     return base.map(v => enriquecerConProducto(v, productos))
-  }, [filasRaw, formato, productos])
+  }, [filasRaw, formato, productos, shopifyAgrupado])
 
   // Aplicar filtro de estado Releasit (solo Shopify)
   const ventasFinal = useMemo(() => {
@@ -394,6 +440,23 @@ export default function ImportarPage() {
               <div className="kpi-sub">Cancelados / pendientes</div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Pedidos con varios productos */}
+      {formato === 'shopify' && shopifyAgrupado.multi.length > 0 && (
+        <div className="alert alert-warning">
+          <AlertTriangle size={14} />
+          <div>
+            <div style={{ fontWeight: 600 }}>{shopifyAgrupado.multi.length} pedido(s) tienen varios productos</div>
+            <div style={{ fontSize: 12, marginTop: 3, opacity: 0.9 }}>
+              Se importa el producto principal (el de mayor valor) con el total del pedido. Los productos secundarios <b>no descuentan stock</b> — revisalos y ajustá el stock a mano si hace falta:
+            </div>
+            {shopifyAgrupado.multi.slice(0, 5).map((p, i) => (
+              <div key={i} style={{ fontSize: 12, marginTop: 3 }}>#{p.ref}: {p.productos.join(' + ')}</div>
+            ))}
+            {shopifyAgrupado.multi.length > 5 && <div style={{ fontSize: 12, marginTop: 3, opacity: 0.6 }}>…y {shopifyAgrupado.multi.length - 5} más</div>}
+          </div>
         </div>
       )}
 

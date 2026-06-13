@@ -147,10 +147,13 @@ export default function DashboardPage() {
       const entregadas = ventasMes.filter(v => v.estado === 'entregado')
       const pendientes = ventasMes.filter(v => v.estado === 'pendiente')
       const devueltas = ventasMes.filter(v => v.estado === 'devuelto')
+      const vbruto = entregadas.reduce((s, v) => s + v.total, 0)
+      const ineto = entregadas.reduce((s, v) => s + v.ganancia_neta, 0)
       setKpis({
-        ventasBrutas: entregadas.reduce((s, v) => s + v.total, 0),
-        ingresosNetos: entregadas.reduce((s, v) => s + v.ganancia_neta, 0),
-        margenPct: entregadas.length ? entregadas.reduce((s, v) => s + parseFloat(v.margen_pct), 0) / entregadas.length : 0,
+        ventasBrutas: vbruto,
+        ingresosNetos: ineto,
+        // Margen real ponderado (incluye flete) — consistente con Reportes
+        margenPct: vbruto ? (ineto / vbruto) * 100 : 0,
         paquetesEnviados: ventasMes.length,
         entregados: entregadas.length,
         devueltos: devueltas.length,
@@ -325,7 +328,7 @@ export default function DashboardPage() {
         <div className="kpi-card">
           <div className="kpi-label"><BarChart3 size={11} />Margen %</div>
           <div className={`kpi-value ${(kpis?.margenPct || 0) > 40 ? 'green' : 'yellow'}`}>{formatPct(kpis?.margenPct || 0)}</div>
-          <div className="kpi-sub">Promedio del mes</div>
+          <div className="kpi-sub">Sobre entregadas (real)</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label"><Package size={11} />Enviados</div>

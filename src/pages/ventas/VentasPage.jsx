@@ -517,8 +517,9 @@ export default function VentasPage() {
   const totalNeto = ventas.filter(v => v.estado === 'entregado').reduce((s, v) => s + v.ganancia_neta, 0)
 
   const mesesDisponibles = []
+  const _hoy = new Date()
   for (let i = 0; i < 6; i++) {
-    const d = new Date(); d.setMonth(d.getMonth() - i)
+    const d = new Date(_hoy.getFullYear(), _hoy.getMonth() - i, 1)
     mesesDisponibles.push({
       value: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
       label: d.toLocaleDateString('es-PY', { month: 'short', year: 'numeric' }),

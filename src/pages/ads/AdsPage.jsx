@@ -2,13 +2,23 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
-import { Plus, X, Megaphone, TrendingUp, Target, DollarSign } from 'lucide-react'
+import { Plus, X, Megaphone, TrendingUp, Target, DollarSign, Edit2, Trash2, Save } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 
-function NuevaCampanaModal({ onClose, onSaved }) {
+function CampanaModal({ campana, onClose, onSaved }) {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
-  const [form, setForm] = useState({
+  const esEdicion = !!campana
+  const [form, setForm] = useState(campana ? {
+    mes: campana.mes || new Date().toISOString().substring(0, 7),
+    plataforma: campana.plataforma || 'Meta Ads',
+    nombre: campana.nombre || '',
+    fecha_inicio: campana.fecha_inicio || new Date().toISOString().split('T')[0],
+    gasto: campana.gasto ?? '',
+    ingresos_atribuidos: campana.ingresos_atribuidos ?? '',
+    ventas_generadas: campana.ventas_generadas ?? '',
+    observaciones: campana.observaciones || '',
+  } : {
     mes: new Date().toISOString().substring(0, 7),
     plataforma: 'Meta Ads',
     nombre: '',
@@ -22,14 +32,17 @@ function NuevaCampanaModal({ onClose, onSaved }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
-    const { error } = await supabase.from('campanas_ads').insert({
+    const payload = {
       ...form,
       gasto: parseInt(form.gasto) || 0,
       ingresos_atribuidos: parseInt(form.ingresos_atribuidos) || 0,
       ventas_generadas: parseInt(form.ventas_generadas) || 0,
-    })
+    }
+    const { error } = esEdicion
+      ? await supabase.from('campanas_ads').update(payload).eq('id', campana.id)
+      : await supabase.from('campanas_ads').insert(payload)
     if (error) toast('Error al guardar', 'error')
-    else { toast('Campaña registrada', 'success'); onSaved(); onClose() }
+    else { toast(esEdicion ? 'Campaña actualizada' : 'Campaña registrada', 'success'); onSaved(); onClose() }
     setLoading(false)
   }
 
@@ -41,7 +54,7 @@ function NuevaCampanaModal({ onClose, onSaved }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-header">
-          <h2 className="modal-title">Nueva campaña de ads</h2>
+          <h2 className="modal-title">{esEdicion ? 'Editar campaña' : 'Nueva campaña de ads'}</h2>
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -127,7 +140,7 @@ function NuevaCampanaModal({ onClose, onSaved }) {
           <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancelar</button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Guardando...' : 'Guardar campaña'}
+              <Save size={14} /> {loading ? 'Guardando...' : esEdicion ? 'Guardar cambios' : 'Guardar campaña'}
             </button>
           </div>
         </form>
@@ -137,9 +150,11 @@ function NuevaCampanaModal({ onClose, onSaved }) {
 }
 
 export default function AdsPage() {
+  const { toast } = useToast()
   const [campanas, setCampanas] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [editando, setEditando] = useState(null)
 
   const cargar = useCallback(async () => {
     setLoading(true)
@@ -149,6 +164,13 @@ export default function AdsPage() {
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
+
+  const eliminar = async (id) => {
+    if (!confirm('¿Eliminar esta campaña?')) return
+    await supabase.from('campanas_ads').delete().eq('id', id)
+    toast('Campaña eliminada', 'info')
+    cargar()
+  }
 
   const totalGasto = campanas.reduce((s, c) => s + (c.gasto || 0), 0)
   const totalIngresos = campanas.reduce((s, c) => s + (c.ingresos_atribuidos || 0), 0)
@@ -251,36 +273,49 @@ export default function AdsPage() {
                 <th>ROAS</th>
                 <th>ROI %</th>
                 <th>CPA</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {campanas.map(c => (
-                <tr key={c.id}>
-                  <td className="muted">{c.mes}</td>
-                  <td><span className="badge badge-purple">{c.plataforma}</span></td>
-                  <td style={{ fontWeight: 500 }}>{c.nombre}</td>
-                  <td style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
-                  <td style={{ color: 'var(--green)' }}>{formatGs(c.ingresos_atribuidos)}</td>
-                  <td>{c.ventas_generadas}</td>
-                  <td>
-                    <span style={{ fontWeight: 700, color: parseFloat(c.roas) >= 2 ? 'var(--green)' : 'var(--yellow)' }}>
-                      {c.roas}x
-                    </span>
-                  </td>
-                  <td>
-                    <span style={{ fontWeight: 700, color: parseFloat(c.roi_pct) > 0 ? 'var(--green)' : 'var(--red)' }}>
-                      {c.roi_pct}%
-                    </span>
-                  </td>
-                  <td className="muted">{formatGs(c.cpa)}</td>
-                </tr>
-              ))}
+              {campanas.map(c => {
+                const roas = c.gasto > 0 ? c.ingresos_atribuidos / c.gasto : 0
+                const roiPct = c.gasto > 0 ? (roas - 1) * 100 : 0
+                const cpa = c.ventas_generadas > 0 ? c.gasto / c.ventas_generadas : 0
+                return (
+                  <tr key={c.id}>
+                    <td className="muted">{c.mes}</td>
+                    <td><span className="badge badge-purple">{c.plataforma}</span></td>
+                    <td style={{ fontWeight: 500 }}>{c.nombre}</td>
+                    <td style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
+                    <td style={{ color: 'var(--green)' }}>{formatGs(c.ingresos_atribuidos)}</td>
+                    <td>{c.ventas_generadas}</td>
+                    <td>
+                      <span style={{ fontWeight: 700, color: roas >= 2 ? 'var(--green)' : 'var(--yellow)' }}>
+                        {roas.toFixed(2)}x
+                      </span>
+                    </td>
+                    <td>
+                      <span style={{ fontWeight: 700, color: roiPct > 0 ? 'var(--green)' : 'var(--red)' }}>
+                        {roiPct.toFixed(0)}%
+                      </span>
+                    </td>
+                    <td className="muted">{cpa > 0 ? formatGs(Math.round(cpa)) : '—'}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 2 }}>
+                        <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditando(c)} style={{ color: 'var(--accent)' }} title="Editar"><Edit2 size={13} /></button>
+                        <button className="btn btn-ghost btn-sm btn-icon" onClick={() => eliminar(c.id)} style={{ color: 'var(--red)', opacity: 0.6 }} title="Eliminar"><Trash2 size={13} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
       </div>
 
-      {showModal && <NuevaCampanaModal onClose={() => setShowModal(false)} onSaved={cargar} />}
+      {showModal && <CampanaModal onClose={() => setShowModal(false)} onSaved={cargar} />}
+      {editando && <CampanaModal campana={editando} onClose={() => setEditando(null)} onSaved={cargar} />}
     </div>
   )
 }

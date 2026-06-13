@@ -32,8 +32,19 @@ function ProductoModal({ producto, onClose, onSaved }) {
     const { error } = esNuevo
       ? await supabase.from('productos').insert(data)
       : await supabase.from('productos').update(data).eq('id', producto.id)
-    if (error) toast('Error: ' + error.message, 'error')
-    else { toast(esNuevo ? 'Producto creado' : 'Producto actualizado', 'success'); onSaved(); onClose() }
+    if (error) { toast('Error: ' + error.message, 'error'); setLoading(false); return }
+    // Si al editar cambió el stock a mano, dejar rastro en el historial
+    if (!esNuevo && producto && data.stock_actual !== producto.stock_actual) {
+      const delta = data.stock_actual - producto.stock_actual
+      try {
+        await supabase.from('stock_movimientos').insert({
+          producto_id: producto.id, producto_nombre: data.nombre,
+          tipo: delta > 0 ? 'compra' : 'venta', cantidad: Math.abs(delta),
+          motivo: `Ajuste manual de stock (${delta > 0 ? '+' : '−'}${Math.abs(delta)})`,
+        })
+      } catch (e) { /* el stock ya quedó guardado */ }
+    }
+    toast(esNuevo ? 'Producto creado' : 'Producto actualizado', 'success'); onSaved(); onClose()
     setLoading(false)
   }
 
@@ -123,17 +134,23 @@ function CompraModal({ producto, onClose, onSaved }) {
     e.preventDefault()
     if (!cantidad || cantidad <= 0) { toast('Ingresá una cantidad válida', 'error'); return }
     setLoading(true)
+    const cant = parseInt(cantidad)
     const { error } = await supabase.from('productos')
-      .update({ stock_actual: producto.stock_actual + parseInt(cantidad) })
+      .update({ stock_actual: producto.stock_actual + cant })
       .eq('id', producto.id)
-    if (!error) {
-      await supabase.from('stock_movimientos').insert({
-        producto_id: producto.id, producto_nombre: producto.nombre,
-        tipo: 'compra', cantidad: parseInt(cantidad), motivo,
-      })
-      toast(`+${cantidad} unidades agregadas a ${producto.nombre}`, 'success')
-      onSaved(); onClose()
-    } else toast('Error al actualizar stock', 'error')
+    if (error) { toast('Error al actualizar stock', 'error'); setLoading(false); return }
+    // Registrar el movimiento; si falla, revertir el stock para no descuadrar
+    const { error: errMov } = await supabase.from('stock_movimientos').insert({
+      producto_id: producto.id, producto_nombre: producto.nombre,
+      tipo: 'compra', cantidad: cant, motivo,
+    })
+    if (errMov) {
+      await supabase.from('productos').update({ stock_actual: producto.stock_actual }).eq('id', producto.id)
+      toast('No se pudo registrar el movimiento — stock sin cambios', 'error')
+      setLoading(false); return
+    }
+    toast(`+${cant} unidades agregadas a ${producto.nombre}`, 'success')
+    onSaved(); onClose()
     setLoading(false)
   }
 

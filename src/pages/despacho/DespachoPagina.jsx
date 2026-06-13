@@ -129,6 +129,18 @@ function mapearPedido(row) {
   return { n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion, telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado, cfg, despachar: cfg.despachar, faltantes }
 }
 
+// ─── Match de producto del catálogo (resuelve costo_prod) ───
+function matchProducto(nombreVenta, productos) {
+  if (!nombreVenta || !productos.length) return null
+  const n = nombreVenta.toLowerCase().trim()
+  let p = productos.find(x => (x.nombre || '').toLowerCase().trim() === n)
+  if (p) return p
+  const cand = productos
+    .filter(x => { const c = (x.nombre || '').toLowerCase().trim(); return c && (n.includes(c) || c.includes(n)) })
+    .sort((a, b) => (b.nombre || '').length - (a.nombre || '').length)
+  return cand[0] || null
+}
+
 // ─── Generar y descargar Cabecera XLSX (formato Punto a Punto AC) ─
 function descargarCabeceraXLSX(pedidos) {
   const headers = ['NOMBRE','CIUDAD','DIRECCIÓN','TELÉFONO','TIPO DE PRODUCTO','CANTIDAD DE BULTOS','PRIORIDAD','FORMA DE PAGO','IMPORTE','N° REFERENCIA','DESCRIPCION']
@@ -340,26 +352,37 @@ export default function DespachoPagina() {
       return
     }
 
-    // 3) Cargar solo las ventas nuevas (confirmados + ayuda)
-    const ventas = nuevas.map(p => ({
-      fecha: p.fecha,
-      producto_nombre: p.producto_nombre,
-      cantidad: p.cantidad,
-      precio_unit: p.total,
-      total: p.total,
-      n_referencia: p.n_referencia,
-      estado: 'pendiente',
-      canal_origen: 'Shopify Orgánico',
-      ciudad: p.ciudad,
-      cliente_nombre: p.cliente_nombre,
-      cliente_telefono: p.telefono,
-      costo_prod: 0,
-      costo_envio: 27000,
-      envio_cliente: 0,
-      metodo_envio_nombre: 'Punto a Punto AC',
-      metodo_pago_nombre: 'Efectivo COD',
-      estado_releasit: p.estado_releasit,
-    }))
+    // 3) Catálogo para resolver costo_prod y producto_id (evita ventas con costo 0)
+    let catalogo = []
+    try {
+      const { data } = await supabase.from('productos').select('id, nombre, costo_unit').eq('activo', true)
+      catalogo = data || []
+    } catch (e) { /* sin catálogo, costo_prod queda 0 y se corrige luego */ }
+
+    // 4) Cargar solo las ventas nuevas (confirmados + ayuda)
+    const ventas = nuevas.map(p => {
+      const prod = matchProducto(p.producto_nombre, catalogo)
+      return {
+        fecha: p.fecha,
+        producto_nombre: prod ? prod.nombre : p.producto_nombre,
+        cantidad: p.cantidad,
+        precio_unit: p.total,
+        total: p.total,
+        n_referencia: p.n_referencia,
+        estado: 'pendiente',
+        canal_origen: 'Shopify Orgánico',
+        ciudad: p.ciudad,
+        cliente_nombre: p.cliente_nombre,
+        cliente_telefono: p.telefono,
+        producto_id: prod ? prod.id : null,
+        costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
+        costo_envio: 27000,
+        envio_cliente: 0,
+        metodo_envio_nombre: 'Punto a Punto AC',
+        metodo_pago_nombre: 'Efectivo COD',
+        estado_releasit: p.estado_releasit,
+      }
+    })
     for (let i = 0; i < ventas.length; i += 50) {
       const { error } = await supabase.from('ventas').insert(ventas.slice(i, i + 50))
       if (error) fail += Math.min(50, ventas.length - i)

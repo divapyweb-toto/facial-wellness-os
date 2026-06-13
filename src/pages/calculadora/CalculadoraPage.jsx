@@ -38,10 +38,9 @@ export default function CalculadoraPage() {
   const gananciaDespuesAds = gananciaNeta - cpaAds
   const margenFinalPct = precio > 0 ? (gananciaDespuesAds / precio) * 100 : 0
 
-  const roasMinimo = precio > 0 && presupuestoAds > 0
-    ? (presupuestoAds / (gananciaNeta * ventasEstimadas)) * precio
-    : 0
-  const roasMinimoNum = gananciaNeta > 0 ? precio / (precio - gananciaNeta) : 0
+  // ROAS mínimo de break-even = precio / ganancia neta por unidad
+  // (cuántos Gs de ingreso por cada Gs de ads para no perder)
+  const roasMinimoNum = gananciaNeta > 0 ? precio / gananciaNeta : 0
 
   const breakEvenUnidades = presupuestoAds > 0 && gananciaNeta > 0
     ? Math.ceil(presupuestoAds / gananciaNeta)
@@ -162,8 +161,14 @@ export default function CalculadoraPage() {
                 {[
                   { label: 'Precio de venta', value: formatGs(precio), color: 'var(--accent)' },
                   { label: '— Costo producto', value: `−${formatGs(costo)}`, color: 'var(--red)' },
-                  { label: form.grupo_envio === 'A' ? '+ Envío cobrado al cliente' : '— Envío (gratis, lo pagás vos)', value: form.grupo_envio === 'A' ? `+${formatGs(envioCliente)}` : `−${formatGs(costoEnvio)}`, color: form.grupo_envio === 'A' ? 'var(--green)' : 'var(--red)' },
-                  { label: '— Costo envío propio', value: `−${formatGs(costoEnvio)}`, color: 'var(--red)' },
+                  ...(form.grupo_envio === 'A'
+                    ? [
+                        { label: '+ Envío cobrado al cliente', value: `+${formatGs(envioCliente)}`, color: 'var(--green)' },
+                        { label: '— Flete a Punto a Punto', value: `−${formatGs(costoEnvio)}`, color: 'var(--red)' },
+                      ]
+                    : [
+                        { label: '— Flete a Punto a Punto (envío gratis al cliente)', value: `−${formatGs(costoEnvio)}`, color: 'var(--red)' },
+                      ]),
                   { label: '= Ganancia neta', value: formatGs(gananciaNeta), color: gananciaNeta > 0 ? 'var(--green)' : 'var(--red)', bold: true },
                   ...(cpaAds > 0 ? [
                     { label: `— CPA ads (${formatGs(presupuestoAds)} ÷ ${ventasEstimadas} ventas)`, value: `−${formatGs(Math.round(cpaAds))}`, color: 'var(--red)' },
