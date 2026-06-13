@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, formatGs, estadoConfig } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
-import { Plus, Search, X, Clock, Trash2 } from 'lucide-react'
+import { Plus, Search, X, Clock, Trash2, Edit2, Save } from 'lucide-react'
 
 const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro']
 const ESTADOS = ['todos', 'pendiente', 'entregado', 'devuelto', 'en_tramite']
@@ -279,6 +279,170 @@ function NuevaVentaModal({ onClose, onSaved }) {
   )
 }
 
+function EditarVentaModal({ venta, onClose, onSaved }) {
+  const { toast } = useToast()
+  const [loading, setLoading] = useState(false)
+  const [productos, setProductos] = useState([])
+  const [form, setForm] = useState({
+    fecha: venta.fecha || '',
+    n_referencia: venta.n_referencia || '',
+    producto_id: venta.producto_id || '',
+    producto_nombre: venta.producto_nombre || '',
+    cantidad: venta.cantidad || 1,
+    total: venta.total || 0,
+    estado: venta.estado || 'pendiente',
+    ciudad: venta.ciudad || '',
+    cliente_nombre: venta.cliente_nombre || '',
+    cliente_telefono: venta.cliente_telefono || '',
+    canal_origen: venta.canal_origen || 'Otro',
+    costo_prod: venta.costo_prod || 0,
+    costo_envio: venta.costo_envio || 0,
+    envio_cliente: venta.envio_cliente || 0,
+  })
+
+  useEffect(() => {
+    supabase.from('productos').select('id, nombre, costo_unit, grupo_envio').eq('activo', true).order('nombre')
+      .then(({ data }) => setProductos(data || []))
+  }, [])
+
+  const set = (k, val) => setForm(f => ({ ...f, [k]: val }))
+
+  const onProducto = (id) => {
+    const p = productos.find(x => x.id === id)
+    if (p) setForm(f => ({ ...f, producto_id: p.id, producto_nombre: p.nombre, costo_prod: (p.costo_unit || 0) * (parseInt(f.cantidad) || 1) }))
+    else set('producto_id', id)
+  }
+
+  const onCantidad = (n) => {
+    const cant = parseInt(n) || 1
+    const p = productos.find(x => x.id === form.producto_id)
+    setForm(f => ({ ...f, cantidad: cant, costo_prod: p ? (p.costo_unit || 0) * cant : f.costo_prod }))
+  }
+
+  const guardar = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    const { error } = await supabase.from('ventas').update({
+      fecha: form.fecha,
+      n_referencia: form.n_referencia,
+      producto_id: form.producto_id || null,
+      producto_nombre: form.producto_nombre,
+      cantidad: parseInt(form.cantidad) || 1,
+      total: parseInt(form.total) || 0,
+      precio_unit: parseInt(form.total) || 0,
+      estado: form.estado,
+      ciudad: form.ciudad,
+      cliente_nombre: form.cliente_nombre,
+      cliente_telefono: form.cliente_telefono,
+      canal_origen: form.canal_origen,
+      costo_prod: parseInt(form.costo_prod) || 0,
+      costo_envio: parseInt(form.costo_envio) || 0,
+      envio_cliente: parseInt(form.envio_cliente) || 0,
+    }).eq('id', venta.id)
+    if (error) toast('Error: ' + error.message, 'error')
+    else { toast('Venta actualizada', 'success'); onSaved(); onClose() }
+    setLoading(false)
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-lg">
+        <div className="modal-header">
+          <h2 className="modal-title">Editar venta {venta.n_referencia ? `#${venta.n_referencia}` : ''}</h2>
+          <button className="modal-close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <form onSubmit={guardar} style={{ display: 'flex', flexDirection: 'column', gap: 14, maxHeight: '72vh', overflowY: 'auto' }}>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Fecha</label>
+              <input className="form-input" type="date" value={form.fecha} onChange={e => set('fecha', e.target.value)} required />
+            </div>
+            <div className="form-group">
+              <label className="form-label">N° Referencia</label>
+              <input className="form-input" value={form.n_referencia} onChange={e => set('n_referencia', e.target.value)} />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Producto</label>
+            <select className="form-select" value={form.producto_id || ''} onChange={e => onProducto(e.target.value)}>
+              <option value="">— {form.producto_nombre || 'Sin vincular'} —</option>
+              {productos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            </select>
+          </div>
+
+          <div className="form-grid form-grid-3">
+            <div className="form-group">
+              <label className="form-label">Cantidad</label>
+              <input className="form-input" type="number" min="1" value={form.cantidad} onChange={e => onCantidad(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Total (Gs.)</label>
+              <input className="form-input" type="number" value={form.total} onChange={e => set('total', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Estado</label>
+              <select className="form-select" value={form.estado} onChange={e => set('estado', e.target.value)}>
+                <option value="pendiente">Pendiente</option>
+                <option value="entregado">Entregado</option>
+                <option value="devuelto">Devuelto</option>
+                <option value="en_tramite">En trámite</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Cliente</label>
+            <input className="form-input" value={form.cliente_nombre} onChange={e => set('cliente_nombre', e.target.value)} placeholder="Nombre del cliente" />
+          </div>
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Teléfono</label>
+              <input className="form-input" value={form.cliente_telefono} onChange={e => set('cliente_telefono', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Ciudad</label>
+              <input className="form-input" value={form.ciudad} onChange={e => set('ciudad', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Canal</label>
+            <select className="form-select" value={form.canal_origen} onChange={e => set('canal_origen', e.target.value)}>
+              {['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro'].map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          <details>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Costos (avanzado)</summary>
+            <div className="form-grid form-grid-3">
+              <div className="form-group">
+                <label className="form-label">Costo producto</label>
+                <input className="form-input" type="number" value={form.costo_prod} onChange={e => set('costo_prod', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Costo envío</label>
+                <input className="form-input" type="number" value={form.costo_envio} onChange={e => set('costo_envio', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Envío cliente</label>
+                <input className="form-input" type="number" value={form.envio_cliente} onChange={e => set('envio_cliente', e.target.value)} />
+              </div>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>La ganancia y el margen se recalculan solos.</p>
+          </details>
+
+          <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="btn btn-primary" disabled={loading}>
+              <Save size={14} /> {loading ? 'Guardando...' : 'Guardar cambios'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export default function VentasPage() {
   const { toast } = useToast()
   const [ventas, setVentas] = useState([])
@@ -287,6 +451,8 @@ export default function VentasPage() {
   const [filtroEstado, setFiltroEstado] = useState('todos')
   const [busqueda, setBusqueda] = useState('')
   const [filtroMes, setFiltroMes] = useState('')
+  const [seleccionadas, setSeleccionadas] = useState(new Set())
+  const [editando, setEditando] = useState(null)
 
   const cargarVentas = useCallback(async () => {
     setLoading(true)
@@ -309,6 +475,7 @@ export default function VentasPage() {
       )
     }
     setVentas(resultado)
+    setSeleccionadas(new Set())
     setLoading(false)
   }, [filtroEstado, busqueda, filtroMes])
 
@@ -325,6 +492,25 @@ export default function VentasPage() {
     await supabase.from('ventas').delete().eq('id', id)
     toast('Venta eliminada', 'info')
     cargarVentas()
+  }
+
+  const toggleSel = (id) => {
+    setSeleccionadas(prev => {
+      const n = new Set(prev)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
+  }
+  const todasSeleccionadas = ventas.length > 0 && seleccionadas.size === ventas.length
+  const toggleTodas = () => setSeleccionadas(todasSeleccionadas ? new Set() : new Set(ventas.map(v => v.id)))
+
+  const eliminarMasivo = async () => {
+    const ids = [...seleccionadas]
+    if (!ids.length) return
+    if (!confirm(`¿Eliminar ${ids.length} venta(s)? Esta acción no se puede deshacer.`)) return
+    const { error } = await supabase.from('ventas').delete().in('id', ids)
+    if (error) toast('Error al eliminar: ' + error.message, 'error')
+    else { toast(`${ids.length} venta(s) eliminada(s)`, 'info'); cargarVentas() }
   }
 
   const totalVentas = ventas.filter(v => v.estado === 'entregado').reduce((s, v) => s + v.total, 0)
@@ -374,6 +560,18 @@ export default function VentasPage() {
         </select>
       </div>
 
+      {seleccionadas.size > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 16px', background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.3)', borderRadius: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{seleccionadas.size} venta(s) seleccionada(s)</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSeleccionadas(new Set())}>Deseleccionar</button>
+            <button className="btn btn-sm" onClick={eliminarMasivo} style={{ background: 'var(--red)', color: '#fff' }}>
+              <Trash2 size={13} /> Eliminar {seleccionadas.size}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="table-wrapper">
         {loading ? (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Cargando...</div>
@@ -387,6 +585,7 @@ export default function VentasPage() {
           <table>
             <thead>
               <tr>
+                <th style={{ width: 34 }}><input type="checkbox" checked={todasSeleccionadas} onChange={toggleTodas} style={{ cursor: 'pointer' }} /></th>
                 <th>Fecha</th>
                 <th>Ref.</th>
                 <th>Producto</th>
@@ -404,7 +603,8 @@ export default function VentasPage() {
                 const cfg = estadoConfig[v.estado]
                 const dias = v.estado === 'pendiente' ? diasSinResolver(v.fecha) : null
                 return (
-                  <tr key={v.id}>
+                  <tr key={v.id} style={seleccionadas.has(v.id) ? { background: 'var(--accent-dim)' } : undefined}>
+                    <td><input type="checkbox" checked={seleccionadas.has(v.id)} onChange={() => toggleSel(v.id)} style={{ cursor: 'pointer' }} /></td>
                     <td className="muted">{new Date(v.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
                     <td className="mono">{v.n_referencia || '—'}</td>
                     <td style={{ fontWeight: 500 }}>{v.producto_nombre}</td>
@@ -428,9 +628,14 @@ export default function VentasPage() {
                     <td className="muted" style={{ fontSize: 12 }}>{v.ciudad || '—'}</td>
                     <td><span className="badge badge-gray" style={{ fontSize: 10 }}>{v.canal_origen}</span></td>
                     <td>
-                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => eliminar(v.id)} style={{ color: 'var(--red)', opacity: 0.6 }}>
-                        <Trash2 size={13} />
-                      </button>
+                      <div style={{ display: 'flex', gap: 2 }}>
+                        <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditando(v)} style={{ color: 'var(--accent)' }} title="Editar">
+                          <Edit2 size={13} />
+                        </button>
+                        <button className="btn btn-ghost btn-sm btn-icon" onClick={() => eliminar(v.id)} style={{ color: 'var(--red)', opacity: 0.6 }} title="Eliminar">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 )
@@ -441,6 +646,7 @@ export default function VentasPage() {
       </div>
 
       {showModal && <NuevaVentaModal onClose={() => setShowModal(false)} onSaved={cargarVentas} />}
+      {editando && <EditarVentaModal venta={editando} onClose={() => setEditando(null)} onSaved={cargarVentas} />}
     </div>
   )
 }
