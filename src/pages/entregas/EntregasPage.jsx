@@ -165,6 +165,7 @@ export default function EntregasPage() {
   const [guardando, setGuardando] = useState(false)
   const [guardado, setGuardado] = useState(false)
   const [resultadoGuardado, setResultadoGuardado] = useState(null)
+  const [verSinRendir, setVerSinRendir] = useState(false)
 
   // Cargar el histórico guardado en Supabase al entrar (así no "desaparece" al refrescar)
   useEffect(() => {
@@ -231,6 +232,13 @@ export default function EntregasPage() {
     const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null)
     const diasRendicionProm = diasRend.length ? (diasRend.reduce((a, b) => a + b, 0) / diasRend.length) : null
     const hayTesoreria = merged.some(m => m.rendido || m.fecha_rendido)
+    // Lista detallada de lo que PaP te debe, lo que más tiempo lleva primero (para reclamar)
+    const hoy = new Date()
+    const listaSinRendir = entregadosSinRendir.map(m => {
+      const fEnt = m.fecha_entrega ? new Date(m.fecha_entrega) : null
+      const diasSinRendir = fEnt ? Math.max(0, Math.round((hoy - fEnt) / 86400000)) : null
+      return { ...m, diasSinRendir }
+    }).sort((a, b) => (b.diasSinRendir ?? -1) - (a.diasSinRendir ?? -1))
 
     // por ciudad
     const ciudadMap = {}
@@ -271,7 +279,7 @@ export default function EntregasPage() {
       perdidaTotal: perdidoProd + costoEnviosDevueltos,
       diasProm, porCiudad, porMensajero, motivos, distribucion,
       montoRendido, montoPendienteCobro, diasRendicionProm, hayTesoreria,
-      rendidos: rendidos.length, entregadosSinRendir: entregadosSinRendir.length,
+      rendidos: rendidos.length, entregadosSinRendir: entregadosSinRendir.length, listaSinRendir,
       conRef: merged.filter(m => m.n_referencia).length,
     }
   }, [merged])
@@ -612,10 +620,14 @@ export default function EntregasPage() {
               <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--green)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.montoRendido)}</div>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.rendidos} pedidos rendidos</div>
             </div>
-            <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10, border: '1px solid var(--yellow)' }}>
+            <div onClick={() => stats.entregadosSinRendir > 0 && setVerSinRendir(v => !v)}
+                 style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10, border: '1px solid var(--yellow)', cursor: stats.entregadosSinRendir > 0 ? 'pointer' : 'default' }}>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>⏳ PaP te debe todavía</div>
               <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--yellow)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.montoPendienteCobro)}</div>
-              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.entregadosSinRendir} entregados sin rendir</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                {stats.entregadosSinRendir} entregados sin rendir
+                {stats.entregadosSinRendir > 0 && <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>· {verSinRendir ? 'ocultar ▲' : 'ver cuáles ▼'}</span>}
+              </div>
             </div>
             <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>⏱ Tiempo de cobro</div>
@@ -623,6 +635,50 @@ export default function EntregasPage() {
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>De la entrega al depósito</div>
             </div>
           </div>
+
+          {/* Detalle de entregados sin rendir (plata que PaP debe) */}
+          {verSinRendir && stats.listaSinRendir.length > 0 && (
+            <div style={{ marginTop: 14, border: '1px solid var(--yellow)', borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ padding: '10px 14px', background: 'var(--bg-hover)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)' }}>
+                  {stats.listaSinRendir.length} entregas que PaP cobró pero todavía no te depositó · {formatGs(stats.montoPendienteCobro)}
+                </span>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Ordenadas por las que llevan más tiempo (reclamá estas primero)</span>
+              </div>
+              <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-card)' }}>
+                    <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
+                      <th style={{ padding: '8px 14px' }}>Ref</th>
+                      <th style={{ padding: '8px 6px' }}>Guía PaP</th>
+                      <th style={{ padding: '8px 6px' }}>Cliente</th>
+                      <th style={{ padding: '8px 6px' }}>Ciudad</th>
+                      <th style={{ padding: '8px 6px' }}>Entregado</th>
+                      <th style={{ padding: '8px 6px', textAlign: 'center' }}>Días</th>
+                      <th style={{ padding: '8px 14px', textAlign: 'right' }}>Importe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.listaSinRendir.map((m, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '8px 14px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
+                        <td style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
+                        <td style={{ padding: '8px 6px' }}>{m.nombre_cliente || '—'}</td>
+                        <td style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
+                        <td style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.fecha_entrega ? new Date(m.fecha_entrega).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'}</td>
+                        <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                          {m.diasSinRendir != null
+                            ? <span style={{ color: m.diasSinRendir > 15 ? 'var(--red)' : m.diasSinRendir > 8 ? 'var(--yellow)' : 'var(--text-muted)', fontWeight: m.diasSinRendir > 15 ? 700 : 400 }}>{m.diasSinRendir}d</span>
+                            : '—'}
+                        </td>
+                        <td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 600 }}>{formatGs(m.importe)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
