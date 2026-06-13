@@ -1,5 +1,5 @@
 // src/pages/entregas/EntregasPage.jsx
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
@@ -143,18 +143,53 @@ const CAT_CFG = {
 export default function EntregasPage() {
   const { toast } = useToast()
   const fileRef = useRef()
+  const autoSaveRef = useRef(null)
   const [paqData, setPaqData] = useState(null)
   const [gesData, setGesData] = useState(null)
+  const [historico, setHistorico] = useState([])
+  const [cargandoHist, setCargandoHist] = useState(true)
   const [busqueda, setBusqueda] = useState('')
   const [filtroCat, setFiltroCat] = useState('todos')
   const [guardando, setGuardando] = useState(false)
   const [guardado, setGuardado] = useState(false)
   const [resultadoGuardado, setResultadoGuardado] = useState(null)
 
-  const merged = useMemo(() => {
+  // Cargar el histórico guardado en Supabase al entrar (así no "desaparece" al refrescar)
+  useEffect(() => {
+    let activo = true
+    ;(async () => {
+      try {
+        const { data } = await supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false })
+        if (activo) setHistorico(data || [])
+      } catch (e) { /* tabla vacía o no accesible */ }
+      if (activo) setCargandoHist(false)
+    })()
+    return () => { activo = false }
+  }, [])
+
+  // Lo recién subido en esta sesión (de los 2 reportes Excel)
+  const reportesNuevos = useMemo(() => {
     if (!paqData && !gesData) return []
     return combinar(paqData, gesData)
   }, [paqData, gesData])
+
+  // Vista combinada: histórico guardado + lo nuevo (lo nuevo pisa por nro_guia_pap)
+  const merged = useMemo(() => {
+    const map = new Map()
+    historico.forEach(h => map.set(String(h.nro_guia_pap), h))
+    reportesNuevos.forEach(r => map.set(String(r.nro_guia_pap), r))
+    return Array.from(map.values())
+  }, [reportesNuevos, historico])
+
+  // AUTO-GUARDADO: al subir reportes, guarda y actualiza las ventas solo (con debounce
+  // para esperar a que carguen ambos archivos si los subís juntos).
+  useEffect(() => {
+    if (!reportesNuevos.length) return
+    if (autoSaveRef.current) clearTimeout(autoSaveRef.current)
+    autoSaveRef.current = setTimeout(() => { guardarEnSistema() }, 1500)
+    return () => { if (autoSaveRef.current) clearTimeout(autoSaveRef.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportesNuevos])
 
   const stats = useMemo(() => {
     if (!merged.length) return null
@@ -260,32 +295,36 @@ export default function EntregasPage() {
 
   const handleFiles = (files) => { Array.from(files).forEach(procesarFile) }
 
+  // Columnas reales de la tabla entregas (sin telefono/nombre_cliente que son solo para el match)
+  const COLS_ENTREGAS = ['nro_guia_pap', 'n_referencia', 'estado_pap', 'categoria', 'motivo', 'importe', 'cobrado', 'costo_envio', 'fecha_ingreso', 'fecha_entrega', 'dias_entrega', 'rendido', 'fecha_rendido', 'dias_rendicion', 'mensajero', 'ciudad', 'producto', 'mes']
+
   const guardarEnSistema = async () => {
-    if (!merged.length) return
+    if (!reportesNuevos.length) return
     setGuardando(true)
     try {
-      // 1) Upsert a tabla entregas (por nro_guia_pap)
-      let ok = 0
-      for (let i = 0; i < merged.length; i += 100) {
-        const lote = merged.slice(i, i + 100)
+      // 1) Guardar las entregas nuevas en la tabla (solo columnas válidas)
+      const limpio = reportesNuevos.map(m => {
+        const o = {}
+        COLS_ENTREGAS.forEach(c => { if (m[c] !== undefined) o[c] = m[c] })
+        return o
+      })
+      let ok = 0, errEntregas = null
+      for (let i = 0; i < limpio.length; i += 100) {
+        const lote = limpio.slice(i, i + 100)
         const { error } = await supabase.from('entregas').upsert(lote, { onConflict: 'nro_guia_pap' })
-        if (!error) ok += lote.length
+        if (error) { if (!errEntregas) errEntregas = error.message } else ok += lote.length
       }
 
-      // 2) Actualizar estado de ventas — MATCH EN CASCADA multi-criterio.
-      //    Niveles, del más preciso al más amplio:
-      //      a) por referencia #XXXX (meses que sí la tienen → exacto)
-      //      b) por teléfono (desempate por monto si hay varias con el mismo número)
-      //      c) por nombre + monto (fallback cuando no hay teléfono que matchee)
-      //    Solo se tocan entregados/devueltos; los en proceso quedan como están.
+      // 2) Actualizar estado de ventas — MATCH EN CASCADA multi-criterio sobre lo recién subido.
+      //    a) por referencia #XXXX  b) por teléfono (+monto)  c) por nombre+monto
       let porRef = 0, porTel = 0, porNombre = 0, sinMatch = 0
-      let diagnostico = null
+      let diagnostico = errEntregas ? `Las entregas no se guardaron: ${errEntregas}` : null
       try {
         const { data: ventas, error: errSel } = await supabase
           .from('ventas')
           .select('id, n_referencia, cliente_telefono, cliente_nombre, ciudad, total, estado')
-        if (errSel) { diagnostico = 'No pude leer las ventas: ' + errSel.message }
-        else if (!ventas || !ventas.length) { diagnostico = 'La consulta de ventas vino vacía (¿permisos?)' }
+        if (errSel) { diagnostico = diagnostico || ('No pude leer las ventas: ' + errSel.message) }
+        else if (!ventas || !ventas.length) { diagnostico = diagnostico || 'La consulta de ventas vino vacía (¿permisos?)' }
         else {
           const idxRef = new Map()
           ventas.forEach(v => { if (v.n_referencia) idxRef.set(String(v.n_referencia), v) })
@@ -293,17 +332,15 @@ export default function EntregasPage() {
           const usadas = new Set()
           const updates = []
 
-          for (const m of merged) {
+          for (const m of reportesNuevos) {
             if (m.categoria === 'en_proceso') continue
             const nuevoEstado = m.categoria === 'entregado' ? 'entregado' : 'devuelto'
             let venta = null, metodo = null
 
-            // a) por referencia
             if (m.n_referencia && idxRef.has(m.n_referencia)) {
               const v = idxRef.get(m.n_referencia)
               if (!usadas.has(v.id)) { venta = v; metodo = 'ref' }
             }
-            // b) por teléfono (+ desempate por monto)
             if (!venta && m.telefono) {
               const mismoTel = ventas.filter(v => limpiarTel(v.cliente_telefono) === m.telefono && !usadas.has(v.id))
               if (mismoTel.length === 1) { venta = mismoTel[0]; metodo = 'tel' }
@@ -312,7 +349,6 @@ export default function EntregasPage() {
                 venta = (mismoMonto.length ? mismoMonto[0] : mismoTel[0]); metodo = 'tel'
               }
             }
-            // c) por nombre + monto
             if (!venta && m.nombre_cliente && m.importe) {
               const nom = m.nombre_cliente.toLowerCase().trim()
               const cand = ventas.filter(v => (v.cliente_nombre || '').toLowerCase().trim() === nom && Number(v.total) === Number(m.importe) && !usadas.has(v.id))
@@ -320,33 +356,29 @@ export default function EntregasPage() {
             }
 
             if (venta) {
-              updates.push({ id: venta.id, estado: nuevoEstado })
-              usadas.add(venta.id)
-              if (metodo === 'ref') porRef++
-              else if (metodo === 'tel') porTel++
-              else porNombre++
-            } else {
-              sinMatch++
-            }
+              updates.push({ id: venta.id, estado: nuevoEstado }); usadas.add(venta.id)
+              if (metodo === 'ref') porRef++; else if (metodo === 'tel') porTel++; else porNombre++
+            } else { sinMatch++ }
           }
 
-          // Aplicar updates contando fallos y capturando el primer error real
           let updFail = 0, primerError = null
           for (const u of updates) {
             const { error: errUpd } = await supabase.from('ventas').update({ estado: u.estado }).eq('id', u.id)
             if (errUpd) { updFail++; if (!primerError) primerError = errUpd.message }
           }
-          if (updFail > 0) {
-            diagnostico = `${updFail} actualizaciones fallaron. Error: ${primerError}`
-            porRef = Math.max(0, porRef); porTel = Math.max(0, porTel) // no descontamos, solo informamos
-          }
-          // Si encontró matches pero ninguno se aplicó, avisar con detalle
-          if ((porRef + porTel + porNombre) === 0 && merged.some(m => m.categoria !== 'en_proceso')) {
+          if (updFail > 0 && !diagnostico) diagnostico = `${updFail} actualizaciones de ventas fallaron. Error: ${primerError}`
+          if ((porRef + porTel + porNombre) === 0 && reportesNuevos.some(m => m.categoria !== 'en_proceso') && !diagnostico) {
             const conTel = ventas.filter(v => v.cliente_telefono).length
-            diagnostico = diagnostico || `No hubo coincidencias. Ventas en BD: ${ventas.length}, con teléfono: ${conTel}. Revisá si los teléfonos coinciden.`
+            diagnostico = `No hubo coincidencias con ventas. En BD hay ${ventas.length} ventas (${conTel} con teléfono). Puede que los teléfonos no coincidan o que esas ventas no estén cargadas.`
           }
         }
-      } catch (e) { diagnostico = 'Error inesperado: ' + (e?.message || e) }
+      } catch (e) { diagnostico = diagnostico || ('Error inesperado: ' + (e?.message || e)) }
+
+      // 3) Recargar el histórico para refrescar la vista con lo recién guardado
+      try {
+        const { data } = await supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false })
+        setHistorico(data || [])
+      } catch (e) { /* nada */ }
 
       setGuardado(true)
       setResultadoGuardado({ ok, porRef, porTel, porNombre, sinMatch, diagnostico })
@@ -359,6 +391,13 @@ export default function EntregasPage() {
   }
 
   const reset = () => { setPaqData(null); setGesData(null); setBusqueda(''); setFiltroCat('todos'); setGuardado(false); setResultadoGuardado(null) }
+
+  // ── CARGANDO HISTÓRICO ──────────────────────────────────
+  if (cargandoHist) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 320, color: 'var(--text-muted)', fontSize: 13 }}>
+      Cargando entregas guardadas...
+    </div>
+  )
 
   // ── UPLOAD ──────────────────────────────────────────────
   if (!stats) return (
@@ -422,13 +461,15 @@ export default function EntregasPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Entregas · Tracking Punto a Punto</h1>
-          <p className="page-subtitle">{stats.total} paquetes · {paqData && gesData ? 'ambos reportes' : paqData ? 'solo Paquetes' : 'solo Gestión'} · {stats.conRef} con referencia</p>
+          <p className="page-subtitle">{stats.total} paquetes en el sistema{reportesNuevos.length ? ` · ${reportesNuevos.length} recién subidos` : ''} · {stats.conRef} con referencia</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-primary btn-sm" onClick={guardarEnSistema} disabled={guardando || guardado}>
-            {guardando ? 'Guardando...' : guardado ? <><CheckCircle size={13} /> Guardado</> : <><Save size={13} /> Guardar en sistema</>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple style={{ display: 'none' }} onChange={e => handleFiles(e.target.files)} />
+          {guardando && <span style={{ fontSize: 12, color: 'var(--accent)' }}>Guardando...</span>}
+          <button className="btn btn-primary btn-sm" onClick={() => fileRef.current?.click()} disabled={guardando}>
+            <Upload size={13} /> Subir reportes
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={reset}><X size={13} /> Otro</button>
+          {reportesNuevos.length > 0 && <button className="btn btn-ghost btn-sm" onClick={reset}><X size={13} /> Limpiar</button>}
         </div>
       </div>
 
