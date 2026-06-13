@@ -1,5 +1,5 @@
 // src/pages/importar/ImportarPage.jsx
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { Upload, CheckCircle, AlertTriangle, Download, X } from 'lucide-react'
@@ -97,6 +97,39 @@ function mapShopifyRow(row) {
   }
 }
 
+// ─── Match de producto del catálogo por nombre ──────────────
+// Resuelve costo_prod y producto_id buscando el producto del catálogo
+// que corresponde al nombre que viene de Shopify (que suele ser más largo/sucio).
+function matchProducto(nombreVenta, productos) {
+  if (!nombreVenta || !productos.length) return null
+  const n = nombreVenta.toLowerCase().trim()
+  // 1) match exacto
+  let p = productos.find(x => (x.nombre || '').toLowerCase().trim() === n)
+  if (p) return p
+  // 2) "contiene": el nombre del catálogo aparece en el de la venta (o al revés).
+  //    Se prefiere el nombre de catálogo más largo (el más específico).
+  const cand = productos
+    .filter(x => {
+      const c = (x.nombre || '').toLowerCase().trim()
+      return c && (n.includes(c) || c.includes(n))
+    })
+    .sort((a, b) => (b.nombre || '').length - (a.nombre || '').length)
+  return cand[0] || null
+}
+
+function enriquecerConProducto(v, productos) {
+  const p = matchProducto(v.producto_nombre, productos)
+  if (!p) return { ...v, _sinProducto: true }
+  return {
+    ...v,
+    producto_id: p.id,
+    producto_nombre: p.nombre, // normaliza al nombre del catálogo (stock + analytics consistentes)
+    costo_prod: (p.costo_unit || 0) * (v.cantidad || 1),
+    envio_cliente: p.grupo_envio === 'A' ? (v.envio_cliente || 29000) : 0,
+    _sinProducto: false,
+  }
+}
+
 function mapGenericoRow(row) {
   const total = parseInt((row['total'] || row['Total'] || row['precio'] || '0').toString().replace(/[^0-9]/g, '')) || 0
   return {
@@ -128,15 +161,25 @@ export default function ImportarPage() {
   const [loading, setLoading] = useState(false)
   const [resultado, setResultado] = useState(null)
   const [dragging, setDragging] = useState(false)
+  const [productos, setProductos] = useState([])
 
-  // Mapear todas las filas según formato
+  // Cargar catálogo de productos para resolver costo_prod y producto_id al importar
+  useEffect(() => {
+    supabase.from('productos').select('id, nombre, costo_unit, grupo_envio').eq('activo', true)
+      .then(({ data }) => setProductos(data || []))
+  }, [])
+
+  // Mapear todas las filas según formato + enriquecer con producto del catálogo
   const todasMapeadas = useMemo(() => {
     if (!filasRaw.length) return []
+    let base
     if (formato === 'shopify') {
-      return filasRaw.filter(r => r['Name'] && r['Name'].startsWith('#')).map(mapShopifyRow)
+      base = filasRaw.filter(r => r['Name'] && r['Name'].startsWith('#')).map(mapShopifyRow)
+    } else {
+      base = filasRaw.map(mapGenericoRow).filter(v => v.producto_nombre && v.producto_nombre !== 'Sin nombre')
     }
-    return filasRaw.map(mapGenericoRow).filter(v => v.producto_nombre && v.producto_nombre !== 'Sin nombre')
-  }, [filasRaw, formato])
+    return base.map(v => enriquecerConProducto(v, productos))
+  }, [filasRaw, formato, productos])
 
   // Aplicar filtro de estado Releasit (solo Shopify)
   const ventasFinal = useMemo(() => {
@@ -161,6 +204,13 @@ export default function ImportarPage() {
     if (formato !== 'shopify' || !soloConfirmados) return 0
     return todasMapeadas.length - ventasFinal.length
   }, [todasMapeadas, ventasFinal, formato, soloConfirmados])
+
+  // Productos que NO matchean con el catálogo → entran con costo 0 y sin descuento de stock
+  const sinProducto = useMemo(() => {
+    const m = new Map()
+    ventasFinal.forEach(v => { if (v._sinProducto) m.set(v.producto_nombre, (m.get(v.producto_nombre) || 0) + 1) })
+    return [...m.entries()].map(([nombre, n]) => ({ nombre, n })).sort((a, b) => b.n - a.n)
+  }, [ventasFinal])
 
   const procesarArchivo = (file) => {
     if (!file) return
@@ -224,7 +274,7 @@ export default function ImportarPage() {
 
       let insertados = 0, fallidos = 0
       for (let i = 0; i < nuevas.length; i += 50) {
-        const lote = nuevas.slice(i, i + 50).map(({ estado_releasit, ...v }) => v)
+        const lote = nuevas.slice(i, i + 50).map(({ estado_releasit, _sinProducto, ...v }) => v)
         const { error } = await supabase.from('ventas').insert(lote)
         if (error) fallidos += lote.length
         else insertados += lote.length
@@ -355,6 +405,23 @@ export default function ImportarPage() {
           <div>
             <div style={{ fontWeight: 600 }}>{errores.length} advertencia(s) en los datos</div>
             {errores.slice(0, 3).map((e, i) => <div key={i} style={{ fontSize: 12, marginTop: 3 }}>{e}</div>)}
+          </div>
+        </div>
+      )}
+
+      {/* Productos sin match en catálogo */}
+      {sinProducto.length > 0 && (
+        <div className="alert alert-error">
+          <AlertTriangle size={14} />
+          <div>
+            <div style={{ fontWeight: 600 }}>{sinProducto.length} producto(s) no están en tu catálogo</div>
+            <div style={{ fontSize: 12, marginTop: 3, opacity: 0.9 }}>
+              Estas ventas se importan con <b>costo 0</b> y <b>no descuentan stock</b>. Creá estos productos en Stock (con su costo) y volvé a importar para que el cálculo sea exacto:
+            </div>
+            {sinProducto.slice(0, 6).map((p, i) => (
+              <div key={i} style={{ fontSize: 12, marginTop: 3 }}>• {p.nombre} <span style={{ opacity: 0.6 }}>({p.n})</span></div>
+            ))}
+            {sinProducto.length > 6 && <div style={{ fontSize: 12, marginTop: 3, opacity: 0.6 }}>…y {sinProducto.length - 6} más</div>}
           </div>
         </div>
       )}

@@ -160,15 +160,22 @@ export default function ReportesPage() {
     const peorDia = [...porDiaSemana].filter(d => d.total >= 3).sort((a, b) => b.devolucion - a.devolucion)[0]
     if (peorDia && peorDia.devolucion >= 45) alertas.push({ tipo: 'patron', texto: `Los pedidos del ${peorDia.dia} se devuelven ${peorDia.devolucion}%. Evaluá no despachar ese día o reforzar la confirmación.` })
 
+    const ingresosNetosCalc = entregadas.reduce((s, v) => s + v.ganancia_neta, 0)
+    const ventasBrutasCalc = entregadas.reduce((s, v) => s + v.total, 0)
+    // Flete perdido: las devoluciones igual te cuestan el envío (COD)
+    const fleteDevoluciones = devueltas.reduce((s, v) => s + (v.costo_envio || 0), 0)
+
     setDatos({
-      mes, ventasBrutas: entregadas.reduce((s, v) => s + v.total, 0),
-      ingresosNetos: entregadas.reduce((s, v) => s + v.ganancia_neta, 0),
-      totalGastos, totalGastoAds,
-      margenPct: entregadas.length ? entregadas.reduce((s, v) => s + parseFloat(v.margen_pct), 0) / entregadas.length : 0,
+      mes, ventasBrutas: ventasBrutasCalc,
+      ingresosNetos: ingresosNetosCalc,
+      totalGastos, totalGastoAds, fleteDevoluciones,
+      // Margen REAL = ganancia neta / ventas brutas (no promedio de margen_pct, que ignora el envío)
+      margenPct: ventasBrutasCalc ? (ingresosNetosCalc / ventasBrutasCalc) * 100 : 0,
       paquetesEnviados: (ventas || []).length,
       entregados: entregadas.length, devueltos: devueltas.length, pendientesCount: pendientes.length,
       tasaEntrega: (ventas || []).length ? (entregadas.length / (ventas || []).length) * 100 : 0,
-      utilidadNeta: entregadas.reduce((s, v) => s + v.ganancia_neta, 0) - totalGastos,
+      // Utilidad = ingresos netos − gastos − flete perdido en devoluciones
+      utilidadNeta: ingresosNetosCalc - totalGastos - fleteDevoluciones,
       porProducto: porProductoArr,
       porDia, campanas: campanas || [],
       ventas: ventas || [],
@@ -327,10 +334,10 @@ export default function ReportesPage() {
             {[
               { label: 'Ventas brutas', value: formatGs(datos.ventasBrutas), sub: 'Solo entregadas', color: 'var(--text-primary)' },
               { label: 'Ingresos netos', value: formatGs(datos.ingresosNetos), sub: 'Después de envíos', color: 'var(--green)' },
-              { label: 'Margen %', value: formatPct(datos.margenPct), sub: 'Promedio del mes', color: datos.margenPct > 40 ? 'var(--green)' : 'var(--yellow)' },
-              { label: 'Utilidad neta', value: formatGs(datos.utilidadNeta), sub: 'Ingresos - Gastos', color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' },
+              { label: 'Margen %', value: formatPct(datos.margenPct), sub: 'Ganancia neta / ventas', color: datos.margenPct > 40 ? 'var(--green)' : 'var(--yellow)' },
+              { label: 'Utilidad neta', value: formatGs(datos.utilidadNeta), sub: 'Ingresos − gastos − flete dev.', color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' },
               { label: 'Paquetes enviados', value: datos.paquetesEnviados, sub: `${datos.entregados} entregados`, color: 'var(--text-primary)' },
-              { label: 'Devoluciones', value: datos.devueltos, sub: `${((datos.devueltos/Math.max(datos.paquetesEnviados,1))*100).toFixed(1)}% del total`, color: datos.devueltos > 10 ? 'var(--red)' : 'var(--yellow)' },
+              { label: 'Devoluciones', value: datos.devueltos, sub: `${formatGs(datos.fleteDevoluciones)} en flete perdido`, color: datos.devueltos > 10 ? 'var(--red)' : 'var(--yellow)' },
               { label: 'Tasa de entrega', value: formatPct(datos.tasaEntrega), sub: 'Sobre total enviado', color: datos.tasaEntrega > 60 ? 'var(--green)' : 'var(--red)' },
               { label: 'Gastos totales', value: formatGs(datos.totalGastos), sub: `Ads: ${formatGs(datos.totalGastoAds)}`, color: 'var(--red)' },
             ].map((k, i) => (
