@@ -1,7 +1,7 @@
 // src/pages/analytics/AnalyticsPage.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
-import { TrendingUp, TrendingDown, MapPin, BarChart3, Calendar, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react'
+import { TrendingUp, TrendingDown, MapPin, BarChart3, Calendar, ArrowUpRight, ArrowDownRight, Minus, Package, Repeat, AlertTriangle } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LineChart, Line, Legend, Cell
@@ -26,6 +26,7 @@ export default function AnalyticsPage() {
   const [ciudades, setCiudades] = useState([])
   const [proyeccion, setProyeccion] = useState(null)
   const [historico, setHistorico] = useState([])
+  const [productos, setProductos] = useState(null)
   const [activeTab, setActiveTab] = useState('comparativa')
 
   const cargar = useCallback(async () => {
@@ -118,6 +119,56 @@ export default function AnalyticsPage() {
       basadoEn: ultimos30.length,
     })
 
+    // ── Inteligencia de productos / patrones / recompras ──
+    const datos = vTodas || []
+
+    // Devolución y mix por producto
+    const prodMap = {}
+    datos.forEach(v => {
+      const p = (v.producto_nombre || 'Sin nombre').trim()
+      if (!prodMap[p]) prodMap[p] = { producto: p, entregados: 0, devueltos: 0, pendientes: 0, ingresos: 0, total: 0 }
+      prodMap[p].total++
+      if (v.estado === 'entregado') { prodMap[p].entregados++; prodMap[p].ingresos += (v.ganancia_neta || 0) }
+      else if (v.estado === 'devuelto') prodMap[p].devueltos++
+      else prodMap[p].pendientes++
+    })
+    const porProducto = Object.values(prodMap)
+      .map(p => { const res = p.entregados + p.devueltos; return { ...p, resueltos: res, tasaDevolucion: res ? Math.round(p.devueltos / res * 100) : 0 } })
+      .filter(p => p.total >= 2)
+      .sort((a, b) => b.total - a.total)
+
+    // Mix de ventas real (ingreso neto de entregados por producto)
+    const mixReal = [...porProducto].filter(p => p.ingresos > 0).sort((a, b) => b.ingresos - a.ingresos).slice(0, 8)
+
+    // Devolución por día de la semana (de la fecha de la venta) — parsing local sin timezone
+    const diasNombre = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+    const diaMap = {}; for (let i = 0; i < 7; i++) diaMap[i] = { entregados: 0, devueltos: 0 }
+    datos.forEach(v => {
+      if (!v.fecha) return
+      const partes = String(v.fecha).slice(0, 10).split('-').map(Number)
+      if (partes.length !== 3) return
+      const dow = new Date(partes[0], partes[1] - 1, partes[2]).getDay()
+      if (v.estado === 'entregado') diaMap[dow].entregados++
+      else if (v.estado === 'devuelto') diaMap[dow].devueltos++
+    })
+    const porDia = [1, 2, 3, 4, 5, 6, 0].map(i => {
+      const d = diaMap[i]; const res = d.entregados + d.devueltos
+      return { dia: diasNombre[i].slice(0, 3), diaFull: diasNombre[i], devolucion: res ? Math.round(d.devueltos / res * 100) : 0, total: res, entregados: d.entregados, devueltos: d.devueltos }
+    })
+
+    // Recompras (por teléfono normalizado)
+    const telMap = {}
+    datos.forEach(v => {
+      const t = String(v.cliente_telefono || '').replace(/\D/g, '')
+      if (t.length >= 6) telMap[t] = (telMap[t] || 0) + 1
+    })
+    const clientesUnicos = Object.keys(telMap).length
+    const recompradores = Object.values(telMap).filter(n => n > 1).length
+    const tasaRecompra = clientesUnicos ? Math.round(recompradores / clientesUnicos * 100) : 0
+    const totalPedidosConTel = Object.values(telMap).reduce((a, b) => a + b, 0)
+
+    setProductos({ porProducto, mixReal, porDia, clientesUnicos, recompradores, tasaRecompra, totalPedidosConTel })
+
     setLoading(false)
   }, [])
 
@@ -150,6 +201,9 @@ export default function AnalyticsPage() {
         </button>
         <button className={`tab ${activeTab === 'proyeccion' ? 'active' : ''}`} onClick={() => setActiveTab('proyeccion')}>
           Proyección 30d
+        </button>
+        <button className={`tab ${activeTab === 'productos' ? 'active' : ''}`} onClick={() => setActiveTab('productos')}>
+          Productos
         </button>
       </div>
 
@@ -361,6 +415,137 @@ export default function AnalyticsPage() {
             <BarChart3 size={14} />
             <span>La proyección se calcula con el promedio de los últimos 30 días. No incluye estacionalidad ni campañas planificadas.</span>
           </div>
+        </div>
+      )}
+
+      {/* ── TAB: Productos ── */}
+      {activeTab === 'productos' && productos && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* Devolución por producto */}
+          <div className="card" style={{ padding: 0 }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
+              <span style={{ fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Package size={14} color="var(--accent)" /> Devolución por producto
+              </span>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                Qué se devuelve más. Los de tasa alta te cuestan producto + envío. Filtrá esas ciudades o mejorá la confirmación antes de despachar.
+              </p>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ minWidth: 520 }}>
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th style={{ textAlign: 'center' }}>Entregados</th>
+                    <th style={{ textAlign: 'center' }}>Devueltos</th>
+                    <th>Tasa devolución</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productos.porProducto.map((p, i) => (
+                    <tr key={i}>
+                      <td style={{ fontWeight: 500, maxWidth: 280 }}>{p.producto}</td>
+                      <td style={{ textAlign: 'center', color: 'var(--green)', fontWeight: 600 }}>{p.entregados}</td>
+                      <td style={{ textAlign: 'center', color: 'var(--red)' }}>{p.devueltos}</td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 50, height: 4, background: 'var(--bg-hover)', borderRadius: 2 }}>
+                            <div style={{ width: `${p.tasaDevolucion}%`, height: '100%', borderRadius: 2, background: p.tasaDevolucion > 35 ? 'var(--red)' : p.tasaDevolucion > 20 ? 'var(--yellow)' : 'var(--green)' }} />
+                          </div>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: p.tasaDevolucion > 35 ? 'var(--red)' : p.tasaDevolucion > 20 ? 'var(--yellow)' : 'var(--green)' }}>
+                            {p.tasaDevolucion}%
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Devolución por día de la semana */}
+          <div className="chart-card">
+            <div className="chart-header">
+              <span className="chart-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Calendar size={14} color="var(--accent)" /> Devolución por día de la semana
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Según el día que cae la venta</span>
+            </div>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={productos.porDia} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="dia" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={36} domain={[0, 100]} />
+                <Tooltip
+                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
+                  formatter={(v) => [`${v}% devolución`, '']}
+                  labelFormatter={(l, p) => p && p[0] ? `${p[0].payload.diaFull} · ${p[0].payload.total} ventas` : l}
+                />
+                <Bar dataKey="devolucion" radius={[3, 3, 0, 0]}>
+                  {productos.porDia.map((e, i) => <Cell key={i} fill={e.devolucion > 40 ? 'var(--red)' : e.devolucion > 30 ? 'var(--yellow)' : 'var(--green)'} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Mix de ventas real + Recompras */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+            {/* Mix real */}
+            <div className="card" style={{ padding: 0 }}>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <TrendingUp size={14} color="var(--green)" /> Mix real de ganancia
+                </span>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Ganancia neta por producto (solo entregados)</p>
+              </div>
+              <div style={{ padding: '8px 0' }}>
+                {productos.mixReal.map((p, i) => {
+                  const max = productos.mixReal[0]?.ingresos || 1
+                  return (
+                    <div key={i} style={{ padding: '8px 20px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                        <span style={{ maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.producto}</span>
+                        <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatGs(p.ingresos)}</span>
+                      </div>
+                      <div style={{ height: 4, background: 'var(--bg-hover)', borderRadius: 2 }}>
+                        <div style={{ width: `${Math.round(p.ingresos / max * 100)}%`, height: '100%', borderRadius: 2, background: 'var(--green)' }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Recompras */}
+            <div className="card">
+              <div style={{ fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <Repeat size={14} color="var(--accent)" /> Recompras
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 16 }}>Clientes que compraron más de una vez (por teléfono)</p>
+              <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 800, color: 'var(--accent)' }}>{productos.tasaRecompra}%</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Tasa de recompra</div>
+                </div>
+                <div>
+                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 800 }}>{productos.recompradores}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Clientes que volvieron</div>
+                </div>
+                <div>
+                  <div style={{ fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 800 }}>{productos.clientesUnicos}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Clientes únicos</div>
+                </div>
+              </div>
+              <div style={{ marginTop: 16, padding: 12, background: 'var(--bg-hover)', borderRadius: 8, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                {productos.tasaRecompra < 15
+                  ? 'Tu recompra es baja. En COD conviene un seguimiento post-venta (WhatsApp) para que el cliente vuelva — es más barato que adquirir uno nuevo.'
+                  : 'Buena base de clientes que repiten. Un programa simple de fidelización podría subir esto más.'}
+              </div>
+            </div>
+          </div>
+
         </div>
       )}
     </div>
