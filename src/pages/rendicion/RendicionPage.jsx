@@ -1,247 +1,262 @@
-// src/pages/rendicion/RendicionPage.jsx
-import { useState, useEffect, useCallback } from 'react'
-import { supabase, formatGs } from '../../lib/supabase'
-import { useToast } from '../../lib/toast'
-import { Plus, X, Truck, CheckCircle, AlertCircle } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { supabase } from '../../lib/supabase'
+import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock } from 'lucide-react'
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
 
-function NuevaRendicionModal({ onClose, onSaved }) {
-  const { toast } = useToast()
-  const [loading, setLoading] = useState(false)
-  const [form, setForm] = useState({
-    semana: '',
-    fecha_rendicion: new Date().toISOString().split('T')[0],
-    mes: new Date().toISOString().substring(0, 7),
-    paquetes_enviados: '',
-    paquetes_entregados: '',
-    paquetes_devueltos: '',
-    monto_a_rendir: '',
-    monto_recibido: '',
-    estado: 'pendiente',
-    observaciones: '',
-  })
+const formatGs = (n) => Math.round(n || 0).toLocaleString('es-PY') + ' Gs.'
+const fechaCorta = (d) => d ? new Date(d).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    const { error } = await supabase.from('rendiciones').insert({
-      ...form,
-      semana: parseInt(form.semana),
-      paquetes_enviados: parseInt(form.paquetes_enviados) || 0,
-      paquetes_entregados: parseInt(form.paquetes_entregados) || 0,
-      paquetes_devueltos: parseInt(form.paquetes_devueltos) || 0,
-      monto_a_rendir: parseInt(form.monto_a_rendir) || 0,
-      monto_recibido: parseInt(form.monto_recibido) || 0,
-    })
-    if (error) toast('Error al guardar', 'error')
-    else { toast('Rendición registrada', 'success'); onSaved(); onClose() }
-    setLoading(false)
-  }
-
-  const diferencia = (parseInt(form.monto_recibido) || 0) - (parseInt(form.monto_a_rendir) || 0)
-
-  return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
-        <div className="modal-header">
-          <h2 className="modal-title">Registrar rendición</h2>
-          <button className="modal-close" onClick={onClose}><X size={18} /></button>
-        </div>
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Semana #</label>
-              <input className="form-input" type="number" min="1" max="52" placeholder="1" value={form.semana}
-                onChange={e => setForm(f => ({ ...f, semana: e.target.value }))} required />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Fecha de rendición</label>
-              <input className="form-input" type="date" value={form.fecha_rendicion}
-                onChange={e => setForm(f => ({ ...f, fecha_rendicion: e.target.value }))} />
-            </div>
-          </div>
-          <div className="form-grid form-grid-3">
-            <div className="form-group">
-              <label className="form-label">Enviados</label>
-              <input className="form-input" type="number" min="0" value={form.paquetes_enviados}
-                onChange={e => setForm(f => ({ ...f, paquetes_enviados: e.target.value }))} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Entregados</label>
-              <input className="form-input" type="number" min="0" value={form.paquetes_entregados}
-                onChange={e => setForm(f => ({ ...f, paquetes_entregados: e.target.value }))} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Devueltos</label>
-              <input className="form-input" type="number" min="0" value={form.paquetes_devueltos}
-                onChange={e => setForm(f => ({ ...f, paquetes_devueltos: e.target.value }))} />
-            </div>
-          </div>
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Monto a rendir (Gs.)</label>
-              <input className="form-input" type="number" value={form.monto_a_rendir}
-                onChange={e => setForm(f => ({ ...f, monto_a_rendir: e.target.value }))} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Monto recibido (Gs.)</label>
-              <input className="form-input" type="number" value={form.monto_recibido}
-                onChange={e => setForm(f => ({ ...f, monto_recibido: e.target.value }))} />
-            </div>
-          </div>
-
-          {(form.monto_a_rendir || form.monto_recibido) && (
-            <div style={{
-              background: diferencia === 0 ? 'var(--green-dim)' : diferencia < 0 ? 'var(--red-dim)' : 'var(--accent-dim)',
-              border: `1px solid ${diferencia < 0 ? 'rgba(239,68,68,0.2)' : diferencia === 0 ? 'rgba(34,197,94,0.2)' : 'rgba(200,241,53,0.2)'}`,
-              borderRadius: 8, padding: '10px 14px',
-            }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: diferencia < 0 ? 'var(--red)' : diferencia === 0 ? 'var(--green)' : 'var(--accent)' }}>
-                Diferencia: {diferencia >= 0 ? '+' : ''}{formatGs(diferencia)}
-                {diferencia === 0 ? ' — OK ✓' : diferencia < 0 ? ' — FALTANTE' : ' — SOBRANTE'}
-              </span>
-            </div>
-          )}
-
-          <div className="form-group">
-            <label className="form-label">Estado</label>
-            <select className="form-select" value={form.estado}
-              onChange={e => setForm(f => ({ ...f, estado: e.target.value }))}>
-              <option value="pendiente">Pendiente</option>
-              <option value="recibido">Recibido</option>
-              <option value="con_diferencia">Con diferencia</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Observaciones</label>
-            <textarea className="form-textarea" value={form.observaciones}
-              onChange={e => setForm(f => ({ ...f, observaciones: e.target.value }))} />
-          </div>
-
-          <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
-            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-            <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Guardando...' : 'Registrar'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
+// Misma lógica de categorización que Entregas (estado + motivo)
+function categorizar(estado, motivo) {
+  const e = (estado || '').toLowerCase(); const m = (motivo || '').toLowerCase()
+  if (e.includes('entregado')) return 'entregado'
+  if (e.includes('devuelto')) return 'devuelto'
+  if (m.includes('rechaz') || m.includes('inubicable') || m.includes('fuera de cobertura') ||
+      m.includes('fin de custodia') || m.includes('problema de direccion') || m.includes('no desea') ||
+      m.includes('cancelad') || m.includes('no ingreso') || m.includes('rehus')) return 'devuelto'
+  if (e.includes('devolucion') || m.includes('devolucion')) return 'devuelto'
+  return 'en_proceso'
 }
 
 export default function RendicionPage() {
-  const [rendiciones, setRendiciones] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
+  const [historico, setHistorico] = useState([])
+  const [cargando, setCargando] = useState(true)
 
-  const cargar = useCallback(async () => {
-    setLoading(true)
-    const { data } = await supabase.from('rendiciones').select('*').order('semana', { ascending: false })
-    setRendiciones(data || [])
-    setLoading(false)
+  useEffect(() => {
+    let activo = true
+    ;(async () => {
+      try {
+        const { data } = await supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false })
+        if (activo) setHistorico(data || [])
+      } catch (e) { /* tabla vacía o sin acceso */ }
+      if (activo) setCargando(false)
+    })()
+    return () => { activo = false }
   }, [])
 
-  useEffect(() => { cargar() }, [cargar])
+  const stats = useMemo(() => {
+    const items = historico.map(h => ({ ...h, categoria: categorizar(h.estado_pap, h.motivo) }))
+    const entregados = items.filter(m => m.categoria === 'entregado')
+    const proceso = items.filter(m => m.categoria === 'en_proceso')
+    const rendidos = entregados.filter(m => m.rendido)
+    const sinRendir = entregados.filter(m => !m.rendido)
 
-  const totalARendir = rendiciones.reduce((s, r) => s + (r.monto_a_rendir || 0), 0)
-  const totalRecibido = rendiciones.reduce((s, r) => s + (r.monto_recibido || 0), 0)
-  const diferenciaTot = totalRecibido - totalARendir
-  const pendientes = rendiciones.filter(r => r.estado === 'pendiente').length
+    const yaRendido = rendidos.reduce((s, m) => s + (m.importe || 0), 0)
+    const porCobrar = sinRendir.reduce((s, m) => s + (m.importe || 0), 0)
+    const enTransito = proceso.reduce((s, m) => s + (m.importe || 0), 0)
 
-  const estadoBadge = {
-    pendiente: <span className="badge badge-yellow">Pendiente</span>,
-    recibido: <span className="badge badge-green">Recibido</span>,
-    con_diferencia: <span className="badge badge-red">Con diferencia</span>,
+    const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null && d >= 0)
+    const diasProm = diasRend.length ? diasRend.reduce((a, b) => a + b, 0) / diasRend.length : null
+
+    const hoy = new Date()
+    const listaSinRendir = sinRendir.map(m => {
+      const fEnt = m.fecha_entrega ? new Date(m.fecha_entrega) : null
+      const diasSinRendir = fEnt ? Math.max(0, Math.round((hoy - fEnt) / 86400000)) : null
+      // fecha estimada de cobro = entrega + días promedio de rendición
+      const fechaEstimada = (fEnt && diasProm != null) ? new Date(fEnt.getTime() + diasProm * 86400000) : null
+      return { ...m, diasSinRendir, fechaEstimada }
+    }).sort((a, b) => (b.diasSinRendir ?? -1) - (a.diasSinRendir ?? -1))
+
+    // Demoradas: entregadas hace más que el doble del promedio (o +15 días)
+    const umbralDemora = diasProm != null ? Math.max(15, diasProm * 2) : 15
+    const demoradas = listaSinRendir.filter(m => m.diasSinRendir != null && m.diasSinRendir > umbralDemora)
+    const montoDemorado = demoradas.reduce((s, m) => s + (m.importe || 0), 0)
+
+    // Histórico de rendiciones agrupado por fecha de rendición
+    const porFecha = {}
+    rendidos.forEach(m => {
+      if (m.fecha_rendido) {
+        const f = String(m.fecha_rendido).slice(0, 10)
+        if (!porFecha[f]) porFecha[f] = { fecha: f, monto: 0, count: 0 }
+        porFecha[f].monto += (m.importe || 0)
+        porFecha[f].count++
+      }
+    })
+    const historicoRend = Object.values(porFecha).sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
+    const datosGrafico = historicoRend.map(r => ({ ...r, label: fechaCorta(r.fecha) }))
+
+    // Proyección: fecha estimada más lejana de lo pendiente
+    const fechasEst = listaSinRendir.map(m => m.fechaEstimada).filter(Boolean)
+    const cobroEstimadoHasta = fechasEst.length ? new Date(Math.max(...fechasEst.map(d => d.getTime()))) : null
+
+    const hayDatos = items.some(m => m.rendido || m.fecha_rendido)
+    const totalGestionado = yaRendido + porCobrar
+    const tasaCobrado = totalGestionado ? Math.round(yaRendido / totalGestionado * 100) : 0
+
+    return {
+      yaRendido, porCobrar, enTransito, diasProm, listaSinRendir, historicoRend, datosGrafico,
+      nRendidos: rendidos.length, nSinRendir: sinRendir.length, nProceso: proceso.length,
+      demoradas, montoDemorado, cobroEstimadoHasta, hayDatos, tasaCobrado, umbralDemora,
+    }
+  }, [historico])
+
+  // ── CARGANDO ───────────────────────────────────────────
+  if (cargando) {
+    return (
+      <div style={{ padding: 24 }}>
+        <h1 className="page-title">Rendición</h1>
+        <p className="page-subtitle">Cargando datos de cobranza…</p>
+      </div>
+    )
   }
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div className="page-header">
+  // ── SIN DATOS ──────────────────────────────────────────
+  if (!stats.hayDatos) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(16px, 4vw, 24px)' }}>
         <div>
-          <h1 className="page-title">Rendición</h1>
-          <p className="page-subtitle">Control de cobros con la transportadora</p>
+          <h1 className="page-title">Rendición · Cobranza con Punto a Punto</h1>
+          <p className="page-subtitle">Cuánto te debe PaP, cuándo lo cobrás y qué reclamar.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
-          <Plus size={15} /> Nueva rendición
-        </button>
-      </div>
-
-      <div className="kpi-grid">
-        <div className="kpi-card">
-          <div className="kpi-label"><Truck size={12} />Total a rendir</div>
-          <div className="kpi-value">{formatGs(totalARendir)}</div>
-          <div className="kpi-sub">Acumulado</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label"><CheckCircle size={12} />Total recibido</div>
-          <div className="kpi-value green">{formatGs(totalRecibido)}</div>
-          <div className="kpi-sub">Cobrado</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label"><AlertCircle size={12} />Diferencia</div>
-          <div className={`kpi-value ${diferenciaTot === 0 ? 'green' : diferenciaTot < 0 ? 'red' : 'yellow'}`}>
-            {formatGs(Math.abs(diferenciaTot))}
-          </div>
-          <div className="kpi-sub">{diferenciaTot < 0 ? 'Faltante' : diferenciaTot > 0 ? 'Sobrante' : 'Cuadrado ✓'}</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label"><Truck size={12} />Pendientes</div>
-          <div className={`kpi-value ${pendientes > 0 ? 'yellow' : 'green'}`}>{pendientes}</div>
-          <div className="kpi-sub">Sin confirmar</div>
+        <div className="card" style={{ textAlign: 'center', padding: 'clamp(32px, 8vw, 64px) 24px' }}>
+          <Wallet size={40} color="var(--text-muted)" style={{ margin: '0 auto 16px' }} />
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Todavía no hay datos de cobranza</div>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 460, margin: '0 auto', lineHeight: 1.5 }}>
+            Esta sección se llena sola desde Entregas. Cuando descargues el reporte de Gestión de PaP,
+            tildá <b>"Incluir Tesorería"</b> y subilo en Entregas. Acá vas a ver qué te rindió PaP,
+            qué te debe y cuándo lo cobrás.
+          </p>
         </div>
       </div>
+    )
+  }
 
-      <div className="table-wrapper">
-        {loading ? (
-          <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Cargando...</div>
-        ) : rendiciones.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state-icon"><Truck size={22} /></div>
-            <p className="empty-state-title">Sin rendiciones</p>
-            <p className="empty-state-desc">Registrá las rendiciones semanales de la transportadora</p>
-            <button className="btn btn-primary btn-sm" onClick={() => setShowModal(true)}>
-              <Plus size={13} /> Nueva rendición
-            </button>
+  // ── DASHBOARD ──────────────────────────────────────────
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(16px, 4vw, 24px)' }}>
+      <div>
+        <h1 className="page-title">Rendición · Cobranza con Punto a Punto</h1>
+        <p className="page-subtitle">
+          PaP cobra al cliente y te deposita después. Acá controlás esa plata: {stats.nRendidos} rendidas · {stats.nSinRendir} por cobrar.
+        </p>
+      </div>
+
+      {/* Alerta de demoras */}
+      {stats.demoradas.length > 0 && (
+        <div className="alert alert-warning">
+          <AlertTriangle size={15} />
+          <div>
+            <div style={{ fontWeight: 600 }}>
+              {stats.demoradas.length} entregas llevan más de {Math.round(stats.umbralDemora)} días sin que te depositen · {formatGs(stats.montoDemorado)}
+            </div>
+            <div style={{ fontSize: 12, marginTop: 2 }}>Reclamá estas a PaP — están en la lista de abajo, marcadas en rojo.</div>
           </div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Semana</th>
-                <th>Mes</th>
-                <th>Fecha</th>
-                <th>Enviados</th>
-                <th>Entregados</th>
-                <th>Devueltos</th>
-                <th>A rendir</th>
-                <th>Recibido</th>
-                <th>Diferencia</th>
-                <th>Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rendiciones.map(r => (
-                <tr key={r.id}>
-                  <td style={{ fontWeight: 600 }}>Sem. {r.semana}</td>
-                  <td className="muted">{r.mes}</td>
-                  <td className="muted">{r.fecha_rendicion ? new Date(r.fecha_rendicion + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'}</td>
-                  <td>{r.paquetes_enviados}</td>
-                  <td style={{ color: 'var(--green)' }}>{r.paquetes_entregados}</td>
-                  <td style={{ color: 'var(--red)' }}>{r.paquetes_devueltos}</td>
-                  <td style={{ fontWeight: 600 }}>{formatGs(r.monto_a_rendir)}</td>
-                  <td style={{ fontWeight: 600, color: 'var(--green)' }}>{formatGs(r.monto_recibido)}</td>
-                  <td style={{ fontWeight: 700, color: r.diferencia < 0 ? 'var(--red)' : r.diferencia > 0 ? 'var(--yellow)' : 'var(--green)' }}>
-                    {r.diferencia !== null ? `${r.diferencia >= 0 ? '+' : ''}${formatGs(r.diferencia)}` : '—'}
-                  </td>
-                  <td>{estadoBadge[r.estado] || estadoBadge.pendiente}</td>
+        </div>
+      )}
+
+      {/* KPIs principales */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+        <div className="card" style={{ borderLeft: '3px solid var(--yellow)' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <Clock size={13} /> PAP TE DEBE
+          </div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--yellow)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.porCobrar)}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nSinRendir} entregas sin rendir</div>
+        </div>
+        <div className="card" style={{ borderLeft: '3px solid var(--green)' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <CheckCircle size={13} /> YA TE DEPOSITARON
+          </div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--green)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.yaRendido)}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nRendidos} rendidas · {stats.tasaCobrado}% del total</div>
+        </div>
+        <div className="card">
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <Truck size={13} /> EN TRÁNSITO
+          </div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{formatGs(stats.enTransito)}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nProceso} en camino, sin resolver</div>
+        </div>
+        <div className="card">
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <CalendarClock size={13} /> TIEMPO DE COBRO
+          </div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{stats.diasProm != null ? `${stats.diasProm.toFixed(1)} días` : '—'}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>De la entrega al depósito</div>
+        </div>
+      </div>
+
+      {/* Proyección de cobro */}
+      {stats.porCobrar > 0 && stats.cobroEstimadoHasta && (
+        <div className="card" style={{ background: 'var(--green-dim)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <TrendingUp size={20} color="var(--green)" />
+          <div style={{ fontSize: 13 }}>
+            Al ritmo actual de <b>{stats.diasProm.toFixed(1)} días</b>, deberías terminar de cobrar
+            los <b style={{ color: 'var(--green)' }}>{formatGs(stats.porCobrar)}</b> pendientes
+            alrededor del <b>{stats.cobroEstimadoHasta.toLocaleDateString('es-PY', { day: '2-digit', month: 'long' })}</b>.
+          </div>
+        </div>
+      )}
+
+      {/* Histórico de rendiciones */}
+      {stats.datosGrafico.length > 0 && (
+        <div className="card">
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Histórico de depósitos de PaP</div>
+          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>Cuánto te rindió PaP en cada fecha.</p>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={stats.datosGrafico} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+              <YAxis tickFormatter={v => `${(v / 1000000).toFixed(1)}M`} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={36} />
+              <Tooltip
+                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
+                formatter={(v, n) => [formatGs(v), 'Depositado']}
+                labelFormatter={l => `Fecha: ${l}`}
+              />
+              <Bar dataKey="monto" radius={[4, 4, 0, 0]}>
+                {stats.datosGrafico.map((e, i) => <Cell key={i} fill="var(--green)" />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Detalle de lo que PaP debe */}
+      {stats.listaSinRendir.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--yellow)' }}>
+              Lo que PaP te debe rendir · {formatGs(stats.porCobrar)}
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+              Ordenado por antigüedad. Usá la guía de PaP para reclamar. Rojo = más de {Math.round(stats.umbralDemora)} días.
+            </p>
+          </div>
+          <div style={{ overflowX: 'auto', maxHeight: 440, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 560 }}>
+              <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-card)', zIndex: 1 }}>
+                <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
+                  <th style={{ padding: '8px 16px' }}>Ref</th>
+                  <th style={{ padding: '8px 6px' }}>Guía PaP</th>
+                  <th style={{ padding: '8px 6px' }}>Ciudad</th>
+                  <th style={{ padding: '8px 6px' }}>Entregado</th>
+                  <th style={{ padding: '8px 6px', textAlign: 'center' }}>Días</th>
+                  <th style={{ padding: '8px 16px', textAlign: 'right' }}>Importe</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {showModal && <NuevaRendicionModal onClose={() => setShowModal(false)} onSaved={cargar} />}
+              </thead>
+              <tbody>
+                {stats.listaSinRendir.map((m, i) => {
+                  const demorada = m.diasSinRendir != null && m.diasSinRendir > stats.umbralDemora
+                  return (
+                    <tr key={i} style={{ borderTop: '1px solid var(--border)', background: demorada ? 'rgba(239,68,68,0.06)' : 'transparent' }}>
+                      <td style={{ padding: '8px 16px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
+                      <td style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
+                      <td style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
+                      <td style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{fechaCorta(m.fecha_entrega)}</td>
+                      <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                        {m.diasSinRendir != null
+                          ? <span style={{ color: demorada ? 'var(--red)' : m.diasSinRendir > 8 ? 'var(--yellow)' : 'var(--text-muted)', fontWeight: demorada ? 700 : 400 }}>{m.diasSinRendir}d</span>
+                          : '—'}
+                      </td>
+                      <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{formatGs(m.importe)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
