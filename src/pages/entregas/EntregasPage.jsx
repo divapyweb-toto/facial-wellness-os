@@ -335,6 +335,7 @@ export default function EntregasPage() {
       //    Procesa TODO lo visible (histórico recategorizado + recién subido).
       //    a) por referencia #XXXX  b) por teléfono (+monto)  c) por nombre+monto
       let porRef = 0, porTel = 0, porNombre = 0, sinMatch = 0
+      let updOk = 0, updVacio = 0, updFail = 0
       let diagnostico = errEntregas ? `Las entregas no se guardaron: ${errEntregas}` : null
       try {
         const { data: ventas, error: errSel } = await supabase.from('ventas').select('*')
@@ -345,7 +346,7 @@ export default function EntregasPage() {
           const pk = ('id' in ventas[0]) ? 'id' : (Object.keys(ventas[0]).find(k => k === 'uuid' || k.toLowerCase().endsWith('id')) || 'id')
 
           const idxRef = new Map()
-          ventas.forEach(v => { if (v.n_referencia) idxRef.set(String(v.n_referencia), v) })
+          ventas.forEach(v => { const rr = normalizarRef(v.n_referencia); if (rr) idxRef.set(rr, v) })
 
           const usadas = new Set()
           const updates = []
@@ -381,15 +382,23 @@ export default function EntregasPage() {
             } else { sinMatch++ }
           }
 
-          let updFail = 0, primerError = null
+          updFail = 0; updVacio = 0; updOk = 0
+          let primerError = null
           for (const u of updates) {
-            const { error: errUpd } = await supabase.from('ventas').update({ estado: u.estado }).eq(pk, u.id)
+            const { data: upd, error: errUpd } = await supabase.from('ventas').update({ estado: u.estado }).eq(pk, u.id).select()
             if (errUpd) { updFail++; if (!primerError) primerError = errUpd.message }
+            else if (!upd || !upd.length) { updVacio++ }
+            else { updOk++ }
           }
-          if (updFail > 0 && !diagnostico) diagnostico = `${updFail} actualizaciones de ventas fallaron (columna id usada: "${pk}"). Error: ${primerError}`
-          if ((porRef + porTel + porNombre) === 0 && merged.some(m => m.categoria !== 'en_proceso') && !diagnostico) {
+          const totalMatch = porRef + porTel + porNombre
+          if (updFail > 0 && !diagnostico) {
+            diagnostico = `${updFail} UPDATEs dieron error (columna id="${pk}"): ${primerError}`
+          } else if (updVacio > 0 && updOk === 0 && !diagnostico) {
+            diagnostico = `Encontré ${totalMatch} ventas para actualizar (${porRef} por ref, ${porTel} por tel), pero NINGÚN UPDATE modificó la fila. Esto es RLS: la tabla "ventas" permite leer pero NO actualizar. Hay que agregar una policy de UPDATE en Supabase (te paso el SQL).`
+          } else if (totalMatch === 0 && merged.some(m => m.categoria !== 'en_proceso') && !diagnostico) {
             const conTel = ventas.filter(v => v.cliente_telefono).length
-            diagnostico = `No hubo coincidencias con ventas. En BD hay ${ventas.length} ventas (${conTel} con teléfono, columna id="${pk}"). Revisá si subiste las ventas de ese mes o si los teléfonos coinciden.`
+            const conRefBD = ventas.filter(v => normalizarRef(v.n_referencia)).length
+            diagnostico = `0 coincidencias. En BD: ${ventas.length} ventas, ${conRefBD} con n_referencia, ${conTel} con teléfono (col id="${pk}"). Reportes traen ${merged.filter(m=>m.categoria!=='en_proceso').length} entregas con estado. Si las ventas tienen ref pero no cruzan, el formato de n_referencia no coincide.`
           }
         }
       } catch (e) { diagnostico = diagnostico || ('Error inesperado: ' + (e?.message || e)) }
@@ -401,9 +410,8 @@ export default function EntregasPage() {
       } catch (e) { /* nada */ }
 
       setGuardado(true)
-      setResultadoGuardado({ ok, porRef, porTel, porNombre, sinMatch, diagnostico })
-      const totalAct = porRef + porTel + porNombre
-      toast(diagnostico ? `Guardado con avisos — mirá el detalle` : `${ok} entregas · ${totalAct} ventas actualizadas`, diagnostico ? 'error' : 'success')
+      setResultadoGuardado({ ok, porRef, porTel, porNombre, sinMatch, updOk, updVacio, updFail, diagnostico })
+      toast(diagnostico ? `Guardado con avisos — mirá el detalle` : `${ok} entregas · ${updOk} ventas actualizadas`, diagnostico ? 'error' : 'success')
     } catch (err) {
       toast('Error guardando: ' + err.message, 'error')
     }
@@ -501,14 +509,17 @@ export default function EntregasPage() {
         <div className={`alert alert-${resultadoGuardado.diagnostico ? 'warning' : 'success'}`}>
           {resultadoGuardado.diagnostico ? <AlertTriangle size={15} /> : <CheckCircle size={15} />}
           <div>
-            <div style={{ fontWeight: 600 }}>{resultadoGuardado.ok} entregas guardadas · {resultadoGuardado.porRef + resultadoGuardado.porTel + resultadoGuardado.porNombre} ventas actualizadas</div>
+            <div style={{ fontWeight: 600 }}>{resultadoGuardado.ok} entregas guardadas · {resultadoGuardado.updOk ?? 0} ventas actualizadas</div>
             <div style={{ fontSize: 12, marginTop: 4 }}>
+              <span>Coincidencias: </span>
               {resultadoGuardado.porRef > 0 && <span>{resultadoGuardado.porRef} por referencia</span>}
               {resultadoGuardado.porRef > 0 && (resultadoGuardado.porTel > 0 || resultadoGuardado.porNombre > 0) && <span> · </span>}
               {resultadoGuardado.porTel > 0 && <span>{resultadoGuardado.porTel} por teléfono</span>}
               {resultadoGuardado.porTel > 0 && resultadoGuardado.porNombre > 0 && <span> · </span>}
               {resultadoGuardado.porNombre > 0 && <span>{resultadoGuardado.porNombre} por nombre+monto</span>}
+              {(resultadoGuardado.porRef + resultadoGuardado.porTel + resultadoGuardado.porNombre) === 0 && <span>ninguna</span>}
               {resultadoGuardado.sinMatch > 0 && <span style={{ color: 'var(--yellow)' }}> · {resultadoGuardado.sinMatch} sin coincidencia</span>}
+              {resultadoGuardado.updVacio > 0 && <span style={{ color: 'var(--yellow)' }}> · {resultadoGuardado.updVacio} bloqueadas por permisos</span>}
             </div>
             {resultadoGuardado.diagnostico && (
               <div style={{ fontSize: 12, marginTop: 6, color: 'var(--yellow)', background: 'var(--bg-hover)', padding: 8, borderRadius: 6 }}>
