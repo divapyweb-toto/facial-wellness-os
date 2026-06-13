@@ -42,10 +42,22 @@ function limpiarTel(tel) {
   return t
 }
 
-function categorizar(estado) {
+// Categoriza mirando ESTADO y MOTIVO juntos. El motivo manda cuando el estado
+// es intermedio: un "Custodio" con motivo "Inubicable" es una devolución, no un proceso.
+function categorizar(estado, motivo) {
   const e = (estado || '').toLowerCase()
+  const m = (motivo || '').toLowerCase()
+  // 1) Entregado (lo más claro)
   if (e.includes('entregado')) return 'entregado'
-  if (e.includes('devuelto') || e.includes('rechazado') || e.includes('inubicable') || e.includes('cancelado') || e.includes('no ingreso')) return 'devuelto'
+  // 2) Devuelto definitivo por estado
+  if (e.includes('devuelto')) return 'devuelto'
+  // 3) Motivos que implican devolución aunque el estado sea intermedio (Custodio, etc.)
+  if (m.includes('rechaz') || m.includes('inubicable') || m.includes('fuera de cobertura') ||
+      m.includes('fin de custodia') || m.includes('problema de direccion') || m.includes('no desea') ||
+      m.includes('cancelad') || m.includes('no ingreso') || m.includes('rehus') || m.includes('rechazado')) return 'devuelto'
+  // 4) Devolución en proceso: no se cobró, va camino a volver
+  if (e.includes('devolucion') || m.includes('devolucion')) return 'devuelto'
+  // 5) Resto (Custodio sin motivo de devolución, Asignado a ruta, No gestionado) → todavía en proceso
   return 'en_proceso'
 }
 
@@ -84,16 +96,16 @@ function combinar(paqData, gesData) {
     const p = pmap.get(guia)
     const g = gmap.get(guia)
 
-    // Estado: prioridad PAQUETE (estado final)
+    // Estado: prioridad PAQUETE (estado final). Motivo: el que tenga valor de cualquiera.
     const estado = (p && p['Estado']) ? p['Estado'] : (g ? g['Estado'] : '')
-    const cat = categorizar(estado)
+    const motivo = ((p && p['Motivo']) || (g && g['Motivo']) || '')
+    const cat = categorizar(estado, motivo)
     const importe = parseInt((p ? p['Importe'] : g['Importe']) || 0) || 0
     const ref = normalizarRef((p && p['NroGuiaRef']) ? p['NroGuiaRef'] : (g ? g['NroGuiaRef'] : ''))
     const ciudad = ((g ? g['Ciudad'] : (p ? p['Ciudad'] : '')) || '').trim()
     const mensajero = (g ? g['Recurso'] : '') || ''
     const telefono = limpiarTel(g ? g['Telefono'] : '')
     const nombreCliente = ((g ? g['Nombre'] : (p ? p['Nombre'] : '')) || '').trim()
-    const motivo = (p ? p['Motivo'] : (g ? g['Motivo'] : '')) || ''
     const producto = (g ? (g['Descripcion'] || g['Tipodeproducto']) : (p ? p['TipoPaquete'] : '')) || ''
     const fIng = toISODate(g ? g['FechaIng'] : (p ? p['Fecha Ingreso'] : null))
     const fEnt = toISODate(g ? g['FechaEnt'] : (p ? p['FechaEvento'] : null))
@@ -173,10 +185,14 @@ export default function EntregasPage() {
     return combinar(paqData, gesData)
   }, [paqData, gesData])
 
-  // Vista combinada: histórico guardado + lo nuevo (lo nuevo pisa por nro_guia_pap)
+  // Vista combinada: histórico guardado + lo nuevo (lo nuevo pisa por nro_guia_pap).
+  // Al histórico se le recalcula la categoría con la lógica nueva (estado + motivo).
   const merged = useMemo(() => {
     const map = new Map()
-    historico.forEach(h => map.set(String(h.nro_guia_pap), h))
+    historico.forEach(h => {
+      const cat = categorizar(h.estado_pap, h.motivo)
+      map.set(String(h.nro_guia_pap), { ...h, categoria: cat, cobrado: cat === 'entregado' ? (h.importe || 0) : 0 })
+    })
     reportesNuevos.forEach(r => map.set(String(r.nro_guia_pap), r))
     return Array.from(map.values())
   }, [reportesNuevos, historico])
@@ -299,7 +315,7 @@ export default function EntregasPage() {
   const COLS_ENTREGAS = ['nro_guia_pap', 'n_referencia', 'estado_pap', 'categoria', 'motivo', 'importe', 'cobrado', 'costo_envio', 'fecha_ingreso', 'fecha_entrega', 'dias_entrega', 'rendido', 'fecha_rendido', 'dias_rendicion', 'mensajero', 'ciudad', 'producto', 'mes']
 
   const guardarEnSistema = async () => {
-    if (!reportesNuevos.length) return
+    if (!merged.length) return
     setGuardando(true)
     try {
       // 1) Guardar las entregas nuevas en la tabla (solo columnas válidas)
@@ -315,34 +331,36 @@ export default function EntregasPage() {
         if (error) { if (!errEntregas) errEntregas = error.message } else ok += lote.length
       }
 
-      // 2) Actualizar estado de ventas — MATCH EN CASCADA multi-criterio sobre lo recién subido.
+      // 2) Actualizar estado de ventas — MATCH EN CASCADA multi-criterio.
+      //    Procesa TODO lo visible (histórico recategorizado + recién subido).
       //    a) por referencia #XXXX  b) por teléfono (+monto)  c) por nombre+monto
       let porRef = 0, porTel = 0, porNombre = 0, sinMatch = 0
       let diagnostico = errEntregas ? `Las entregas no se guardaron: ${errEntregas}` : null
       try {
-        const { data: ventas, error: errSel } = await supabase
-          .from('ventas')
-          .select('id, n_referencia, cliente_telefono, cliente_nombre, ciudad, total, estado')
+        const { data: ventas, error: errSel } = await supabase.from('ventas').select('*')
         if (errSel) { diagnostico = diagnostico || ('No pude leer las ventas: ' + errSel.message) }
-        else if (!ventas || !ventas.length) { diagnostico = diagnostico || 'La consulta de ventas vino vacía (¿permisos?)' }
+        else if (!ventas || !ventas.length) { diagnostico = diagnostico || 'La consulta de ventas vino vacía (¿permisos de la tabla ventas?)' }
         else {
+          // Detectar la columna identificadora (normalmente 'id')
+          const pk = ('id' in ventas[0]) ? 'id' : (Object.keys(ventas[0]).find(k => k === 'uuid' || k.toLowerCase().endsWith('id')) || 'id')
+
           const idxRef = new Map()
           ventas.forEach(v => { if (v.n_referencia) idxRef.set(String(v.n_referencia), v) })
 
           const usadas = new Set()
           const updates = []
 
-          for (const m of reportesNuevos) {
+          for (const m of merged) {
             if (m.categoria === 'en_proceso') continue
             const nuevoEstado = m.categoria === 'entregado' ? 'entregado' : 'devuelto'
             let venta = null, metodo = null
 
             if (m.n_referencia && idxRef.has(m.n_referencia)) {
               const v = idxRef.get(m.n_referencia)
-              if (!usadas.has(v.id)) { venta = v; metodo = 'ref' }
+              if (!usadas.has(v[pk])) { venta = v; metodo = 'ref' }
             }
             if (!venta && m.telefono) {
-              const mismoTel = ventas.filter(v => limpiarTel(v.cliente_telefono) === m.telefono && !usadas.has(v.id))
+              const mismoTel = ventas.filter(v => limpiarTel(v.cliente_telefono) === m.telefono && !usadas.has(v[pk]))
               if (mismoTel.length === 1) { venta = mismoTel[0]; metodo = 'tel' }
               else if (mismoTel.length > 1) {
                 const mismoMonto = mismoTel.filter(v => Number(v.total) === Number(m.importe))
@@ -351,25 +369,27 @@ export default function EntregasPage() {
             }
             if (!venta && m.nombre_cliente && m.importe) {
               const nom = m.nombre_cliente.toLowerCase().trim()
-              const cand = ventas.filter(v => (v.cliente_nombre || '').toLowerCase().trim() === nom && Number(v.total) === Number(m.importe) && !usadas.has(v.id))
+              const cand = ventas.filter(v => (v.cliente_nombre || '').toLowerCase().trim() === nom && Number(v.total) === Number(m.importe) && !usadas.has(v[pk]))
               if (cand.length) { venta = cand[0]; metodo = 'nombre' }
             }
 
             if (venta) {
-              updates.push({ id: venta.id, estado: nuevoEstado }); usadas.add(venta.id)
+              // Solo actualizar si el estado cambia (evita writes inútiles)
+              if (venta.estado !== nuevoEstado) updates.push({ id: venta[pk], estado: nuevoEstado })
+              usadas.add(venta[pk])
               if (metodo === 'ref') porRef++; else if (metodo === 'tel') porTel++; else porNombre++
             } else { sinMatch++ }
           }
 
           let updFail = 0, primerError = null
           for (const u of updates) {
-            const { error: errUpd } = await supabase.from('ventas').update({ estado: u.estado }).eq('id', u.id)
+            const { error: errUpd } = await supabase.from('ventas').update({ estado: u.estado }).eq(pk, u.id)
             if (errUpd) { updFail++; if (!primerError) primerError = errUpd.message }
           }
-          if (updFail > 0 && !diagnostico) diagnostico = `${updFail} actualizaciones de ventas fallaron. Error: ${primerError}`
-          if ((porRef + porTel + porNombre) === 0 && reportesNuevos.some(m => m.categoria !== 'en_proceso') && !diagnostico) {
+          if (updFail > 0 && !diagnostico) diagnostico = `${updFail} actualizaciones de ventas fallaron (columna id usada: "${pk}"). Error: ${primerError}`
+          if ((porRef + porTel + porNombre) === 0 && merged.some(m => m.categoria !== 'en_proceso') && !diagnostico) {
             const conTel = ventas.filter(v => v.cliente_telefono).length
-            diagnostico = `No hubo coincidencias con ventas. En BD hay ${ventas.length} ventas (${conTel} con teléfono). Puede que los teléfonos no coincidan o que esas ventas no estén cargadas.`
+            diagnostico = `No hubo coincidencias con ventas. En BD hay ${ventas.length} ventas (${conTel} con teléfono, columna id="${pk}"). Revisá si subiste las ventas de ese mes o si los teléfonos coinciden.`
           }
         }
       } catch (e) { diagnostico = diagnostico || ('Error inesperado: ' + (e?.message || e)) }
@@ -465,7 +485,10 @@ export default function EntregasPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple style={{ display: 'none' }} onChange={e => handleFiles(e.target.files)} />
-          {guardando && <span style={{ fontSize: 12, color: 'var(--accent)' }}>Guardando...</span>}
+          {guardando && <span style={{ fontSize: 12, color: 'var(--accent)' }}>Procesando...</span>}
+          <button className="btn btn-ghost btn-sm" onClick={guardarEnSistema} disabled={guardando} title="Vuelve a aplicar los estados a tus ventas">
+            <CheckCircle size={13} /> Actualizar ventas
+          </button>
           <button className="btn btn-primary btn-sm" onClick={() => fileRef.current?.click()} disabled={guardando}>
             <Upload size={13} /> Subir reportes
           </button>
