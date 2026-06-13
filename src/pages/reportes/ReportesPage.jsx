@@ -247,7 +247,9 @@ export default function ReportesPage() {
     })
   }
 
-  const nombreMes = datos ? new Date(datos.mes + '-01').toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }) : ''
+  const nombreMes = datos
+    ? (() => { const [y, m] = datos.mes.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }) })()
+    : ''
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
