@@ -1,13 +1,27 @@
 // src/pages/reportes/ReportesPage.jsx
 import { useState, useCallback, useRef } from 'react'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
-import { FileBarChart2, Download, Loader2 } from 'lucide-react'
+import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat } from 'lucide-react'
 import {
   BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
 
 const COLORS = ['#c8f135', '#22c55e', '#3b82f6', '#a78bfa', '#f59e0b', '#ef4444', '#ec4899']
+
+// Badge de variación vs mes anterior
+function Delta({ actual, anterior, invertido = false }) {
+  if (anterior == null || anterior === 0) return <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>nuevo</span>
+  const delta = ((actual - anterior) / anterior) * 100
+  const bueno = invertido ? delta < 0 : delta > 0
+  const color = Math.abs(delta) < 0.5 ? 'var(--text-muted)' : bueno ? 'var(--green)' : 'var(--red)'
+  const Icon = delta > 0.5 ? ArrowUpRight : delta < -0.5 ? ArrowDownRight : Minus
+  return (
+    <span style={{ color, fontSize: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 1 }}>
+      <Icon size={10} />{Math.abs(delta).toFixed(0)}%
+    </span>
+  )
+}
 
 export default function ReportesPage() {
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
@@ -21,19 +35,26 @@ export default function ReportesPage() {
     const [year, month] = mes.split('-')
     const inicio = `${year}-${month}-01`
     const fin = new Date(year, parseInt(month), 0).toISOString().split('T')[0]
+    // Mes anterior (para comparar)
+    const dPrev = new Date(year, parseInt(month) - 2, 1)
+    const yPrev = dPrev.getFullYear(), mPrev = String(dPrev.getMonth() + 1).padStart(2, '0')
+    const inicioPrev = `${yPrev}-${mPrev}-01`
+    const finPrev = new Date(yPrev, parseInt(mPrev), 0).toISOString().split('T')[0]
 
-    const [{ data: ventas }, { data: gastos }, { data: campanas }, { data: productos }] = await Promise.all([
+    const [{ data: ventas }, { data: ventasPrev }, { data: gastos }, { data: campanas }, { data: productos }, { data: entregas }] = await Promise.all([
       supabase.from('ventas').select('*').gte('fecha', inicio).lte('fecha', fin).order('fecha'),
+      supabase.from('ventas').select('*').gte('fecha', inicioPrev).lte('fecha', finPrev),
       supabase.from('gastos').select('*').gte('fecha', inicio).lte('fecha', fin),
       supabase.from('campanas_ads').select('*').eq('mes', mes),
       supabase.from('productos').select('*').eq('activo', true),
+      supabase.from('entregas').select('*').gte('fecha_entrega', inicio).lte('fecha_entrega', fin),
     ])
 
     const entregadas = (ventas || []).filter(v => v.estado === 'entregado')
     const pendientes = (ventas || []).filter(v => v.estado === 'pendiente')
     const devueltas = (ventas || []).filter(v => v.estado === 'devuelto')
 
-    // Por producto
+    // Por producto (con tasa de devolución)
     const porProducto = {}
     ;(ventas || []).forEach(v => {
       if (!porProducto[v.producto_nombre]) porProducto[v.producto_nombre] = { nombre: v.producto_nombre, ventas: 0, entregados: 0, devueltos: 0, ingresos: 0 }
@@ -41,6 +62,10 @@ export default function ReportesPage() {
       if (v.estado === 'entregado') { porProducto[v.producto_nombre].entregados++; porProducto[v.producto_nombre].ingresos += v.ganancia_neta }
       if (v.estado === 'devuelto') porProducto[v.producto_nombre].devueltos++
     })
+    const porProductoArr = Object.values(porProducto).map(p => {
+      const res = p.entregados + p.devueltos
+      return { ...p, tasaDevolucion: res ? Math.round(p.devueltos / res * 100) : 0 }
+    }).sort((a, b) => b.ingresos - a.ingresos)
 
     // Por día (para chart)
     const diasDelMes = new Date(year, parseInt(month), 0).getDate()
@@ -49,17 +74,91 @@ export default function ReportesPage() {
       const fechaStr = `${year}-${month}-${String(d).padStart(2, '0')}`
       const ventasDia = entregadas.filter(v => v.fecha === fechaStr)
       if (ventasDia.length > 0 || d <= new Date().getDate()) {
-        porDia.push({
-          dia: d,
-          ventas: ventasDia.reduce((s, v) => s + v.total, 0),
-          neto: ventasDia.reduce((s, v) => s + v.ganancia_neta, 0),
-          cantidad: ventasDia.length,
-        })
+        porDia.push({ dia: d, ventas: ventasDia.reduce((s, v) => s + v.total, 0), neto: ventasDia.reduce((s, v) => s + v.ganancia_neta, 0), cantidad: ventasDia.length })
       }
     }
 
     const totalGastos = (gastos || []).reduce((s, g) => s + g.monto, 0)
     const totalGastoAds = (campanas || []).reduce((s, c) => s + c.gasto, 0)
+
+    // ── Comparativa con mes anterior ──
+    const entregadasPrev = (ventasPrev || []).filter(v => v.estado === 'entregado')
+    const comparativa = {
+      ventasBrutas: entregadasPrev.reduce((s, v) => s + v.total, 0),
+      ingresosNetos: entregadasPrev.reduce((s, v) => s + v.ganancia_neta, 0),
+      paquetes: (ventasPrev || []).length,
+      entregados: entregadasPrev.length,
+      devueltos: (ventasPrev || []).filter(v => v.estado === 'devuelto').length,
+      tasaEntrega: (ventasPrev || []).length ? (entregadasPrev.length / (ventasPrev || []).length) * 100 : 0,
+    }
+
+    // ── Cobranza (de entregas del mes) ──
+    const entItems = (entregas || [])
+    const entEntregadas = entItems.filter(e => (e.categoria === 'entregado') || (e.estado_pap || '').toLowerCase().includes('entregado'))
+    const rendidas = entEntregadas.filter(e => e.rendido)
+    const sinRendir = entEntregadas.filter(e => !e.rendido)
+    const diasRend = rendidas.map(e => e.dias_rendicion).filter(d => d != null && d >= 0)
+    const cobranza = {
+      cobrado: rendidas.reduce((s, e) => s + (e.importe || 0), 0),
+      porCobrar: sinRendir.reduce((s, e) => s + (e.importe || 0), 0),
+      nRendidas: rendidas.length, nSinRendir: sinRendir.length,
+      tiempoCobro: diasRend.length ? diasRend.reduce((a, b) => a + b, 0) / diasRend.length : null,
+      hayCobranza: entItems.some(e => e.rendido || e.fecha_rendido),
+    }
+
+    // ── Ciudades ──
+    const ciudadMap = {}
+    ;(ventas || []).forEach(v => {
+      const c = (v.ciudad || 'Sin ciudad').trim()
+      if (!ciudadMap[c]) ciudadMap[c] = { ciudad: c, pedidos: 0, entregados: 0, devueltos: 0 }
+      ciudadMap[c].pedidos++
+      if (v.estado === 'entregado') ciudadMap[c].entregados++
+      if (v.estado === 'devuelto') ciudadMap[c].devueltos++
+    })
+    const ciudades = Object.values(ciudadMap).map(c => {
+      const res = c.entregados + c.devueltos
+      return { ...c, tasaEntrega: res ? Math.round(c.entregados / res * 100) : 0, tasaDevolucion: res ? Math.round(c.devueltos / res * 100) : 0 }
+    }).filter(c => c.pedidos >= 2).sort((a, b) => b.pedidos - a.pedidos)
+
+    // ── Día de la semana ──
+    const diasNombre = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+    const dM = {}; for (let i = 0; i < 7; i++) dM[i] = { entregados: 0, devueltos: 0 }
+    ;(ventas || []).forEach(v => {
+      if (!v.fecha) return
+      const p = String(v.fecha).slice(0, 10).split('-').map(Number)
+      if (p.length !== 3) return
+      const dow = new Date(p[0], p[1] - 1, p[2]).getDay()
+      if (v.estado === 'entregado') dM[dow].entregados++
+      else if (v.estado === 'devuelto') dM[dow].devueltos++
+    })
+    const porDiaSemana = [1, 2, 3, 4, 5, 6, 0].map(i => {
+      const d = dM[i]; const res = d.entregados + d.devueltos
+      return { dia: diasNombre[i].slice(0, 3), devolucion: res ? Math.round(d.devueltos / res * 100) : 0, total: res }
+    })
+
+    // ── Motivos de devolución (de entregas) ──
+    const motMap = {}
+    entItems.filter(e => (e.categoria === 'devuelto') || (e.estado_pap || '').toLowerCase().includes('devuelto')).forEach(e => {
+      const m = (e.motivo || 'Sin motivo').trim()
+      motMap[m] = (motMap[m] || 0) + 1
+    })
+    const motivos = Object.entries(motMap).map(([m, n]) => ({ motivo: m, count: n })).sort((a, b) => b.count - a.count)
+
+    // ── Recompras ──
+    const telMap = {}
+    ;(ventas || []).forEach(v => { const t = String(v.cliente_telefono || '').replace(/\D/g, ''); if (t.length >= 6) telMap[t] = (telMap[t] || 0) + 1 })
+    const clientesUnicos = Object.keys(telMap).length
+    const recompradores = Object.values(telMap).filter(n => n > 1).length
+
+    // ── Alertas accionables ──
+    const alertas = []
+    porProductoArr.filter(p => (p.entregados + p.devueltos) >= 3 && p.tasaDevolucion >= 35)
+      .forEach(p => alertas.push({ tipo: 'producto', texto: `"${p.nombre}" tiene ${p.tasaDevolucion}% de devolución. Revisá la confirmación antes de despachar o filtrá ciudades.` }))
+    ciudades.filter(c => c.pedidos >= 3 && c.tasaDevolucion >= 50)
+      .slice(0, 4).forEach(c => alertas.push({ tipo: 'ciudad', texto: `${c.ciudad}: ${c.tasaDevolucion}% de devolución (${c.pedidos} pedidos). Considerá confirmar por WhatsApp o pausar esa zona.` }))
+    if (cobranza.porCobrar > 0) alertas.push({ tipo: 'cobranza', texto: `PaP te debe ${formatGs(cobranza.porCobrar)} de ${cobranza.nSinRendir} entregas. Reclamá las más viejas en Rendición.` })
+    const peorDia = [...porDiaSemana].filter(d => d.total >= 3).sort((a, b) => b.devolucion - a.devolucion)[0]
+    if (peorDia && peorDia.devolucion >= 45) alertas.push({ tipo: 'patron', texto: `Los pedidos del ${peorDia.dia} se devuelven ${peorDia.devolucion}%. Evaluá no despachar ese día o reforzar la confirmación.` })
 
     setDatos({
       mes, ventasBrutas: entregadas.reduce((s, v) => s + v.total, 0),
@@ -70,9 +169,11 @@ export default function ReportesPage() {
       entregados: entregadas.length, devueltos: devueltas.length, pendientesCount: pendientes.length,
       tasaEntrega: (ventas || []).length ? (entregadas.length / (ventas || []).length) * 100 : 0,
       utilidadNeta: entregadas.reduce((s, v) => s + v.ganancia_neta, 0) - totalGastos,
-      porProducto: Object.values(porProducto).sort((a, b) => b.ingresos - a.ingresos),
+      porProducto: porProductoArr,
       porDia, campanas: campanas || [],
       ventas: ventas || [],
+      comparativa, cobranza, ciudades, porDiaSemana, motivos,
+      clientesUnicos, recompradores, alertas,
     })
     setLoading(false)
   }, [mes])
@@ -223,6 +324,49 @@ export default function ReportesPage() {
             ))}
           </div>
 
+          {/* Comparativa con mes anterior */}
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
+              Comparativa vs mes anterior
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 0 }}>
+              {[
+                { label: 'Ventas brutas', actual: datos.ventasBrutas, ant: datos.comparativa.ventasBrutas, fmt: formatGs },
+                { label: 'Ingresos netos', actual: datos.ingresosNetos, ant: datos.comparativa.ingresosNetos, fmt: formatGs },
+                { label: 'Entregados', actual: datos.entregados, ant: datos.comparativa.entregados, fmt: v => v },
+                { label: 'Devueltos', actual: datos.devueltos, ant: datos.comparativa.devueltos, fmt: v => v, invertido: true },
+                { label: 'Tasa entrega', actual: datos.tasaEntrega, ant: datos.comparativa.tasaEntrega, fmt: v => `${v.toFixed(0)}%` },
+              ].map((m, i) => (
+                <div key={i} style={{ padding: '12px 14px', borderRight: i < 4 ? '1px solid var(--border)' : 'none' }}>
+                  <div style={{ fontSize: 9.5, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>{m.label}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{m.fmt(m.actual)}</div>
+                  <div style={{ marginTop: 3 }}><Delta actual={m.actual} anterior={m.ant} invertido={m.invertido} /></div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Cobranza con PaP */}
+          {datos.cobranza.hayCobranza && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+              <div className="kpi-card" style={{ borderLeft: '3px solid var(--green)' }}>
+                <div className="kpi-label"><Truck size={11} /> Cobrado de PaP</div>
+                <div className="kpi-value green" style={{ fontSize: 15 }}>{formatGs(datos.cobranza.cobrado)}</div>
+                <div className="kpi-sub">{datos.cobranza.nRendidas} entregas rendidas</div>
+              </div>
+              <div className="kpi-card" style={{ borderLeft: '3px solid var(--yellow)' }}>
+                <div className="kpi-label">PaP te debe</div>
+                <div className="kpi-value" style={{ fontSize: 15, color: 'var(--yellow)' }}>{formatGs(datos.cobranza.porCobrar)}</div>
+                <div className="kpi-sub">{datos.cobranza.nSinRendir} sin rendir</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label">Tiempo de cobro</div>
+                <div className="kpi-value" style={{ fontSize: 15 }}>{datos.cobranza.tiempoCobro != null ? `${datos.cobranza.tiempoCobro.toFixed(1)} días` : '—'}</div>
+                <div className="kpi-sub">Entrega → depósito</div>
+              </div>
+            </div>
+          )}
+
           {/* Charts */}
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
             <div className="chart-card">
@@ -300,6 +444,56 @@ export default function ReportesPage() {
             </table>
           </div>
 
+          {/* Entrega por ciudad */}
+          <div className="card" style={{ padding: 0 }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <MapPin size={14} color="var(--accent)" /><span style={{ fontWeight: 600, fontSize: 14 }}>Entrega por ciudad</span>
+            </div>
+            <table>
+              <thead><tr><th>Ciudad</th><th>Pedidos</th><th>Entregados</th><th>Devueltos</th><th>Tasa entrega</th></tr></thead>
+              <tbody>
+                {datos.ciudades.slice(0, 12).map(c => (
+                  <tr key={c.ciudad}>
+                    <td style={{ fontWeight: 600 }}>{c.ciudad}</td>
+                    <td>{c.pedidos}</td>
+                    <td style={{ color: 'var(--green)' }}>{c.entregados}</td>
+                    <td style={{ color: 'var(--red)' }}>{c.devueltos}</td>
+                    <td><span style={{ fontWeight: 700, color: c.tasaEntrega > 60 ? 'var(--green)' : c.tasaEntrega > 40 ? 'var(--yellow)' : 'var(--red)' }}>{c.tasaEntrega}%</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Patrones: día de la semana + motivos de devolución */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 16 }}>
+            <div className="chart-card">
+              <div className="chart-header"><span className="chart-title"><Calendar size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />Devolución por día</span></div>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={datos.porDiaSemana} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="dia" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+                  <YAxis tickFormatter={v => `${v}%`} tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={30} domain={[0, 100]} />
+                  <Tooltip formatter={v => [`${v}%`, 'Devolución']} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 11 }} />
+                  <Bar dataKey="devolucion" radius={[3, 3, 0, 0]}>
+                    {datos.porDiaSemana.map((e, i) => <Cell key={i} fill={e.devolucion > 40 ? '#ef4444' : e.devolucion > 30 ? '#f59e0b' : '#22c55e'} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="card" style={{ padding: 0 }}>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 14 }}>Motivos de devolución</div>
+              <div style={{ padding: '8px 0' }}>
+                {datos.motivos.length ? datos.motivos.map((m, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 20px', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>{m.motivo}</span>
+                    <span style={{ fontWeight: 700, color: 'var(--red)' }}>{m.count}</span>
+                  </div>
+                )) : <div style={{ padding: '12px 20px', fontSize: 12, color: 'var(--text-muted)' }}>Sin devoluciones registradas</div>}
+              </div>
+            </div>
+          </div>
+
           {/* Campañas ads */}
           {datos.campanas.length > 0 && (
             <div className="card" style={{ padding: 0 }}>
@@ -330,6 +524,43 @@ export default function ReportesPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Recompras */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div className="kpi-card">
+              <div className="kpi-label"><Repeat size={11} /> Clientes únicos</div>
+              <div className="kpi-value" style={{ fontSize: 16 }}>{datos.clientesUnicos}</div>
+              <div className="kpi-sub">Por teléfono, en el mes</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Recompraron</div>
+              <div className="kpi-value accent" style={{ fontSize: 16 }}>{datos.recompradores}</div>
+              <div className="kpi-sub">Compraron 2+ veces</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Tasa de recompra</div>
+              <div className="kpi-value" style={{ fontSize: 16 }}>{datos.clientesUnicos ? Math.round(datos.recompradores / datos.clientesUnicos * 100) : 0}%</div>
+              <div className="kpi-sub">Fidelización</div>
+            </div>
+          </div>
+
+          {/* Alertas / acciones sugeridas */}
+          {datos.alertas.length > 0 && (
+            <div className="card" style={{ padding: 0, border: '1px solid var(--yellow)' }}>
+              <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <AlertTriangle size={15} color="var(--yellow)" />
+                <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--yellow)' }}>Puntos de atención del mes</span>
+              </div>
+              <div style={{ padding: '8px 0' }}>
+                {datos.alertas.map((a, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 10, padding: '10px 20px', fontSize: 12.5, lineHeight: 1.5, borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+                    <span style={{ color: 'var(--yellow)', fontWeight: 700, flexShrink: 0 }}>{i + 1}.</span>
+                    <span style={{ color: 'var(--text-secondary)' }}>{a.texto}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
