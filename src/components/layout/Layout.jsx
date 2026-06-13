@@ -1,9 +1,10 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { useState } from 'react'
 import { useAuth } from '../../lib/AuthContext'
 import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
-  Users, Calculator, Upload, BarChart3, PackageCheck, MapPin
+  Users, Calculator, Upload, BarChart3, PackageCheck, MapPin, Menu, X
 } from 'lucide-react'
 
 const navMain = [
@@ -25,15 +26,31 @@ const navHerramientas = [
   { to: '/reportes', icon: FileBarChart2, label: 'Reportes' },
 ]
 
+// Los 4 accesos directos fijos en la barra inferior del celular (los más usados)
+const navMovilFijo = [
+  { to: '/dashboard', icon: LayoutDashboard, label: 'Inicio' },
+  { to: '/ventas', icon: ShoppingCart, label: 'Ventas' },
+  { to: '/entregas', icon: MapPin, label: 'Entregas' },
+  { to: '/analytics', icon: BarChart3, label: 'Stats' },
+]
+
 export default function Layout() {
   const { profile, signOut, isAdmin } = useAuth()
   const navigate = useNavigate()
+  const [masAbierto, setMasAbierto] = useState(false)
 
   const handleSignOut = async () => { await signOut(); navigate('/login') }
   const initials = profile?.nombre ? profile.nombre.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : 'FW'
 
+  const todosLosItems = [
+    ...navMain,
+    ...navHerramientas,
+    ...(isAdmin ? [{ to: '/config', icon: Settings, label: 'Configuración' }] : []),
+  ]
+
   return (
     <div className="app-shell">
+      {/* SIDEBAR (desktop / tablet) */}
       <aside className="sidebar">
         <div className="sidebar-logo">
           <div style={{ width: 32, height: 32, background: 'var(--accent)', borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -78,6 +95,51 @@ export default function Layout() {
           </button>
         </div>
       </aside>
+
+      {/* BOTTOM NAV (solo móvil): 4 fijos + Más */}
+      <nav className="mobile-nav">
+        {navMovilFijo.map(({ to, icon: Icon, label }) => (
+          <NavLink key={to} to={to} className={({ isActive }) => `mobile-nav-item ${isActive ? 'active' : ''}`}>
+            <Icon size={21} /><span>{label}</span>
+          </NavLink>
+        ))}
+        <button className={`mobile-nav-item ${masAbierto ? 'active' : ''}`} onClick={() => setMasAbierto(true)}>
+          <Menu size={21} /><span>Más</span>
+        </button>
+      </nav>
+
+      {/* PANEL "Más" (solo móvil) */}
+      {masAbierto && (
+        <div className="mobile-more-overlay" onClick={() => setMasAbierto(false)}>
+          <div className="mobile-more-sheet" onClick={e => e.stopPropagation()}>
+            <div className="mobile-more-handle" />
+            <div className="mobile-more-header">
+              <div className="user-card" style={{ margin: 0 }}>
+                <div className="user-avatar">{initials}</div>
+                <div className="user-info">
+                  <div className="user-name">{profile?.nombre || 'Usuario'}</div>
+                  <div className="user-role" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {isAdmin && <Shield size={9} />}{profile?.rol || 'staff'}
+                  </div>
+                </div>
+              </div>
+              <button className="mobile-more-close" onClick={() => setMasAbierto(false)}><X size={20} /></button>
+            </div>
+            <div className="mobile-more-grid">
+              {todosLosItems.map(({ to, icon: Icon, label }) => (
+                <NavLink key={to} to={to} onClick={() => setMasAbierto(false)}
+                  className={({ isActive }) => `mobile-more-item ${isActive ? 'active' : ''}`}>
+                  <Icon size={22} /><span>{label}</span>
+                </NavLink>
+              ))}
+            </div>
+            <button className="mobile-more-logout" onClick={handleSignOut}>
+              <LogOut size={16} /><span>Cerrar sesión</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="main-content">
         <div className="page-content"><Outlet /></div>
       </main>
