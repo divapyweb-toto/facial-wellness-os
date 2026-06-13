@@ -178,48 +178,64 @@ export default function ReportesPage() {
     setLoading(false)
   }, [mes])
 
-  const generarPDF = async () => {
+  const generarPDF = () => {
     if (!datos) return
     setGenerandoPdf(true)
 
-    try {
-      const { default: jsPDF } = await import('jspdf')
-      const { default: html2canvas } = await import('html2canvas')
-
-      const element = reportRef.current
-      const canvas = await html2canvas(element, {
-        backgroundColor: '#080808',
-        scale: 1.5,
-        useCORS: true,
-        allowTaint: true,
-      })
-
-      const imgData = canvas.toDataURL('image/png')
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-      const pageWidth = pdf.internal.pageSize.getWidth()
-      const pageHeight = pdf.internal.pageSize.getHeight()
-      const imgWidth = pageWidth
-      const imgHeight = (canvas.height * imgWidth) / canvas.width
-
-      let heightLeft = imgHeight
-      let position = 0
-
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight)
-      heightLeft -= pageHeight
-
-      while (heightLeft >= 0) {
-        position -= pageHeight
-        pdf.addPage()
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight)
-        heightLeft -= pageHeight
-      }
-
-      const nombreMes = new Date(datos.mes + '-01').toLocaleDateString('es-PY', { month: 'long', year: 'numeric' })
-      pdf.save(`facial-wellness-reporte-${datos.mes}.pdf`)
-    } catch (e) {
-      console.error(e)
+    // Inyecta estilos de impresión: oculta todo menos el reporte, fuerza colores,
+    // evita cortar tarjetas a la mitad entre páginas.
+    const STYLE_ID = 'fw-print-styles'
+    let styleEl = document.getElementById(STYLE_ID)
+    if (!styleEl) {
+      styleEl = document.createElement('style')
+      styleEl.id = STYLE_ID
+      document.head.appendChild(styleEl)
     }
-    setGenerandoPdf(false)
+    styleEl.textContent = `
+      @media print {
+        @page { size: A4 portrait; margin: 8mm; }
+        html, body { background: #080808 !important; }
+        body * { visibility: hidden !important; }
+        #reporte-print, #reporte-print * { visibility: visible !important; }
+        #reporte-print {
+          position: absolute !important;
+          left: 0 !important; top: 0 !important;
+          width: 100% !important;
+          margin: 0 !important; padding: 0 !important;
+          background: #080808 !important;
+        }
+        #reporte-print .card,
+        #reporte-print .chart-card,
+        #reporte-print .kpi-card,
+        #reporte-print table,
+        #reporte-print tr {
+          break-inside: avoid !important;
+          page-break-inside: avoid !important;
+        }
+        * {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+      }
+    `
+
+    // Renombra el documento para que el PDF salga con el nombre del mes
+    const tituloOriginal = document.title
+    document.title = `facial-wellness-reporte-${datos.mes}`
+
+    const limpiar = () => {
+      document.title = tituloOriginal
+      setGenerandoPdf(false)
+      window.removeEventListener('afterprint', limpiar)
+    }
+    window.addEventListener('afterprint', limpiar)
+
+    // Pequeño delay para que apliquen los estilos antes de abrir el diálogo
+    setTimeout(() => {
+      window.print()
+      // Fallback por si el navegador no dispara afterprint
+      setTimeout(limpiar, 1000)
+    }, 150)
   }
 
   const mesesDisponibles = []
@@ -278,7 +294,7 @@ export default function ReportesPage() {
       )}
 
       {datos && (
-        <div ref={reportRef} style={{ display: 'flex', flexDirection: 'column', gap: 20, background: 'var(--bg-base)', padding: 8 }}>
+        <div ref={reportRef} id="reporte-print" style={{ display: 'flex', flexDirection: 'column', gap: 20, background: 'var(--bg-base)', padding: 8 }}>
           {/* Header del reporte */}
           <div style={{
             background: 'linear-gradient(135deg, var(--bg-card) 0%, #1a1a0a 100%)',
