@@ -78,6 +78,13 @@ function mapShopifyRow(row) {
   const ciudad = extraerNota(notas, 'ciudad') || (row['Shipping City'] !== '-' ? row['Shipping City'] : '') || ''
   const nombre = (extraerNota(notas, 'Nombre y apellido') || row['Billing Name'] || row['Shipping Name'] || '').replace(/\s*-\s*$/, '').trim()
   const telefono = limpiarTel(extraerNota(notas, 'Teléfono') || extraerNota(notas, 'whatsapp') || row['Phone'] || row['Billing Phone'] || '')
+  // Dirección: Note Attributes (Releasit) → Shipping → Billing. Suma la referencia si existe.
+  const dirBase = extraerNota(notas, 'Dirección principal')
+    || (row['Shipping Address1'] && row['Shipping Address1'] !== '-' ? row['Shipping Address1'] : '')
+    || (row['Billing Address1'] && row['Billing Address1'] !== '-' ? row['Billing Address1'] : '')
+    || ''
+  const refDir = extraerNota(notas, 'Referencia')
+  const cliente_direccion = dirBase ? (refDir ? `${dirBase} (${refDir})` : dirBase) : refDir
   return {
     fecha,
     n_referencia: (row['Name'] || '').replace('#', '').trim(),
@@ -88,6 +95,7 @@ function mapShopifyRow(row) {
     ciudad,
     cliente_nombre: nombre,
     cliente_telefono: telefono,
+    cliente_direccion,
     estado: 'pendiente',
     estado_releasit,
     canal_origen: 'Shopify Orgánico',
@@ -181,6 +189,7 @@ function mapGenericoRow(row) {
     ciudad: row['ciudad'] || row['Ciudad'] || row['city'] || '',
     cliente_nombre: row['cliente'] || row['Cliente'] || row['nombre'] || '',
     cliente_telefono: limpiarTel(row['telefono'] || row['Telefono'] || row['tel'] || ''),
+    cliente_direccion: row['direccion'] || row['Direccion'] || row['dirección'] || row['address'] || '',
     estado: row['estado'] || row['Estado'] || 'pendiente',
     estado_releasit: 'confirmado',
     canal_origen: row['canal'] || 'Meta Ads',
@@ -334,7 +343,7 @@ export default function ImportarPage() {
   }
 
   const descargarPlantilla = () => {
-    const csv = 'fecha,referencia,producto,cantidad,total,ciudad,cliente,telefono,canal\n2026-06-01,1580,JawFlex Pro,1,137000,Asunción,Juan Pérez,0981000000,Meta Ads\n2026-06-01,1581,Pack Gudair,2,256000,San Lorenzo,Ana López,0982000000,TikTok'
+    const csv = 'fecha,referencia,producto,cantidad,total,ciudad,direccion,cliente,telefono,canal\n2026-06-01,1580,JawFlex Pro,1,137000,Asunción,Av. España 123,Juan Pérez,0981000000,Meta Ads\n2026-06-01,1581,Pack Gudair,2,256000,San Lorenzo,Ruta 2 km 18,Ana López,0982000000,TikTok'
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -536,6 +545,7 @@ export default function ImportarPage() {
                   <th>Total</th>
                   <th>Cliente</th>
                   <th>Ciudad</th>
+                  <th>Dirección</th>
                   <th>Teléfono</th>
                 </tr>
               </thead>
@@ -549,6 +559,7 @@ export default function ImportarPage() {
                     <td style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
                     <td className="muted">{v.cliente_nombre || '—'}</td>
                     <td className="muted">{v.ciudad || '—'}</td>
+                    <td className="muted" style={{ maxWidth: 180, whiteSpace: 'normal', fontSize: 11 }}>{v.cliente_direccion || '—'}</td>
                     <td className="muted">{v.cliente_telefono || '—'}</td>
                   </tr>
                 ))}

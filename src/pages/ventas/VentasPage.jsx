@@ -101,6 +101,9 @@ function NuevaVentaModal({ onClose, onSaved }) {
     metodo_envio_id: '',
     canal_origen: 'Meta Ads',
     ciudad: '',
+    cliente_nombre: '',
+    cliente_telefono: '',
+    cliente_direccion: '',
     descripcion: '',
   })
   const [productoSel, setProductoSel] = useState(null)
@@ -261,6 +264,26 @@ function NuevaVentaModal({ onClose, onSaved }) {
             <SearchSelect value={form.ciudad} onChange={(v) => setForm(f => ({ ...f, ciudad: v }))} options={ciudadesOpts} placeholder="Buscar ciudad..." />
           </div>
 
+          <div className="form-grid">
+            <div className="form-group">
+              <label className="form-label">Cliente</label>
+              <input className="form-input" placeholder="Nombre del cliente" value={form.cliente_nombre}
+                onChange={e => setForm(f => ({ ...f, cliente_nombre: e.target.value }))} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Teléfono</label>
+              <input className="form-input" placeholder="0981000000" value={form.cliente_telefono}
+                onChange={e => setForm(f => ({ ...f, cliente_telefono: e.target.value }))} />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Dirección de entrega</label>
+            <input className="form-input" placeholder="Calle, número, referencia" value={form.cliente_direccion}
+              onChange={e => setForm(f => ({ ...f, cliente_direccion: e.target.value }))} />
+            <span className="form-hint">Necesaria para despachar desde Ventas (Cabecera + Guías)</span>
+          </div>
+
           <div className="form-group">
             <label className="form-label">Descripción / Notas</label>
             <input className="form-input" placeholder="Ej: 2 negros, 1 blanco" value={form.descripcion}
@@ -294,6 +317,7 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
     ciudad: venta.ciudad || '',
     cliente_nombre: venta.cliente_nombre || '',
     cliente_telefono: venta.cliente_telefono || '',
+    cliente_direccion: venta.cliente_direccion || '',
     canal_origen: venta.canal_origen || 'Otro',
     costo_prod: venta.costo_prod || 0,
     costo_envio: venta.costo_envio || 0,
@@ -334,6 +358,7 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
       ciudad: form.ciudad,
       cliente_nombre: form.cliente_nombre,
       cliente_telefono: form.cliente_telefono,
+      cliente_direccion: form.cliente_direccion,
       canal_origen: form.canal_origen,
       costo_prod: parseInt(form.costo_prod) || 0,
       costo_envio: parseInt(form.costo_envio) || 0,
@@ -404,6 +429,11 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
               <label className="form-label">Ciudad</label>
               <input className="form-input" value={form.ciudad} onChange={e => set('ciudad', e.target.value)} />
             </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Dirección de entrega</label>
+            <input className="form-input" value={form.cliente_direccion} onChange={e => set('cliente_direccion', e.target.value)} placeholder="Calle, número, referencia" />
+            <span className="form-hint">Se usa al despachar desde Ventas (Cabecera + Guías)</span>
           </div>
           <div className="form-group">
             <label className="form-label">Canal</label>

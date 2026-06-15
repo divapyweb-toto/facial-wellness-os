@@ -225,14 +225,13 @@ async function descargarGuiasDOCX(pedidos) {
 }
 
 // ─── Map venta DB → formato pedido (para XLSX/DOCX) ─────
-// Las ventas no guardan dirección → queda vacío (se puede completar en Excel)
 function ventaAPedido(v) {
   return {
     n_referencia: v.n_referencia || '',
     cliente_nombre: v.cliente_nombre || '—',
     ciudad: v.ciudad || '',
     departamento: '',
-    direccion: '',
+    direccion: v.cliente_direccion || '',
     telefono: v.cliente_telefono || '',
     producto_nombre: v.producto_nombre || '',
     cantidad: v.cantidad || 1,
@@ -408,6 +407,7 @@ export default function DespachoPagina() {
         ciudad: p.ciudad,
         cliente_nombre: p.cliente_nombre,
         cliente_telefono: p.telefono,
+        cliente_direccion: p.direccion,
         producto_id: prod ? prod.id : null,
         costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
         costo_envio: 27000,
@@ -452,7 +452,7 @@ export default function DespachoPagina() {
     try {
       const { data, error } = await supabase
         .from('ventas')
-        .select('id, n_referencia, fecha, cliente_nombre, cliente_telefono, ciudad, producto_nombre, cantidad, total, estado_releasit')
+        .select('id, n_referencia, fecha, cliente_nombre, cliente_telefono, cliente_direccion, ciudad, producto_nombre, cantidad, total, estado_releasit')
         .eq('estado', 'pendiente')
         .order('fecha', { ascending: false })
       if (error) throw error
@@ -557,13 +557,19 @@ export default function DespachoPagina() {
       ═══════════════════════════════════════════════════ */}
       {modo === 'ventas' && (
         <>
-          {/* Aviso dirección */}
-          <div className="alert" style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
-            <Info size={14} color="var(--accent)" style={{ flexShrink: 0, marginTop: 1 }} />
-            <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
-              Las ventas guardadas no almacenan dirección. El campo <b>DIRECCIÓN</b> quedará vacío en la Cabecera y en las Guías — podés completarlo a mano en Excel antes de enviarlo a PaP.
-            </span>
-          </div>
+          {/* Aviso: solo si hay ventas seleccionadas SIN dirección */}
+          {(() => {
+            const sinDir = pedidosSeleccionados.filter(p => !p.direccion).length
+            if (selVentas.size === 0 || sinDir === 0) return null
+            return (
+              <div className="alert" style={{ background: 'var(--yellow-dim)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+                <AlertTriangle size={14} color="var(--yellow)" style={{ flexShrink: 0, marginTop: 1 }} />
+                <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                  {sinDir} de las {selVentas.size} ventas seleccionadas no tienen dirección guardada (ventas viejas cargadas antes de esta función). En la Cabecera y las Guías ese campo saldrá vacío — completalo a mano en Excel, o editá la venta para cargarle la dirección.
+                </span>
+              </div>
+            )
+          })()}
 
           {/* Barra de acción */}
           <div className="card card-sm" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px' }}>
@@ -645,6 +651,7 @@ export default function DespachoPagina() {
                       <th>Fecha</th>
                       <th>Nombre</th>
                       <th>Ciudad</th>
+                      <th>Dirección</th>
                       <th>Teléfono</th>
                       <th>Producto</th>
                       <th>Cant.</th>
@@ -675,6 +682,11 @@ export default function DespachoPagina() {
                         <td className="muted" style={{ fontSize: 11 }}>{v.fecha}</td>
                         <td style={{ fontWeight: 500 }}>{v.cliente_nombre || '—'}</td>
                         <td className="muted">{v.ciudad || '—'}</td>
+                        <td className="muted" style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11 }}>
+                          {v.cliente_direccion
+                            ? v.cliente_direccion
+                            : <span style={{ color: 'var(--yellow)' }} title="Sin dirección — completar en Excel o editar la venta">⚠ falta</span>}
+                        </td>
                         <td className="muted">{v.cliente_telefono || '—'}</td>
                         <td style={{ fontSize: 12 }}>{getTipo(v.producto_nombre)}</td>
                         <td>{v.cantidad}</td>
