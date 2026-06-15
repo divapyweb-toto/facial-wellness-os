@@ -80,7 +80,7 @@ function mapShopifyRow(row) {
   const telefono = limpiarTel(extraerNota(notas, 'Teléfono') || extraerNota(notas, 'whatsapp') || row['Phone'] || row['Billing Phone'] || '')
   return {
     fecha,
-    n_referencia: row['Name'] || '',
+    n_referencia: (row['Name'] || '').replace('#', '').trim(),
     producto_nombre: row['Lineitem name'] || 'Sin nombre',
     cantidad: parseInt(row['Lineitem quantity']) || 1,
     total,
@@ -422,6 +422,36 @@ export default function ImportarPage() {
         )}
       </div>
 
+      {/* Alerta: hay órdenes pero todas filtradas por estado */}
+      {!resultado && todasMapeadas.length > 0 && ventasFinal.length === 0 && (
+        <div className="alert alert-warning">
+          <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <div style={{ fontWeight: 600 }}>
+              {todasMapeadas.length} pedido{todasMapeadas.length !== 1 ? 's' : ''} encontrado{todasMapeadas.length !== 1 ? 's' : ''}, pero {todasMapeadas.length === 1 ? 'está' : 'están'} en estado pendiente de confirmación
+            </div>
+            <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5, opacity: 0.9 }}>
+              Releasit todavía no confirmó {todasMapeadas.length === 1 ? 'este pedido' : 'estos pedidos'}.
+              Destildá <b>"Solo confirmados + ayuda"</b> para importarlos igual, o esperá a que el cliente confirme.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Alerta: CSV cargado pero sin pedidos válidos */}
+      {!resultado && filasRaw.length > 0 && todasMapeadas.length === 0 && (
+        <div className="alert alert-warning">
+          <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <div style={{ fontWeight: 600 }}>El CSV no contiene pedidos válidos</div>
+            <div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5, opacity: 0.9 }}>
+              Verificá que exportaste desde Shopify: Pedidos → Exportar → <b>"Archivo CSV sin formato"</b>.
+              Las filas deben tener una columna "Name" con valores como "#1595".
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Resumen */}
       {ventasFinal.length > 0 && !resultado && (
         <div className="kpi-grid">
@@ -436,8 +466,8 @@ export default function ImportarPage() {
           {excluidosPorEstado > 0 && (
             <div className="kpi-card">
               <div className="kpi-label">Excluidos por estado</div>
-              <div className="kpi-value" style={{ color: 'var(--red)' }}>{excluidosPorEstado}</div>
-              <div className="kpi-sub">Cancelados / pendientes</div>
+              <div className="kpi-value" style={{ color: 'var(--yellow)' }}>{excluidosPorEstado}</div>
+              <div className="kpi-sub">Pendientes / cancelados</div>
             </div>
           )}
         </div>
