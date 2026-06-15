@@ -645,6 +645,102 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .saldo-item { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; background: var(--bg-hover); border-radius: var(--radius-sm); transition: background var(--t-fast) ease; }
 .saldo-item:hover { background: #222; }
 
+/* ═══════════════════════════════════════════════════════
+   RESPONSIVE VISIBILITY + MOBILE CARD SYSTEM
+   .desktop-only  → visible en ≥769px, oculto en móvil
+   .mobile-only   → visible en ≤768px, oculto en desktop/tablet
+════════════════════════════════════════════════════════ */
+.mobile-only { display: none; }
+.desktop-only { display: block; }
+
+/* Tarjeta de dato para vista móvil (reemplaza filas de tabla) */
+.m-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0;
+  overflow: hidden;
+  transition: border-color var(--t-base) ease, box-shadow var(--t-base) ease, transform var(--t-fast) ease;
+  animation: slideUp 0.3s var(--ease-out) both;
+}
+.m-card:active { transform: scale(0.985); }
+.m-card.selected {
+  border-color: rgba(200,241,53,0.4);
+  box-shadow: 0 0 0 1px rgba(200,241,53,0.3), var(--accent-glow);
+}
+
+/* Header de la tarjeta: título + acción rápida */
+.m-card-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 10px; padding: 13px 14px 11px;
+}
+.m-card-title {
+  font-size: 14px; font-weight: 600; color: var(--text-primary);
+  line-height: 1.3; flex: 1; min-width: 0;
+}
+.m-card-amount {
+  font-family: var(--font-display);
+  font-size: 16px; font-weight: 700;
+  color: var(--text-primary); white-space: nowrap;
+  letter-spacing: -0.02em;
+}
+
+/* Cuerpo: pares etiqueta/valor en grilla compacta */
+.m-card-body {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 8px 14px;
+  padding: 0 14px 12px;
+}
+.m-card-row { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.m-card-row.full { grid-column: 1 / -1; }
+.m-card-label {
+  font-size: 9.5px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.m-card-value {
+  font-size: 13px; color: var(--text-secondary); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.m-card-value.strong { color: var(--text-primary); font-weight: 600; }
+
+/* Footer de la tarjeta: acciones / estado */
+.m-card-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 10px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(255,255,255,0.012);
+}
+
+/* Stagger en la lista de tarjetas */
+.m-card-list { display: flex; flex-direction: column; gap: 10px; }
+.m-card-list > .m-card:nth-child(1)  { animation-delay:  0ms; }
+.m-card-list > .m-card:nth-child(2)  { animation-delay: 35ms; }
+.m-card-list > .m-card:nth-child(3)  { animation-delay: 70ms; }
+.m-card-list > .m-card:nth-child(4)  { animation-delay:105ms; }
+.m-card-list > .m-card:nth-child(5)  { animation-delay:140ms; }
+.m-card-list > .m-card:nth-child(6)  { animation-delay:175ms; }
+.m-card-list > .m-card:nth-child(7)  { animation-delay:210ms; }
+.m-card-list > .m-card:nth-child(8)  { animation-delay:245ms; }
+.m-card-list > .m-card:nth-child(n+9) { animation-delay:280ms; }
+
+/* Chip de estado dentro de tarjeta (tappable) */
+.m-status-select {
+  appearance: none; -webkit-appearance: none;
+  border-radius: 20px; padding: 5px 12px;
+  font-size: 12px; font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer; border: 1px solid;
+}
+
+/* Filtros scrollables horizontalmente en móvil (chips) */
+.filter-scroll {
+  display: flex; gap: 6px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.filter-scroll::-webkit-scrollbar { display: none; }
+
 /* ─── Tablet collapse ─────────────────────────────────── */
 @media (max-width: 1024px) {
   .sidebar { width: var(--sidebar-collapsed); }
@@ -665,6 +761,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
    MOBILE — iPhone-native feel
 ════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
+
+  /* Toggle de vistas: tablas ocultas, tarjetas visibles */
+  .desktop-only { display: none !important; }
+  .mobile-only  { display: block !important; }
 
   .sidebar { display: none; }
 

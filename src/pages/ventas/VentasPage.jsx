@@ -578,7 +578,7 @@ export default function VentasPage() {
           <input className="form-input" style={{ paddingLeft: 30 }} placeholder="Buscar producto, ref, ciudad..."
             value={busqueda} onChange={e => setBusqueda(e.target.value)} />
         </div>
-        <div className="tabs">
+        <div className="tabs filter-scroll">
           {ESTADOS.map(e => (
             <button key={e} className={`tab ${filtroEstado === e ? 'active' : ''}`} onClick={() => setFiltroEstado(e)}>
               {e === 'todos' ? 'Todos' : e === 'en_tramite' ? 'En trámite' : e.charAt(0).toUpperCase() + e.slice(1)}
@@ -603,7 +603,8 @@ export default function VentasPage() {
         </div>
       )}
 
-      <div className="table-wrapper">
+      {/* ─── VISTA DESKTOP: tabla ─────────────────────── */}
+      <div className="table-wrapper desktop-only">
         {loading ? (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Cargando...</div>
         ) : ventas.length === 0 ? (
@@ -673,6 +674,96 @@ export default function VentasPage() {
               })}
             </tbody>
           </table>
+        )}
+      </div>
+
+      {/* ─── VISTA MÓVIL: tarjetas ────────────────────── */}
+      <div className="mobile-only">
+        {loading ? (
+          <div className="m-card-list">
+            {[...Array(4)].map((_, i) => <div key={i} className="skeleton" style={{ height: 130, borderRadius: 'var(--radius)' }} />)}
+          </div>
+        ) : ventas.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-icon"><Plus size={22} /></div>
+            <p className="empty-state-title">Sin ventas</p>
+            <button className="btn btn-primary btn-sm" onClick={() => setShowModal(true)}><Plus size={13} /> Nueva venta</button>
+          </div>
+        ) : (
+          <div className="m-card-list">
+            {ventas.map(v => {
+              const cfg = estadoConfig[v.estado]
+              const dias = v.estado === 'pendiente' ? diasSinResolver(v.fecha) : null
+              const sel = seleccionadas.has(v.id)
+              return (
+                <div key={v.id} className={`m-card${sel ? ' selected' : ''}`}>
+                  {/* Header: checkbox + producto + total */}
+                  <div className="m-card-head">
+                    <input
+                      type="checkbox"
+                      checked={sel}
+                      onChange={() => toggleSel(v.id)}
+                      style={{ cursor: 'pointer', width: 17, height: 17, marginTop: 1, flexShrink: 0, accentColor: 'var(--accent)' }}
+                    />
+                    <div className="m-card-title">{v.producto_nombre}</div>
+                    <div className="m-card-amount">{formatGs(v.total)}</div>
+                  </div>
+
+                  {/* Body: datos en grilla 2 columnas */}
+                  <div className="m-card-body">
+                    <div className="m-card-row">
+                      <span className="m-card-label">Fecha</span>
+                      <span className="m-card-value">
+                        {new Date(v.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}
+                        {dias !== null && dias >= 5 && <span style={{ color: 'var(--red)', marginLeft: 5 }}>· {dias}d</span>}
+                      </span>
+                    </div>
+                    <div className="m-card-row">
+                      <span className="m-card-label">Ref.</span>
+                      <span className="m-card-value strong">{v.n_referencia ? `#${v.n_referencia}` : '—'}</span>
+                    </div>
+                    <div className="m-card-row">
+                      <span className="m-card-label">Cantidad</span>
+                      <span className="m-card-value">{v.cantidad} u</span>
+                    </div>
+                    <div className="m-card-row">
+                      <span className="m-card-label">Ganancia</span>
+                      <span className="m-card-value strong" style={{ color: v.estado === 'entregado' ? 'var(--green)' : 'var(--text-muted)' }}>
+                        {v.estado === 'entregado' ? formatGs(v.ganancia_neta) : '—'}
+                      </span>
+                    </div>
+                    <div className="m-card-row full">
+                      <span className="m-card-label">Ciudad</span>
+                      <span className="m-card-value">{v.ciudad || '—'} · {v.canal_origen}</span>
+                    </div>
+                  </div>
+
+                  {/* Footer: estado + acciones */}
+                  <div className="m-card-foot">
+                    <select
+                      value={v.estado}
+                      onChange={e => cambiarEstado(v.id, e.target.value)}
+                      className="m-status-select"
+                      style={{ background: cfg.bg, color: cfg.color, borderColor: `${cfg.color}40` }}
+                    >
+                      <option value="pendiente">Pendiente</option>
+                      <option value="entregado">Entregado</option>
+                      <option value="devuelto">Devuelto</option>
+                      <option value="en_tramite">En trámite</option>
+                    </select>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setEditando(v)} style={{ color: 'var(--accent)' }}>
+                        <Edit2 size={14} /> Editar
+                      </button>
+                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => eliminar(v.id)} style={{ color: 'var(--red)', opacity: 0.7 }} title="Eliminar">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
 

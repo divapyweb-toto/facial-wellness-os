@@ -416,28 +416,60 @@ export default function DashboardPage() {
             </button>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ minWidth: 500 }}>
-              <thead>
-                <tr>
-                  <th>Fecha</th>
-                  <th>Producto</th>
-                  <th>Total</th>
-                  <th>Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ventasRecientes.map(v => (
-                  <tr key={v.id}>
-                    <td className="muted" style={{ fontSize: 12 }}>{new Date(v.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
-                    <td style={{ fontWeight: 500, fontSize: 12 }}>{v.producto_nombre}</td>
-                    <td style={{ fontWeight: 600, fontSize: 12 }}>{formatGs(v.total)}</td>
-                    <td>{estadoBadge[v.estado]}</td>
+          <>
+            {/* Desktop: tabla */}
+            <div className="desktop-only" style={{ overflowX: 'auto' }}>
+              <table style={{ minWidth: 500 }}>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Producto</th>
+                    <th>Total</th>
+                    <th>Estado</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {ventasRecientes.map(v => (
+                    <tr key={v.id}>
+                      <td className="muted" style={{ fontSize: 12 }}>{new Date(v.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
+                      <td style={{ fontWeight: 500, fontSize: 12 }}>{v.producto_nombre}</td>
+                      <td style={{ fontWeight: 600, fontSize: 12 }}>{formatGs(v.total)}</td>
+                      <td>{estadoBadge[v.estado]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Móvil: filas compactas */}
+            <div className="mobile-only" style={{ display: 'flex', flexDirection: 'column' }}>
+              {ventasRecientes.map((v, i) => (
+                <div
+                  key={v.id}
+                  onClick={() => navigate('/ventas')}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                    padding: '12px 16px',
+                    borderTop: i === 0 ? 'none' : '1px solid var(--border-subtle)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {v.producto_nombre}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                      {new Date(v.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-display)' }}>{formatGs(v.total)}</span>
+                    {estadoBadge[v.estado]}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
