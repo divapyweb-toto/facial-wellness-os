@@ -8,14 +8,15 @@ const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgáni
 const ESTADOS = ['todos', 'pendiente', 'entregado', 'devuelto', 'en_tramite']
 
 function SearchSelect({ value, onChange, options, placeholder }) {
+  const opts = Array.isArray(options) ? options : []
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const ref = useRef()
 
   useEffect(() => {
-    const found = options.find(o => o.value === value)
+    const found = opts.find(o => o.value === value)
     setQuery(found ? found.label : '')
-  }, [value, options])
+  }, [value, opts])
 
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
@@ -23,8 +24,8 @@ function SearchSelect({ value, onChange, options, placeholder }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const filtered = options.filter(o =>
-    o.label.toLowerCase().includes(query.toLowerCase())
+  const filtered = opts.filter(o =>
+    (o?.label || '').toLowerCase().includes(query.toLowerCase())
   ).slice(0, 20)
 
   const handleSelect = (opt) => {
