@@ -519,7 +519,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
   max-width: 520px; max-height: 92vh;
   overflow-y: auto;
   box-shadow: var(--shadow-modal);
-  animation: scaleIn 0.22s var(--ease-spring) both;
+  opacity: 1;
+  animation: scaleIn 0.22s var(--ease-spring);
   -webkit-overflow-scrolling: touch;
 }
 .modal-lg  { max-width: 680px; }
@@ -914,7 +915,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
   /* ── Modal → bottom sheet ──────────────────────── */
   .modal-overlay { padding: 0; align-items: flex-end; }
-  .modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; max-height: 90vh; max-width: 100%; padding: 20px 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); animation: slideUpSheet 0.28s var(--ease-spring) both; }
+  .modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; max-height: 90vh; max-width: 100%; padding: 20px 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); opacity: 1; animation: slideUpSheet 0.28s var(--ease-spring); }
 
   /* ── Forms ─────────────────────────────────────── */
   .form-grid { grid-template-columns: 1fr; gap: 12px; }
