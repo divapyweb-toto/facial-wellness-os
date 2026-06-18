@@ -84,11 +84,11 @@ const ESTADO_CONFIG = {
 function getTipo(nombre) {
   const n = (nombre || '').toLowerCase()
   if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return 'Pack Gudair'
-  if (n.includes('tira') || n.includes('nasal')) return 'Tiras nasales'
-  if (n.includes('raspador') || n.includes('lengua') || n.includes('limpiador')) return 'Raspador de lengua'
-  if (n.includes('parche') || n.includes('bucal')) return 'Parche Bucal'
-  if (n.includes('jaw') || n.includes('mandíbula') || n.includes('ejercitador')) return 'JawFlex Pro'
-  if (n.includes('botella') || n.includes('flexible')) return 'Botella Flexible'
+  if (n.includes('tira') || n.includes('nasal') || n.includes('nose') || n.includes('strip')) return 'Tiras nasales'
+  if (n.includes('raspador') || n.includes('lengua') || n.includes('limpiador') || n.includes('tongue') || n.includes('scraper')) return 'Raspador de lengua'
+  if (n.includes('parche') || n.includes('bucal') || n.includes('mouth') || n.includes('tape')) return 'Parche Bucal'
+  if (n.includes('jaw') || n.includes('mandíbula') || n.includes('mandibula') || n.includes('ejercitador')) return 'JawFlex Pro'
+  if (n.includes('botella') || n.includes('flexible') || n.includes('bottle') || n.includes('flow')) return 'Botella Flexible'
   if (n.includes('bebird')) return 'Bebird Pro'
   return nombre || 'Producto'
 }
@@ -97,11 +97,11 @@ function getDesc(nombre, cantidad) {
   const n = (nombre || '').toLowerCase()
   const u = parseInt(cantidad) || 1
   if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return `Pack Gudair (${u} unidad${u > 1 ? 'es' : ''})`
-  if (n.includes('tira') || n.includes('nasal')) return 'Tiras nasales (30 unidades)'
-  if (n.includes('raspador') || n.includes('lengua') || n.includes('limpiador')) return 'Limpiador de Lengua Facial Wellness'
-  if (n.includes('parche') || n.includes('bucal')) return 'Parches bucales (30 unidades)'
-  if (n.includes('jaw') || n.includes('mandíbula') || n.includes('ejercitador')) return `Ejercitadores de Mandíbula - Pack ${u}x JawFlex Pro`
-  if (n.includes('botella') || n.includes('flexible')) return u > 1 ? `Botella Flexible Flow 500 x${u}` : 'Botella Flexible Flow 500 Negro'
+  if (n.includes('tira') || n.includes('nasal') || n.includes('nose') || n.includes('strip')) return 'Tiras nasales (30 unidades)'
+  if (n.includes('raspador') || n.includes('lengua') || n.includes('limpiador') || n.includes('tongue') || n.includes('scraper')) return 'Limpiador de Lengua Facial Wellness'
+  if (n.includes('parche') || n.includes('bucal') || n.includes('mouth') || n.includes('tape')) return 'Parches bucales (30 unidades)'
+  if (n.includes('jaw') || n.includes('mandíbula') || n.includes('mandibula') || n.includes('ejercitador')) return `Ejercitadores de Mandíbula - Pack ${u}x JawFlex Pro`
+  if (n.includes('botella') || n.includes('flexible') || n.includes('bottle') || n.includes('flow')) return u > 1 ? `Botella Flexible Flow 500 x${u}` : 'Botella Flexible Flow 500 Negro'
   if (n.includes('bebird')) return 'Bebird Pro - Limpiador de Oídos'
   return `${nombre} (${u} unidad${u > 1 ? 'es' : ''})`
 }

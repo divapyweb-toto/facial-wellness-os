@@ -216,7 +216,7 @@ export default function FinanzasPage() {
                   </div>
                   <div style={{ background: 'var(--bg-hover)', borderRadius: 3, height: 4 }}>
                     <div style={{
-                      width: `${(monto / totalGastos) * 100}%`, height: '100%',
+                      width: `${totalGastos ? (monto / totalGastos) * 100 : 0}%`, height: '100%',
                       background: 'var(--accent)', borderRadius: 3,
                     }} />
                   </div>

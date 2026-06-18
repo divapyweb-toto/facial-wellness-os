@@ -273,7 +273,7 @@ export default function EntregasPage() {
     return {
       total, entregados: entregados.length, devueltos: devueltos.length, proceso: proceso.length,
       tasaEntrega: resueltos ? Math.round(entregados.length / resueltos * 100) : 0,
-      tasaTotal: Math.round(entregados.length / total * 100),
+      tasaTotal: total ? Math.round(entregados.length / total * 100) : 0,
       cobrado, perdidoProd, costoEnvios, costoEnviosDevueltos,
       margenNeto: cobrado - costoEnvios,
       perdidaTotal: perdidoProd + costoEnviosDevueltos,
