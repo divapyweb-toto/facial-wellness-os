@@ -5,6 +5,7 @@ import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { Plus, X, DollarSign, TrendingDown, TrendingUp, BarChart3, Edit2, Trash2, Save } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { logAccion, logAccionLote } from '../../lib/audit'
 
 const CATEGORIAS = ['Publicidad', 'Logística', 'Operativo', 'Personal', 'Impuestos', 'Otro']
 
@@ -41,7 +42,15 @@ function GastoModal({ gasto, onClose, onSaved }) {
       ? await supabase.from('gastos').update(payload).eq('id', gasto.id)
       : await supabase.from('gastos').insert(payload)
     if (error) toast('Error al guardar', 'error')
-    else { toast(esEdicion ? 'Gasto actualizado' : 'Gasto registrado', 'success'); onSaved(); onClose() }
+    else {
+      await logAccion({
+        accion: esEdicion ? 'editar' : 'crear',
+        entidad: 'gasto',
+        entidadId: gasto?.id,
+        detalle: `${payload.categoria} — ${payload.concepto} (${payload.monto.toLocaleString('es-PY')} Gs)`,
+      })
+      toast(esEdicion ? 'Gasto actualizado' : 'Gasto registrado', 'success'); onSaved(); onClose()
+    }
     setLoading(false)
   }
 
@@ -98,16 +107,39 @@ function GastoModal({ gasto, onClose, onSaved }) {
 
 export default function FinanzasPage() {
   const { isAdmin } = useAuth()
+  const { toast } = useToast()
   const [gastos, setGastos] = useState([])
   const [ventasPorMes, setVentasPorMes] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editando, setEditando] = useState(null)
   const [filtroMes, setFiltroMes] = useState(new Date().toISOString().substring(0, 7))
+  const [sel, setSel] = useState(new Set())
+
+  const toggleSel = (id) => setSel(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n
+  })
+  const todasSel = gastos.length > 0 && sel.size === gastos.length
+  const toggleTodas = () => setSel(todasSel ? new Set() : new Set(gastos.map(g => g.id)))
 
   const eliminarGasto = async (id) => {
+    const g = gastos.find(x => x.id === id)
     if (!confirm('¿Eliminar este gasto?')) return
     await supabase.from('gastos').delete().eq('id', id)
+    await logAccion({ accion: 'eliminar', entidad: 'gasto', entidadId: id, detalle: g ? `${g.categoria} — ${g.concepto}` : '' })
+    toast('Gasto eliminado', 'info')
+    cargar()
+  }
+
+  const eliminarLote = async () => {
+    const ids = [...sel]
+    if (!ids.length) return
+    if (!confirm(`¿Eliminar ${ids.length} gasto(s)? Esta acción no se puede deshacer.`)) return
+    const { error } = await supabase.from('gastos').delete().in('id', ids)
+    if (error) { toast('Error al eliminar: ' + error.message, 'error'); return }
+    await logAccionLote({ accion: 'eliminar', entidad: 'gasto', cantidad: ids.length, detalle: `mes ${filtroMes}` })
+    toast(`${ids.length} gasto(s) eliminado(s)`, 'info')
+    setSel(new Set())
     cargar()
   }
 
@@ -246,11 +278,25 @@ export default function FinanzasPage() {
         </div>
       </div>
 
+      {/* Barra de selección masiva */}
+      {sel.size > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 16px', background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.3)', borderRadius: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{sel.size} gasto(s) seleccionado(s)</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSel(new Set())}>Deseleccionar</button>
+            <button className="btn btn-sm" onClick={eliminarLote} style={{ background: 'var(--red)', color: '#fff' }}>
+              <Trash2 size={13} /> Eliminar {sel.size}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Tabla gastos */}
       <div className="table-wrapper">
         <table>
           <thead>
             <tr>
+              <th style={{ width: 34 }}><input type="checkbox" checked={todasSel} onChange={toggleTodas} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} /></th>
               <th>Fecha</th>
               <th>Categoría</th>
               <th>Concepto</th>
@@ -262,13 +308,14 @@ export default function FinanzasPage() {
           </thead>
           <tbody>
             {gastos.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 40 }}>
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 40 }}>
                 Sin gastos registrados este mes
               </td></tr>
             ) : gastos.map(g => {
               const dif = g.presupuestado ? g.presupuestado - g.monto : null
               return (
-                <tr key={g.id}>
+                <tr key={g.id} style={sel.has(g.id) ? { background: 'var(--accent-dim)' } : undefined}>
+                  <td><input type="checkbox" checked={sel.has(g.id)} onChange={() => toggleSel(g.id)} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} /></td>
                   <td className="muted">{new Date(g.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
                   <td><span className="badge badge-gray">{g.categoria}</span></td>
                   <td style={{ fontWeight: 500 }}>{g.concepto}</td>

@@ -1,6 +1,7 @@
 // src/lib/AuthContext.jsx
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from './supabase'
+import { setAuditUser } from './audit'
 
 const AuthContext = createContext({})
 
@@ -34,6 +35,7 @@ export function AuthProvider({ children }) {
       .eq('id', userId)
       .single()
     setProfile(data)
+    setAuditUser(data)
     setLoading(false)
   }
 
