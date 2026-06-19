@@ -145,6 +145,25 @@ function agruparPedidosShopify(filas) {
   return { ventas, multi }
 }
 
+// ─── Familia de producto (matcheo inteligente por palabras clave) ──
+// Clasifica CUALQUIER nombre (de Shopify o del catálogo) en una familia
+// canónica. Si la venta y un producto del catálogo caen en la misma
+// familia, hacen match aunque los nombres no sean idénticos.
+// Mismo cerebro que usa Despacho (getTipo) — probado con 500 pedidos.
+function familiaProducto(nombre) {
+  const n = (nombre || '').toLowerCase()
+  if (!n) return null
+  // Pack Gudair primero (combo tira+parche) para que no lo agarre "tira" suelto
+  if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return 'gudair'
+  if (n.includes('bebird')) return 'bebird'
+  if (n.includes('raspador') || n.includes('lengua') || n.includes('limpiador') || n.includes('tongue') || n.includes('scraper')) return 'lengua'
+  if (n.includes('parche') || n.includes('bucal') || n.includes('mouth') || n.includes('tape')) return 'parche'
+  if (n.includes('tira') || n.includes('nasal') || n.includes('nose') || n.includes('strip')) return 'nasal'
+  if (n.includes('jaw') || n.includes('mandíbula') || n.includes('mandibula') || n.includes('ejercitador')) return 'jaw'
+  if (n.includes('botella') || n.includes('flexible') || n.includes('bottle') || n.includes('flow')) return 'botella'
+  return null
+}
+
 // ─── Match de producto del catálogo por nombre ──────────────
 // Resuelve costo_prod y producto_id buscando el producto del catálogo
 // que corresponde al nombre que viene de Shopify (que suele ser más largo/sucio).
@@ -162,7 +181,19 @@ function matchProducto(nombreVenta, productos) {
       return c && (n.includes(c) || c.includes(n))
     })
     .sort((a, b) => (b.nombre || '').length - (a.nombre || '').length)
-  return cand[0] || null
+  if (cand[0]) return cand[0]
+  // 3) match por familia (palabras clave): "Limpiador de Lengua" ≈ "Raspador de Lengua"
+  const fam = familiaProducto(nombreVenta)
+  if (fam) {
+    const porFamilia = productos.filter(x => familiaProducto(x.nombre) === fam)
+    // Si hay un único producto de esa familia, es match seguro.
+    if (porFamilia.length === 1) return porFamilia[0]
+    // Si hay varios (ej: distintas presentaciones), preferir el de nombre más corto (el genérico).
+    if (porFamilia.length > 1) {
+      return porFamilia.sort((a, b) => (a.nombre || '').length - (b.nombre || '').length)[0]
+    }
+  }
+  return null
 }
 
 function enriquecerConProducto(v, productos) {
