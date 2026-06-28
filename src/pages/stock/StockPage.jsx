@@ -2,7 +2,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
-import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save } from 'lucide-react'
+import { calcularStockCombo } from '../../lib/stockEngine'
+import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save, Layers } from 'lucide-react'
 
 // Modal: agregar/editar producto completo
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -217,8 +218,13 @@ export default function StockPage() {
 
   useEffect(() => { cargar() }, [cargar])
 
-  const valorTotal = productos.reduce((s, p) => s + (p.stock_actual * p.costo_unit), 0)
-  const bajosAlerta = productos.filter(p => p.stock_actual <= p.stock_alerta)
+  // Mapa de productos por ID (para calcular stock de combos)
+  const productosById = productos.reduce((acc, p) => { acc[p.id] = p; return acc }, {})
+  // Stock a mostrar: combos = calculado (mín. de componentes); simples = stock real
+  const stockMostrado = (p) => p.es_combo ? calcularStockCombo(p, productosById) : p.stock_actual
+  // Valor de inventario: solo productos simples (los combos no tienen stock propio, evita doble conteo)
+  const valorTotal = productos.reduce((s, p) => s + (p.es_combo ? 0 : p.stock_actual * p.costo_unit), 0)
+  const bajosAlerta = productos.filter(p => !p.es_combo && p.stock_actual <= p.stock_alerta)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -285,34 +291,46 @@ export default function StockPage() {
               </thead>
               <tbody>
                 {productos.map(p => {
-                  const bajo = p.stock_actual <= p.stock_alerta
-                  const pct = Math.min(100, (p.stock_actual / Math.max(p.stock_alerta * 3, 1)) * 100)
+                  const stockVal = stockMostrado(p)
+                  const bajo = !p.es_combo && stockVal <= p.stock_alerta
+                  const pct = Math.min(100, (stockVal / Math.max(p.stock_alerta * 3, 1)) * 100)
                   return (
                     <tr key={p.id}>
-                      <td style={{ fontWeight: 600 }}>{p.nombre}</td>
+                      <td style={{ fontWeight: 600 }}>
+                        {p.nombre}
+                        {p.es_combo && <span className="badge badge-accent" style={{ marginLeft: 6, fontSize: 9 }}><Layers size={8} /> Combo</span>}
+                      </td>
                       <td className="muted">{formatGs(p.costo_unit)}</td>
                       <td style={{ fontWeight: 500 }}>{formatGs(p.precio_1u)}</td>
                       <td className="muted">{p.precio_2u ? formatGs(p.precio_2u) : '—'}</td>
                       <td className="muted">{p.precio_3u ? formatGs(p.precio_3u) : '—'}</td>
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ fontWeight: 700, color: bajo ? 'var(--red)' : 'var(--text-primary)', minWidth: 24 }}>{p.stock_actual}</span>
-                          <div style={{ width: 50, height: 4, background: 'var(--bg-hover)', borderRadius: 2 }}>
-                            <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: bajo ? 'var(--red)' : pct > 50 ? 'var(--green)' : 'var(--yellow)', transition: 'width 0.5s' }} />
+                        {p.es_combo ? (
+                          <span style={{ fontWeight: 700, color: 'var(--accent)' }} title="Calculado según componentes disponibles">
+                            {stockVal} <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--text-muted)' }}>armables</span>
+                          </span>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontWeight: 700, color: bajo ? 'var(--red)' : 'var(--text-primary)', minWidth: 24 }}>{stockVal}</span>
+                            <div style={{ width: 50, height: 4, background: 'var(--bg-hover)', borderRadius: 2 }}>
+                              <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: bajo ? 'var(--red)' : pct > 50 ? 'var(--green)' : 'var(--yellow)', transition: 'width 0.5s' }} />
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </td>
-                      <td className="muted">{p.stock_alerta}</td>
-                      <td>{bajo ? <span className="badge badge-red"><AlertTriangle size={9} /> Bajo</span> : <span className="badge badge-green">OK</span>}</td>
+                      <td className="muted">{p.es_combo ? '—' : p.stock_alerta}</td>
+                      <td>{p.es_combo ? <span className="badge badge-accent">Auto</span> : bajo ? <span className="badge badge-red"><AlertTriangle size={9} /> Bajo</span> : <span className="badge badge-green">OK</span>}</td>
                       <td><span className={`badge ${p.grupo_envio === 'A' ? 'badge-blue' : 'badge-accent'}`}>Grupo {p.grupo_envio}</span></td>
                       <td>
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button className="btn btn-ghost btn-sm" onClick={() => setModalProducto(p)} title="Editar producto/precios">
                             <Edit2 size={12} /> Editar
                           </button>
-                          <button className="btn btn-secondary btn-sm" onClick={() => setModalCompra(p)}>
-                            <Plus size={12} /> Stock
-                          </button>
+                          {!p.es_combo && (
+                            <button className="btn btn-secondary btn-sm" onClick={() => setModalCompra(p)}>
+                              <Plus size={12} /> Stock
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -335,32 +353,44 @@ export default function StockPage() {
                 </button>
               </div>
             ) : productos.map(p => {
-              const bajo = p.stock_actual <= p.stock_alerta
-              const pct = Math.min(100, (p.stock_actual / Math.max(p.stock_alerta * 3, 1)) * 100)
+              const stockVal = stockMostrado(p)
+              const bajo = !p.es_combo && stockVal <= p.stock_alerta
+              const pct = Math.min(100, (stockVal / Math.max(p.stock_alerta * 3, 1)) * 100)
               return (
                 <div key={p.id} className="card card-sm" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {/* Row 1: nombre + badges */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>{p.nombre}</span>
+                    <span style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>
+                      {p.nombre}
+                      {p.es_combo && <span className="badge badge-accent" style={{ marginLeft: 5, fontSize: 9 }}><Layers size={8} /> Combo</span>}
+                    </span>
                     <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
                       <span className={`badge ${p.grupo_envio === 'A' ? 'badge-blue' : 'badge-accent'}`}>G{p.grupo_envio}</span>
-                      {bajo ? <span className="badge badge-red"><AlertTriangle size={9} /> Bajo</span> : <span className="badge badge-green">OK</span>}
+                      {p.es_combo ? <span className="badge badge-accent">Auto</span> : bajo ? <span className="badge badge-red"><AlertTriangle size={9} /> Bajo</span> : <span className="badge badge-green">OK</span>}
                     </div>
                   </div>
 
-                  {/* Row 2: stock bar */}
+                  {/* Row 2: stock bar (o disponibilidad de combo) */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, color: bajo ? 'var(--red)' : 'var(--accent)', minWidth: 36 }}>
-                      {p.stock_actual}
+                      {stockVal}
                     </span>
                     <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 10, color: 'var(--text-muted)' }}>
-                        <span>Stock actual</span>
-                        <span>Alerta: {p.stock_alerta}</span>
-                      </div>
-                      <div style={{ height: 5, background: 'var(--bg-hover)', borderRadius: 3 }}>
-                        <div style={{ width: `${pct}%`, height: '100%', borderRadius: 3, background: bajo ? 'var(--red)' : pct > 50 ? 'var(--green)' : 'var(--yellow)', transition: 'width 0.5s' }} />
-                      </div>
+                      {p.es_combo ? (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                          Packs armables según componentes disponibles
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 10, color: 'var(--text-muted)' }}>
+                            <span>Stock actual</span>
+                            <span>Alerta: {p.stock_alerta}</span>
+                          </div>
+                          <div style={{ height: 5, background: 'var(--bg-hover)', borderRadius: 3 }}>
+                            <div style={{ width: `${pct}%`, height: '100%', borderRadius: 3, background: bajo ? 'var(--red)' : pct > 50 ? 'var(--green)' : 'var(--yellow)', transition: 'width 0.5s' }} />
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -387,9 +417,11 @@ export default function StockPage() {
                     <button className="btn btn-ghost btn-sm" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setModalProducto(p)}>
                       <Edit2 size={12} /> Editar / Precios
                     </button>
-                    <button className="btn btn-primary btn-sm" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setModalCompra(p)}>
-                      <Plus size={12} /> Agregar stock
-                    </button>
+                    {!p.es_combo && (
+                      <button className="btn btn-primary btn-sm" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setModalCompra(p)}>
+                        <Plus size={12} /> Agregar stock
+                      </button>
+                    )}
                   </div>
                 </div>
               )

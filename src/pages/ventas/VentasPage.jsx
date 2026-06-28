@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, formatGs, estadoConfig } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
+import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion } from '../../lib/stockEngine'
 import { Plus, Search, X, Clock, Trash2, Edit2, Save } from 'lucide-react'
 
 const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro']
@@ -151,7 +152,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
     const costoEnvio = envioSel?.costo_propio || 27000
     const envioCliente = productoSel?.grupo_envio === 'A' ? (envioSel?.costo_cliente || 29000) : 0
 
-    const { error } = await supabase.from('ventas').insert({
+    const { data: ventaCreada, error } = await supabase.from('ventas').insert({
       ...form,
       producto_nombre: productoSel.nombre,
       precio_unit: total,
@@ -161,9 +162,14 @@ function NuevaVentaModal({ onClose, onSaved }) {
       envio_cliente: envioCliente,
       metodo_pago_nombre: metodoPagoNombre,
       metodo_envio_nombre: envioSel?.nombre || '',
-    })
+      stock_descontado: false,
+    }).select().single()
     if (error) toast('Error: ' + error.message, 'error')
-    else { toast('Venta registrada', 'success'); onSaved(); onClose() }
+    else {
+      // Descontar stock automáticamente (si es combo, descuenta sus componentes)
+      try { await aplicarStockNuevaVenta(ventaCreada) } catch (e) { console.warn('stock:', e?.message) }
+      toast('Venta registrada', 'success'); onSaved(); onClose()
+    }
     setLoading(false)
   }
 
@@ -366,7 +372,18 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
       envio_cliente: parseInt(form.envio_cliente) || 0,
     }).eq('id', venta.id)
     if (error) toast('Error: ' + error.message, 'error')
-    else { toast('Venta actualizada', 'success'); onSaved(); onClose() }
+    else {
+      // Reajustar stock: el motor revierte la versión vieja y aplica la nueva (cantidad/producto/estado)
+      const ventaNueva = {
+        ...venta,
+        producto_id: form.producto_id || null,
+        cantidad: parseInt(form.cantidad) || 1,
+        estado: form.estado,
+        n_referencia: form.n_referencia,
+      }
+      try { await aplicarStockEdicion(venta, ventaNueva) } catch (e) { console.warn('stock:', e?.message) }
+      toast('Venta actualizada', 'success'); onSaved(); onClose()
+    }
     setLoading(false)
   }
 
@@ -513,9 +530,14 @@ export default function VentasPage() {
   useEffect(() => { cargarVentas() }, [cargarVentas])
 
   const cambiarEstado = async (id, nuevoEstado) => {
+    const ventaActual = ventas.find(v => v.id === id)
     const { error } = await supabase.from('ventas').update({ estado: nuevoEstado }).eq('id', id)
-    if (error) toast('Error al actualizar', 'error')
-    else { toast('Estado actualizado', 'success'); cargarVentas() }
+    if (error) { toast('Error al actualizar', 'error'); return }
+    // Ajustar stock según la transición (devuelto suma, reactivar descuenta) — el motor evita el doble descuento
+    if (ventaActual) {
+      try { await aplicarStockCambioEstado(ventaActual, nuevoEstado) } catch (e) { console.warn('stock:', e?.message) }
+    }
+    toast('Estado actualizado', 'success'); cargarVentas()
   }
 
   const eliminar = async (id) => {
