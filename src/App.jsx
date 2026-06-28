@@ -17,6 +17,7 @@ import ImportarPage from './pages/importar/ImportarPage'
 import AnalyticsPage from './pages/analytics/AnalyticsPage'
 import DespachoPagina from './pages/despacho/DespachoPagina'
 import EntregasPage from './pages/entregas/EntregasPage'
+import SistemaPage from './pages/sistema/SistemaPage'
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth()
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="importar" element={<ImportarPage />} />
           <Route path="reportes" element={<ReportesPage />} />
           <Route path="config" element={<ConfigPage />} />
+          <Route path="sistema" element={<SistemaPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

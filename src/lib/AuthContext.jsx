@@ -2,6 +2,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from './supabase'
 import { setAuditUser } from './audit'
+import { setErrorUser } from './errorLog'
 
 const AuthContext = createContext({})
 
@@ -36,6 +37,7 @@ export function AuthProvider({ children }) {
       .single()
     setProfile(data)
     setAuditUser(data)
+    setErrorUser(data)
     setLoading(false)
   }
 

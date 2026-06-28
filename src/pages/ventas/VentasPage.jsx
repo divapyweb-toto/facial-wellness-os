@@ -3,6 +3,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, formatGs, estadoConfig } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion } from '../../lib/stockEngine'
+import { logError } from '../../lib/errorLog'
+import { validarVenta } from '../../lib/validation'
+import { logAccion, logAccionLote } from '../../lib/audit'
 import { Plus, Search, X, Clock, Trash2, Edit2, Save } from 'lucide-react'
 
 const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro']
@@ -143,7 +146,9 @@ function NuevaVentaModal({ onClose, onSaved }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!form.producto_id) { toast('Seleccioná un producto', 'error'); return }
+    // Validación completa antes de tocar la base
+    const errorValidacion = validarVenta(form)
+    if (errorValidacion) { toast(errorValidacion, 'error'); return }
     setLoading(true)
     const envioSel = form.metodo_envio_id
       ? (await supabase.from('metodos_envio').select('*').eq('id', form.metodo_envio_id).single()).data
@@ -164,10 +169,11 @@ function NuevaVentaModal({ onClose, onSaved }) {
       metodo_envio_nombre: envioSel?.nombre || '',
       stock_descontado: false,
     }).select().single()
-    if (error) toast('Error: ' + error.message, 'error')
+    if (error) { toast('Error: ' + error.message, 'error'); logError('crear_venta', error, { producto: productoSel.nombre }) }
     else {
       // Descontar stock automáticamente (si es combo, descuenta sus componentes)
-      try { await aplicarStockNuevaVenta(ventaCreada) } catch (e) { console.warn('stock:', e?.message) }
+      try { await aplicarStockNuevaVenta(ventaCreada) } catch (e) { logError('crear_venta_stock', e, { id: ventaCreada.id }) }
+      await logAccion({ accion: 'crear', entidad: 'venta', entidadId: ventaCreada.id, detalle: `#${ventaCreada.n_referencia || ''} — ${productoSel.nombre}` })
       toast('Venta registrada', 'success'); onSaved(); onClose()
     }
     setLoading(false)
@@ -504,7 +510,7 @@ export default function VentasPage() {
 
   const cargarVentas = useCallback(async () => {
     setLoading(true)
-    let query = supabase.from('ventas').select('*').order('fecha', { ascending: false }).order('created_at', { ascending: false })
+    let query = supabase.from('ventas').select('*').is('deleted_at', null).order('fecha', { ascending: false }).order('created_at', { ascending: false })
     if (filtroEstado !== 'todos') query = query.eq('estado', filtroEstado)
     if (filtroMes) {
       const [year, month] = filtroMes.split('-')
@@ -541,9 +547,16 @@ export default function VentasPage() {
   }
 
   const eliminar = async (id) => {
-    if (!confirm('¿Eliminar esta venta?')) return
-    await supabase.from('ventas').delete().eq('id', id)
-    toast('Venta eliminada', 'info')
+    if (!confirm('¿Mover esta venta a la papelera? Podés recuperarla después.')) return
+    const venta = ventas.find(v => v.id === id)
+    // Si la venta tenía stock descontado, devolverlo al borrar
+    if (venta?.stock_descontado) {
+      try { await aplicarStockCambioEstado(venta, 'devuelto') } catch (e) { logError('borrar_venta_stock', e, { id }) }
+    }
+    const { error } = await supabase.from('ventas').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast('Error al eliminar', 'error'); logError('borrar_venta', error, { id }); return }
+    await logAccion({ accion: 'eliminar', entidad: 'venta', entidadId: id, detalle: venta ? `#${venta.n_referencia} — ${venta.producto_nombre}` : '' })
+    toast('Venta movida a la papelera', 'info')
     cargarVentas()
   }
 
@@ -560,10 +573,20 @@ export default function VentasPage() {
   const eliminarMasivo = async () => {
     const ids = [...seleccionadas]
     if (!ids.length) return
-    if (!confirm(`¿Eliminar ${ids.length} venta(s)? Esta acción no se puede deshacer.`)) return
-    const { error } = await supabase.from('ventas').delete().in('id', ids)
-    if (error) toast('Error al eliminar: ' + error.message, 'error')
-    else { toast(`${ids.length} venta(s) eliminada(s)`, 'info'); cargarVentas() }
+    if (!confirm(`¿Mover ${ids.length} venta(s) a la papelera? Podés recuperarlas después.`)) return
+    // Devolver stock de las que estaban descontadas
+    for (const id of ids) {
+      const venta = ventas.find(v => v.id === id)
+      if (venta?.stock_descontado) {
+        try { await aplicarStockCambioEstado(venta, 'devuelto') } catch (e) { logError('borrar_lote_stock', e, { id }) }
+      }
+    }
+    const { error } = await supabase.from('ventas').update({ deleted_at: new Date().toISOString() }).in('id', ids)
+    if (error) { toast('Error al eliminar: ' + error.message, 'error'); logError('borrar_lote_ventas', error, { count: ids.length }) }
+    else {
+      await logAccionLote({ accion: 'eliminar', entidad: 'venta', cantidad: ids.length, detalle: `mes ${filtroMes}` })
+      toast(`${ids.length} venta(s) movida(s) a la papelera`, 'info'); cargarVentas()
+    }
   }
 
   const totalVentas = ventas.filter(v => v.estado === 'entregado').reduce((s, v) => s + v.total, 0)

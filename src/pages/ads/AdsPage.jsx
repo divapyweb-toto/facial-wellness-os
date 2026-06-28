@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
+import { logError } from '../../lib/errorLog'
 import { Plus, X, Megaphone, TrendingUp, Target, DollarSign, Edit2, Trash2, Save } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 
@@ -158,7 +159,7 @@ export default function AdsPage() {
 
   const cargar = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase.from('campanas_ads').select('*').order('created_at', { ascending: false })
+    const { data } = await supabase.from('campanas_ads').select('*').is('deleted_at', null).order('created_at', { ascending: false })
     setCampanas(data || [])
     setLoading(false)
   }, [])
@@ -166,9 +167,10 @@ export default function AdsPage() {
   useEffect(() => { cargar() }, [cargar])
 
   const eliminar = async (id) => {
-    if (!confirm('¿Eliminar esta campaña?')) return
-    await supabase.from('campanas_ads').delete().eq('id', id)
-    toast('Campaña eliminada', 'info')
+    if (!confirm('¿Mover esta campaña a la papelera?')) return
+    const { error } = await supabase.from('campanas_ads').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast('Error al eliminar', 'error'); logError('borrar_campana', error, { id }); return }
+    toast('Campaña movida a la papelera', 'info')
     cargar()
   }
 

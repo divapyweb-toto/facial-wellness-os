@@ -6,6 +6,8 @@ import { useToast } from '../../lib/toast'
 import { Plus, X, DollarSign, TrendingDown, TrendingUp, BarChart3, Edit2, Trash2, Save } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { logAccion, logAccionLote } from '../../lib/audit'
+import { logError } from '../../lib/errorLog'
+import { validarGasto } from '../../lib/validation'
 
 const CATEGORIAS = ['Publicidad', 'Logística', 'Operativo', 'Personal', 'Impuestos', 'Otro']
 
@@ -31,6 +33,8 @@ function GastoModal({ gasto, onClose, onSaved }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    const errorValidacion = validarGasto(form)
+    if (errorValidacion) { toast(errorValidacion, 'error'); return }
     setLoading(true)
     const payload = {
       ...form,
@@ -41,7 +45,7 @@ function GastoModal({ gasto, onClose, onSaved }) {
     const { error } = esEdicion
       ? await supabase.from('gastos').update(payload).eq('id', gasto.id)
       : await supabase.from('gastos').insert(payload)
-    if (error) toast('Error al guardar', 'error')
+    if (error) { toast('Error al guardar', 'error'); logError('guardar_gasto', error, { concepto: payload.concepto }) }
     else {
       await logAccion({
         accion: esEdicion ? 'editar' : 'crear',
@@ -124,21 +128,22 @@ export default function FinanzasPage() {
 
   const eliminarGasto = async (id) => {
     const g = gastos.find(x => x.id === id)
-    if (!confirm('¿Eliminar este gasto?')) return
-    await supabase.from('gastos').delete().eq('id', id)
+    if (!confirm('¿Mover este gasto a la papelera?')) return
+    const { error } = await supabase.from('gastos').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast('Error al eliminar', 'error'); logError('borrar_gasto', error, { id }); return }
     await logAccion({ accion: 'eliminar', entidad: 'gasto', entidadId: id, detalle: g ? `${g.categoria} — ${g.concepto}` : '' })
-    toast('Gasto eliminado', 'info')
+    toast('Gasto movido a la papelera', 'info')
     cargar()
   }
 
   const eliminarLote = async () => {
     const ids = [...sel]
     if (!ids.length) return
-    if (!confirm(`¿Eliminar ${ids.length} gasto(s)? Esta acción no se puede deshacer.`)) return
-    const { error } = await supabase.from('gastos').delete().in('id', ids)
-    if (error) { toast('Error al eliminar: ' + error.message, 'error'); return }
+    if (!confirm(`¿Mover ${ids.length} gasto(s) a la papelera?`)) return
+    const { error } = await supabase.from('gastos').update({ deleted_at: new Date().toISOString() }).in('id', ids)
+    if (error) { toast('Error al eliminar: ' + error.message, 'error'); logError('borrar_lote_gastos', error, { count: ids.length }); return }
     await logAccionLote({ accion: 'eliminar', entidad: 'gasto', cantidad: ids.length, detalle: `mes ${filtroMes}` })
-    toast(`${ids.length} gasto(s) eliminado(s)`, 'info')
+    toast(`${ids.length} gasto(s) movido(s) a la papelera`, 'info')
     setSel(new Set())
     cargar()
   }
@@ -150,8 +155,8 @@ export default function FinanzasPage() {
     const fin = new Date(year, parseInt(month), 0).toISOString().split('T')[0]
 
     const [{ data: g }, { data: v }] = await Promise.all([
-      supabase.from('gastos').select('*').gte('fecha', inicio).lte('fecha', fin).order('fecha', { ascending: false }),
-      supabase.from('ventas').select('*').gte('fecha', inicio).lte('fecha', fin),
+      supabase.from('gastos').select('*').is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin).order('fecha', { ascending: false }),
+      supabase.from('ventas').select('*').is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin),
     ])
 
     setGastos(g || [])

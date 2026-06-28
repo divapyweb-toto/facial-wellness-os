@@ -55,7 +55,10 @@ export default function Layout() {
   const todosLosItems = [
     ...navMain,
     ...navHerramientas,
-    ...(isAdmin ? [{ to: '/config', icon: Settings, label: 'Configuración' }] : []),
+    ...(isAdmin ? [
+      { to: '/config', icon: Settings, label: 'Configuración' },
+      { to: '/sistema', icon: Shield, label: 'Sistema' },
+    ] : []),
   ]
 
   return (
@@ -113,6 +116,12 @@ export default function Layout() {
                 className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
               >
                 <Settings size={16} /><span>Configuración</span>
+              </NavLink>
+              <NavLink
+                to="/sistema"
+                className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+              >
+                <Shield size={16} /><span>Sistema</span>
               </NavLink>
             </>
           )}
