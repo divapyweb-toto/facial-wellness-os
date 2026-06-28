@@ -635,7 +635,7 @@ export default function DespachoPagina() {
               </div>
             ) : (
               <div style={{ overflowX: 'auto' }}>
-                <table>
+                <table className="tabla-responsive">
                   <thead>
                     <tr>
                       <th style={{ width: 40, textAlign: 'center', padding: '8px 8px 8px 16px' }}>
@@ -678,19 +678,19 @@ export default function DespachoPagina() {
                             style={{ cursor: 'pointer', accentColor: 'var(--accent)', width: 14, height: 14 }}
                           />
                         </td>
-                        <td className="mono">#{v.n_referencia}</td>
-                        <td className="muted" style={{ fontSize: 11 }}>{v.fecha}</td>
-                        <td style={{ fontWeight: 500 }}>{v.cliente_nombre || '—'}</td>
-                        <td className="muted">{v.ciudad || '—'}</td>
-                        <td className="muted" style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11 }}>
+                        <td data-label="Ref." className="mono">#{v.n_referencia}</td>
+                        <td data-label="Fecha" className="muted" style={{ fontSize: 11 }}>{v.fecha}</td>
+                        <td data-label="Nombre" style={{ fontWeight: 500 }}>{v.cliente_nombre || '—'}</td>
+                        <td data-label="Ciudad" className="muted">{v.ciudad || '—'}</td>
+                        <td data-label="Dirección" className="muted" style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11 }}>
                           {v.cliente_direccion
                             ? v.cliente_direccion
                             : <span style={{ color: 'var(--yellow)' }} title="Sin dirección — completar en Excel o editar la venta">⚠ falta</span>}
                         </td>
-                        <td className="muted">{v.cliente_telefono || '—'}</td>
-                        <td style={{ fontSize: 12 }}>{getTipo(v.producto_nombre)}</td>
-                        <td>{v.cantidad}</td>
-                        <td style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
+                        <td data-label="Teléfono" className="muted">{v.cliente_telefono || '—'}</td>
+                        <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(v.producto_nombre)}</td>
+                        <td data-label="Cant.">{v.cantidad}</td>
+                        <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -922,7 +922,7 @@ export default function DespachoPagina() {
               </span>
             </div>
             <div style={{ overflowX: 'auto' }}>
-              <table>
+              <table className="tabla-responsive">
                 <thead>
                   <tr>
                     <th>Ref.</th>
@@ -940,23 +940,23 @@ export default function DespachoPagina() {
                 <tbody>
                   {tablaFiltrada.map((p, i) => (
                     <tr key={i} style={{ opacity: p.despachar ? 1 : 0.45 }}>
-                      <td className="mono">#{p.n_referencia}</td>
-                      <td className="muted" style={{ fontSize: 11 }}>{p.fecha}</td>
-                      <td style={{ fontWeight: 500 }}>
+                      <td data-label="Ref." className="mono">#{p.n_referencia}</td>
+                      <td data-label="Fecha" className="muted" style={{ fontSize: 11 }}>{p.fecha}</td>
+                      <td data-label="Nombre" style={{ fontWeight: 500 }}>
                         {p.cliente_nombre || '—'}
                         {p.faltantes.length > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--yellow)' }} title={`Falta ${p.faltantes.join(', ')}`}>⚠</span>}
                       </td>
-                      <td className="muted">{p.ciudad || '—'}</td>
-                      <td className="muted">{p.telefono || '—'}</td>
-                      <td style={{ fontSize: 12 }}>{getTipo(p.producto_nombre)}</td>
-                      <td>{p.cantidad}</td>
-                      <td style={{ fontWeight: 600 }}>{formatGs(p.total)}</td>
-                      <td>
+                      <td data-label="Ciudad" className="muted">{p.ciudad || '—'}</td>
+                      <td data-label="Teléfono" className="muted">{p.telefono || '—'}</td>
+                      <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(p.producto_nombre)}</td>
+                      <td data-label="Cant.">{p.cantidad}</td>
+                      <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(p.total)}</td>
+                      <td data-label="Estado">
                         <span style={{ fontSize: 11, fontWeight: 600, color: p.cfg.color, whiteSpace: 'nowrap' }}>
                           {p.cfg.label}
                         </span>
                       </td>
-                      <td>
+                      <td data-label="Despacho">
                         {p.despachar
                           ? <span className="badge badge-green" style={{ fontSize: 10 }}>✓ Despachar</span>
                           : <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>

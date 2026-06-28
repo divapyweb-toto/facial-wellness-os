@@ -566,7 +566,7 @@ export default function ImportarPage() {
             <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{archivo?.name}</span>
           </div>
           <div className="table-wrapper" style={{ border: 'none', borderRadius: 0, overflowX: 'auto' }}>
-            <table>
+            <table className="tabla-responsive">
               <thead>
                 <tr>
                   <th>Fecha</th>
@@ -583,15 +583,15 @@ export default function ImportarPage() {
               <tbody>
                 {preview.map((v, i) => (
                   <tr key={i}>
-                    <td className="muted" style={{ fontSize: 11 }}>{v.fecha}</td>
-                    <td className="mono">{v.n_referencia || '—'}</td>
-                    <td style={{ fontWeight: 500, fontSize: 12 }}>{v.producto_nombre}</td>
-                    <td>{v.cantidad}</td>
-                    <td style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
-                    <td className="muted">{v.cliente_nombre || '—'}</td>
-                    <td className="muted">{v.ciudad || '—'}</td>
-                    <td className="muted" style={{ maxWidth: 180, whiteSpace: 'normal', fontSize: 11 }}>{v.cliente_direccion || '—'}</td>
-                    <td className="muted">{v.cliente_telefono || '—'}</td>
+                    <td data-label="Fecha" className="muted" style={{ fontSize: 11 }}>{v.fecha}</td>
+                    <td data-label="Ref." className="mono">{v.n_referencia || '—'}</td>
+                    <td data-label="Producto" style={{ fontWeight: 500, fontSize: 12 }}>{v.producto_nombre}</td>
+                    <td data-label="Cant.">{v.cantidad}</td>
+                    <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
+                    <td data-label="Cliente" className="muted">{v.cliente_nombre || '—'}</td>
+                    <td data-label="Ciudad" className="muted">{v.ciudad || '—'}</td>
+                    <td data-label="Dirección" className="muted" style={{ maxWidth: 180, whiteSpace: 'normal', fontSize: 11 }}>{v.cliente_direccion || '—'}</td>
+                    <td data-label="Teléfono" className="muted">{v.cliente_telefono || '—'}</td>
                   </tr>
                 ))}
               </tbody>

@@ -309,7 +309,7 @@ export default function RendicionPage() {
           </div>
 
           <div style={{ overflowX: 'auto', maxHeight: 480, overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 580 }}>
+            <table className="tabla-responsive" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 580 }}>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-card)', zIndex: 1 }}>
                 <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
                   <th style={{ padding: '8px 8px 8px 16px', width: 36 }}>
@@ -355,16 +355,16 @@ export default function RendicionPage() {
                           style={{ cursor: 'pointer', accentColor: 'var(--green)', width: 14, height: 14 }}
                         />
                       </td>
-                      <td style={{ padding: '8px 6px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
-                      <td style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
-                      <td style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
-                      <td style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{fechaCorta(m.fecha_entrega)}</td>
-                      <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                      <td data-label="Ref" style={{ padding: '8px 6px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
+                      <td data-label="Guía PaP" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
+                      <td data-label="Ciudad" style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
+                      <td data-label="Entregado" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{fechaCorta(m.fecha_entrega)}</td>
+                      <td data-label="Días" style={{ padding: '8px 6px', textAlign: 'center' }}>
                         {m.diasSinRendir != null
                           ? <span style={{ color: demorada ? 'var(--red)' : m.diasSinRendir > 8 ? 'var(--yellow)' : 'var(--text-muted)', fontWeight: demorada ? 700 : 400 }}>{m.diasSinRendir}d</span>
                           : '—'}
                       </td>
-                      <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{formatGs(m.importe)}</td>
+                      <td data-label="Importe" style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{formatGs(m.importe)}</td>
                     </tr>
                   )
                 })}

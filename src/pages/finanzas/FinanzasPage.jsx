@@ -298,7 +298,7 @@ export default function FinanzasPage() {
 
       {/* Tabla gastos */}
       <div className="table-wrapper">
-        <table>
+        <table className="tabla-responsive">
           <thead>
             <tr>
               <th style={{ width: 34 }}><input type="checkbox" checked={todasSel} onChange={toggleTodas} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} /></th>
@@ -321,12 +321,12 @@ export default function FinanzasPage() {
               return (
                 <tr key={g.id} style={sel.has(g.id) ? { background: 'var(--accent-dim)' } : undefined}>
                   <td><input type="checkbox" checked={sel.has(g.id)} onChange={() => toggleSel(g.id)} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} /></td>
-                  <td className="muted">{new Date(g.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
-                  <td><span className="badge badge-gray">{g.categoria}</span></td>
-                  <td style={{ fontWeight: 500 }}>{g.concepto}</td>
-                  <td style={{ color: 'var(--red)', fontWeight: 600 }}>{formatGs(g.monto)}</td>
-                  <td className="muted">{g.presupuestado ? formatGs(g.presupuestado) : '—'}</td>
-                  <td style={{ color: dif !== null ? (dif >= 0 ? 'var(--green)' : 'var(--red)') : undefined, fontWeight: 500 }}>
+                  <td data-label="Fecha" className="muted">{new Date(g.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
+                  <td data-label="Categoría"><span className="badge badge-gray">{g.categoria}</span></td>
+                  <td data-label="Concepto" style={{ fontWeight: 500 }}>{g.concepto}</td>
+                  <td data-label="Monto real" style={{ color: 'var(--red)', fontWeight: 600 }}>{formatGs(g.monto)}</td>
+                  <td data-label="Presupuestado" className="muted">{g.presupuestado ? formatGs(g.presupuestado) : '—'}</td>
+                  <td data-label="Diferencia" style={{ color: dif !== null ? (dif >= 0 ? 'var(--green)' : 'var(--red)') : undefined, fontWeight: 500 }}>
                     {dif !== null ? `${dif >= 0 ? '+' : ''}${formatGs(dif)}` : '—'}
                   </td>
                   <td>

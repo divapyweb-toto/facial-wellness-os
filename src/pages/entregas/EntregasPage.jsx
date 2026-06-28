@@ -646,7 +646,7 @@ export default function EntregasPage() {
                 <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Ordenadas por las que llevan más tiempo (reclamá estas primero)</span>
               </div>
               <div style={{ maxHeight: 340, overflowY: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <table className="tabla-responsive" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-card)' }}>
                     <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
                       <th style={{ padding: '8px 14px' }}>Ref</th>
@@ -661,17 +661,17 @@ export default function EntregasPage() {
                   <tbody>
                     {stats.listaSinRendir.map((m, i) => (
                       <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                        <td style={{ padding: '8px 14px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
-                        <td style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
-                        <td style={{ padding: '8px 6px' }}>{m.nombre_cliente || '—'}</td>
-                        <td style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
-                        <td style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.fecha_entrega ? new Date(m.fecha_entrega).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'}</td>
-                        <td style={{ padding: '8px 6px', textAlign: 'center' }}>
+                        <td data-label="Ref" style={{ padding: '8px 14px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
+                        <td data-label="Guía PaP" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
+                        <td data-label="Cliente" style={{ padding: '8px 6px' }}>{m.nombre_cliente || '—'}</td>
+                        <td data-label="Ciudad" style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
+                        <td data-label="Entregado" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.fecha_entrega ? new Date(m.fecha_entrega).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'}</td>
+                        <td data-label="Días" style={{ padding: '8px 6px', textAlign: 'center' }}>
                           {m.diasSinRendir != null
                             ? <span style={{ color: m.diasSinRendir > 15 ? 'var(--red)' : m.diasSinRendir > 8 ? 'var(--yellow)' : 'var(--text-muted)', fontWeight: m.diasSinRendir > 15 ? 700 : 400 }}>{m.diasSinRendir}d</span>
                             : '—'}
                         </td>
-                        <td style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 600 }}>{formatGs(m.importe)}</td>
+                        <td data-label="Importe" style={{ padding: '8px 14px', textAlign: 'right', fontWeight: 600 }}>{formatGs(m.importe)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -771,7 +771,7 @@ export default function EntregasPage() {
           </div>
         </div>
         <div style={{ overflowX: 'auto', maxHeight: 480 }}>
-          <table>
+          <table className="tabla-responsive">
             <thead>
               <tr>
                 <th>Ref.</th><th>Guía PaP</th><th>Estado</th><th>Ciudad</th><th>Mensajero</th><th>Producto</th><th>Importe</th><th>Cobrado</th><th>Entrega</th>
@@ -780,15 +780,15 @@ export default function EntregasPage() {
             <tbody>
               {tablaFiltrada.map((m, i) => (
                 <tr key={i}>
-                  <td className="mono">{m.n_referencia ? `#${m.n_referencia}` : '—'}</td>
-                  <td className="muted" style={{ fontSize: 11 }}>{m.nro_guia_pap}</td>
-                  <td><span style={{ fontSize: 11, fontWeight: 600, color: CAT_CFG[m.categoria].color, whiteSpace: 'nowrap' }}>{m.estado_pap}</span></td>
-                  <td className="muted">{m.ciudad || '—'}</td>
-                  <td className="muted" style={{ fontSize: 11 }}>{(m.mensajero || '—').split(' - ')[0]}</td>
-                  <td style={{ fontSize: 11 }}>{(m.producto || '—').slice(0, 28)}</td>
-                  <td style={{ fontWeight: 600 }}>{formatGs(m.importe)}</td>
-                  <td style={{ fontWeight: 600, color: m.cobrado > 0 ? 'var(--green)' : 'var(--text-muted)' }}>{m.cobrado > 0 ? formatGs(m.cobrado) : '—'}</td>
-                  <td className="muted" style={{ fontSize: 11 }}>{m.fecha_entrega || '—'}{m.dias_entrega != null ? ` (${m.dias_entrega}d)` : ''}</td>
+                  <td data-label="Ref." className="mono">{m.n_referencia ? `#${m.n_referencia}` : '—'}</td>
+                  <td data-label="Guía PaP" className="muted" style={{ fontSize: 11 }}>{m.nro_guia_pap}</td>
+                  <td data-label="Estado"><span style={{ fontSize: 11, fontWeight: 600, color: CAT_CFG[m.categoria].color, whiteSpace: 'nowrap' }}>{m.estado_pap}</span></td>
+                  <td data-label="Ciudad" className="muted">{m.ciudad || '—'}</td>
+                  <td data-label="Mensajero" className="muted" style={{ fontSize: 11 }}>{(m.mensajero || '—').split(' - ')[0]}</td>
+                  <td data-label="Producto" style={{ fontSize: 11 }}>{(m.producto || '—').slice(0, 28)}</td>
+                  <td data-label="Importe" style={{ fontWeight: 600 }}>{formatGs(m.importe)}</td>
+                  <td data-label="Cobrado" style={{ fontWeight: 600, color: m.cobrado > 0 ? 'var(--green)' : 'var(--text-muted)' }}>{m.cobrado > 0 ? formatGs(m.cobrado) : '—'}</td>
+                  <td data-label="Entrega" className="muted" style={{ fontSize: 11 }}>{m.fecha_entrega || '—'}{m.dias_entrega != null ? ` (${m.dias_entrega}d)` : ''}</td>
                 </tr>
               ))}
             </tbody>

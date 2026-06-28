@@ -221,7 +221,7 @@ export default function AnalyticsPage() {
               </span>
             </div>
             <div style={{ overflowX: 'auto' }}>
-              <table>
+              <table className="tabla-responsive">
                 <thead>
                   <tr>
                     <th>Métrica</th>
@@ -241,10 +241,10 @@ export default function AnalyticsPage() {
                     { label: 'Ticket promedio', actual: formatGs(mesMes.actual.ticketPromedio), anterior: formatGs(mesMes.anterior.ticketPromedio), av: mesMes.actual.ticketPromedio, ant: mesMes.anterior.ticketPromedio },
                   ].map((row, i) => (
                     <tr key={i}>
-                      <td style={{ fontWeight: 500 }}>{row.label}</td>
+                      <td data-label="Métrica" style={{ fontWeight: 500 }}>{row.label}</td>
                       <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{row.actual}</td>
                       <td className="muted">{row.anterior}</td>
-                      <td><DeltaBadge actual={row.av} anterior={row.ant} invertido={row.invertido} /></td>
+                      <td data-label="Variación"><DeltaBadge actual={row.av} anterior={row.ant} invertido={row.invertido} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -297,7 +297,7 @@ export default function AnalyticsPage() {
 
           {/* Tabla ciudades */}
           <div className="table-wrapper">
-            <table>
+            <table className="tabla-responsive">
               <thead>
                 <tr>
                   <th>#</th>
@@ -312,14 +312,14 @@ export default function AnalyticsPage() {
               <tbody>
                 {ciudades.map((c, i) => (
                   <tr key={c.ciudad}>
-                    <td className="muted">{i + 1}</td>
-                    <td style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <td data-label="#" className="muted">{i + 1}</td>
+                    <td data-label="Ciudad" style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <MapPin size={12} color="var(--text-muted)" /> {c.ciudad}
                     </td>
-                    <td>{c.pedidos}</td>
-                    <td style={{ color: 'var(--green)', fontWeight: 600 }}>{c.entregados}</td>
-                    <td style={{ color: 'var(--red)' }}>{c.devueltos}</td>
-                    <td>
+                    <td data-label="Pedidos">{c.pedidos}</td>
+                    <td data-label="Entregados" style={{ color: 'var(--green)', fontWeight: 600 }}>{c.entregados}</td>
+                    <td data-label="Devueltos" style={{ color: 'var(--red)' }}>{c.devueltos}</td>
+                    <td data-label="Tasa entrega">
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <div style={{ width: 40, height: 4, background: 'var(--bg-hover)', borderRadius: 2 }}>
                           <div style={{ width: `${c.tasaEntrega}%`, height: '100%', borderRadius: 2, background: c.tasaEntrega > 60 ? 'var(--green)' : c.tasaEntrega > 40 ? 'var(--yellow)' : 'var(--red)' }} />
@@ -329,7 +329,7 @@ export default function AnalyticsPage() {
                         </span>
                       </div>
                     </td>
-                    <td style={{ color: 'var(--green)', fontWeight: 600 }}>{formatGs(c.ingresos)}</td>
+                    <td data-label="Ingresos netos" style={{ color: 'var(--green)', fontWeight: 600 }}>{formatGs(c.ingresos)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -436,7 +436,7 @@ export default function AnalyticsPage() {
               </p>
             </div>
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: 520 }}>
+              <table className="tabla-responsive" style={{ minWidth: 520 }}>
                 <thead>
                   <tr>
                     <th>Producto</th>
@@ -448,10 +448,10 @@ export default function AnalyticsPage() {
                 <tbody>
                   {productos.porProducto.map((p, i) => (
                     <tr key={i}>
-                      <td style={{ fontWeight: 500, maxWidth: 280 }}>{p.producto}</td>
-                      <td style={{ textAlign: 'center', color: 'var(--green)', fontWeight: 600 }}>{p.entregados}</td>
-                      <td style={{ textAlign: 'center', color: 'var(--red)' }}>{p.devueltos}</td>
-                      <td>
+                      <td data-label="Producto" style={{ fontWeight: 500, maxWidth: 280 }}>{p.producto}</td>
+                      <td data-label="Entregados" style={{ textAlign: 'center', color: 'var(--green)', fontWeight: 600 }}>{p.entregados}</td>
+                      <td data-label="Devueltos" style={{ textAlign: 'center', color: 'var(--red)' }}>{p.devueltos}</td>
+                      <td data-label="Tasa devolución">
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <div style={{ width: 50, height: 4, background: 'var(--bg-hover)', borderRadius: 2 }}>
                             <div style={{ width: `${p.tasaDevolucion}%`, height: '100%', borderRadius: 2, background: p.tasaDevolucion > 35 ? 'var(--red)' : p.tasaDevolucion > 20 ? 'var(--yellow)' : 'var(--green)' }} />

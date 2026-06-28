@@ -482,7 +482,7 @@ export default function ReportesPage() {
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
               <span style={{ fontWeight: 600, fontSize: 14 }}>Detalle por producto</span>
             </div>
-            <table>
+            <table className="tabla-responsive">
               <thead>
                 <tr>
                   <th>Producto</th>
@@ -496,16 +496,16 @@ export default function ReportesPage() {
               <tbody>
                 {datos.porProducto.map(p => (
                   <tr key={p.nombre}>
-                    <td style={{ fontWeight: 600 }}>{p.nombre}</td>
-                    <td>{p.ventas}</td>
-                    <td style={{ color: 'var(--green)' }}>{p.entregados}</td>
-                    <td style={{ color: 'var(--red)' }}>{p.devueltos}</td>
-                    <td>
+                    <td data-label="Producto" style={{ fontWeight: 600 }}>{p.nombre}</td>
+                    <td data-label="Pedidos">{p.ventas}</td>
+                    <td data-label="Entregados" style={{ color: 'var(--green)' }}>{p.entregados}</td>
+                    <td data-label="Devueltos" style={{ color: 'var(--red)' }}>{p.devueltos}</td>
+                    <td data-label="Tasa entrega">
                       <span style={{ color: (p.entregados/Math.max(p.ventas,1)) > 0.6 ? 'var(--green)' : 'var(--yellow)' }}>
                         {((p.entregados / Math.max(p.ventas, 1)) * 100).toFixed(1)}%
                       </span>
                     </td>
-                    <td style={{ fontWeight: 700, color: 'var(--green)' }}>{formatGs(p.ingresos)}</td>
+                    <td data-label="Ingresos netos" style={{ fontWeight: 700, color: 'var(--green)' }}>{formatGs(p.ingresos)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -517,16 +517,16 @@ export default function ReportesPage() {
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6 }}>
               <MapPin size={14} color="var(--accent)" /><span style={{ fontWeight: 600, fontSize: 14 }}>Entrega por ciudad</span>
             </div>
-            <table>
+            <table className="tabla-responsive">
               <thead><tr><th>Ciudad</th><th>Pedidos</th><th>Entregados</th><th>Devueltos</th><th>Tasa entrega</th></tr></thead>
               <tbody>
                 {datos.ciudades.slice(0, 12).map(c => (
                   <tr key={c.ciudad}>
-                    <td style={{ fontWeight: 600 }}>{c.ciudad}</td>
-                    <td>{c.pedidos}</td>
-                    <td style={{ color: 'var(--green)' }}>{c.entregados}</td>
-                    <td style={{ color: 'var(--red)' }}>{c.devueltos}</td>
-                    <td><span style={{ fontWeight: 700, color: c.tasaEntrega > 60 ? 'var(--green)' : c.tasaEntrega > 40 ? 'var(--yellow)' : 'var(--red)' }}>{c.tasaEntrega}%</span></td>
+                    <td data-label="Ciudad" style={{ fontWeight: 600 }}>{c.ciudad}</td>
+                    <td data-label="Pedidos">{c.pedidos}</td>
+                    <td data-label="Entregados" style={{ color: 'var(--green)' }}>{c.entregados}</td>
+                    <td data-label="Devueltos" style={{ color: 'var(--red)' }}>{c.devueltos}</td>
+                    <td data-label="Tasa entrega"><span style={{ fontWeight: 700, color: c.tasaEntrega > 60 ? 'var(--green)' : c.tasaEntrega > 40 ? 'var(--yellow)' : 'var(--red)' }}>{c.tasaEntrega}%</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -568,7 +568,7 @@ export default function ReportesPage() {
               <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>Campañas publicitarias</span>
               </div>
-              <table>
+              <table className="tabla-responsive">
                 <thead>
                   <tr>
                     <th>Campaña</th>
@@ -582,12 +582,12 @@ export default function ReportesPage() {
                 <tbody>
                   {datos.campanas.map(c => (
                     <tr key={c.id}>
-                      <td style={{ fontWeight: 500 }}>{c.nombre}</td>
-                      <td><span className="badge badge-purple">{c.plataforma}</span></td>
-                      <td style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
-                      <td style={{ color: 'var(--green)' }}>{formatGs(c.ingresos_atribuidos)}</td>
-                      <td><span style={{ fontWeight: 700, color: parseFloat(c.roas) >= 2 ? 'var(--green)' : 'var(--yellow)' }}>{c.roas}x</span></td>
-                      <td><span style={{ fontWeight: 700, color: parseFloat(c.roi_pct) > 0 ? 'var(--green)' : 'var(--red)' }}>{c.roi_pct}%</span></td>
+                      <td data-label="Campaña" style={{ fontWeight: 500 }}>{c.nombre}</td>
+                      <td data-label="Plataforma"><span className="badge badge-purple">{c.plataforma}</span></td>
+                      <td data-label="Gasto" style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
+                      <td data-label="Ingresos" style={{ color: 'var(--green)' }}>{formatGs(c.ingresos_atribuidos)}</td>
+                      <td data-label="ROAS"><span style={{ fontWeight: 700, color: parseFloat(c.roas) >= 2 ? 'var(--green)' : 'var(--yellow)' }}>{c.roas}x</span></td>
+                      <td data-label="ROI %"><span style={{ fontWeight: 700, color: parseFloat(c.roi_pct) > 0 ? 'var(--green)' : 'var(--red)' }}>{c.roi_pct}%</span></td>
                     </tr>
                   ))}
                 </tbody>

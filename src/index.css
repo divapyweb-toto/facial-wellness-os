@@ -966,6 +966,84 @@ input[type="checkbox"] { accent-color: var(--accent); }
   table { min-width: 600px; font-size: 12px; }
   td, thead th { padding: 9px 10px; }
   .chart-card .recharts-wrapper { height: 160px !important; }
+
+  /* ── Tablas que se vuelven CARDS en mobile (.tabla-responsive) ── */
+  /* Técnica robusta: solo requiere la clase en <table>, no toca las celdas.
+     Cada fila se vuelve una tarjeta; cada celda una línea con su etiqueta (del th via JS data-label si está). */
+  .tabla-responsive { min-width: 0 !important; }
+  .tabla-responsive thead { display: none; }
+  .tabla-responsive,
+  .tabla-responsive tbody,
+  .tabla-responsive tr,
+  .tabla-responsive td { display: block; width: 100%; }
+  .tabla-responsive tr {
+    margin-bottom: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    padding: 8px 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+  }
+  .tabla-responsive td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 12px;
+    border: none !important;
+    text-align: right;
+    min-height: 20px;
+  }
+  /* Etiqueta opcional (si la celda tiene data-label) */
+  .tabla-responsive td[data-label]::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    text-align: left;
+    flex-shrink: 0;
+  }
+  /* Primera celda destacada como título de la card */
+  .tabla-responsive td:first-child {
+    font-size: 14px;
+    font-weight: 700;
+    border-bottom: 1px solid var(--border-subtle) !important;
+    padding-bottom: 9px;
+    margin-bottom: 3px;
+    justify-content: flex-start;
+  }
+  /* Si la primera celda es un checkbox de selección, no la tratamos como título */
+  .tabla-responsive td:first-child:has(input[type="checkbox"]) {
+    font-size: inherit;
+    font-weight: inherit;
+    border-bottom: none !important;
+    padding-bottom: 7px;
+    margin-bottom: 0;
+    justify-content: flex-start;
+  }
+  .tabla-responsive td:first-child:has(input[type="checkbox"])::before {
+    content: "Seleccionar";
+  }
+  /* Última celda (acciones) centrada */
+  .tabla-responsive td:last-child {
+    justify-content: center;
+    padding-top: 10px;
+  }
+  /* Celdas con colSpan (mensajes "sin datos"): centradas, sin formato de título */
+  .tabla-responsive td[colspan] {
+    justify-content: center !important;
+    text-align: center !important;
+    font-size: 13px !important;
+    font-weight: 400 !important;
+    border-bottom: none !important;
+    padding: 20px 12px !important;
+    margin-bottom: 0 !important;
+  }
+  .tabla-responsive td[colspan]::before { content: none !important; }
+  /* Celdas con botones: que no se aplasten */
+  .tabla-responsive td .btn { white-space: nowrap; }
 }
 
 /* Very small screens */

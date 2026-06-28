@@ -33,15 +33,15 @@ function ClienteDetalle({ cliente, onClose }) {
             <div className="kpi-card"><div className="kpi-label">Pedidos</div><div className="kpi-value" style={{ fontSize: 16 }}>{cliente.pedidos}</div><div className="kpi-sub">{cliente.devueltos} devueltos</div></div>
           </div>
           <div className="table-wrapper" style={{ maxHeight: 300, overflowY: 'auto' }}>
-            <table>
+            <table className="tabla-responsive">
               <thead><tr><th>Fecha</th><th>Producto</th><th>Total</th><th>Estado</th></tr></thead>
               <tbody>
                 {cliente.compras.map((c, i) => (
                   <tr key={i}>
-                    <td className="muted">{fmtFecha(c.fecha)}</td>
-                    <td style={{ fontSize: 12 }}>{c.producto_nombre}</td>
-                    <td style={{ fontWeight: 600 }}>{formatGs(c.total)}</td>
-                    <td><span className="badge badge-gray" style={{ fontSize: 10 }}>{c.estado}</span></td>
+                    <td data-label="Fecha" className="muted">{fmtFecha(c.fecha)}</td>
+                    <td data-label="Producto" style={{ fontSize: 12 }}>{c.producto_nombre}</td>
+                    <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(c.total)}</td>
+                    <td data-label="Estado"><span className="badge badge-gray" style={{ fontSize: 10 }}>{c.estado}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -137,20 +137,20 @@ export default function ClientesPage() {
             <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Cargá ventas y los clientes aparecen acá automáticamente.</p>
           </div>
         ) : (
-          <table>
+          <table className="tabla-responsive">
             <thead>
               <tr><th>Cliente</th><th>Teléfono</th><th>Ciudad</th><th>Pedidos</th><th>Entregados</th><th>LTV</th><th>Última</th></tr>
             </thead>
             <tbody>
               {filtrados.slice(0, 200).map(c => (
                 <tr key={c.key} style={{ cursor: 'pointer' }} onClick={() => setDetalle(c)}>
-                  <td style={{ fontWeight: 600 }}>{c.nombre || '—'}</td>
-                  <td className="mono" style={{ fontSize: 12 }}>{c.telefono || '—'}</td>
-                  <td className="muted" style={{ fontSize: 12 }}>{c.ciudad || '—'}</td>
-                  <td>{c.pedidos}</td>
-                  <td style={{ color: 'var(--green)' }}>{c.entregados}</td>
-                  <td style={{ fontWeight: 600 }}>{formatGs(c.ltv)}</td>
-                  <td className="muted" style={{ fontSize: 12 }}>{fmtFecha(c.ultima)}</td>
+                  <td data-label="Cliente" style={{ fontWeight: 600 }}>{c.nombre || '—'}</td>
+                  <td data-label="Teléfono" className="mono" style={{ fontSize: 12 }}>{c.telefono || '—'}</td>
+                  <td data-label="Ciudad" className="muted" style={{ fontSize: 12 }}>{c.ciudad || '—'}</td>
+                  <td data-label="Pedidos">{c.pedidos}</td>
+                  <td data-label="Entregados" style={{ color: 'var(--green)' }}>{c.entregados}</td>
+                  <td data-label="LTV" style={{ fontWeight: 600 }}>{formatGs(c.ltv)}</td>
+                  <td data-label="Última" className="muted" style={{ fontSize: 12 }}>{fmtFecha(c.ultima)}</td>
                 </tr>
               ))}
             </tbody>

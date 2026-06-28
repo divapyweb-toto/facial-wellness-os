@@ -263,7 +263,7 @@ export default function AdsPage() {
             </button>
           </div>
         ) : (
-          <table>
+          <table className="tabla-responsive">
             <thead>
               <tr>
                 <th>Mes</th>
@@ -285,23 +285,23 @@ export default function AdsPage() {
                 const cpa = c.ventas_generadas > 0 ? c.gasto / c.ventas_generadas : 0
                 return (
                   <tr key={c.id}>
-                    <td className="muted">{c.mes}</td>
-                    <td><span className="badge badge-purple">{c.plataforma}</span></td>
-                    <td style={{ fontWeight: 500 }}>{c.nombre}</td>
-                    <td style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
-                    <td style={{ color: 'var(--green)' }}>{formatGs(c.ingresos_atribuidos)}</td>
-                    <td>{c.ventas_generadas}</td>
-                    <td>
+                    <td data-label="Mes" className="muted">{c.mes}</td>
+                    <td data-label="Plataforma"><span className="badge badge-purple">{c.plataforma}</span></td>
+                    <td data-label="Campaña" style={{ fontWeight: 500 }}>{c.nombre}</td>
+                    <td data-label="Gasto" style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
+                    <td data-label="Ingresos" style={{ color: 'var(--green)' }}>{formatGs(c.ingresos_atribuidos)}</td>
+                    <td data-label="Ventas">{c.ventas_generadas}</td>
+                    <td data-label="ROAS">
                       <span style={{ fontWeight: 700, color: roas >= 2 ? 'var(--green)' : 'var(--yellow)' }}>
                         {roas.toFixed(2)}x
                       </span>
                     </td>
-                    <td>
+                    <td data-label="ROI %">
                       <span style={{ fontWeight: 700, color: roiPct > 0 ? 'var(--green)' : 'var(--red)' }}>
                         {roiPct.toFixed(0)}%
                       </span>
                     </td>
-                    <td className="muted">{cpa > 0 ? formatGs(Math.round(cpa)) : '—'}</td>
+                    <td data-label="CPA" className="muted">{cpa > 0 ? formatGs(Math.round(cpa)) : '—'}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 2 }}>
                         <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditando(c)} style={{ color: 'var(--accent)' }} title="Editar"><Edit2 size={13} /></button>

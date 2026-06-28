@@ -315,7 +315,7 @@ export default function ConfigPage() {
             </button>
           </div>
           <div className="table-wrapper">
-            <table>
+            <table className="tabla-responsive">
               <thead>
                 <tr>
                   <th>Producto</th>
@@ -335,21 +335,21 @@ export default function ConfigPage() {
                   const margen = p.precio_1u > 0 ? ((p.precio_1u - p.costo_unit) / p.precio_1u * 100).toFixed(1) : 0
                   return (
                     <tr key={p.id}>
-                      <td style={{ fontWeight: 600 }}>{p.nombre}</td>
-                      <td className="muted">{formatGs(p.costo_unit)}</td>
-                      <td style={{ fontWeight: 500 }}>{formatGs(p.precio_1u)}</td>
-                      <td className="muted">{p.precio_2u ? formatGs(p.precio_2u) : '—'}</td>
-                      <td className="muted">{p.precio_3u ? formatGs(p.precio_3u) : '—'}</td>
-                      <td style={{ color: margen > 50 ? 'var(--green)' : 'var(--yellow)', fontWeight: 600 }}>{margen}%</td>
-                      <td><span className={`badge ${p.grupo_envio === 'A' ? 'badge-blue' : 'badge-accent'}`}>Grupo {p.grupo_envio}</span></td>
-                      <td style={{ color: p.stock_actual <= p.stock_alerta ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>{p.stock_actual}</td>
-                      <td>
+                      <td data-label="Producto" style={{ fontWeight: 600 }}>{p.nombre}</td>
+                      <td data-label="Costo" className="muted">{formatGs(p.costo_unit)}</td>
+                      <td data-label="1u" style={{ fontWeight: 500 }}>{formatGs(p.precio_1u)}</td>
+                      <td data-label="2u" className="muted">{p.precio_2u ? formatGs(p.precio_2u) : '—'}</td>
+                      <td data-label="3u" className="muted">{p.precio_3u ? formatGs(p.precio_3u) : '—'}</td>
+                      <td data-label="Margen 1u" style={{ color: margen > 50 ? 'var(--green)' : 'var(--yellow)', fontWeight: 600 }}>{margen}%</td>
+                      <td data-label="Grupo"><span className={`badge ${p.grupo_envio === 'A' ? 'badge-blue' : 'badge-accent'}`}>Grupo {p.grupo_envio}</span></td>
+                      <td data-label="Stock" style={{ color: p.stock_actual <= p.stock_alerta ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>{p.stock_actual}</td>
+                      <td data-label="Estado">
                         <button onClick={() => toggleActivo('productos', p.id, p.activo)}
                           className={`badge ${p.activo ? 'badge-green' : 'badge-gray'}`} style={{ border: 'none', cursor: 'pointer' }}>
                           {p.activo ? 'Activo' : 'Inactivo'}
                         </button>
                       </td>
-                      <td>
+                      <td data-label="Acciones">
                         <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setModal({ tipo: 'producto', item: p })}>
                           <Edit2 size={13} />
                         </button>
@@ -372,21 +372,21 @@ export default function ConfigPage() {
             </button>
           </div>
           <div className="table-wrapper">
-            <table>
+            <table className="tabla-responsive">
               <thead>
                 <tr><th>Nombre</th><th>Estado</th><th>Acciones</th></tr>
               </thead>
               <tbody>
                 {metodosPago.map(m => (
                   <tr key={m.id}>
-                    <td style={{ fontWeight: 500 }}>{m.nombre}</td>
-                    <td>
+                    <td data-label="Nombre" style={{ fontWeight: 500 }}>{m.nombre}</td>
+                    <td data-label="Estado">
                       <button onClick={() => toggleActivo('metodos_pago', m.id, m.activo)}
                         className={`badge ${m.activo ? 'badge-green' : 'badge-gray'}`} style={{ border: 'none', cursor: 'pointer' }}>
                         {m.activo ? 'Activo' : 'Inactivo'}
                       </button>
                     </td>
-                    <td>
+                    <td data-label="Acciones">
                       <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setModal({ tipo: 'metodo', subtipo: 'pago', item: m })}>
                         <Edit2 size={13} />
                       </button>
@@ -408,23 +408,23 @@ export default function ConfigPage() {
             </button>
           </div>
           <div className="table-wrapper">
-            <table>
+            <table className="tabla-responsive">
               <thead>
                 <tr><th>Nombre</th><th>Costo al cliente</th><th>Costo propio</th><th>Estado</th><th>Acciones</th></tr>
               </thead>
               <tbody>
                 {metodosEnvio.map(m => (
                   <tr key={m.id}>
-                    <td style={{ fontWeight: 500 }}>{m.nombre}</td>
-                    <td>{formatGs(m.costo_cliente)}</td>
-                    <td style={{ color: 'var(--red)' }}>{formatGs(m.costo_propio)}</td>
-                    <td>
+                    <td data-label="Nombre" style={{ fontWeight: 500 }}>{m.nombre}</td>
+                    <td data-label="Costo al cliente">{formatGs(m.costo_cliente)}</td>
+                    <td data-label="Costo propio" style={{ color: 'var(--red)' }}>{formatGs(m.costo_propio)}</td>
+                    <td data-label="Estado">
                       <button onClick={() => toggleActivo('metodos_envio', m.id, m.activo)}
                         className={`badge ${m.activo ? 'badge-green' : 'badge-gray'}`} style={{ border: 'none', cursor: 'pointer' }}>
                         {m.activo ? 'Activo' : 'Inactivo'}
                       </button>
                     </td>
-                    <td>
+                    <td data-label="Acciones">
                       <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setModal({ tipo: 'metodo', subtipo: 'envio', item: m })}>
                         <Edit2 size={13} />
                       </button>
@@ -446,14 +446,14 @@ export default function ConfigPage() {
             </button>
           </div>
           <div className="table-wrapper">
-            <table>
+            <table className="tabla-responsive">
               <thead>
                 <tr><th>Nombre</th><th>Rol</th><th>Estado</th></tr>
               </thead>
               <tbody>
                 {profiles.map(p => (
                   <tr key={p.id}>
-                    <td style={{ fontWeight: 500 }}>
+                    <td data-label="Nombre" style={{ fontWeight: 500 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: 'var(--accent)' }}>
                           {p.nombre.slice(0, 2).toUpperCase()}
@@ -461,12 +461,12 @@ export default function ConfigPage() {
                         {p.nombre}
                       </div>
                     </td>
-                    <td>
+                    <td data-label="Rol">
                       <span className={`badge ${p.rol === 'admin' ? 'badge-accent' : 'badge-gray'}`}>
                         {p.rol === 'admin' && <Shield size={10} />} {p.rol}
                       </span>
                     </td>
-                    <td><span className={`badge ${p.activo ? 'badge-green' : 'badge-gray'}`}>{p.activo ? 'Activo' : 'Inactivo'}</span></td>
+                    <td data-label="Estado"><span className={`badge ${p.activo ? 'badge-green' : 'badge-gray'}`}>{p.activo ? 'Activo' : 'Inactivo'}</span></td>
                   </tr>
                 ))}
               </tbody>
