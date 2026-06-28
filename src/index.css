@@ -976,3 +976,36 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .mobile-more-grid { grid-template-columns: repeat(2, 1fr); }
   .page-title { font-size: 20px; }
 }
+
+/* ── Botón de búsqueda global en sidebar ── */
+.sidebar-search-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+.sidebar-search-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-secondary);
+}
+.sidebar-search-text { flex: 1; text-align: left; }
+.sidebar-search-kbd {
+  font-size: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+/* En sidebar colapsado (tablet) ocultar texto y kbd */
+@media (max-width: 1100px) {
+  .sidebar-search-text, .sidebar-search-kbd { display: none; }
+  .sidebar-search-btn { justify-content: center; padding: 8px; }
+}

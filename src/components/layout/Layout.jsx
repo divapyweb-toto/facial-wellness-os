@@ -1,12 +1,13 @@
 // src/components/layout/Layout.jsx
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useState } from 'react'
+import BusquedaGlobal from './BusquedaGlobal'
 import { useAuth } from '../../lib/AuthContext'
 import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
   Users, Calculator, Upload, BarChart3, PackageCheck, MapPin, X,
-  Grid3X3,
+  Grid3X3, Search as SearchIcon,
 } from 'lucide-react'
 
 // ── Logo embebido (PNG transparente, negro → invertir con CSS) ──
@@ -83,6 +84,17 @@ export default function Layout() {
             <span>FW</span>
           </div>
         </div>
+
+        {/* Botón de búsqueda global */}
+        <button
+          className="sidebar-search-btn"
+          onClick={() => window.dispatchEvent(new CustomEvent('abrir-busqueda'))}
+          title="Buscar (⌘K)"
+        >
+          <SearchIcon size={15} />
+          <span className="sidebar-search-text">Buscar...</span>
+          <span className="sidebar-search-kbd">⌘K</span>
+        </button>
 
         {/* Nav links */}
         <nav className="sidebar-nav">
@@ -242,6 +254,9 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
+
+      {/* Búsqueda global — se abre con ⌘K / Ctrl+K */}
+      <BusquedaGlobal />
     </div>
   )
 }

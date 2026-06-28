@@ -4,10 +4,11 @@ import { useNavigate } from 'react-router-dom'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
+import CountUp from '../../lib/CountUp'
 import {
   TrendingUp, Package, Truck, AlertTriangle, Plus,
   DollarSign, BarChart3, RefreshCw, Banknote, Edit3,
-  CheckCircle2, XCircle, Clock, ArrowUpRight, History, X
+  CheckCircle2, XCircle, Clock, ArrowUpRight, History, X, Target
 } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -141,7 +142,12 @@ export default function DashboardPage() {
     const finMes = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0).toISOString().split('T')[0]
 
     const { data: ventasMes } = await supabase
-      .from('ventas').select('*').gte('fecha', inicioMes).lte('fecha', finMes)
+      .from('ventas').select('*').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
+
+    // Gastos del mes (costo fijo para el punto de equilibrio)
+    const { data: gastosMes } = await supabase
+      .from('gastos').select('monto').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
+    const totalGastosMes = (gastosMes || []).reduce((s, g) => s + (g.monto || 0), 0)
 
     if (ventasMes) {
       const entregadas = ventasMes.filter(v => v.estado === 'entregado')
@@ -149,6 +155,17 @@ export default function DashboardPage() {
       const devueltas = ventasMes.filter(v => v.estado === 'devuelto')
       const vbruto = entregadas.reduce((s, v) => s + v.total, 0)
       const ineto = entregadas.reduce((s, v) => s + v.ganancia_neta, 0)
+
+      // ── Punto de equilibrio en vivo ──
+      // Margen neto promedio por venta entregada
+      const margenPromedio = entregadas.length ? ineto / entregadas.length : 0
+      // Ganancia del mes después de cubrir gastos fijos
+      const gananciaReal = ineto - totalGastosMes
+      // ¿Cuántas ventas más faltan para cubrir los gastos? (si todavía no se cubrieron)
+      const faltaParaCubrir = (gananciaReal < 0 && margenPromedio > 0)
+        ? Math.ceil(Math.abs(gananciaReal) / margenPromedio)
+        : 0
+
       setKpis({
         ventasBrutas: vbruto,
         ingresosNetos: ineto,
@@ -159,6 +176,12 @@ export default function DashboardPage() {
         devueltos: devueltas.length,
         pendientesCount: pendientes.length,
         tasaEntrega: ventasMes.length ? (entregadas.length / ventasMes.length * 100) : 0,
+        // Punto de equilibrio
+        gastosMes: totalGastosMes,
+        margenPromedio,
+        gananciaReal,
+        faltaParaCubrir,
+        cubierto: gananciaReal >= 0,
       })
     }
 
@@ -315,13 +338,13 @@ export default function DashboardPage() {
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-label"><TrendingUp size={11} />Ventas brutas</div>
-          <div className="kpi-value">{formatGs(kpis?.ventasBrutas || 0)}</div>
+          <div className="kpi-value"><CountUp value={kpis?.ventasBrutas || 0} format={formatGs} /></div>
           <div className="kpi-sub">Solo entregadas</div>
           <div className="kpi-icon" style={{ background: 'var(--green-dim)' }}><TrendingUp size={14} color="var(--green)" /></div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label"><DollarSign size={11} />Ingresos netos</div>
-          <div className="kpi-value green">{formatGs(kpis?.ingresosNetos || 0)}</div>
+          <div className="kpi-value green"><CountUp value={kpis?.ingresosNetos || 0} format={formatGs} /></div>
           <div className="kpi-sub">Después de envíos</div>
           <div className="kpi-icon" style={{ background: 'var(--green-dim)' }}><DollarSign size={14} color="var(--green)" /></div>
         </div>
@@ -346,7 +369,54 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Chart */}
+      {/* Punto de equilibrio en vivo */}
+      {kpis && (kpis.gastosMes > 0 || kpis.entregados > 0) && (
+        <div className="card" style={{ padding: '16px 18px', border: '1px solid var(--border)', background: kpis.cubierto ? 'linear-gradient(135deg, var(--green-dim), transparent)' : 'var(--bg-card)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <Target size={15} color={kpis.cubierto ? 'var(--green)' : 'var(--accent)'} />
+            <span style={{ fontWeight: 700, fontSize: 14 }}>Punto de equilibrio del mes</span>
+          </div>
+          {kpis.cubierto ? (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                <CheckCircle2 size={18} color="var(--green)" />
+                <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--green)' }}>¡Gastos cubiertos!</span>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  Ganancia real: <strong style={{ color: 'var(--green)' }}>{formatGs(kpis.gananciaReal)}</strong>
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+                Cubriste {formatGs(kpis.gastosMes)} de gastos. Cada venta nueva (~{formatGs(Math.round(kpis.margenPromedio))} de margen) es ganancia limpia.
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 28, fontFamily: 'var(--font-display)', fontWeight: 800, color: 'var(--accent)' }}>
+                  {kpis.faltaParaCubrir}
+                </span>
+                <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+                  venta{kpis.faltaParaCubrir !== 1 ? 's' : ''} más para cubrir el mes
+                </span>
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                  <span>Cubierto: {formatGs(kpis.ingresosNetos)}</span>
+                  <span>Meta: {formatGs(kpis.gastosMes)}</span>
+                </div>
+                <div style={{ height: 8, background: 'var(--bg-hover)', borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.min(100, kpis.gastosMes ? (kpis.ingresosNetos / kpis.gastosMes) * 100 : 0)}%`, height: '100%', background: 'var(--accent)', borderRadius: 4, transition: 'width 0.6s ease' }} />
+                </div>
+              </div>
+              {kpis.margenPromedio > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
+                  A ~{formatGs(Math.round(kpis.margenPromedio))} de margen por venta. Te faltan {formatGs(Math.abs(kpis.gananciaReal))}.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="chart-card">
         <div className="chart-header">
           <span className="chart-title">Últimos 7 días</span>

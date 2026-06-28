@@ -3,7 +3,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { calcularStockCombo } from '../../lib/stockEngine'
-import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save, Layers } from 'lucide-react'
+import { calcularVelocidades, analizarReposicion, sugerirReposicion, URGENCIA_CFG } from '../../lib/stockIntel'
+import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save, Layers, Clock, TrendingUp } from 'lucide-react'
 
 // Modal: agregar/editar producto completo
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -200,6 +201,7 @@ function CompraModal({ producto, onClose, onSaved }) {
 export default function StockPage() {
   const [productos, setProductos] = useState([])
   const [movimientos, setMovimientos] = useState([])
+  const [velocidades, setVelocidades] = useState({})
   const [loading, setLoading] = useState(true)
   const [modalCompra, setModalCompra] = useState(null)
   const [modalProducto, setModalProducto] = useState(null) // null=cerrado, 'nuevo'=nuevo, objeto=editar
@@ -214,6 +216,11 @@ export default function StockPage() {
     setProductos(prods || [])
     setMovimientos(movs || [])
     setLoading(false)
+    // Velocidades de venta (predicción) — en segundo plano, no bloquea la pantalla
+    try {
+      const vel = await calcularVelocidades(prods || [], 30)
+      setVelocidades(vel)
+    } catch (e) { console.warn('velocidades:', e?.message) }
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
@@ -222,6 +229,13 @@ export default function StockPage() {
   const productosById = productos.reduce((acc, p) => { acc[p.id] = p; return acc }, {})
   // Stock a mostrar: combos = calculado (mín. de componentes); simples = stock real
   const stockMostrado = (p) => p.es_combo ? calcularStockCombo(p, productosById) : p.stock_actual
+  // Predicción de reposición por producto
+  const prediccion = (p) => analizarReposicion(p, velocidades, productosById)
+  // Productos que necesitan reposición (crítico o pronto o agotado), ordenados por urgencia
+  const necesitanReposicion = productos
+    .map(p => ({ producto: p, analisis: prediccion(p) }))
+    .filter(x => ['agotado', 'critico', 'pronto'].includes(x.analisis.urgencia))
+    .sort((a, b) => (URGENCIA_CFG[a.analisis.urgencia]?.prioridad ?? 9) - (URGENCIA_CFG[b.analisis.urgencia]?.prioridad ?? 9))
   // Valor de inventario: solo productos simples (los combos no tienen stock propio, evita doble conteo)
   const valorTotal = productos.reduce((s, p) => s + (p.es_combo ? 0 : p.stock_actual * p.costo_unit), 0)
   const bajosAlerta = productos.filter(p => !p.es_combo && p.stock_actual <= p.stock_alerta)
@@ -240,10 +254,39 @@ export default function StockPage() {
         </div>
       </div>
 
-      {bajosAlerta.length > 0 && (
-        <div className="alert alert-error">
-          <AlertTriangle size={15} />
-          <span>{bajosAlerta.map(p => p.nombre).join(', ')} — stock bajo</span>
+      {necesitanReposicion.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--border)' }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-hover)' }}>
+            <TrendingUp size={15} color="var(--accent)" />
+            <span style={{ fontWeight: 700, fontSize: 14 }}>Reposición sugerida</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>· según tu ritmo de ventas (últimos 30 días)</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {necesitanReposicion.map(({ producto, analisis }, i) => {
+              const cfg = URGENCIA_CFG[analisis.urgencia]
+              const sugerido = sugerirReposicion(producto, velocidades, productosById, 30)
+              return (
+                <div key={producto.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderTop: i === 0 ? 'none' : '1px solid var(--border-subtle)' }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: cfg.color, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{producto.nombre}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      {analisis.urgencia === 'agotado'
+                        ? 'Agotado'
+                        : <><Clock size={9} style={{ display: 'inline', verticalAlign: 'middle' }} /> Se acaba en ~{analisis.diasRestantes} día{analisis.diasRestantes !== 1 ? 's' : ''} · vende {analisis.velocidadDia.toFixed(1)}/día</>}
+                    </div>
+                  </div>
+                  <span className="badge" style={{ background: `${cfg.color}22`, color: cfg.color, fontSize: 10, flexShrink: 0 }}>{cfg.label}</span>
+                  {sugerido > 0 && (
+                    <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 70 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--accent)' }}>+{sugerido}</div>
+                      <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>comprar</div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 
@@ -260,7 +303,7 @@ export default function StockPage() {
         </div>
         <div className="kpi-card">
           <div className="kpi-label"><Package size={11} />Total unidades</div>
-          <div className="kpi-value">{productos.reduce((s, p) => s + p.stock_actual, 0)}</div>
+          <div className="kpi-value">{productos.reduce((s, p) => s + (p.es_combo ? 0 : p.stock_actual), 0)}</div>
           <div className="kpi-sub">En todos los productos</div>
         </div>
       </div>
