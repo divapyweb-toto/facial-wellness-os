@@ -175,6 +175,7 @@ export default function EntregasPage() {
   const [resultadoGuardado, setResultadoGuardado] = useState(null)
   const [verSinRendir, setVerSinRendir] = useState(false)
   const [refCosto, setRefCosto] = useState({})       // costo real de producto por referencia de venta
+  const [ventasParaPiramide, setVentasParaPiramide] = useState([]) // ventas completas: fuente única de la ganancia
   const [gastosPorMes, setGastosPorMes] = useState({}) // gastos generales por mes (YYYY-MM)
 
   // Cargar el histórico guardado en Supabase al entrar (así no "desaparece" al refrescar)
@@ -197,8 +198,11 @@ export default function EntregasPage() {
       try {
         // Costos: traer ventas con su referencia y costo_prod real
         const { data: ventas } = await supabase
-          .from('ventas').select('n_referencia, costo_prod').is('deleted_at', null)
-        if (activo && ventas) setRefCosto(indexarCostos(ventas))
+          .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha').is('deleted_at', null)
+        if (activo && ventas) {
+          setRefCosto(indexarCostos(ventas))
+          setVentasParaPiramide(ventas)
+        }
         // Gastos por mes: agrupar gastos generales por YYYY-MM
         const { data: gastos } = await supabase
           .from('gastos').select('monto, fecha').is('deleted_at', null)
@@ -237,12 +241,14 @@ export default function EntregasPage() {
   // —que guardó "mes" con otra fórmula— quede consistente con la decisión actual).
   const mesDePaquete = (m) => (m.fecha_ingreso || m.fecha_entrega || m.mes || '').slice(0, 7)
 
-  // Meses disponibles en los datos (para el selector), del más nuevo al más viejo
+  // Meses disponibles en los datos (para el selector), del más nuevo al más viejo.
+  // Combina meses con reporte PaP Y meses con ventas (porque la pirámide sale de ventas).
   const mesesDisponibles = useMemo(() => {
     const set = new Set()
     merged.forEach(m => { const mm = mesDePaquete(m); if (mm) set.add(mm) })
+    ventasParaPiramide.forEach(v => { const mm = (v.fecha || '').slice(0, 7); if (mm) set.add(mm) })
     return Array.from(set).sort().reverse()
-  }, [merged])
+  }, [merged, ventasParaPiramide])
 
   // El mes "actual" = el más reciente que tenga datos (no el calendario, por si no cargaste aún este mes)
   const mesActual = mesesDisponibles[0] || ''
@@ -352,12 +358,29 @@ export default function EntregasPage() {
   // ── PIRÁMIDE DE RENTABILIDAD (profit-first) ──
   // Costo promedio de producto como fallback (cuando no hay match por referencia)
   const COGS_PROMEDIO = 12000
+  // ── Convierte VENTAS de un mes al formato de calcularPiramide ──
+  // estado → categoria, total → importe. Esta es la FUENTE ÚNICA de la ganancia
+  // (la misma que usa Reportes), para que ambas pantallas coincidan exacto.
+  const ventasComoPaquetes = (ventasMes) => ventasMes.map(v => ({
+    n_referencia: v.n_referencia,
+    importe: v.total || 0,
+    categoria: v.estado === 'entregado' ? 'entregado'
+             : v.estado === 'devuelto' ? 'devuelto'
+             : 'en_proceso',
+  }))
+
+  // Ventas filtradas por el mes elegido (la pirámide sale de acá, no de PaP)
+  const ventasDelMes = useMemo(() => {
+    if (filtroMes === 'todos') return ventasParaPiramide
+    return ventasParaPiramide.filter(v => (v.fecha || '').slice(0, 7) === mesEfectivo)
+  }, [ventasParaPiramide, filtroMes, mesEfectivo])
+
   const piramide = useMemo(() => {
-    if (!mergedFiltrado.length) return null
+    if (!ventasDelMes.length) return null
     const gastosMes = filtroMes === 'todos' ? 0 : (gastosPorMes[mesEfectivo] || 0)
-    return calcularPiramide(mergedFiltrado, refCosto, COGS_PROMEDIO, gastosMes)
+    return calcularPiramide(ventasComoPaquetes(ventasDelMes), refCosto, COGS_PROMEDIO, gastosMes)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mergedFiltrado, refCosto, gastosPorMes, filtroMes, mesEfectivo])
+  }, [ventasDelMes, refCosto, gastosPorMes, filtroMes, mesEfectivo])
 
   // Pirámide del MES ANTERIOR (para comparar: ¿mejoró o empeoró?)
   const piramideMesAnterior = useMemo(() => {
@@ -366,12 +389,12 @@ export default function EntregasPage() {
     const [y, m] = mesEfectivo.split('-').map(Number)
     const fechaAnt = new Date(y, m - 2, 1) // m-2 porque Date usa 0-index
     const mesAnt = `${fechaAnt.getFullYear()}-${String(fechaAnt.getMonth() + 1).padStart(2, '0')}`
-    const paqAnt = merged.filter(p => mesDePaquete(p) === mesAnt)
-    if (!paqAnt.length) return null
+    const ventasAnt = ventasParaPiramide.filter(v => (v.fecha || '').slice(0, 7) === mesAnt)
+    if (!ventasAnt.length) return null
     const gastosAnt = gastosPorMes[mesAnt] || 0
-    return { ...calcularPiramide(paqAnt, refCosto, COGS_PROMEDIO, gastosAnt), mes: mesAnt }
+    return { ...calcularPiramide(ventasComoPaquetes(ventasAnt), refCosto, COGS_PROMEDIO, gastosAnt), mes: mesAnt }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [merged, refCosto, gastosPorMes, filtroMes, mesEfectivo])
+  }, [ventasParaPiramide, refCosto, gastosPorMes, filtroMes, mesEfectivo])
 
   const tablaFiltrada = useMemo(() => {
     let r = mergedFiltrado
@@ -525,7 +548,9 @@ export default function EntregasPage() {
   )
 
   // ── UPLOAD ──────────────────────────────────────────────
-  if (!stats) return (
+  // Mostrar la pantalla de "subí reportes" solo si no hay NADA: ni datos de PaP ni ventas.
+  // Si hay ventas (aunque falte el reporte PaP), mostramos el dashboard con la pirámide.
+  if (!stats && !piramide) return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div className="page-header">
         <div>
@@ -589,7 +614,9 @@ export default function EntregasPage() {
           <p className="page-subtitle">
             {filtroMes === 'todos'
               ? <>{merged.length} paquetes en total · histórico completo</>
-              : <>{stats.total} paquetes en {etiquetaMes(mesEfectivo)} · {stats.conRef} con referencia</>}
+              : stats
+                ? <>{stats.total} paquetes en {etiquetaMes(mesEfectivo)} · {stats.conRef} con referencia</>
+                : <>{piramide?.total || 0} ventas en {etiquetaMes(mesEfectivo)} · sin reporte PaP cargado</>}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -641,7 +668,7 @@ export default function EntregasPage() {
           </div>
           {filtroMes !== 'todos' && (
             <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
-              {stats.total} paquete{stats.total !== 1 ? 's' : ''} en {etiquetaMes(mesEfectivo)}
+              {(stats?.total ?? piramide?.total ?? 0)} paquete{(stats?.total ?? piramide?.total ?? 0) !== 1 ? 's' : ''} en {etiquetaMes(mesEfectivo)}
             </span>
           )}
         </div>
@@ -713,7 +740,7 @@ export default function EntregasPage() {
                     {fmtSigno(estrella)}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8, maxWidth: 480 }}>
-                    Lo que <strong>ya es tuyo</strong> de los {p.resueltos} paquetes que cerraron este mes (entregados + devueltos). {p.enProceso > 0 && `Hay ${p.enProceso} más en tránsito — mirá abajo.`}
+                    Lo que <strong>ya es tuyo</strong> de los {p.resueltos} pedidos que cerraron este mes (entregados + devueltos). {p.enProceso > 0 && `Hay ${p.enProceso} más en tránsito — mirá abajo.`}
                   </div>
                 </div>
                 {deltaEstrella != null && (
@@ -835,6 +862,19 @@ export default function EntregasPage() {
         )
       })()}
 
+
+      {/* ════ SECCIONES LOGÍSTICAS (solo con reporte PaP cargado) ════ */}
+      {stats && (<>
+
+      {/* Aviso si el conteo de ventas y el de PaP difieren (fuentes distintas) */}
+      {piramide && stats.total !== piramide.total && filtroMes !== 'todos' && (
+        <div className="alert" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <AlertTriangle size={15} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: 2 }} />
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            La <strong>ganancia de arriba</strong> sale de tus {piramide.total} ventas del mes (tu fuente de plata). Lo de <strong>acá abajo</strong> es el detalle logístico de los {stats.total} paquetes que Punto a Punto movió y reportó. Si no coinciden, es porque {stats.total < piramide.total ? `${piramide.total - stats.total} pedidos los despachaste por otro medio o aún no están en el reporte PaP` : 'el reporte PaP incluye paquetes de otros meses'}.
+          </div>
+        </div>
+      )}
 
       {/* Flujo de caja con PaP (solo si el reporte incluye Tesorería) */}
       {stats.hayTesoreria && (
@@ -1026,6 +1066,9 @@ export default function EntregasPage() {
           </table>
         </div>
       </div>
+
+      </>)}
+      {/* ════ FIN SECCIONES LOGÍSTICAS ════ */}
     </div>
   )
 }
