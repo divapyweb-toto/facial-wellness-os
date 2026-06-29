@@ -20,7 +20,6 @@ const SECCIONES = [
   { to: '/rendicion', label: 'Rendición', icon: Truck, keys: 'pap punto a punto cobros' },
   { to: '/despacho', label: 'Despacho', icon: Package, keys: 'envios preparar paquetes' },
   { to: '/entregas', label: 'Entregas', icon: MapPin, keys: 'mapa zonas reparto' },
-  { to: '/analytics', label: 'Analytics', icon: BarChart3, keys: 'estadisticas graficos metricas' },
   { to: '/calculadora', label: 'Calculadora', icon: Calculator, keys: 'roas margen breakeven' },
   { to: '/importar', label: 'Importar', icon: Upload, keys: 'csv shopify subir datos' },
   { to: '/reportes', label: 'Reportes', icon: FileBarChart2, keys: 'informes pdf exportar' },

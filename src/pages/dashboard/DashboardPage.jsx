@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer
+  Tooltip, ResponsiveContainer, BarChart, Bar, Legend
 } from 'recharts'
 
 const CustomTooltip = ({ active, payload, label }) => {
@@ -129,6 +129,7 @@ export default function DashboardPage() {
   const [kpis, setKpis] = useState(null)
   const [alertas, setAlertas] = useState([])
   const [chartData, setChartData] = useState([])
+  const [historico6m, setHistorico6m] = useState([])
   const [topProductos, setTopProductos] = useState([])
   const [saldoBanco, setSaldoBanco] = useState(null)
   const [showSaldoModal, setShowSaldoModal] = useState(false)
@@ -148,6 +149,25 @@ export default function DashboardPage() {
     const { data: gastosMes } = await supabase
       .from('gastos').select('monto').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
     const totalGastosMes = (gastosMes || []).reduce((s, g) => s + (g.monto || 0), 0)
+
+    // ── Histórico de 6 meses (tendencia de mediano plazo) ──
+    const inicio6m = new Date(ahora.getFullYear(), ahora.getMonth() - 5, 1).toISOString().split('T')[0]
+    const { data: ventas6m } = await supabase
+      .from('ventas').select('fecha, total, ganancia_neta, estado').is('deleted_at', null).gte('fecha', inicio6m)
+    const mesesData = []
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1)
+      const ini = d.toISOString().split('T')[0]
+      const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
+      const vMes = (ventas6m || []).filter(v => v.fecha >= ini && v.fecha <= fin)
+      const entMes = vMes.filter(v => v.estado === 'entregado')
+      mesesData.push({
+        mes: d.toLocaleDateString('es-PY', { month: 'short' }),
+        ventas: entMes.reduce((s, v) => s + (v.total || 0), 0),
+        neto: entMes.reduce((s, v) => s + (v.ganancia_neta || 0), 0),
+      })
+    }
+    setHistorico6m(mesesData)
 
     if (ventasMes) {
       const entregadas = ventasMes.filter(v => v.estado === 'entregado')
@@ -472,7 +492,27 @@ export default function DashboardPage() {
         </ResponsiveContainer>
       </div>
 
-      {/* Top productos */}
+      {/* Evolución 6 meses (tendencia de mediano plazo) */}
+      {historico6m.length > 0 && (
+        <div className="chart-card">
+          <div className="chart-header">
+            <span className="chart-title">Evolución · últimos 6 meses</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Solo entregadas</span>
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={historico6m} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="mes" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false}
+                tickFormatter={v => v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : `${(v/1000).toFixed(0)}k`} />
+              <Tooltip formatter={(v, n) => [formatGs(v), n]} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="ventas" name="Ventas brutas" fill="var(--accent)" opacity={0.85} radius={[3,3,0,0]} />
+              <Bar dataKey="neto" name="Ingresos netos" fill="var(--green)" opacity={0.8} radius={[3,3,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
       {topProductos.length > 0 && (
         <div className="card card-sm">
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Top productos — este mes</div>

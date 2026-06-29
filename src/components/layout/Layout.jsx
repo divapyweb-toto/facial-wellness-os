@@ -33,7 +33,6 @@ const navDinero = [
 const navHerramientas = [
   { to: '/calculadora', icon: Calculator,    label: 'Calculadora' },
   { to: '/importar',    icon: Upload,        label: 'Importar'    },
-  { to: '/analytics',   icon: BarChart3,     label: 'Analytics'   },
 ]
 const navMovilFijo = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Inicio'   },

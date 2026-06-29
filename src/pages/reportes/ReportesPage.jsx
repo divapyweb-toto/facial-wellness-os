@@ -463,19 +463,18 @@ export default function ReportesPage() {
             </div>
 
             <div className="chart-card">
-              <div className="chart-header"><span className="chart-title">Ventas por producto</span></div>
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart>
-                  <Pie data={datos.porProducto} dataKey="ingresos" nameKey="nombre"
-                    cx="50%" cy="50%" outerRadius={70} strokeWidth={0}>
-                    {datos.porProducto.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={v => [formatGs(v)]}
+              <div className="chart-header"><span className="chart-title">Ingresos por producto</span></div>
+              <ResponsiveContainer width="100%" height={Math.max(200, (datos.porProducto?.slice(0, 8).length || 1) * 32)}>
+                <BarChart data={datos.porProducto?.slice(0, 8)} layout="vertical" margin={{ top: 0, right: 12, left: 8, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false}
+                    tickFormatter={v => v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : `${(v/1000).toFixed(0)}k`} />
+                  <YAxis type="category" dataKey="nombre" tick={{ fontSize: 10, fill: 'var(--text-secondary)' }} axisLine={false} tickLine={false} width={110}
+                    tickFormatter={v => v.length > 16 ? v.slice(0, 15) + '…' : v} />
+                  <Tooltip formatter={v => [formatGs(v), 'Ingresos']}
                     contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 11 }} />
-                  <Legend wrapperStyle={{ fontSize: 10 }} />
-                </PieChart>
+                  <Bar dataKey="ingresos" fill="var(--accent)" opacity={0.85} radius={[0,3,3,0]} />
+                </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
