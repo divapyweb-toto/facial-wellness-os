@@ -219,8 +219,8 @@ export default function ReportesPage() {
     }
     styleEl.textContent = `
       @media print {
-        @page { size: A4 portrait; margin: 8mm; }
-        html, body { background: #080808 !important; }
+        @page { size: A4 portrait; margin: 12mm 10mm; }
+        html, body { background: #ffffff !important; }
         body * { visibility: hidden !important; }
         #reporte-print, #reporte-print * { visibility: visible !important; }
         #reporte-print {
@@ -228,8 +228,101 @@ export default function ReportesPage() {
           left: 0 !important; top: 0 !important;
           width: 100% !important;
           margin: 0 !important; padding: 0 !important;
-          background: #080808 !important;
+          background: #ffffff !important;
+          color: #1a1a1a !important;
+          font-family: 'Inter', -apple-system, sans-serif !important;
         }
+
+        /* ── Documento ejecutivo: todo blanco y sobrio ── */
+        #reporte-print * {
+          background: transparent !important;
+          color: #1a1a1a !important;
+          box-shadow: none !important;
+          text-shadow: none !important;
+        }
+        /* Tarjetas: borde fino gris, sin relleno oscuro */
+        #reporte-print .card,
+        #reporte-print .chart-card,
+        #reporte-print .kpi-card,
+        #reporte-print .table-wrapper {
+          background: #ffffff !important;
+          border: 1px solid #e2e2e2 !important;
+          border-radius: 6px !important;
+        }
+        /* Verde sobrio (no neón) para positivos */
+        #reporte-print [style*="--green"],
+        #reporte-print [style*="rgb(34"],
+        #reporte-print .green {
+          color: #2a7a00 !important;
+        }
+        /* Rojo sobrio para negativos */
+        #reporte-print [style*="--red"],
+        #reporte-print [style*="rgb(239"] {
+          color: #c0392b !important;
+        }
+        /* Acento lima → verde oscuro sobrio en el documento */
+        #reporte-print [style*="--accent"] { color: #5a8a00 !important; }
+
+        /* Títulos de sección: línea inferior gris */
+        #reporte-print .chart-title,
+        #reporte-print .section-title {
+          color: #1a1a1a !important;
+          font-weight: 700 !important;
+        }
+        /* Texto secundario y muted en grises legibles sobre blanco */
+        #reporte-print [style*="text-muted"],
+        #reporte-print [style*="text-secondary"],
+        #reporte-print .muted { color: #888888 !important; }
+
+        /* Tablas limpias estilo documento */
+        #reporte-print table { border-collapse: collapse !important; }
+        #reporte-print thead th {
+          color: #888 !important;
+          border-bottom: 1.5px solid #ddd !important;
+          font-size: 9.5px !important;
+          text-transform: uppercase !important;
+          letter-spacing: 0.04em !important;
+        }
+        #reporte-print td {
+          border-bottom: 1px solid #f2f2f2 !important;
+          font-variant-numeric: tabular-nums !important;
+        }
+        #reporte-print td.mono { color: #555 !important; }
+
+        /* KPIs en grilla con separadores claros */
+        #reporte-print .kpi-grid { gap: 1px !important; background: #e2e2e2 !important; border: 1px solid #e2e2e2 !important; }
+
+        /* Barras de gráficos: tonos sobrios imprimibles */
+        #reporte-print .recharts-bar-rectangle path { fill: #5a8a00 !important; }
+
+        /* Ámbar oscuro para amarillos (legible en blanco) */
+        #reporte-print [style*="--yellow"],
+        #reporte-print [style*="rgb(245"],
+        #reporte-print .yellow { color: #b8860b !important; }
+
+        /* Pie de página ejecutivo en dos columnas */
+        #reporte-print .reporte-pie {
+          display: flex !important;
+          justify-content: space-between !important;
+          text-align: left !important;
+          border-top: 1px solid #ddd !important;
+          padding-top: 12px !important;
+          margin-top: 16px !important;
+          font-size: 9.5px !important;
+          color: #aaa !important;
+        }
+        #reporte-print .reporte-pie span { color: #aaa !important; }
+
+        /* Encabezado: ocultar el gradiente oscuro, dejar limpio */
+        #reporte-print .reporte-head {
+          border: none !important;
+          border-bottom: 2px solid #1a1a1a !important;
+          border-radius: 0 !important;
+          padding: 0 0 16px 0 !important;
+          background: #ffffff !important;
+        }
+
+        /* Evitar cortes feos entre páginas */
         #reporte-print .card,
         #reporte-print .chart-card,
         #reporte-print .kpi-card,
@@ -324,7 +417,7 @@ export default function ReportesPage() {
       {datos && (
         <div ref={reportRef} id="reporte-print" style={{ display: 'flex', flexDirection: 'column', gap: 20, background: 'var(--bg-base)', padding: 8 }}>
           {/* Header del reporte */}
-          <div style={{
+          <div className="reporte-head" style={{
             background: 'linear-gradient(135deg, var(--bg-card) 0%, #1a1a0a 100%)',
             border: '1px solid var(--border)',
             borderRadius: 14, padding: '24px 28px',
@@ -635,8 +728,9 @@ export default function ReportesPage() {
           )}
 
           {/* Footer del reporte */}
-          <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '12px 0' }}>
-            Facial Wellness · Ciudad del Este, Paraguay · Generado el {new Date().toLocaleDateString('es-PY', { day: '2-digit', month: 'long', year: 'numeric' })}
+          <div className="reporte-pie" style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '12px 0' }}>
+            <span>Generado el {new Date().toLocaleDateString('es-PY', { day: '2-digit', month: 'long', year: 'numeric' })}</span>
+            <span>Facial Wellness OS · Ciudad del Este, Paraguay</span>
           </div>
         </div>
       )}
