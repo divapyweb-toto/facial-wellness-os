@@ -436,6 +436,12 @@ export default function DashboardPage() {
               )}
             </div>
           )}
+          <div
+            onClick={() => navigate('/entregas')}
+            style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border-subtle)', fontSize: 12, color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <Target size={12} /> Ver análisis logístico completo (contribución por envío, devoluciones, fletes) →
+          </div>
         </div>
       )}
       <div className="chart-card">

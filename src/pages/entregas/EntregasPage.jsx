@@ -5,6 +5,7 @@ import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar } from 'lucide-react'
+import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 
 const COSTO_PAP = 27000
 
@@ -173,6 +174,8 @@ export default function EntregasPage() {
   const [guardado, setGuardado] = useState(false)
   const [resultadoGuardado, setResultadoGuardado] = useState(null)
   const [verSinRendir, setVerSinRendir] = useState(false)
+  const [refCosto, setRefCosto] = useState({})       // costo real de producto por referencia de venta
+  const [gastosPorMes, setGastosPorMes] = useState({}) // gastos generales por mes (YYYY-MM)
 
   // Cargar el histórico guardado en Supabase al entrar (así no "desaparece" al refrescar)
   useEffect(() => {
@@ -183,6 +186,31 @@ export default function EntregasPage() {
         if (activo) setHistorico(data || [])
       } catch (e) { /* tabla vacía o no accesible */ }
       if (activo) setCargandoHist(false)
+    })()
+    return () => { activo = false }
+  }, [])
+
+  // Cargar costos reales de producto (por referencia) y gastos por mes — para la pirámide
+  useEffect(() => {
+    let activo = true
+    ;(async () => {
+      try {
+        // Costos: traer ventas con su referencia y costo_prod real
+        const { data: ventas } = await supabase
+          .from('ventas').select('n_referencia, costo_prod').is('deleted_at', null)
+        if (activo && ventas) setRefCosto(indexarCostos(ventas))
+        // Gastos por mes: agrupar gastos generales por YYYY-MM
+        const { data: gastos } = await supabase
+          .from('gastos').select('monto, fecha').is('deleted_at', null)
+        if (activo && gastos) {
+          const porMes = {}
+          gastos.forEach(g => {
+            const mes = (g.fecha || '').slice(0, 7)
+            if (mes) porMes[mes] = (porMes[mes] || 0) + (g.monto || 0)
+          })
+          setGastosPorMes(porMes)
+        }
+      } catch (e) { /* sin datos */ }
     })()
     return () => { activo = false }
   }, [])
@@ -320,6 +348,30 @@ export default function EntregasPage() {
       conRef: mergedFiltrado.filter(m => m.n_referencia).length,
     }
   }, [mergedFiltrado])
+
+  // ── PIRÁMIDE DE RENTABILIDAD (profit-first) ──
+  // Costo promedio de producto como fallback (cuando no hay match por referencia)
+  const COGS_PROMEDIO = 12000
+  const piramide = useMemo(() => {
+    if (!mergedFiltrado.length) return null
+    const gastosMes = filtroMes === 'todos' ? 0 : (gastosPorMes[mesEfectivo] || 0)
+    return calcularPiramide(mergedFiltrado, refCosto, COGS_PROMEDIO, gastosMes)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mergedFiltrado, refCosto, gastosPorMes, filtroMes, mesEfectivo])
+
+  // Pirámide del MES ANTERIOR (para comparar: ¿mejoró o empeoró?)
+  const piramideMesAnterior = useMemo(() => {
+    if (filtroMes === 'todos' || !mesEfectivo) return null
+    // Calcular el mes anterior a mesEfectivo (YYYY-MM)
+    const [y, m] = mesEfectivo.split('-').map(Number)
+    const fechaAnt = new Date(y, m - 2, 1) // m-2 porque Date usa 0-index
+    const mesAnt = `${fechaAnt.getFullYear()}-${String(fechaAnt.getMonth() + 1).padStart(2, '0')}`
+    const paqAnt = merged.filter(p => mesDePaquete(p) === mesAnt)
+    if (!paqAnt.length) return null
+    const gastosAnt = gastosPorMes[mesAnt] || 0
+    return { ...calcularPiramide(paqAnt, refCosto, COGS_PROMEDIO, gastosAnt), mes: mesAnt }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merged, refCosto, gastosPorMes, filtroMes, mesEfectivo])
 
   const tablaFiltrada = useMemo(() => {
     let r = mergedFiltrado
@@ -626,67 +678,143 @@ export default function EntregasPage() {
         </div>
       )}
 
-      {/* Alerta si tasa de devolución alta */}
-      {stats.devueltos / stats.total > 0.25 && (
-        <div className="alert alert-warning">
-          <AlertTriangle size={15} />
-          <div>
-            <div style={{ fontWeight: 600 }}>Tasa de devolución alta: {Math.round(stats.devueltos / stats.total * 100)}%</div>
-            <div style={{ fontSize: 12, marginTop: 4 }}>
-              Estás perdiendo {formatGs(stats.perdidaTotal)} entre producto devuelto y envíos pagados a pérdida. Revisá las ciudades y motivos de abajo.
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ═══ PIRÁMIDE DE RENTABILIDAD — profit-first ═══ */}
+      {piramide && (() => {
+        const p = piramide
+        const prev = piramideMesAnterior
+        const positivo = p.contribucionNeta >= 0
+        // Comparación de tasa de devolución vs mes anterior
+        const deltaDevol = prev ? p.tasaDevolucion - prev.tasaDevolucion : null
+        const deltaContrib = prev ? p.contribucionNeta - prev.contribucionNeta : null
+        const fmtSigno = (n) => (n >= 0 ? '+' : '') + formatGs(n)
 
-      {/* KPIs */}
-      <div className="kpi-grid">
-        <div className="kpi-card">
-          <div className="kpi-label"><PackageCheck size={13} style={{ verticalAlign: -2 }} /> Tasa de entrega</div>
-          <div className="kpi-value green">{stats.tasaEntrega}%</div>
-          <div className="kpi-sub">{stats.entregados} de {stats.entregados + stats.devueltos} resueltos</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label"><DollarSign size={13} style={{ verticalAlign: -2 }} /> Cobrado real</div>
-          <div className="kpi-value">{formatGs(stats.cobrado)}</div>
-          <div className="kpi-sub">Productos efectivamente entregados</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label"><TrendingDown size={13} style={{ verticalAlign: -2 }} /> Pérdida x devoluciones</div>
-          <div className="kpi-value" style={{ color: 'var(--red)' }}>{formatGs(stats.perdidaTotal)}</div>
-          <div className="kpi-sub">Producto que volvió + envíos pagados</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label"><Clock size={13} style={{ verticalAlign: -2 }} /> En proceso</div>
-          <div className="kpi-value accent">{stats.proceso}</div>
-          <div className="kpi-sub">{stats.diasProm ? `${stats.diasProm.toFixed(1)} días prom. entrega` : 'Sin resolver'}</div>
-        </div>
-      </div>
-
-      {/* Análisis financiero */}
-      <div className="card">
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <DollarSign size={15} color="var(--green)" /> Análisis financiero del despacho
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
-          {[
-            { label: 'Cobrado bruto', val: stats.cobrado, color: 'var(--green)', sign: '+' },
-            { label: `Costo envíos PaP (${stats.total} × 27k)`, val: -stats.costoEnvios, color: 'var(--red)', sign: '' },
-            { label: 'Margen logístico neto', val: stats.margenNeto, color: stats.margenNeto > 0 ? 'var(--green)' : 'var(--red)', sign: '=', bold: true },
-            { label: `Envíos perdidos (${stats.devueltos} devol.)`, val: -stats.costoEnviosDevueltos, color: 'var(--red)', sign: '' },
-          ].map((item, i) => (
-            <div key={i} style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>{item.label}</div>
-              <div style={{ fontSize: item.bold ? 20 : 16, fontWeight: item.bold ? 800 : 700, color: item.color, fontFamily: 'var(--font-display)' }}>
-                {formatGs(item.val)}
+        return (
+          <>
+            {/* NÚMERO ESTRELLA: contribución neta (o ganancia real si hay gastos) */}
+            <div className="card" style={{
+              padding: '22px 24px',
+              background: positivo
+                ? 'linear-gradient(135deg, rgba(34,197,94,0.12), transparent 70%)'
+                : 'linear-gradient(135deg, rgba(239,68,68,0.12), transparent 70%)',
+              border: `1px solid ${positivo ? 'var(--green)' : 'var(--red)'}`,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+                    {p.gastosMes > 0 ? 'Ganancia real del mes' : 'Contribución neta del mes'}
+                    {filtroMes !== 'todos' && ` · ${etiquetaMes(mesEfectivo)}`}
+                  </div>
+                  <div style={{
+                    fontSize: 38, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1,
+                    color: (p.gastosMes > 0 ? p.gananciaReal : p.contribucionNeta) >= 0 ? 'var(--green)' : 'var(--red)',
+                  }}>
+                    {fmtSigno(p.gastosMes > 0 ? p.gananciaReal : p.contribucionNeta)}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8, maxWidth: 460 }}>
+                    {p.gastosMes > 0
+                      ? 'Lo que te queda libre después de producto, todos los fletes y gastos generales.'
+                      : 'Lo que deja la operación logística (después de producto y todos los fletes).'}
+                  </div>
+                </div>
+                {/* Comparación con mes anterior */}
+                {deltaContrib != null && (
+                  <div style={{
+                    padding: '8px 14px', borderRadius: 10, background: 'var(--bg-card)',
+                    border: '1px solid var(--border)', textAlign: 'right',
+                  }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>vs {etiquetaMes(prev.mes)}</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: deltaContrib >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                      {deltaContrib >= 0 ? '↑' : '↓'} {fmtSigno(deltaContrib)}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-          ))}
-        </div>
-        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
-          El margen logístico es antes de restar el costo de tu producto (CMV). La pérdida por devoluciones ({formatGs(stats.perdidaTotal)}) es el golpe real: producto que volvió sin venderse + el envío que igual pagaste.
-        </p>
-      </div>
+
+            {/* LA PIRÁMIDE — desglose de niveles */}
+            <div className="card" style={{ padding: '16px 20px' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 14, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                De dónde sale el número
+              </div>
+              {[
+                { label: 'Ingreso cobrado', sub: `${p.entregados} entregados`, val: p.ingreso, sign: '+', color: 'var(--green)' },
+                { label: 'Flete de envíos', sub: `${p.resueltos} resueltos × 27k`, val: -p.fleteResueltos, sign: '−', color: 'var(--red)' },
+                { label: 'Costo del producto', sub: `solo los ${p.entregados} entregados`, val: -p.cogs, sign: '−', color: 'var(--red)' },
+                { label: 'Contribución neta', sub: 'lo que deja la operación', val: p.contribucionNeta, sign: '=', color: p.contribucionNeta >= 0 ? 'var(--green)' : 'var(--red)', bold: true },
+                ...(p.gastosMes > 0 ? [
+                  { label: 'Gastos generales', sub: 'ads, sueldos, etc. (Finanzas)', val: -p.gastosMes, sign: '−', color: 'var(--red)' },
+                  { label: 'Ganancia real', sub: 'lo que te queda libre', val: p.gananciaReal, sign: '=', color: p.gananciaReal >= 0 ? 'var(--green)' : 'var(--red)', bold: true, destacado: true },
+                ] : []),
+              ].map((nivel, i) => (
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: nivel.bold ? '12px 12px' : '8px 12px',
+                  borderTop: nivel.sign === '=' ? '1px solid var(--border)' : 'none',
+                  marginTop: nivel.sign === '=' ? 4 : 0,
+                  background: nivel.destacado ? 'var(--green-dim)' : 'transparent',
+                  borderRadius: nivel.destacado ? 8 : 0,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                    <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-muted)', width: 16 }}>{nivel.sign}</span>
+                    <div>
+                      <div style={{ fontSize: nivel.bold ? 14 : 13, fontWeight: nivel.bold ? 700 : 500 }}>{nivel.label}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{nivel.sub}</div>
+                    </div>
+                  </div>
+                  <div style={{
+                    fontSize: nivel.bold ? 18 : 15, fontWeight: nivel.bold ? 800 : 600,
+                    color: nivel.color, fontFamily: 'var(--font-display)',
+                  }}>
+                    {nivel.val >= 0 && nivel.sign !== '=' ? '' : ''}{formatGs(nivel.val)}
+                  </div>
+                </div>
+              ))}
+              {p.cogsEstimado > 0 && (
+                <p style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 10, fontStyle: 'italic' }}>
+                  Nota: {p.conCostoReal} entregados con costo real (cruzados con su venta) y {p.cogsEstimado} con costo estimado ({formatGs(COGS_PROMEDIO)}). Cargá la referencia en cada venta para precisión total.
+                </p>
+              )}
+            </div>
+
+            {/* LAS 3 PALANCAS — métricas clave */}
+            <div className="kpi-grid">
+              <div className="kpi-card">
+                <div className="kpi-label"><TrendingUp size={13} style={{ verticalAlign: -2 }} /> Contribución por envío</div>
+                <div className="kpi-value" style={{ color: p.contribPorEnvio >= 0 ? 'var(--green)' : 'var(--red)' }}>{formatGs(p.contribPorEnvio)}</div>
+                <div className="kpi-sub">Lo que deja cada paquete resuelto</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label"><PackageX size={13} style={{ verticalAlign: -2 }} /> Tasa de devolución</div>
+                <div className="kpi-value" style={{ color: p.tasaDevolucion > 25 ? 'var(--red)' : p.tasaDevolucion > 15 ? 'var(--yellow)' : 'var(--green)' }}>{p.tasaDevolucion}%</div>
+                <div className="kpi-sub">
+                  {deltaDevol != null
+                    ? <span style={{ color: deltaDevol <= 0 ? 'var(--green)' : 'var(--red)' }}>{deltaDevol <= 0 ? '↓' : '↑'} {Math.abs(deltaDevol)}pts vs {etiquetaMes(prev.mes)}</span>
+                    : `${p.devueltos} de ${p.resueltos} resueltos`}
+                </div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label"><TrendingDown size={13} style={{ verticalAlign: -2 }} /> Sangrado por fletes</div>
+                <div className="kpi-value" style={{ color: 'var(--red)' }}>{formatGs(p.sangradoFlete)}</div>
+                <div className="kpi-sub">{p.devueltos} devoluciones × 27k (el producto vuelve)</div>
+              </div>
+            </div>
+
+            {/* ALERTA: paquetes en proceso = riesgo no contabilizado */}
+            {p.enProceso > 0 && (
+              <div className="alert" style={{ background: 'var(--bg-card)', border: '1px solid var(--yellow)', borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <Clock size={15} color="var(--yellow)" style={{ flexShrink: 0, marginTop: 2 }} />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.enProceso} paquetes todavía en proceso</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                    No entran en el cálculo porque aún no cerraron. Si se devuelven en la misma proporción ({p.tasaDevolucion}%), serían ~{Math.round(p.enProceso * p.tasaDevolucion / 100)} devoluciones más (~{formatGs(Math.round(p.enProceso * p.tasaDevolucion / 100) * 27000)} en fletes).
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )
+      })()}
+
 
       {/* Flujo de caja con PaP (solo si el reporte incluye Tesorería) */}
       {stats.hayTesoreria && (
