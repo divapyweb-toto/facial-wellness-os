@@ -660,7 +660,7 @@ export default function VentasPage() {
             <button className="btn btn-primary btn-sm" onClick={() => setShowModal(true)}><Plus size={13} /> Nueva venta</button>
           </div>
         ) : (
-          <table>
+          <table className="tabla-responsive">
             <thead>
               <tr>
                 <th style={{ width: 34 }}><input type="checkbox" checked={todasSeleccionadas} onChange={toggleTodas} style={{ cursor: 'pointer' }} /></th>
@@ -683,15 +683,15 @@ export default function VentasPage() {
                 return (
                   <tr key={v.id} style={seleccionadas.has(v.id) ? { background: 'var(--accent-dim)' } : undefined}>
                     <td><input type="checkbox" checked={seleccionadas.has(v.id)} onChange={() => toggleSel(v.id)} style={{ cursor: 'pointer' }} /></td>
-                    <td className="muted">{new Date(v.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
-                    <td className="mono">{v.n_referencia || '—'}</td>
-                    <td style={{ fontWeight: 500 }}>{v.producto_nombre}</td>
-                    <td className="muted">{v.cantidad}</td>
-                    <td style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
-                    <td style={{ color: v.estado === 'entregado' ? 'var(--green)' : 'var(--text-muted)', fontWeight: 500 }}>
+                    <td data-label="Fecha" className="muted">{new Date(v.fecha + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
+                    <td data-label="Ref." className="mono">{v.n_referencia || '—'}</td>
+                    <td data-label="Producto" style={{ fontWeight: 500 }}>{v.producto_nombre}</td>
+                    <td data-label="Cant." className="muted">{v.cantidad}</td>
+                    <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
+                    <td data-label="Ganancia" style={{ color: v.estado === 'entregado' ? 'var(--green)' : 'var(--text-muted)', fontWeight: 500 }}>
                       {v.estado === 'entregado' ? formatGs(v.ganancia_neta) : '—'}
                     </td>
-                    <td>
+                    <td data-label="Estado">
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                         <select value={v.estado} onChange={e => cambiarEstado(v.id, e.target.value)}
                           style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}40`, borderRadius: 20, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-body)', appearance: 'none' }}>
@@ -703,8 +703,8 @@ export default function VentasPage() {
                         {dias !== null && dias >= 5 && <Clock size={12} color="var(--red)" title={`${dias} días`} />}
                       </div>
                     </td>
-                    <td className="muted" style={{ fontSize: 12 }}>{v.ciudad || '—'}</td>
-                    <td><span className="badge badge-gray" style={{ fontSize: 10 }}>{v.canal_origen}</span></td>
+                    <td data-label="Ciudad" className="muted" style={{ fontSize: 12 }}>{v.ciudad || '—'}</td>
+                    <td data-label="Canal"><span className="badge badge-gray" style={{ fontSize: 10 }}>{v.canal_origen}</span></td>
                     <td>
                       <div style={{ display: 'flex', gap: 2 }}>
                         <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditando(v)} style={{ color: 'var(--accent)' }} title="Editar">

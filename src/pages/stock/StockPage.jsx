@@ -475,7 +475,7 @@ export default function StockPage() {
 
       {activeTab === 'historial' && (
         <div className="table-wrapper">
-          <table>
+          <table className="tabla-responsive">
             <thead>
               <tr>
                 <th>Fecha</th>
@@ -490,13 +490,13 @@ export default function StockPage() {
                 <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 40 }}>Sin movimientos</td></tr>
               ) : movimientos.map(m => (
                 <tr key={m.id}>
-                  <td className="muted">{new Date(m.created_at).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
-                  <td style={{ fontWeight: 500 }}>{m.producto_nombre}</td>
-                  <td><span className={`badge ${m.tipo === 'compra' ? 'badge-green' : m.tipo === 'venta' ? 'badge-blue' : m.tipo === 'devolucion' ? 'badge-yellow' : 'badge-gray'}`}>{m.tipo}</span></td>
-                  <td style={{ fontWeight: 700, color: m.tipo === 'compra' || m.tipo === 'devolucion' ? 'var(--green)' : 'var(--red)' }}>
+                  <td data-label="Fecha" className="muted">{new Date(m.created_at).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })}</td>
+                  <td data-label="Producto" style={{ fontWeight: 500 }}>{m.producto_nombre}</td>
+                  <td data-label="Tipo"><span className={`badge ${m.tipo === 'compra' ? 'badge-green' : m.tipo === 'venta' ? 'badge-blue' : m.tipo === 'devolucion' ? 'badge-yellow' : 'badge-gray'}`}>{m.tipo}</span></td>
+                  <td data-label="Cant." style={{ fontWeight: 700, color: m.tipo === 'compra' || m.tipo === 'devolucion' ? 'var(--green)' : 'var(--red)' }}>
                     {m.tipo === 'compra' || m.tipo === 'devolucion' ? '+' : '-'}{m.cantidad}
                   </td>
-                  <td className="muted">{m.motivo || '—'}</td>
+                  <td data-label="Motivo" className="muted">{m.motivo || '—'}</td>
                 </tr>
               ))}
             </tbody>
