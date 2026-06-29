@@ -229,10 +229,31 @@ export default function DashboardPage() {
 
     // Alertas
     const alertasActivas = []
-    const { data: todosProds } = await supabase.from('productos').select('nombre, stock_actual, stock_alerta').eq('activo', true)
+    const { data: todosProds } = await supabase.from('productos')
+      .select('id, nombre, stock_actual, stock_alerta, es_combo, componente_1_id, componente_1_qty, componente_2_id, componente_2_qty')
+      .eq('activo', true)
     if (todosProds) {
-      todosProds.filter(p => p.stock_actual <= p.stock_alerta)
-        .forEach(p => alertasActivas.push({ tipo: 'stock', color: 'red', msg: `Stock bajo: ${p.nombre} — ${p.stock_actual} uds` }))
+      const porId = todosProds.reduce((a, p) => { a[p.id] = p; return a }, {})
+      // Stock real considerando combos (combo = mínimo de sus componentes disponibles)
+      const stockReal = (p) => {
+        if (!p.es_combo) return p.stock_actual
+        const disp = []
+        const c1 = porId[p.componente_1_id], c2 = porId[p.componente_2_id]
+        if (c1) disp.push(Math.floor((c1.stock_actual || 0) / (p.componente_1_qty || 1)))
+        if (c2) disp.push(Math.floor((c2.stock_actual || 0) / (p.componente_2_qty || 1)))
+        return disp.length ? Math.min(...disp) : 0
+      }
+      todosProds
+        .filter(p => stockReal(p) <= p.stock_alerta)
+        .forEach(p => {
+          const s = stockReal(p)
+          alertasActivas.push({
+            tipo: 'stock', color: 'red',
+            msg: p.es_combo
+              ? `Stock bajo: ${p.nombre} — ${s} armables`
+              : `Stock bajo: ${p.nombre} — ${s} uds`,
+          })
+        })
     }
     const hace5 = new Date(); hace5.setDate(hace5.getDate() - 5)
     const { data: viejos } = await supabase.from('ventas').select('id').eq('estado', 'pendiente').lt('fecha', hace5.toISOString().split('T')[0])

@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet } from 'lucide-react'
+import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar } from 'lucide-react'
 
 const COSTO_PAP = 27000
 
@@ -27,7 +27,13 @@ function parseXLSX(arrayBuffer) {
 
 function normalizarRef(ref) {
   if (!ref) return ''
-  return String(ref).replace(/[#\s]/g, '').trim()
+  // Quitar #, espacios y cualquier separador
+  let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
+  // Si es puramente numérico, quitar ceros a la izquierda (PaP '00123' = venta '123')
+  if (/^\d+$/.test(r)) {
+    r = String(parseInt(r, 10))
+  }
+  return r
 }
 
 // Normaliza teléfono igual que Despacho, para poder cruzar con las ventas
@@ -136,7 +142,7 @@ function combinar(paqData, gesData) {
       nombre_cliente: nombreCliente,
       ciudad,
       producto,
-      mes: (fEnt || fIng || '').slice(0, 7),
+      mes: (fIng || fEnt || '').slice(0, 7),  // mes por FECHA DE INGRESO (cuándo salió a despacho)
     })
   })
 
@@ -162,6 +168,7 @@ export default function EntregasPage() {
   const [cargandoHist, setCargandoHist] = useState(true)
   const [busqueda, setBusqueda] = useState('')
   const [filtroCat, setFiltroCat] = useState('todos')
+  const [filtroMes, setFiltroMes] = useState('actual')  // 'actual' | 'todos' | 'YYYY-MM'
   const [guardando, setGuardando] = useState(false)
   const [guardado, setGuardado] = useState(false)
   const [resultadoGuardado, setResultadoGuardado] = useState(null)
@@ -198,6 +205,36 @@ export default function EntregasPage() {
     return Array.from(map.values())
   }, [reportesNuevos, historico])
 
+  // Mes de un paquete según FECHA DE INGRESO (recalculado para que el histórico viejo
+  // —que guardó "mes" con otra fórmula— quede consistente con la decisión actual).
+  const mesDePaquete = (m) => (m.fecha_ingreso || m.fecha_entrega || m.mes || '').slice(0, 7)
+
+  // Meses disponibles en los datos (para el selector), del más nuevo al más viejo
+  const mesesDisponibles = useMemo(() => {
+    const set = new Set()
+    merged.forEach(m => { const mm = mesDePaquete(m); if (mm) set.add(mm) })
+    return Array.from(set).sort().reverse()
+  }, [merged])
+
+  // El mes "actual" = el más reciente que tenga datos (no el calendario, por si no cargaste aún este mes)
+  const mesActual = mesesDisponibles[0] || ''
+  const mesEfectivo = filtroMes === 'actual' ? mesActual : filtroMes
+
+  // merged filtrado por el mes elegido (o todos)
+  const mergedFiltrado = useMemo(() => {
+    if (filtroMes === 'todos') return merged
+    return merged.filter(m => mesDePaquete(m) === mesEfectivo)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merged, filtroMes, mesEfectivo])
+
+  // Etiqueta legible de un mes "YYYY-MM" → "Junio 2026"
+  const etiquetaMes = (ym) => {
+    if (!ym) return ''
+    const [y, m] = ym.split('-')
+    const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+    return `${meses[parseInt(m) - 1] || ''} ${y}`
+  }
+
   // AUTO-GUARDADO: al subir reportes, guarda y actualiza las ventas solo (con debounce
   // para esperar a que carguen ambos archivos si los subís juntos).
   useEffect(() => {
@@ -209,11 +246,11 @@ export default function EntregasPage() {
   }, [reportesNuevos])
 
   const stats = useMemo(() => {
-    if (!merged.length) return null
-    const total = merged.length
-    const entregados = merged.filter(m => m.categoria === 'entregado')
-    const devueltos = merged.filter(m => m.categoria === 'devuelto')
-    const proceso = merged.filter(m => m.categoria === 'en_proceso')
+    if (!mergedFiltrado.length) return null
+    const total = mergedFiltrado.length
+    const entregados = mergedFiltrado.filter(m => m.categoria === 'entregado')
+    const devueltos = mergedFiltrado.filter(m => m.categoria === 'devuelto')
+    const proceso = mergedFiltrado.filter(m => m.categoria === 'en_proceso')
 
     const cobrado = entregados.reduce((s, m) => s + m.importe, 0)
     const perdidoProd = devueltos.reduce((s, m) => s + m.importe, 0)
@@ -231,7 +268,7 @@ export default function EntregasPage() {
     const montoPendienteCobro = entregadosSinRendir.reduce((s, m) => s + m.importe, 0)
     const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null)
     const diasRendicionProm = diasRend.length ? (diasRend.reduce((a, b) => a + b, 0) / diasRend.length) : null
-    const hayTesoreria = merged.some(m => m.rendido || m.fecha_rendido)
+    const hayTesoreria = mergedFiltrado.some(m => m.rendido || m.fecha_rendido)
     // Lista detallada de lo que PaP te debe, lo que más tiempo lleva primero (para reclamar)
     const hoy = new Date()
     const listaSinRendir = entregadosSinRendir.map(m => {
@@ -242,7 +279,7 @@ export default function EntregasPage() {
 
     // por ciudad
     const ciudadMap = {}
-    merged.forEach(m => {
+    mergedFiltrado.forEach(m => {
       const c = m.ciudad || 'Sin ciudad'
       if (!ciudadMap[c]) ciudadMap[c] = { total: 0, entregados: 0 }
       ciudadMap[c].total++
@@ -280,12 +317,12 @@ export default function EntregasPage() {
       diasProm, porCiudad, porMensajero, motivos, distribucion,
       montoRendido, montoPendienteCobro, diasRendicionProm, hayTesoreria,
       rendidos: rendidos.length, entregadosSinRendir: entregadosSinRendir.length, listaSinRendir,
-      conRef: merged.filter(m => m.n_referencia).length,
+      conRef: mergedFiltrado.filter(m => m.n_referencia).length,
     }
-  }, [merged])
+  }, [mergedFiltrado])
 
   const tablaFiltrada = useMemo(() => {
-    let r = merged
+    let r = mergedFiltrado
     if (filtroCat !== 'todos') r = r.filter(m => m.categoria === filtroCat)
     if (busqueda.trim()) {
       const q = busqueda.toLowerCase()
@@ -298,7 +335,7 @@ export default function EntregasPage() {
       )
     }
     return r
-  }, [merged, filtroCat, busqueda])
+  }, [mergedFiltrado, filtroCat, busqueda])
 
   const procesarFile = (file) => {
     if (!file?.name.match(/\.xlsx?$/i)) { toast('Solo archivos Excel (.xlsx)', 'error'); return }
@@ -497,7 +534,11 @@ export default function EntregasPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Entregas · Tracking Punto a Punto</h1>
-          <p className="page-subtitle">{stats.total} paquetes en el sistema{reportesNuevos.length ? ` · ${reportesNuevos.length} recién subidos` : ''} · {stats.conRef} con referencia</p>
+          <p className="page-subtitle">
+            {filtroMes === 'todos'
+              ? <>{merged.length} paquetes en total · histórico completo</>
+              : <>{stats.total} paquetes en {etiquetaMes(mesEfectivo)} · {stats.conRef} con referencia</>}
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple style={{ display: 'none' }} onChange={e => handleFiles(e.target.files)} />
@@ -511,6 +552,48 @@ export default function EntregasPage() {
           {reportesNuevos.length > 0 && <button className="btn btn-ghost btn-sm" onClick={reset}><X size={13} /> Limpiar</button>}
         </div>
       </div>
+
+      {/* Selector de mes — analiza por período (fecha de ingreso a despacho) */}
+      {mesesDisponibles.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '12px 14px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12 }}>
+          <Calendar size={15} color="var(--accent)" style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', marginRight: 4 }}>Período:</span>
+          <div className="filter-scroll" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {mesesDisponibles.map(mm => (
+              <button
+                key={mm}
+                onClick={() => setFiltroMes(mm)}
+                className="btn btn-sm"
+                style={{
+                  background: (mesEfectivo === mm && filtroMes !== 'todos') ? 'var(--accent)' : 'var(--bg-hover)',
+                  color: (mesEfectivo === mm && filtroMes !== 'todos') ? '#000' : 'var(--text-secondary)',
+                  border: 'none', fontWeight: (mesEfectivo === mm && filtroMes !== 'todos') ? 700 : 500,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {etiquetaMes(mm)}
+              </button>
+            ))}
+            <button
+              onClick={() => setFiltroMes('todos')}
+              className="btn btn-sm"
+              style={{
+                background: filtroMes === 'todos' ? 'var(--accent)' : 'var(--bg-hover)',
+                color: filtroMes === 'todos' ? '#000' : 'var(--text-secondary)',
+                border: 'none', fontWeight: filtroMes === 'todos' ? 700 : 500,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Todos
+            </button>
+          </div>
+          {filtroMes !== 'todos' && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+              {stats.total} paquete{stats.total !== 1 ? 's' : ''} en {etiquetaMes(mesEfectivo)}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Resultado del guardado: cuántas ventas se actualizaron y cómo */}
       {resultadoGuardado && (
