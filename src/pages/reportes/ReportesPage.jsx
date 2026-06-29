@@ -167,25 +167,28 @@ export default function ReportesPage() {
     const ventasBrutasCalc = sumE(v => v.total)                 // lo cobrado (entregadas) — ya incluye el envío
     const cogsEntregadas = sumE(v => v.costo_prod)              // costo mercadería entregada
     const cogsPendientes = sumP(v => v.costo_prod)              // costo mercadería pendiente (info, no se resta)
-    // Flete a Punto a Punto: 27.000 por TODO paquete que sale (entregado, pendiente o devuelto)
+    // Flete a Punto a Punto: 27.000 por paquete.
+    // GANANCIA FIRME usa solo lo RESUELTO (entregadas + devueltas), igual que Entregas:
+    // no contamos flete de pendientes porque puede que aún no se despacharon.
     const fleteEntregadas = sumE(v => v.costo_envio)
-    const fletePendientes = sumP(v => v.costo_envio)
+    const fletePendientes = sumP(v => v.costo_envio)           // en tránsito (no se resta de lo firme)
     const fleteDevoluciones = sumD(v => v.costo_envio)
-    const fleteTotal = fleteEntregadas + fletePendientes + fleteDevoluciones
+    const fleteFirme = fleteEntregadas + fleteDevoluciones      // solo resueltos → unificado con Entregas
+    const fleteTotal = fleteFirme + fletePendientes             // total incluyendo tránsito (referencia)
     // Ingreso neto de entregadas (= ganancia_neta = total − costo prod − flete; el envío ya viene en total)
     const ingresosNetosCalc = sumE(v => v.ganancia_neta)
-    // ── Tu fórmula ──
-    //  Utilidad = dinero que entró (entregadas) − flete de TODOS los paquetes − gastos − costo mercadería vendida
+    // ── GANANCIA FIRME ──
+    //  Lo que ya cerró: dinero cobrado (entregadas) − flete de resueltos − costo mercadería vendida − gastos
     const dineroEntro = ventasBrutasCalc                        // lo cobrado (entregadas)
     const costoMercaderiaVendida = cogsEntregadas               // costo de lo entregado/vendido
-    const utilidadNetaCalc = dineroEntro - fleteTotal - totalGastos - costoMercaderiaVendida
+    const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida
 
     setDatos({
       mes, ventasBrutas: ventasBrutasCalc,
       ingresosNetos: ingresosNetosCalc,
       totalGastos, totalGastoAds,
       cogsEntregadas, cogsPendientes, costoMercaderiaVendida,
-      fleteEntregadas, fletePendientes, fleteDevoluciones, fleteTotal,
+      fleteEntregadas, fletePendientes, fleteDevoluciones, fleteFirme, fleteTotal,
       // Margen = ingreso neto de entregadas / ventas brutas
       margenPct: ventasBrutasCalc ? (ingresosNetosCalc / ventasBrutasCalc) * 100 : 0,
       paquetesEnviados: (ventas || []).length,
@@ -351,7 +354,7 @@ export default function ReportesPage() {
               { label: 'Ventas brutas', value: formatGs(datos.ventasBrutas), sub: 'Cobrado (entregadas)', color: 'var(--text-primary)' },
               { label: 'Costo de venta', value: formatGs(datos.costoMercaderiaVendida), sub: 'Mercadería vendida (entregada)', color: 'var(--red)' },
               { label: 'Margen %', value: formatPct(datos.margenPct), sub: 'Ingreso neto / ventas', color: datos.margenPct > 40 ? 'var(--green)' : 'var(--yellow)' },
-              { label: 'Utilidad neta', value: formatGs(datos.utilidadNeta), sub: 'Después de todo', color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' },
+              { label: 'Ganancia firme', value: formatGs(datos.utilidadNeta), sub: 'Lo ya cerrado', color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' },
               { label: 'Paquetes enviados', value: datos.paquetesEnviados, sub: `${datos.entregados} entregados`, color: 'var(--text-primary)' },
               { label: 'Devoluciones', value: datos.devueltos, sub: `${formatGs(datos.fleteDevoluciones)} en flete perdido`, color: datos.devueltos > 10 ? 'var(--red)' : 'var(--yellow)' },
               { label: 'Tasa de entrega', value: formatPct(datos.tasaEntrega), sub: 'Sobre total enviado', color: datos.tasaEntrega > 60 ? 'var(--green)' : 'var(--red)' },
@@ -368,13 +371,13 @@ export default function ReportesPage() {
           {/* Desglose de utilidad (P&L) */}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
-              Cómo se arma tu utilidad
+              Cómo se arma tu utilidad firme
             </div>
             <div style={{ padding: '6px 20px' }}>
               {[
                 { l: 'Ingresos cobrados (entregadas, con envío)', v: datos.ventasBrutas, signo: '+' },
                 { l: 'Costo de mercadería vendida (entregadas)', v: datos.costoMercaderiaVendida, signo: '−' },
-                { l: `Flete a Punto a Punto (${datos.entregados + datos.pendientesCount + datos.devueltos} paquetes × 27.000)`, v: datos.fleteTotal, signo: '−' },
+                { l: `Flete a Punto a Punto (${datos.entregados + datos.devueltos} resueltos × 27.000)`, v: datos.fleteFirme, signo: '−' },
                 { l: 'Gastos del mes', v: datos.totalGastos, signo: '−' },
               ].filter(r => r.v !== undefined).map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 13 }}>
@@ -383,11 +386,11 @@ export default function ReportesPage() {
                 </div>
               ))}
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0 10px', fontSize: 14 }}>
-                <span style={{ fontWeight: 700 }}>Utilidad neta</span>
+                <span style={{ fontWeight: 700 }}>Utilidad firme</span>
                 <span style={{ fontWeight: 800, color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' }}>{formatGs(datos.utilidadNeta)}</span>
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', paddingBottom: 12, lineHeight: 1.5 }}>
-                El flete cuenta los {datos.entregados + datos.pendientesCount + datos.devueltos} paquetes que enviaste (entregados, pendientes y devueltos), porque a todos les pagás los 27.000. El costo de mercadería cuenta solo lo entregado{datos.cogsPendientes > 0 ? `. Tenés ${formatGs(datos.cogsPendientes)} en mercadería pendiente que se contará cuando se entregue` : ''}.
+                Esta es tu ganancia <strong>firme</strong>: cuenta solo los {datos.entregados + datos.devueltos} paquetes que ya cerraron (entregados + devueltos), porque de esos ya pagaste el flete. {datos.pendientesCount > 0 ? `Tenés ${datos.pendientesCount} pendientes en tránsito (${formatGs(datos.fletePendientes)} en flete y ${formatGs(datos.cogsPendientes)} en mercadería) que sumarán cuando se entreguen — mirá el detalle en Entregas.` : ''}
               </div>
             </div>
           </div>

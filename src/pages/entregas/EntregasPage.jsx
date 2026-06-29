@@ -682,15 +682,17 @@ export default function EntregasPage() {
       {piramide && (() => {
         const p = piramide
         const prev = piramideMesAnterior
-        const positivo = p.contribucionNeta >= 0
-        // Comparación de tasa de devolución vs mes anterior
+        // El número estrella es la GANANCIA FIRME (si hay gastos) o CONTRIBUCIÓN FIRME
+        const estrella = p.gastosMes > 0 ? p.gananciaFirme : p.contribucionFirme
+        const positivo = estrella >= 0
         const deltaDevol = prev ? p.tasaDevolucion - prev.tasaDevolucion : null
-        const deltaContrib = prev ? p.contribucionNeta - prev.contribucionNeta : null
+        const prevEstrella = prev ? (prev.gastosMes > 0 ? prev.gananciaFirme : prev.contribucionFirme) : null
+        const deltaEstrella = prevEstrella != null ? estrella - prevEstrella : null
         const fmtSigno = (n) => (n >= 0 ? '+' : '') + formatGs(n)
 
         return (
           <>
-            {/* NÚMERO ESTRELLA: contribución neta (o ganancia real si hay gastos) */}
+            {/* NÚMERO ESTRELLA: GANANCIA FIRME (lo que ya cerró, sólido) */}
             <div className="card" style={{
               padding: '22px 24px',
               background: positivo
@@ -701,49 +703,46 @@ export default function EntregasPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
                 <div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
-                    {p.gastosMes > 0 ? 'Ganancia real del mes' : 'Contribución neta del mes'}
+                    {p.gastosMes > 0 ? 'Ganancia firme del mes' : 'Contribución firme del mes'}
                     {filtroMes !== 'todos' && ` · ${etiquetaMes(mesEfectivo)}`}
                   </div>
                   <div style={{
                     fontSize: 38, fontWeight: 800, fontFamily: 'var(--font-display)', lineHeight: 1,
-                    color: (p.gastosMes > 0 ? p.gananciaReal : p.contribucionNeta) >= 0 ? 'var(--green)' : 'var(--red)',
+                    color: positivo ? 'var(--green)' : 'var(--red)',
                   }}>
-                    {fmtSigno(p.gastosMes > 0 ? p.gananciaReal : p.contribucionNeta)}
+                    {fmtSigno(estrella)}
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8, maxWidth: 460 }}>
-                    {p.gastosMes > 0
-                      ? 'Lo que te queda libre después de producto, todos los fletes y gastos generales.'
-                      : 'Lo que deja la operación logística (después de producto y todos los fletes).'}
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8, maxWidth: 480 }}>
+                    Lo que <strong>ya es tuyo</strong> de los {p.resueltos} paquetes que cerraron este mes (entregados + devueltos). {p.enProceso > 0 && `Hay ${p.enProceso} más en tránsito — mirá abajo.`}
                   </div>
                 </div>
-                {/* Comparación con mes anterior */}
-                {deltaContrib != null && (
+                {deltaEstrella != null && (
                   <div style={{
                     padding: '8px 14px', borderRadius: 10, background: 'var(--bg-card)',
                     border: '1px solid var(--border)', textAlign: 'right',
                   }}>
                     <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>vs {etiquetaMes(prev.mes)}</div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: deltaContrib >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                      {deltaContrib >= 0 ? '↑' : '↓'} {fmtSigno(deltaContrib)}
+                    <div style={{ fontSize: 16, fontWeight: 700, color: deltaEstrella >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                      {deltaEstrella >= 0 ? '↑' : '↓'} {fmtSigno(deltaEstrella)}
                     </div>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* LA PIRÁMIDE — desglose de niveles */}
+            {/* LA PIRÁMIDE — desglose de la ganancia firme */}
             <div className="card" style={{ padding: '16px 20px' }}>
               <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 14, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                De dónde sale el número
+                De dónde sale (solo lo que ya cerró)
               </div>
               {[
                 { label: 'Ingreso cobrado', sub: `${p.entregados} entregados`, val: p.ingreso, sign: '+', color: 'var(--green)' },
                 { label: 'Flete de envíos', sub: `${p.resueltos} resueltos × 27k`, val: -p.fleteResueltos, sign: '−', color: 'var(--red)' },
                 { label: 'Costo del producto', sub: `solo los ${p.entregados} entregados`, val: -p.cogs, sign: '−', color: 'var(--red)' },
-                { label: 'Contribución neta', sub: 'lo que deja la operación', val: p.contribucionNeta, sign: '=', color: p.contribucionNeta >= 0 ? 'var(--green)' : 'var(--red)', bold: true },
+                { label: 'Contribución firme', sub: 'lo que deja la operación', val: p.contribucionFirme, sign: '=', color: p.contribucionFirme >= 0 ? 'var(--green)' : 'var(--red)', bold: true, destacado: p.gastosMes === 0 },
                 ...(p.gastosMes > 0 ? [
                   { label: 'Gastos generales', sub: 'ads, sueldos, etc. (Finanzas)', val: -p.gastosMes, sign: '−', color: 'var(--red)' },
-                  { label: 'Ganancia real', sub: 'lo que te queda libre', val: p.gananciaReal, sign: '=', color: p.gananciaReal >= 0 ? 'var(--green)' : 'var(--red)', bold: true, destacado: true },
+                  { label: 'Ganancia firme', sub: 'lo que te queda libre', val: p.gananciaFirme, sign: '=', color: p.gananciaFirme >= 0 ? 'var(--green)' : 'var(--red)', bold: true, destacado: true },
                 ] : []),
               ].map((nivel, i) => (
                 <div key={i} style={{
@@ -765,7 +764,7 @@ export default function EntregasPage() {
                     fontSize: nivel.bold ? 18 : 15, fontWeight: nivel.bold ? 800 : 600,
                     color: nivel.color, fontFamily: 'var(--font-display)',
                   }}>
-                    {nivel.val >= 0 && nivel.sign !== '=' ? '' : ''}{formatGs(nivel.val)}
+                    {formatGs(nivel.val)}
                   </div>
                 </div>
               ))}
@@ -775,6 +774,40 @@ export default function EntregasPage() {
                 </p>
               )}
             </div>
+
+            {/* BLOQUE EN TRÁNSITO — lo que todavía está volando (proyección) */}
+            {p.enProceso > 0 && (
+              <div className="card" style={{ padding: '16px 20px', border: '1px solid var(--yellow)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <Clock size={15} color="var(--yellow)" />
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>En tránsito · {p.enProceso} paquetes todavía volando</span>
+                </div>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
+                  Estos NO están en la ganancia firme porque aún no cerraron. Esto es la <strong>proyección</strong> si cierran como tu historial ({p.tasaEntrega}% de entrega).
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+                  <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Flete ya comprometido</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--red)', fontFamily: 'var(--font-display)' }}>−{formatGs(p.fleteEnTransito)}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{p.enProceso} × 27k (ya despachados)</div>
+                  </div>
+                  <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Proyección de cierre</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'var(--font-display)' }}>
+                      ~{p.entregadosProyectados} <span style={{ color: 'var(--green)', fontSize: 12 }}>entregan</span> · ~{p.devueltosProyectados} <span style={{ color: 'var(--red)', fontSize: 12 }}>vuelven</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>a tu tasa histórica {p.tasaEntrega}%</div>
+                  </div>
+                  <div style={{ padding: 12, background: p.contribucionProyectada >= 0 ? 'var(--green-dim)' : 'var(--bg-hover)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Aportaría a tu ganancia</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: p.contribucionProyectada >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-display)' }}>
+                      {p.contribucionProyectada >= 0 ? '+' : ''}{formatGs(p.contribucionProyectada)}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>si cierran como el promedio</div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* LAS 3 PALANCAS — métricas clave */}
             <div className="kpi-grid">
@@ -798,19 +831,6 @@ export default function EntregasPage() {
                 <div className="kpi-sub">{p.devueltos} devoluciones × 27k (el producto vuelve)</div>
               </div>
             </div>
-
-            {/* ALERTA: paquetes en proceso = riesgo no contabilizado */}
-            {p.enProceso > 0 && (
-              <div className="alert" style={{ background: 'var(--bg-card)', border: '1px solid var(--yellow)', borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                <Clock size={15} color="var(--yellow)" style={{ flexShrink: 0, marginTop: 2 }} />
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.enProceso} paquetes todavía en proceso</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-                    No entran en el cálculo porque aún no cerraron. Si se devuelven en la misma proporción ({p.tasaDevolucion}%), serían ~{Math.round(p.enProceso * p.tasaDevolucion / 100)} devoluciones más (~{formatGs(Math.round(p.enProceso * p.tasaDevolucion / 100) * 27000)} en fletes).
-                  </div>
-                </div>
-              </div>
-            )}
           </>
         )
       })()}
