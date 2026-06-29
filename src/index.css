@@ -269,6 +269,8 @@ body {
   display: flex; flex-direction: column;
   gap: 1px;
 }
+/* Cada grupo del menú mantiene el spacing interno entre sus items */
+.sidebar-nav > div { display: flex; flex-direction: column; gap: 1px; }
 .nav-section-label {
   font-size: 9.5px; font-weight: 700;
   color: var(--text-muted);

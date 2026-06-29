@@ -205,7 +205,7 @@ export default function FinanzasPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Finanzas</h1>
+          <h1 className="page-title">Gastos</h1>
           <p className="page-subtitle">Control de gastos y flujo de caja</p>
         </div>
         <div className="page-actions">
