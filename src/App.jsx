@@ -18,6 +18,7 @@ const ClientesPage = lazy(() => import('./pages/clientes/ClientesPage'))
 const CalculadoraPage = lazy(() => import('./pages/calculadora/CalculadoraPage'))
 const ImportarPage = lazy(() => import('./pages/importar/ImportarPage'))
 const DespachoPagina = lazy(() => import('./pages/despacho/DespachoPagina'))
+const RecompraPage = lazy(() => import('./pages/recompra/RecompraPage'))
 const EntregasPage = lazy(() => import('./pages/entregas/EntregasPage'))
 const SistemaPage = lazy(() => import('./pages/sistema/SistemaPage'))
 
@@ -62,6 +63,7 @@ export default function App() {
           <Route path="calculadora" element={<Suspense fallback={<PageLoader />}><CalculadoraPage /></Suspense>} />
           <Route path="importar" element={<Suspense fallback={<PageLoader />}><ImportarPage /></Suspense>} />
           <Route path="reportes" element={<Suspense fallback={<PageLoader />}><ReportesPage /></Suspense>} />
+          <Route path="recompra" element={<Suspense fallback={<PageLoader />}><RecompraPage /></Suspense>} />
           <Route path="config" element={<Suspense fallback={<PageLoader />}><ConfigPage /></Suspense>} />
           <Route path="sistema" element={<Suspense fallback={<PageLoader />}><SistemaPage /></Suspense>} />
         </Route>
