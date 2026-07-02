@@ -150,3 +150,87 @@ export function calcularStockCombo(combo, productosById) {
   if (c2) disp.push(Math.floor((c2.stock_actual || 0) / (combo.componente_2_qty || 1)))
   return disp.length ? Math.min(...disp) : 0
 }
+
+// ═══════════════════════════════════════════════════════════
+// STOCK EN LOTE (para importación masiva)
+// ═══════════════════════════════════════════════════════════
+
+// LÓGICA PURA (testeable): dado un conjunto de ventas + el catálogo de productos,
+// agrega cuánto hay que descontar por cada producto FÍSICO (explotando combos).
+// ventas: [{ producto_id, cantidad }] · prodById: { id → producto (con campos de combo) }
+// → { producto_id: { nombre, cantidad } }
+export function agregarDeltasStock(ventas, prodById) {
+  const deltas = {}
+  for (const v of (ventas || [])) {
+    const prod = prodById[v.producto_id]
+    if (!prod) continue
+    const cant = v.cantidad || 1
+    const items = []
+    if (prod.es_combo) {
+      if (prod.componente_1_id) items.push({ id: prod.componente_1_id, nombre: prodById[prod.componente_1_id]?.nombre, qty: (prod.componente_1_qty || 1) * cant })
+      if (prod.componente_2_id) items.push({ id: prod.componente_2_id, nombre: prodById[prod.componente_2_id]?.nombre, qty: (prod.componente_2_qty || 1) * cant })
+    } else {
+      items.push({ id: prod.id, nombre: prod.nombre, qty: cant })
+    }
+    for (const it of items) {
+      if (!it.id) continue
+      if (!deltas[it.id]) deltas[it.id] = { nombre: it.nombre, cantidad: 0 }
+      deltas[it.id].cantidad += it.qty
+    }
+  }
+  return deltas
+}
+
+// Descuenta stock de un LOTE de ventas nuevas (importación), en pocas queries.
+// Solo descuenta las que corresponden (estado que descuenta + con producto_id + no descontadas ya).
+// Devuelve { descontadas, productos } para feedback.
+export async function aplicarStockLoteNuevasVentas(ventas) {
+  const aDescontar = (ventas || []).filter(v => v?.id && v?.producto_id && v?.stock_descontado !== true && estadoDescuenta(v.estado))
+  if (!aDescontar.length) return { descontadas: 0, productos: 0 }
+
+  // 1) Cargar los productos involucrados (con campos de combo) en una query
+  const idsProducto = [...new Set(aDescontar.map(v => v.producto_id))]
+  const { data: prods } = await supabase
+    .from('productos')
+    .select('id, nombre, es_combo, componente_1_id, componente_1_qty, componente_2_id, componente_2_qty')
+    .in('id', idsProducto)
+  const prodById = {}
+  for (const p of (prods || [])) prodById[p.id] = p
+
+  // 2) Cargar nombres de componentes de combos (para los movimientos)
+  const compIds = new Set()
+  for (const p of (prods || [])) {
+    if (p.es_combo) { if (p.componente_1_id) compIds.add(p.componente_1_id); if (p.componente_2_id) compIds.add(p.componente_2_id) }
+  }
+  if (compIds.size) {
+    const { data: comps } = await supabase.from('productos').select('id, nombre').in('id', [...compIds])
+    for (const c of (comps || [])) if (!prodById[c.id]) prodById[c.id] = c
+  }
+
+  // 3) Agregar deltas por producto físico (LÓGICA PURA)
+  const deltas = agregarDeltasStock(aDescontar, prodById)
+  const fisicoIds = Object.keys(deltas)
+  if (!fisicoIds.length) return { descontadas: 0, productos: 0 }
+
+  // 4) Leer stock actual de los productos físicos afectados (una query)
+  const { data: stocks } = await supabase.from('productos').select('id, stock_actual').in('id', fisicoIds)
+  const stockById = {}
+  for (const s of (stocks || [])) stockById[s.id] = s.stock_actual || 0
+
+  // 5) Actualizar stock de cada producto + juntar movimientos
+  const movimientos = []
+  await Promise.all(fisicoIds.map(pid => {
+    const d = deltas[pid]
+    const nuevo = (stockById[pid] || 0) - d.cantidad
+    movimientos.push({ producto_id: pid, producto_nombre: d.nombre, tipo: 'venta', cantidad: d.cantidad, motivo: `Importación masiva (${aDescontar.length} ventas)` })
+    return supabase.from('productos').update({ stock_actual: nuevo }).eq('id', pid)
+  }))
+
+  // 6) Insertar movimientos (una query, no crítico si falla)
+  if (movimientos.length) { try { await supabase.from('stock_movimientos').insert(movimientos) } catch (e) { /* stock ya aplicado */ } }
+
+  // 7) Marcar las ventas como descontadas (una query)
+  await supabase.from('ventas').update({ stock_descontado: true }).in('id', aDescontar.map(v => v.id))
+
+  return { descontadas: aDescontar.length, productos: fisicoIds.length }
+}

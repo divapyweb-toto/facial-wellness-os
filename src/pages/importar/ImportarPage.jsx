@@ -1,6 +1,7 @@
 // src/pages/importar/ImportarPage.jsx
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
+import { aplicarStockLoteNuevasVentas } from '../../lib/stockEngine'
 import { useToast } from '../../lib/toast'
 import { Upload, CheckCircle, AlertTriangle, Download, X } from 'lucide-react'
 
@@ -358,14 +359,23 @@ export default function ImportarPage() {
       }
 
       let insertados = 0, fallidos = 0
+      const insertadas = []
       for (let i = 0; i < nuevas.length; i += 50) {
         const lote = nuevas.slice(i, i + 50).map(({ estado_releasit, _sinProducto, ...v }) => v)
-        const { error } = await supabase.from('ventas').insert(lote)
+        const { data, error } = await supabase.from('ventas').insert(lote).select('id, producto_id, cantidad, estado, n_referencia, stock_descontado')
         if (error) fallidos += lote.length
-        else insertados += lote.length
+        else { insertados += lote.length; if (data) insertadas.push(...data) }
+      }
+      // Descontar stock de las ventas importadas (pendiente = ya despachado, sale del depósito)
+      let stockMsg = ''
+      if (insertadas.length) {
+        try {
+          const res = await aplicarStockLoteNuevasVentas(insertadas)
+          if (res.descontadas > 0) stockMsg = ` · stock descontado (${res.descontadas})`
+        } catch (e) { console.warn('stock lote:', e?.message) }
       }
       setResultado({ insertados, fallidos, total: nuevas.length, duplicados: duplicados.length, refsDup: duplicados })
-      if (insertados > 0) toast(`${insertados} ventas importadas${duplicados.length ? ` · ${duplicados.length} duplicados omitidos` : ''}`, 'success')
+      if (insertados > 0) toast(`${insertados} ventas importadas${stockMsg}${duplicados.length ? ` · ${duplicados.length} duplicados omitidos` : ''}`, 'success')
       if (fallidos > 0) toast(`${fallidos} ventas fallaron`, 'error')
     } catch (err) {
       toast('Error al importar: ' + err.message, 'error')

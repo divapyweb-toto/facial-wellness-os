@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
-import { calcularStockCombo } from '../../lib/stockEngine'
+import { calcularStockCombo, aplicarStockLoteNuevasVentas } from '../../lib/stockEngine'
 import { calcularVelocidades, analizarReposicion, sugerirReposicion, URGENCIA_CFG } from '../../lib/stockIntel'
 import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save, Layers, Clock, TrendingUp } from 'lucide-react'
 
@@ -206,6 +206,8 @@ export default function StockPage() {
   const [modalCompra, setModalCompra] = useState(null)
   const [modalProducto, setModalProducto] = useState(null) // null=cerrado, 'nuevo'=nuevo, objeto=editar
   const [activeTab, setActiveTab] = useState('stock')
+  const [confirmSync, setConfirmSync] = useState(false)
+  const [sincronizando, setSincronizando] = useState(false)
 
   const cargar = useCallback(async () => {
     setLoading(true)
@@ -224,6 +226,32 @@ export default function StockPage() {
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
+
+  const { toast } = useToast()
+
+  // Sincronizar stock: descuenta las ventas que todavía no descontaron
+  // (importaciones viejas). Idempotente: las ya descontadas se saltean.
+  const sincronizarStock = async () => {
+    setSincronizando(true)
+    try {
+      const { data: ventas } = await supabase
+        .from('ventas')
+        .select('id, producto_id, cantidad, estado, n_referencia, stock_descontado')
+        .is('deleted_at', null)
+      const res = await aplicarStockLoteNuevasVentas(ventas || [])
+      if (res.descontadas > 0) {
+        toast(`Stock sincronizado: ${res.descontadas} ventas descontadas en ${res.productos} producto${res.productos === 1 ? '' : 's'}`, 'success')
+      } else {
+        toast('El stock ya estaba sincronizado (no había ventas pendientes de descontar)', 'info')
+      }
+      setConfirmSync(false)
+      cargar()
+    } catch (e) {
+      toast('Error sincronizando stock: ' + e.message, 'error')
+    } finally {
+      setSincronizando(false)
+    }
+  }
 
   // Mapa de productos por ID (para calcular stock de combos)
   const productosById = productos.reduce((acc, p) => { acc[p.id] = p; return acc }, {})
@@ -248,6 +276,9 @@ export default function StockPage() {
           <p className="page-subtitle">{productos.length} productos · {formatGs(valorTotal)} en inventario</p>
         </div>
         <div className="page-actions">
+          <button className="btn btn-secondary" onClick={() => setConfirmSync(true)} title="Descontar ventas que aún no descontaron stock">
+            <TrendingDown size={15} /> Sincronizar
+          </button>
           <button className="btn btn-primary" onClick={() => setModalProducto('nuevo')}>
             <Plus size={15} /> Nuevo producto
           </button>
@@ -511,6 +542,31 @@ export default function StockPage() {
           onClose={() => setModalProducto(null)}
           onSaved={cargar}
         />
+      )}
+
+      {confirmSync && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && !sincronizando && setConfirmSync(false)}>
+          <div className="modal">
+            <div className="modal-header">
+              <h2 className="modal-title">Sincronizar stock</h2>
+              {!sincronizando && <button className="modal-close" onClick={() => setConfirmSync(false)}><X size={18} /></button>}
+            </div>
+            <div style={{ padding: '4px 4px 8px' }}>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6, marginTop: 0 }}>
+                Esto descuenta del stock todas las ventas que todavía no lo hicieron (las importaciones que nunca descontaron). Corrige tu inventario para que refleje lo que realmente tenés.
+              </p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                Es seguro: solo toca las ventas pendientes de descontar (las ya contadas se saltean), así que podés correrlo sin miedo a descontar dos veces. Las ventas devueltas no se descuentan.
+              </p>
+            </div>
+            <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
+              <button className="btn btn-ghost" onClick={() => setConfirmSync(false)} disabled={sincronizando}>Cancelar</button>
+              <button className="btn btn-primary" onClick={sincronizarStock} disabled={sincronizando}>
+                {sincronizando ? 'Sincronizando…' : 'Sincronizar ahora'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
