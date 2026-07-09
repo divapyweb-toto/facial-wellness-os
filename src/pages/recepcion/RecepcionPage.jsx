@@ -12,7 +12,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { registrarReingresoLote } from '../../lib/stockEngine'
-import { normalizarEscaneo } from '../../lib/barcode'
+import { normalizarEscaneo, interpretarEscaneo } from '../../lib/barcode'
 import {
   PackageOpen, ScanLine, CheckCircle, AlertTriangle, X, RefreshCw,
   Boxes, Clock,
@@ -103,12 +103,14 @@ export default function RecepcionPage() {
   const faltantes = useMemo(() => esperados.filter(e => !tandaIds.has(e.id)), [esperados, tandaIds])
 
   const procesar = (bruto) => {
-    const key = normalizarEscaneo(bruto)
-    if (!key) return
+    const { ref, raw } = interpretarEscaneo(bruto)
+    if (!ref) return
 
-    // Buscar por referencia propia, o por número de guía de Punto a Punto
-    let venta = idxRef[key]
-    if (!venta && idxGuia[key]) venta = idxRef[idxGuia[key]]
+    // Buscar por referencia propia (código nuevo o etiqueta vieja),
+    // o por número de guía de Punto a Punto.
+    let venta = idxRef[ref]
+    if (!venta && idxGuia[raw]) venta = idxRef[idxGuia[raw]]
+    if (!venta && idxGuia[ref]) venta = idxRef[idxGuia[ref]]
 
     if (!venta) {
       beep(false)

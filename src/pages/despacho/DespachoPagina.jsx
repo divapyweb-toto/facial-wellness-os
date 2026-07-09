@@ -1,8 +1,8 @@
 // src/pages/despacho/DespachoPagina.jsx
 import { useState, useRef, useMemo } from 'react'
 import * as XLSX from 'xlsx'
-import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRun, convertMillimetersToTwip } from 'docx'
-import { generarBarcodePNG } from '../../lib/barcode'
+import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRun, BorderStyle, Table, TableRow, TableCell, WidthType, convertMillimetersToTwip } from 'docx'
+import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import {
@@ -183,42 +183,126 @@ async function descargarGuiasDOCX(pedidos) {
   })
   const VACIO = () => new Paragraph({ children: [new TextRun({ text: '' })] })
 
+  // ── Helpers de etiqueta ──
+  const GRIS = '5A5A5A'
+  const ANCHO_LABEL = convertMillimetersToTwip(26)
+  const ANCHO_VALOR = convertMillimetersToTwip(68)
+  const SIN_BORDE = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' }
+  const BORDES_TABLA = { top: SIN_BORDE, bottom: SIN_BORDE, left: SIN_BORDE, right: SIN_BORDE, insideHorizontal: SIN_BORDE, insideVertical: SIN_BORDE }
+
+  // Fila "TÍTULO   valor" de la tabla de datos
+  const fila = (titulo, valor, opciones = {}) => new TableRow({
+    children: [
+      new TableCell({
+        width: { size: ANCHO_LABEL, type: WidthType.DXA },
+        borders: BORDES_TABLA,
+        margins: { top: 34, bottom: 34, left: 0, right: 60 },
+        children: [new Paragraph({ spacing: { after: 0 }, children: [
+          new TextRun({ text: titulo, bold: true, size: 18, color: GRIS, characterSpacing: 12 }),
+        ] })],
+      }),
+      new TableCell({
+        width: { size: ANCHO_VALOR, type: WidthType.DXA },
+        borders: BORDES_TABLA,
+        margins: { top: 34, bottom: 34, left: 0, right: 0 },
+        children: [new Paragraph({ spacing: { after: 0 }, children: [
+          new TextRun({ text: String(valor || '—'), size: opciones.destacado ? 26 : 24, bold: !!opciones.destacado }),
+        ] })],
+      }),
+    ],
+  })
+
+  // Título de sección con línea inferior
+  const seccion = (texto) => new Paragraph({
+    spacing: { before: 60, after: 60 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: '333333' } },
+    children: [new TextRun({ text: texto, bold: true, size: 20, color: '222222', characterSpacing: 40 })],
+  })
+
+  const tabla = (filas) => new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    columnWidths: [ANCHO_LABEL, ANCHO_VALOR],
+    borders: BORDES_TABLA,
+    rows: filas,
+  })
+
   const children = []
   pedidos.forEach((p, i) => {
+    // ── REMITENTE ──
     children.push(
-      P('FACIAL WELLNESS', 18, true),
-      P('CIUDAD DEL ESTE', 14),
-      P('CI: 6.103.233', 14),
-      P('NRO: 0985-914-500', 14),
-      VACIO(),
+      new Paragraph({
+        spacing: { after: 20 },
+        children: [new TextRun({ text: 'FACIAL WELLNESS', bold: true, size: 34 })],
+      }),
+      new Paragraph({
+        spacing: { after: 100 },
+        border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: '000000' } },
+        children: [new TextRun({ text: 'Ciudad del Este  ·  CI 6.103.233  ·  Tel. 0985-914-500', size: 18, color: GRIS })],
+      }),
     )
 
-    // Código de barras del pedido (Code128 con el n_referencia).
-    // Se escanea al empacar y, sobre todo, al recibir la caja de vuelta
-    // si el pedido se devuelve. El número va impreso debajo como respaldo.
-    const png = p.n_referencia ? generarBarcodePNG(p.n_referencia) : null
-    if (png) {
-      children.push(
-        new Paragraph({
-          alignment: AlignmentType.CENTER,
-          children: [new ImageRun({ type: 'png', data: png, transformation: { width: 200, height: 62 } })],
-          spacing: { after: 60 },
-        }),
-      )
+    // ── CÓDIGO DE BARRAS ──
+    const codigo = codigoPedido(p.n_referencia, p.fecha)
+    const bc = codigo ? generarBarcodePNG(codigo, { height: 52, fontSize: 17 }) : null
+    if (bc) {
+      const ANCHO_MAX = 330 // px ≈ 87mm, entra cómodo en los 94mm útiles
+      const escala = Math.min(1.6, ANCHO_MAX / bc.width)
+      children.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 60, after: 40 },
+        children: [new ImageRun({
+          type: 'png',
+          data: bc.data,
+          transformation: { width: Math.round(bc.width * escala), height: Math.round(bc.height * escala) },
+        })],
+      }))
     } else {
-      children.push(P('— SIN REFERENCIA —', 10, true))
+      children.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 60, after: 40 },
+        children: [new TextRun({ text: '— PEDIDO SIN REFERENCIA —', bold: true, size: 20, color: 'AA0000' })],
+      }))
     }
 
+    // ── DESTINATARIO ──
     children.push(
-      VACIO(),
-      P('DATOS DEL DESTINATARIO', 14, true),
-      VACIO(),
-      P(`Nombre: ${p.cliente_nombre || '—'}`, 12),
-      P(`Ciudad: ${p.ciudad || '—'}`, 12),
-      P(`Dirección: ${p.direccion || '—'}`, 12),
-      P(`Teléfono: ${p.telefono || '—'}`, 12),
-      P(`Producto: ${getTipo(p.producto_nombre)} ×${p.cantidad || 1}`, 12),
+      seccion('DESTINATARIO'),
+      tabla([
+        fila('NOMBRE', p.cliente_nombre, { destacado: true }),
+        fila('DIRECCIÓN', p.direccion),
+        fila('CIUDAD', p.ciudad, { destacado: true }),
+        fila('DEPARTAMENTO', p.departamento),
+        fila('TELÉFONO', p.telefono),
+      ]),
     )
+
+    // ── PEDIDO ──
+    children.push(
+      seccion('PEDIDO'),
+      tabla([
+        fila('PRODUCTO', getTipo(p.producto_nombre), { destacado: true }),
+        fila('CANTIDAD', `${p.cantidad || 1} unidad${(p.cantidad || 1) === 1 ? '' : 'es'}`),
+        fila('REFERENCIA', codigo || p.n_referencia || '—'),
+      ]),
+    )
+
+    // ── A COBRAR (contra entrega) ──
+    const B = { style: BorderStyle.SINGLE, size: 10, color: '000000' }
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 100, after: 0 },
+        border: { top: B, left: B, right: B },
+        children: [new TextRun({ text: 'A COBRAR CONTRA ENTREGA', bold: true, size: 18, color: '222222', characterSpacing: 30 })],
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 30, after: 50 },
+        border: { bottom: B, left: B, right: B },
+        children: [new TextRun({ text: `Gs. ${Number(p.total || 0).toLocaleString('es-PY')}`, bold: true, size: 40 })],
+      }),
+    )
+
     if (i < pedidos.length - 1) children.push(new Paragraph({ children: [new PageBreak()] }))
   })
 
