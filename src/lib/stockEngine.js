@@ -1,24 +1,29 @@
 // src/lib/stockEngine.js
 // ═══════════════════════════════════════════════════════════
-// MOTOR DE STOCK — descuento automático por estado de venta
+// MOTOR DE STOCK — separa el ESTADO COMERCIAL del HECHO FÍSICO
 //
-// Reglas (definidas con Enrique):
-//  - Toda venta NACE descontando stock (pendiente = ya despachado).
-//  - Solo "devuelto" devuelve el stock.
-//  - El campo venta.stock_descontado evita descontar/devolver dos veces.
-//  - Si el producto es combo (es_combo), descuenta sus COMPONENTES,
-//    no el combo en sí.
+// Regla central (Enrique, jul 2026):
+//   El estado comercial NO mueve mercadería. La mercadería sale del depósito
+//   cuando se despacha, y vuelve SOLO cuando la recibís físicamente (escaneo).
 //
-// Estados que MANTIENEN el stock descontado: pendiente, entregado, en_tramite
-// Estado que DEVUELVE el stock: devuelto
+//   "Devuelto" según Punto a Punto significa que el cliente no la recibió,
+//   pero la caja sigue en poder del courier — puede tardar semanas en volver.
+//   Durante ese tiempo NO la tenés y NO la podés vender.
+//
+// Fuente de verdad del stock: el campo venta.reingresado_at
+//   - reingresado_at = null  → la mercadería está FUERA (descontada)
+//   - reingresado_at = fecha → volvió al depósito (stock devuelto)
+//
+// El flag venta.stock_descontado evita descontar/devolver dos veces.
+// Si el producto es combo (es_combo), mueve sus COMPONENTES, no el combo.
 // ═══════════════════════════════════════════════════════════
 import { supabase } from './supabase'
 
-// ¿Este estado implica que la mercadería está fuera del depósito?
-export function estadoDescuenta(estado) {
-  // devuelto = volvió al depósito → NO descontado
-  // todo lo demás (pendiente, entregado, en_tramite) = fuera → descontado
-  return estado !== 'devuelto'
+// ¿La mercadería de esta venta está fuera del depósito?
+// Está fuera mientras no se haya verificado su reingreso físico.
+// Ojo: un "entregado" nunca reingresa (se vendió), así que queda fuera para siempre.
+export function estaFueraDelDeposito(venta) {
+  return !venta?.reingresado_at
 }
 
 // Resolver qué ítems físicos mueve una venta.
@@ -76,11 +81,11 @@ async function moverStock(producto_id, producto_nombre, delta, motivo) {
 // ═══════════════════════════════════════════════════════════
 
 // Llamar al CREAR una venta nueva.
-// Si la venta arranca en un estado que descuenta, descuenta y marca.
+// Toda venta nueva descuenta stock: la mercadería se aparta para ese cliente.
 export async function aplicarStockNuevaVenta(venta) {
   if (!venta?.id) return
-  const debeDescontar = estadoDescuenta(venta.estado)
-  if (!debeDescontar) return // nació devuelta (raro): no descuenta
+  if (venta.stock_descontado === true) return // ya descontada
+  if (!estaFueraDelDeposito(venta)) return    // nació ya reingresada (imposible en la práctica)
 
   const items = await resolverItemsFisicos(venta)
   for (const it of items) {
@@ -90,29 +95,25 @@ export async function aplicarStockNuevaVenta(venta) {
 }
 
 // Llamar al CAMBIAR el estado de una venta existente.
-// Compara el estado nuevo vs. el flag stock_descontado y ajusta solo si hace falta.
-export async function aplicarStockCambioEstado(venta, nuevoEstado) {
-  if (!venta?.id) return
-  const estabaDescontado = venta.stock_descontado === true
-  const deberiaDescontar = estadoDescuenta(nuevoEstado)
+// NO-OP a propósito: el estado comercial no mueve mercadería física.
+//  - pendiente → entregado: la caja ya estaba afuera, sigue afuera (vendida).
+//  - pendiente → devuelto:  la caja está con el courier, NO volvió todavía.
+// El stock vuelve únicamente al registrar el reingreso físico (ver registrarReingresoLote).
+export async function aplicarStockCambioEstado(_venta, _nuevoEstado) {
+  return
+}
 
-  if (deberiaDescontar === estabaDescontado) return // nada que hacer
+// Llamar al BORRAR una venta (soft-delete).
+// Acá SÍ vuelve el stock: la venta no existió, la mercadería es tuya de nuevo.
+export async function devolverStockPorBorrado(venta) {
+  if (!venta?.id) return
+  if (venta.stock_descontado !== true) return // no estaba descontada, nada que devolver
 
   const items = await resolverItemsFisicos(venta)
-
-  if (deberiaDescontar && !estabaDescontado) {
-    // Devuelto → activo otra vez: volver a DESCONTAR
-    for (const it of items) {
-      await moverStock(it.producto_id, it.producto_nombre, -it.cantidad, `Reactivación venta #${venta.n_referencia || venta.id}`)
-    }
-    await supabase.from('ventas').update({ stock_descontado: true }).eq('id', venta.id)
-  } else if (!deberiaDescontar && estabaDescontado) {
-    // Activo → devuelto: DEVOLVER stock
-    for (const it of items) {
-      await moverStock(it.producto_id, it.producto_nombre, +it.cantidad, `Devolución venta #${venta.n_referencia || venta.id}`)
-    }
-    await supabase.from('ventas').update({ stock_descontado: false }).eq('id', venta.id)
+  for (const it of items) {
+    await moverStock(it.producto_id, it.producto_nombre, +it.cantidad, `Venta eliminada #${venta.n_referencia || venta.id}`)
   }
+  await supabase.from('ventas').update({ stock_descontado: false }).eq('id', venta.id)
 }
 
 // Llamar al EDITAR una venta (cambió cantidad y/o producto).
@@ -127,7 +128,7 @@ export async function aplicarStockEdicion(ventaVieja, ventaNueva) {
     }
   }
   // 2) Si lo nuevo debe descontar, descontarlo
-  const debeDescontar = estadoDescuenta(ventaNueva.estado)
+  const debeDescontar = estaFueraDelDeposito(ventaNueva)
   if (debeDescontar) {
     const itemsNuevos = await resolverItemsFisicos({ ...ventaNueva, id: ventaVieja.id })
     for (const it of itemsNuevos) {
@@ -185,7 +186,7 @@ export function agregarDeltasStock(ventas, prodById) {
 // Solo descuenta las que corresponden (estado que descuenta + con producto_id + no descontadas ya).
 // Devuelve { descontadas, productos } para feedback.
 export async function aplicarStockLoteNuevasVentas(ventas) {
-  const aDescontar = (ventas || []).filter(v => v?.id && v?.producto_id && v?.stock_descontado !== true && estadoDescuenta(v.estado))
+  const aDescontar = (ventas || []).filter(v => v?.id && v?.producto_id && v?.stock_descontado !== true && estaFueraDelDeposito(v))
   if (!aDescontar.length) return { descontadas: 0, productos: 0 }
 
   // 1) Cargar los productos involucrados (con campos de combo) en una query
@@ -233,4 +234,73 @@ export async function aplicarStockLoteNuevasVentas(ventas) {
   await supabase.from('ventas').update({ stock_descontado: true }).in('id', aDescontar.map(v => v.id))
 
   return { descontadas: aDescontar.length, productos: fisicoIds.length }
+}
+
+// ═══════════════════════════════════════════════════════════
+// REINGRESO FÍSICO — la mercadería volvió al depósito (escaneo)
+// Es el ÚNICO camino por el que el stock vuelve a subir por una devolución.
+// ═══════════════════════════════════════════════════════════
+
+// Registra el reingreso de una tanda de paquetes devueltos.
+// ventas: filas completas de `ventas` (id, producto_id, cantidad, estado, stock_descontado, reingresado_at)
+// Idempotente: las que ya tienen reingresado_at se saltean.
+export async function registrarReingresoLote(ventas) {
+  const aReingresar = (ventas || []).filter(v => v?.id && !v.reingresado_at)
+  if (!aReingresar.length) return { reingresadas: 0, productos: 0, unidades: 0 }
+
+  const ahora = new Date().toISOString()
+  const conProducto = aReingresar.filter(v => v.producto_id && v.stock_descontado === true)
+
+  let fisicoIds = []
+  if (conProducto.length) {
+    // Cargar productos involucrados (+ componentes de combos)
+    const idsProducto = [...new Set(conProducto.map(v => v.producto_id))]
+    const { data: prods } = await supabase
+      .from('productos')
+      .select('id, nombre, es_combo, componente_1_id, componente_1_qty, componente_2_id, componente_2_qty')
+      .in('id', idsProducto)
+    const prodById = {}
+    for (const p of (prods || [])) prodById[p.id] = p
+
+    const compIds = new Set()
+    for (const p of (prods || [])) {
+      if (p.es_combo) { if (p.componente_1_id) compIds.add(p.componente_1_id); if (p.componente_2_id) compIds.add(p.componente_2_id) }
+    }
+    if (compIds.size) {
+      const { data: comps } = await supabase.from('productos').select('id, nombre').in('id', [...compIds])
+      for (const c of (comps || [])) if (!prodById[c.id]) prodById[c.id] = c
+    }
+
+    // Agregar deltas (misma lógica pura que la importación, pero SUMANDO)
+    const deltas = agregarDeltasStock(conProducto, prodById)
+    fisicoIds = Object.keys(deltas)
+
+    if (fisicoIds.length) {
+      const { data: stocks } = await supabase.from('productos').select('id, stock_actual').in('id', fisicoIds)
+      const stockById = {}
+      for (const s of (stocks || [])) stockById[s.id] = s.stock_actual || 0
+
+      const movimientos = []
+      await Promise.all(fisicoIds.map(pid => {
+        const d = deltas[pid]
+        const nuevo = (stockById[pid] || 0) + d.cantidad // ← SUMA: la mercadería volvió
+        movimientos.push({ producto_id: pid, producto_nombre: d.nombre, tipo: 'devolucion', cantidad: d.cantidad, motivo: `Reingreso verificado (${conProducto.length} paquetes)` })
+        return supabase.from('productos').update({ stock_actual: nuevo }).eq('id', pid)
+      }))
+      if (movimientos.length) { try { await supabase.from('stock_movimientos').insert(movimientos) } catch (e) { /* stock ya aplicado */ } }
+    }
+  }
+
+  // Marcar reingreso + liberar el flag de descontado (una query)
+  const ids = aReingresar.map(v => v.id)
+  await supabase.from('ventas').update({ reingresado_at: ahora, stock_descontado: false }).in('id', ids)
+
+  // Los que PaP aún no reportó como devueltos: si volvieron físicamente, es una devolución.
+  const pendientes = aReingresar.filter(v => v.estado === 'pendiente' || v.estado === 'en_tramite')
+  if (pendientes.length) {
+    await supabase.from('ventas').update({ estado: 'devuelto' }).in('id', pendientes.map(v => v.id))
+  }
+
+  const unidades = conProducto.reduce((s, v) => s + (v.cantidad || 1), 0)
+  return { reingresadas: aReingresar.length, productos: fisicoIds.length, unidades }
 }

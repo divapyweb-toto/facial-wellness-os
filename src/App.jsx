@@ -19,6 +19,7 @@ const CalculadoraPage = lazy(() => import('./pages/calculadora/CalculadoraPage')
 const ImportarPage = lazy(() => import('./pages/importar/ImportarPage'))
 const DespachoPagina = lazy(() => import('./pages/despacho/DespachoPagina'))
 const RecompraPage = lazy(() => import('./pages/recompra/RecompraPage'))
+const RecepcionPage = lazy(() => import('./pages/recepcion/RecepcionPage'))
 const EntregasPage = lazy(() => import('./pages/entregas/EntregasPage'))
 const SistemaPage = lazy(() => import('./pages/sistema/SistemaPage'))
 
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="rendicion" element={<Suspense fallback={<PageLoader />}><RendicionPage /></Suspense>} />
           <Route path="despacho" element={<Suspense fallback={<PageLoader />}><DespachoPagina /></Suspense>} />
           <Route path="entregas" element={<Suspense fallback={<PageLoader />}><EntregasPage /></Suspense>} />
+          <Route path="recepcion" element={<Suspense fallback={<PageLoader />}><RecepcionPage /></Suspense>} />
           <Route path="calculadora" element={<Suspense fallback={<PageLoader />}><CalculadoraPage /></Suspense>} />
           <Route path="importar" element={<Suspense fallback={<PageLoader />}><ImportarPage /></Suspense>} />
           <Route path="reportes" element={<Suspense fallback={<PageLoader />}><ReportesPage /></Suspense>} />

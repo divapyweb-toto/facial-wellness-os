@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, formatGs, estadoConfig } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
-import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion } from '../../lib/stockEngine'
+import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
 import { logError } from '../../lib/errorLog'
 import { validarVenta } from '../../lib/validation'
 import { logAccion, logAccionLote } from '../../lib/audit'
@@ -551,7 +551,7 @@ export default function VentasPage() {
     const venta = ventas.find(v => v.id === id)
     // Si la venta tenía stock descontado, devolverlo al borrar
     if (venta?.stock_descontado) {
-      try { await aplicarStockCambioEstado(venta, 'devuelto') } catch (e) { logError('borrar_venta_stock', e, { id }) }
+      try { await devolverStockPorBorrado(venta) } catch (e) { logError('borrar_venta_stock', e, { id }) }
     }
     const { error } = await supabase.from('ventas').update({ deleted_at: new Date().toISOString() }).eq('id', id)
     if (error) { toast('Error al eliminar', 'error'); logError('borrar_venta', error, { id }); return }
@@ -578,7 +578,7 @@ export default function VentasPage() {
     for (const id of ids) {
       const venta = ventas.find(v => v.id === id)
       if (venta?.stock_descontado) {
-        try { await aplicarStockCambioEstado(venta, 'devuelto') } catch (e) { logError('borrar_lote_stock', e, { id }) }
+        try { await devolverStockPorBorrado(venta) } catch (e) { logError('borrar_lote_stock', e, { id }) }
       }
     }
     const { error } = await supabase.from('ventas').update({ deleted_at: new Date().toISOString() }).in('id', ids)

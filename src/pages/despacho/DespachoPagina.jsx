@@ -1,7 +1,8 @@
 // src/pages/despacho/DespachoPagina.jsx
 import { useState, useRef, useMemo } from 'react'
 import * as XLSX from 'xlsx'
-import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, convertMillimetersToTwip } from 'docx'
+import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRun, convertMillimetersToTwip } from 'docx'
+import { generarBarcodePNG } from '../../lib/barcode'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import {
@@ -189,6 +190,26 @@ async function descargarGuiasDOCX(pedidos) {
       P('CIUDAD DEL ESTE', 14),
       P('CI: 6.103.233', 14),
       P('NRO: 0985-914-500', 14),
+      VACIO(),
+    )
+
+    // Código de barras del pedido (Code128 con el n_referencia).
+    // Se escanea al empacar y, sobre todo, al recibir la caja de vuelta
+    // si el pedido se devuelve. El número va impreso debajo como respaldo.
+    const png = p.n_referencia ? generarBarcodePNG(p.n_referencia) : null
+    if (png) {
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new ImageRun({ type: 'png', data: png, transformation: { width: 200, height: 62 } })],
+          spacing: { after: 60 },
+        }),
+      )
+    } else {
+      children.push(P('— SIN REFERENCIA —', 10, true))
+    }
+
+    children.push(
       VACIO(),
       P('DATOS DEL DESTINATARIO', 14, true),
       VACIO(),
