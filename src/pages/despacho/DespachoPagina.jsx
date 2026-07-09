@@ -3,11 +3,12 @@ import { useState, useRef, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRun, BorderStyle, Table, TableRow, TableCell, WidthType, convertMillimetersToTwip } from 'docx'
 import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
+import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import {
   Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X,
-  Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp, RefreshCw, Info,
+  Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp, RefreshCw, Info, ScanLine,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════
@@ -366,6 +367,7 @@ export default function DespachoPagina() {
 
   // ── Modo (CSV / Ventas) ────────────────────────────────
   const [modo, setModo] = useState('csv')
+  const [modalSalida, setModalSalida] = useState(false)
 
   // ── Estado Desde Ventas ────────────────────────────────
   const [ventasPend, setVentasPend] = useState([])
@@ -625,6 +627,9 @@ export default function DespachoPagina() {
           <p className="page-subtitle">{subtitle}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setModalSalida(true)} title="Escanear las cajas al entregarlas al courier">
+            <ScanLine size={14} /> Confirmar salida
+          </button>
           {/* Tab switcher */}
           <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
             <button
@@ -1074,6 +1079,13 @@ export default function DespachoPagina() {
             </div>
           </div>
         </>
+      )}
+
+      {modalSalida && (
+        <ModalSalida
+          onClose={() => setModalSalida(false)}
+          onConfirmado={() => { if (modo === 'ventas') fetchVentasPendientes() }}
+        />
       )}
     </div>
   )

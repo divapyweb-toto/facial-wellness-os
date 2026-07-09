@@ -13,25 +13,11 @@ import { supabase } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { registrarReingresoLote } from '../../lib/stockEngine'
 import { normalizarEscaneo, interpretarEscaneo } from '../../lib/barcode'
+import { beep } from '../../lib/beep'
 import {
   PackageOpen, ScanLine, CheckCircle, AlertTriangle, X, RefreshCw,
   Boxes, Clock,
 } from 'lucide-react'
-
-// Beep corto para no tener que mirar la pantalla mientras escaneás.
-function beep(ok = true) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.connect(gain); gain.connect(ctx.destination)
-    osc.frequency.value = ok ? 880 : 220
-    gain.gain.setValueAtTime(0.08, ctx.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (ok ? 0.12 : 0.3))
-    osc.start(); osc.stop(ctx.currentTime + (ok ? 0.12 : 0.3))
-    setTimeout(() => ctx.close(), 500)
-  } catch { /* sin audio, no pasa nada */ }
-}
 
 const diasDesde = (fecha) => {
   if (!fecha) return null
