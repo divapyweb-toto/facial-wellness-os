@@ -28,7 +28,7 @@ export const CIUDADES = {
   minga_guazu:          { nombre: 'Minga Guazú',           depto: 'Alto Paraná', zona: 'local',    lat: -25.4833, lng: -54.8167, alias: ['minga guazu', 'minga'] },
   santa_rita:           { nombre: 'Santa Rita',            depto: 'Alto Paraná', zona: 'local',    lat: -25.8000, lng: -55.0667, alias: ['santa rita'] },
   santa_rosa_monday:    { nombre: 'Santa Rosa del Monday', depto: 'Alto Paraná', zona: 'local',    lat: -25.6167, lng: -54.9333, alias: ['santa rosa del monday', 'santa rosa monday'] },
-  juan_leon_mallorquin: { nombre: 'Juan L. Mallorquín',    depto: 'Alto Paraná', zona: 'local',    lat: -25.4167, lng: -55.1500, alias: ['juan leon mallorquin', 'juan l mallorquin', 'mallorquin'] },
+  juan_leon_mallorquin: { nombre: 'Juan L. Mallorquín',    depto: 'Alto Paraná', zona: 'local',    lat: -25.4305, lng: -55.2541, alias: ['juan leon mallorquin', 'juan l mallorquin', 'mallorquin'] },
 
   // ── Asunción y Central (zona metro) ──
   asuncion:             { nombre: 'Asunción',              depto: 'Asunción',    zona: 'metro',    lat: -25.2637, lng: -57.5759, alias: ['asuncion', 'asu', 'capital', 'asuncion py'] },
@@ -65,7 +65,7 @@ export const CIUDADES = {
   carapegua:            { nombre: 'Carapeguá',             depto: 'Paraguarí',   zona: 'interior', lat: -25.7833, lng: -57.2333, alias: ['carapegua'] },
   yaguaron:             { nombre: 'Yaguarón',              depto: 'Paraguarí',   zona: 'interior', lat: -25.5667, lng: -57.2667, alias: ['yaguaron'] },
   salto_guaira:         { nombre: 'Salto del Guairá',      depto: 'Canindeyú',   zona: 'interior', lat: -24.0567, lng: -54.3067, alias: ['salto del guaira', 'salto guaira'] },
-  curuguaty:            { nombre: 'Curuguaty',             depto: 'Canindeyú',   zona: 'interior', lat: -24.5167, lng: -55.6833, alias: ['curuguaty'] },
+  curuguaty:            { nombre: 'Curuguaty',             depto: 'Canindeyú',   zona: 'interior', lat: -24.4718, lng: -55.6923, alias: ['curuguaty'] },
   katuete:              { nombre: 'Katueté',               depto: 'Canindeyú',   zona: 'interior', lat: -24.2833, lng: -54.7500, alias: ['katuete'] },
   san_estanislao:       { nombre: 'San Estanislao',        depto: 'San Pedro',   zona: 'interior', lat: -24.6500, lng: -56.4333, alias: ['san estanislao', 'santani'] },
   san_juan_bautista:    { nombre: 'San Juan Bautista',     depto: 'Misiones',    zona: 'interior', lat: -26.6667, lng: -57.1500, alias: ['san juan bautista'] },

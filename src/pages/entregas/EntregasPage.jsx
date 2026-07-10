@@ -9,6 +9,7 @@ import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveCo
 import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown, ArrowRight } from 'lucide-react'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { normalizarCiudad, ZONAS } from '../../lib/ciudades'
+import MapaCiudades from './MapaCiudades'
 
 const COSTO_PAP = 27000
 
@@ -1082,6 +1083,9 @@ export default function EntregasPage() {
               </p>
             )}
           </div>
+
+          {/* Mapa geográfico de las mismas ciudades */}
+          <MapaCiudades ciudades={porCiudad} />
         </>
       )}
 
