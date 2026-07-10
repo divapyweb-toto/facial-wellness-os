@@ -1,9 +1,11 @@
 // src/pages/ventas/VentasPage.jsx
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { supabase, formatGs, estadoConfig } from '../../lib/supabase'
+import { supabase, formatGs, estadoConfig, getEstadoConfig } from '../../lib/supabase'
+import { costoFleteActual } from '../../lib/flete'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
 import { logError } from '../../lib/errorLog'
+import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
 import { validarVenta } from '../../lib/validation'
 import { logAccion, logAccionLote } from '../../lib/audit'
 import { Plus, Search, X, Clock, Trash2, Edit2, Save } from 'lucide-react'
@@ -154,7 +156,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
       ? (await supabase.from('metodos_envio').select('*').eq('id', form.metodo_envio_id).single()).data
       : null
     const metodoPagoNombre = metodosPago.find(m => m.id === form.metodo_pago_id)?.nombre || ''
-    const costoEnvio = envioSel?.costo_propio || 27000
+    const costoEnvio = envioSel?.costo_propio || costoFleteActual()
     const envioCliente = productoSel?.grupo_envio === 'A' ? (envioSel?.costo_cliente || 29000) : 0
 
     const { data: ventaCreada, error } = await supabase.from('ventas').insert({
@@ -222,7 +224,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
           {productoSel && (() => {
             const envSel = metodosEnvio.find(m => m.id === form.metodo_envio_id)
             const envioCli = productoSel.grupo_envio === 'A' ? (envSel?.costo_cliente || 29000) : 0
-            const costoEnv = envSel?.costo_propio || 27000
+            const costoEnv = envSel?.costo_propio || costoFleteActual()
             const costoProd = productoSel.costo_unit * form.cantidad
             const totalCliente = total + envioCli
             const margenEst = totalCliente - costoProd - costoEnv
@@ -340,6 +342,7 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
   useEffect(() => {
     supabase.from('productos').select('id, nombre, costo_unit, grupo_envio').eq('activo', true).order('nombre')
       .then(({ data }) => setProductos(data || []))
+      .catch(err => { console.warn('No se pudieron cargar productos:', err?.message); setProductos([]) })
   }, [])
 
   const set = (k, val) => setForm(f => ({ ...f, [k]: val }))
@@ -678,7 +681,7 @@ export default function VentasPage() {
             </thead>
             <tbody>
               {ventas.map(v => {
-                const cfg = estadoConfig[v.estado]
+                const cfg = getEstadoConfig(v.estado)
                 const dias = v.estado === 'pendiente' ? diasSinResolver(v.fecha) : null
                 return (
                   <tr key={v.id} style={seleccionadas.has(v.id) ? { background: 'var(--accent-dim)' } : undefined}>
@@ -738,7 +741,7 @@ export default function VentasPage() {
         ) : (
           <div className="m-card-list">
             {ventas.map(v => {
-              const cfg = estadoConfig[v.estado]
+              const cfg = getEstadoConfig(v.estado)
               const dias = v.estado === 'pendiente' ? diasSinResolver(v.fecha) : null
               const sel = seleccionadas.has(v.id)
               return (
@@ -814,7 +817,11 @@ export default function VentasPage() {
       </div>
 
       {showModal && <NuevaVentaModal onClose={() => setShowModal(false)} onSaved={cargarVentas} />}
-      {editando && <EditarVentaModal venta={editando} onClose={() => setEditando(null)} onSaved={cargarVentas} />}
+      {editando && (
+        <ModalErrorBoundary onClose={() => setEditando(null)}>
+          <EditarVentaModal venta={editando} onClose={() => setEditando(null)} onSaved={cargarVentas} />
+        </ModalErrorBoundary>
+      )}
     </div>
   )
 }

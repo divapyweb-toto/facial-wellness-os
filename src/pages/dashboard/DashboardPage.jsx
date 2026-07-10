@@ -173,6 +173,7 @@ export default function DashboardPage() {
       const paquetes = ventasMes.map(v => ({
         n_referencia: v.n_referencia,
         importe: v.total || 0,
+        fecha: v.fecha,  // para valorizar el flete a la tarifa vigente en su fecha
         categoria: v.estado === 'entregado' ? 'entregado'
                  : v.estado === 'devuelto' ? 'devuelto'
                  : 'en_proceso',

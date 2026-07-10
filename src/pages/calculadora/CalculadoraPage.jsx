@@ -1,13 +1,14 @@
 // src/pages/calculadora/CalculadoraPage.jsx
 import { useState } from 'react'
 import { formatGs, formatPct } from '../../lib/supabase'
+import { costoFleteActual } from '../../lib/flete'
 import { Calculator, TrendingUp, Target, DollarSign, Package, AlertTriangle, CheckCircle } from 'lucide-react'
 
 export default function CalculadoraPage() {
   const [form, setForm] = useState({
     costo_producto: '',
     precio_venta: '',
-    costo_envio: 27000,
+    costo_envio: costoFleteActual(),
     envio_cliente: 29000,
     grupo_envio: 'A',
     presupuesto_ads: '',
@@ -22,7 +23,7 @@ export default function CalculadoraPage() {
   // Cálculos principales
   const costo = parseFloat(form.costo_producto) || 0
   const precio = parseFloat(form.precio_venta) || 0
-  const costoEnvio = parseFloat(form.costo_envio) || 27000
+  const costoEnvio = parseFloat(form.costo_envio) || costoFleteActual()
   const envioCliente = form.grupo_envio === 'A' ? (parseFloat(form.envio_cliente) || 29000) : 0
   const presupuestoAds = parseFloat(form.presupuesto_ads) || 0
   const ventasEstimadas = parseFloat(form.ventas_estimadas) || 1

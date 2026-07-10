@@ -5,6 +5,7 @@ import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRu
 import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
 import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
+import { costoFleteActual } from '../../lib/flete'
 import { fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import {
@@ -198,7 +199,7 @@ async function descargarGuiasDOCX(pedidos) {
       new TableCell({
         width: { size: ANCHO_LABEL, type: WidthType.DXA },
         borders: BORDES_TABLA,
-        margins: { top: 34, bottom: 34, left: 0, right: 60 },
+        margins: { top: 46, bottom: 46, left: 0, right: 60 },
         children: [new Paragraph({ spacing: { after: 0 }, children: [
           new TextRun({ text: titulo, bold: true, size: 18, color: GRIS, characterSpacing: 12 }),
         ] })],
@@ -206,9 +207,9 @@ async function descargarGuiasDOCX(pedidos) {
       new TableCell({
         width: { size: ANCHO_VALOR, type: WidthType.DXA },
         borders: BORDES_TABLA,
-        margins: { top: 34, bottom: 34, left: 0, right: 0 },
+        margins: { top: 46, bottom: 46, left: 0, right: 0 },
         children: [new Paragraph({ spacing: { after: 0 }, children: [
-          new TextRun({ text: String(valor || '—'), size: opciones.destacado ? 26 : 24, bold: !!opciones.destacado }),
+          new TextRun({ text: String(valor || '—'), size: opciones.destacado ? 28 : 25, bold: !!opciones.destacado }),
         ] })],
       }),
     ],
@@ -216,7 +217,7 @@ async function descargarGuiasDOCX(pedidos) {
 
   // Título de sección con línea inferior
   const seccion = (texto) => new Paragraph({
-    spacing: { before: 60, after: 60 },
+    spacing: { before: 90, after: 60 },
     border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: '333333' } },
     children: [new TextRun({ text: texto, bold: true, size: 20, color: '222222', characterSpacing: 40 })],
   })
@@ -245,7 +246,7 @@ async function descargarGuiasDOCX(pedidos) {
 
     // ── CÓDIGO DE BARRAS ──
     const codigo = codigoPedido(p.n_referencia, p.fecha)
-    const bc = codigo ? generarBarcodePNG(codigo, { height: 52, fontSize: 17 }) : null
+    const bc = codigo ? generarBarcodePNG(codigo, { height: 62, fontSize: 18 }) : null
     if (bc) {
       const ANCHO_MAX = 330 // px ≈ 87mm, entra cómodo en los 94mm útiles
       const escala = Math.min(1.6, ANCHO_MAX / bc.width)
@@ -273,7 +274,6 @@ async function descargarGuiasDOCX(pedidos) {
         fila('NOMBRE', p.cliente_nombre, { destacado: true }),
         fila('DIRECCIÓN', p.direccion),
         fila('CIUDAD', p.ciudad, { destacado: true }),
-        fila('DEPARTAMENTO', p.departamento),
         fila('TELÉFONO', p.telefono),
       ]),
     )
@@ -518,7 +518,7 @@ export default function DespachoPagina() {
         cliente_direccion: p.direccion,
         producto_id: prod ? prod.id : null,
         costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
-        costo_envio: 27000,
+        costo_envio: costoFleteActual(),
         envio_cliente: 0,
         metodo_envio_nombre: 'Punto a Punto AC',
         metodo_pago_nombre: 'Efectivo COD',

@@ -121,7 +121,7 @@ function MetodoModal({ tipo, item, onClose, onSaved }) {
   const tabla = tipo === 'pago' ? 'metodos_pago' : 'metodos_envio'
   const [form, setForm] = useState(item || {
     nombre: '',
-    ...(tipo === 'envio' ? { costo_cliente: 29000, costo_propio: 27000 } : {}),
+    ...(tipo === 'envio' ? { costo_cliente: 29000, costo_propio: 29000 } : {}),
     activo: true,
   })
 

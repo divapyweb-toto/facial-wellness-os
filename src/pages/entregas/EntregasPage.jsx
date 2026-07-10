@@ -11,7 +11,8 @@ import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { normalizarCiudad, ZONAS } from '../../lib/ciudades'
 import MapaCiudades from './MapaCiudades'
 
-const COSTO_PAP = 27000
+import { costoFleteActual } from '../../lib/flete'
+const COSTO_PAP = costoFleteActual()  // tarifa vigente hoy (los cálculos por-fecha usan lib/flete)
 
 // ═══════════════════════════════════════════════════════════
 // LÓGICA — combina los 2 reportes de Punto a Punto
@@ -363,6 +364,7 @@ export default function EntregasPage() {
   const ventasComoPaquetes = (ventasMes) => ventasMes.map(v => ({
     n_referencia: v.n_referencia,
     importe: v.total || 0,
+    fecha: v.fecha,  // para valorizar el flete a la tarifa vigente en su fecha
     categoria: v.estado === 'entregado' ? 'entregado'
              : v.estado === 'devuelto' ? 'devuelto'
              : 'en_proceso',

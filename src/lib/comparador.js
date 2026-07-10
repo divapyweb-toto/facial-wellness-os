@@ -20,7 +20,7 @@
 // (percentil 90 de los días que tardan las entregas).
 // ═══════════════════════════════════════════════════════════
 
-const COSTO_PAP = 27000
+import { costoFlete, sumarFlete } from './flete'
 
 // Normaliza una referencia para cruzar ventas ⋈ entregas
 export function normRef(ref) {
@@ -125,8 +125,8 @@ export function metricasResultado(ventas, mes, diaCorte, ventanaDias, refCosto, 
     const c = refCosto?.[normRef(v.n_referencia)]
     return s + (c != null ? c : cogsPromedio)
   }, 0)
-  const fleteResueltos = resueltos * COSTO_PAP
-  const sangradoFlete = devueltos.length * COSTO_PAP
+  const fleteResueltos = sumarFlete([...entregados, ...devueltos])
+  const sangradoFlete = sumarFlete(devueltos)
   const contribucion = ingreso - fleteResueltos - cogs
 
   return {

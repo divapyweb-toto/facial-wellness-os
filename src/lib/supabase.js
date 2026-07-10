@@ -60,3 +60,13 @@ export const estadoConfig = {
   devuelto: { label: 'Devuelto', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
   en_tramite: { label: 'En trámite', color: '#a78bfa', bg: 'rgba(167,139,250,0.1)' },
 }
+
+// Estado por defecto para valores no mapeados (ventas viejas con 'en_proceso',
+// 'en_transito', vacío, etc.). SIN esto, acceder a estadoConfig[estado].color
+// cuando el estado no existe tira una excepción que rompe el render entero de
+// la página — dejando solo el fondo oscuro del modal, sin contenido.
+export const getEstadoConfig = (estado) => estadoConfig[estado] || {
+  label: estado ? String(estado).replace(/_/g, ' ') : 'Sin estado',
+  color: '#6b7280',
+  bg: 'rgba(107,114,128,0.1)',
+}

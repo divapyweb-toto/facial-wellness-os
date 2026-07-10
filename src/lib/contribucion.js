@@ -22,7 +22,10 @@
 // depósito y se revende → NO es pérdida. Solo se pierde el FLETE.
 // ═══════════════════════════════════════════════════════════
 
-const COSTO_PAP = 27000
+import { sumarFlete, costoFleteActual } from './flete'
+
+// Tarifa vigente hoy (para compatibilidad con quien importe COSTO_PAP)
+const COSTO_PAP = costoFleteActual()
 
 // Normalización de referencia (alineada con el matcher de Entregas)
 function normalizarRefSimple(ref) {
@@ -54,8 +57,9 @@ export function calcularPiramide(paquetes, refCosto = {}, cogsPromedio = 12000, 
 
   // ── BLOQUE 1: GANANCIA FIRME (solo resueltos) ──
   const ingreso = entregados.reduce((s, p) => s + (p.importe || 0), 0)
-  const fleteResueltos = resueltos * COSTO_PAP        // flete que YA pagaste de lo cerrado
-  const fleteDevueltos = devueltos.length * COSTO_PAP  // el sangrado real (solo flete)
+  // Flete a la tarifa vigente en la FECHA de cada envío (histórico exacto).
+  const fleteResueltos = sumarFlete([...entregados, ...devueltos])
+  const fleteDevueltos = sumarFlete(devueltos)  // el sangrado real (solo flete)
   const cogsCalc = calcularCOGS(entregados, refCosto, cogsPromedio)
   const cogs = cogsCalc.cogs
 
@@ -63,7 +67,7 @@ export function calcularPiramide(paquetes, refCosto = {}, cogsPromedio = 12000, 
   const gananciaFirme = contribucionFirme - gastosMes
 
   // ── BLOQUE 2: EN TRÁNSITO (en proceso) ──
-  const fleteEnTransito = enProceso.length * COSTO_PAP  // flete ya comprometido
+  const fleteEnTransito = sumarFlete(enProceso)  // flete ya comprometido
   const ingresoPotencialBruto = enProceso.reduce((s, p) => s + (p.importe || 0), 0)
   // Tasa de entrega histórica (de lo ya resuelto) para proyectar
   const tasaEntrega = resueltos ? (entregados.length / resueltos) : 0

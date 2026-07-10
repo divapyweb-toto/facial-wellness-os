@@ -1,6 +1,7 @@
 // src/pages/importar/ImportarPage.jsx
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
+import { costoFleteActual } from '../../lib/flete'
 import { aplicarStockLoteNuevasVentas } from '../../lib/stockEngine'
 import { useToast } from '../../lib/toast'
 import { Upload, CheckCircle, AlertTriangle, Download, X } from 'lucide-react'
@@ -101,7 +102,7 @@ function mapShopifyRow(row) {
     estado_releasit,
     canal_origen: 'Shopify Orgánico',
     costo_prod: 0,
-    costo_envio: 27000,
+    costo_envio: costoFleteActual(),
     envio_cliente: 0,
   }
 }
@@ -226,7 +227,7 @@ function mapGenericoRow(row) {
     estado_releasit: 'confirmado',
     canal_origen: row['canal'] || 'Meta Ads',
     costo_prod: 0,
-    costo_envio: 27000,
+    costo_envio: costoFleteActual(),
     envio_cliente: 0,
   }
 }
