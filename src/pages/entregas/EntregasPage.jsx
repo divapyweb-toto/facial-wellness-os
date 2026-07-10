@@ -383,11 +383,25 @@ export default function EntregasPage() {
   // CONTRIBUCIÓN, que es lo que cada ciudad deja después de flete y producto.
   const [ciudadAbierta, setCiudadAbierta] = useState(null)
 
+  // Muchas ventas viejas se importaron sin ciudad (Shopify manda "-" y el dato
+  // real venía en los Note Attributes de Releasit). Pero el reporte de Punto a
+  // Punto SÍ trae la ciudad. Cuando la venta no la tiene, la buscamos ahí por
+  // número de referencia. Sin esto, todo cae en "Sin ciudad".
+  const ciudadPorRef = useMemo(() => {
+    const m = {}
+    for (const p of merged) {
+      const ref = normalizarRef(p.n_referencia)
+      if (ref && p.ciudad) m[ref] = p.ciudad
+    }
+    return m
+  }, [merged])
+
   const porCiudad = useMemo(() => {
     if (!ventasDelMes.length) return []
     const grupos = {}
     for (const v of ventasDelMes) {
-      const info = normalizarCiudad(v.ciudad)
+      const cruda = v.ciudad || ciudadPorRef[normalizarRef(v.n_referencia)] || ''
+      const info = normalizarCiudad(cruda)
       if (!grupos[info.clave]) grupos[info.clave] = { info, ventas: [] }
       grupos[info.clave].ventas.push(v)
     }
@@ -405,7 +419,7 @@ export default function EntregasPage() {
       return { ...info, ...p, productos }
     }).sort((a, b) => b.contribucionFirme - a.contribucionFirme)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ventasDelMes, refCosto])
+  }, [ventasDelMes, refCosto, ciudadPorRef])
 
   // Resumen por zona: ¿conviene mandar lejos?
   const porZona = useMemo(() => {
