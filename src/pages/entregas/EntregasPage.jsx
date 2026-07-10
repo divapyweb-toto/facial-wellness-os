@@ -1,10 +1,11 @@
 // src/pages/entregas/EntregasPage.jsx
 import { useState, useRef, useMemo, useEffect, Fragment } from 'react'
+import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown } from 'lucide-react'
+import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown, ArrowRight } from 'lucide-react'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { normalizarCiudad, ZONAS } from '../../lib/ciudades'
 
@@ -162,6 +163,7 @@ const CAT_CFG = {
 // ═══════════════════════════════════════════════════════════
 export default function EntregasPage() {
   const { toast } = useToast()
+  const navigate = useNavigate()
   const fileRef = useRef()
   const autoSaveRef = useRef(null)
   const [paqData, setPaqData] = useState(null)
@@ -177,7 +179,6 @@ export default function EntregasPage() {
   const [verSinRendir, setVerSinRendir] = useState(false)
   const [refCosto, setRefCosto] = useState({})       // costo real de producto por referencia de venta
   const [ventasParaPiramide, setVentasParaPiramide] = useState([]) // ventas completas: fuente única de la ganancia
-  const [gastosPorMes, setGastosPorMes] = useState({}) // gastos generales por mes (YYYY-MM)
 
   // Cargar el histórico guardado en Supabase al entrar (así no "desaparece" al refrescar)
   useEffect(() => {
@@ -204,17 +205,8 @@ export default function EntregasPage() {
           setRefCosto(indexarCostos(ventas))
           setVentasParaPiramide(ventas)
         }
-        // Gastos por mes: agrupar gastos generales por YYYY-MM
-        const { data: gastos } = await supabase
-          .from('gastos').select('monto, fecha').is('deleted_at', null)
-        if (activo && gastos) {
-          const porMes = {}
-          gastos.forEach(g => {
-            const mes = (g.fecha || '').slice(0, 7)
-            if (mes) porMes[mes] = (porMes[mes] || 0) + (g.monto || 0)
-          })
-          setGastosPorMes(porMes)
-        }
+        // Nota: esta página NO consulta gastos a propósito. La logística mide
+        // contribución (flete + producto). Los gastos generales viven en Reportes.
       } catch (e) { /* sin datos */ }
     })()
     return () => { activo = false }
@@ -456,10 +448,11 @@ export default function EntregasPage() {
 
   const piramide = useMemo(() => {
     if (!ventasDelMes.length) return null
-    const gastosMes = filtroMes === 'todos' ? 0 : (gastosPorMes[mesEfectivo] || 0)
-    return calcularPiramide(ventasComoPaquetes(ventasDelMes), refCosto, COGS_PROMEDIO, gastosMes)
+    // gastos = 0: los gastos generales (ads, sueldos) no los controla la logística.
+    // Esta pirámide llega hasta la contribución firme. La ganancia final vive en Reportes.
+    return calcularPiramide(ventasComoPaquetes(ventasDelMes), refCosto, COGS_PROMEDIO, 0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ventasDelMes, refCosto, gastosPorMes, filtroMes, mesEfectivo])
+  }, [ventasDelMes, refCosto, filtroMes, mesEfectivo])
 
   // Pirámide del MES ANTERIOR (para comparar: ¿mejoró o empeoró?)
   const piramideMesAnterior = useMemo(() => {
@@ -470,10 +463,9 @@ export default function EntregasPage() {
     const mesAnt = `${fechaAnt.getFullYear()}-${String(fechaAnt.getMonth() + 1).padStart(2, '0')}`
     const ventasAnt = ventasParaPiramide.filter(v => (v.fecha || '').slice(0, 7) === mesAnt)
     if (!ventasAnt.length) return null
-    const gastosAnt = gastosPorMes[mesAnt] || 0
-    return { ...calcularPiramide(ventasComoPaquetes(ventasAnt), refCosto, COGS_PROMEDIO, gastosAnt), mes: mesAnt }
+    return { ...calcularPiramide(ventasComoPaquetes(ventasAnt), refCosto, COGS_PROMEDIO, 0), mes: mesAnt }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ventasParaPiramide, refCosto, gastosPorMes, filtroMes, mesEfectivo])
+  }, [ventasParaPiramide, refCosto, filtroMes, mesEfectivo])
 
   const tablaFiltrada = useMemo(() => {
     let r = mergedFiltrado
@@ -788,17 +780,21 @@ export default function EntregasPage() {
       {piramide && (() => {
         const p = piramide
         const prev = piramideMesAnterior
-        // El número estrella es la GANANCIA FIRME (si hay gastos) o CONTRIBUCIÓN FIRME
-        const estrella = p.gastosMes > 0 ? p.gananciaFirme : p.contribucionFirme
+        // Número estrella de LOGÍSTICA: la contribución que deja cada envío.
+        // No es la ganancia final: los gastos generales (ads, sueldos) no los
+        // controla esta operación. Esa ganancia vive en Reportes.
+        // Se elige "por envío" y no el total porque el total sube solo con el
+        // volumen, aunque cada paquete rinda peor. Por envío avisa cuando la
+        // operación se pudre.
+        const estrella = p.contribPorEnvio
         const positivo = estrella >= 0
         const deltaDevol = prev ? p.tasaDevolucion - prev.tasaDevolucion : null
-        const prevEstrella = prev ? (prev.gastosMes > 0 ? prev.gananciaFirme : prev.contribucionFirme) : null
-        const deltaEstrella = prevEstrella != null ? estrella - prevEstrella : null
+        const deltaEstrella = prev ? estrella - prev.contribPorEnvio : null
         const fmtSigno = (n) => (n >= 0 ? '+' : '') + formatGs(n)
 
         return (
           <>
-            {/* NÚMERO ESTRELLA: GANANCIA FIRME (lo que ya cerró, sólido) */}
+            {/* NÚMERO ESTRELLA: CONTRIBUCIÓN POR ENVÍO (salud de la operación) */}
             <div className="card" style={{
               padding: '22px 24px',
               background: positivo
@@ -809,7 +805,7 @@ export default function EntregasPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
                 <div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
-                    {p.gastosMes > 0 ? 'Ganancia firme del mes' : 'Contribución firme del mes'}
+                    Contribución por envío
                     {filtroMes !== 'todos' && ` · ${etiquetaMes(mesEfectivo)}`}
                   </div>
                   <div style={{
@@ -818,8 +814,8 @@ export default function EntregasPage() {
                   }}>
                     {fmtSigno(estrella)}
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8, maxWidth: 480 }}>
-                    Lo que <strong>ya es tuyo</strong> de los {p.resueltos} pedidos que cerraron este mes (entregados + devueltos). {p.enProceso > 0 && `Hay ${p.enProceso} más en tránsito — mirá abajo.`}
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8, maxWidth: 520 }}>
+                    Lo que deja <strong>cada uno</strong> de los {p.resueltos} paquetes que cerraron. Sube si entregás más, baja si te devuelven. Es la salud de tu operación, sin importar cuánto vendiste.
                   </div>
                 </div>
                 {deltaEstrella != null && (
@@ -836,7 +832,7 @@ export default function EntregasPage() {
               </div>
             </div>
 
-            {/* LA PIRÁMIDE — desglose de la ganancia firme */}
+            {/* LA PIRÁMIDE — hasta donde llega la logística (CM2) */}
             <div className="card" style={{ padding: '16px 20px' }}>
               <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 14, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                 De dónde sale (solo lo que ya cerró)
@@ -845,11 +841,7 @@ export default function EntregasPage() {
                 { label: 'Ingreso cobrado', sub: `${p.entregados} entregados`, val: p.ingreso, sign: '+', color: 'var(--green)' },
                 { label: 'Flete de envíos', sub: `${p.resueltos} resueltos × 27k`, val: -p.fleteResueltos, sign: '−', color: 'var(--red)' },
                 { label: 'Costo del producto', sub: `solo los ${p.entregados} entregados`, val: -p.cogs, sign: '−', color: 'var(--red)' },
-                { label: 'Contribución firme', sub: 'lo que deja la operación', val: p.contribucionFirme, sign: '=', color: p.contribucionFirme >= 0 ? 'var(--green)' : 'var(--red)', bold: true, destacado: p.gastosMes === 0 },
-                ...(p.gastosMes > 0 ? [
-                  { label: 'Gastos generales', sub: 'ads, sueldos, etc. (Finanzas)', val: -p.gastosMes, sign: '−', color: 'var(--red)' },
-                  { label: 'Ganancia firme', sub: 'lo que te queda libre', val: p.gananciaFirme, sign: '=', color: p.gananciaFirme >= 0 ? 'var(--green)' : 'var(--red)', bold: true, destacado: true },
-                ] : []),
+                { label: 'Contribución firme', sub: `${p.resueltos} envíos × ${formatGs(p.contribPorEnvio)}`, val: p.contribucionFirme, sign: '=', color: p.contribucionFirme >= 0 ? 'var(--green)' : 'var(--red)', bold: true, destacado: true },
               ].map((nivel, i) => (
                 <div key={i} style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -874,6 +866,21 @@ export default function EntregasPage() {
                   </div>
                 </div>
               ))}
+
+              {/* Dónde termina la logística y empieza la contabilidad */}
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0, maxWidth: 460, lineHeight: 1.5 }}>
+                  Acá termina la logística. Los gastos generales (ads, sueldos) no los controla esta operación — la ganancia final está en Reportes.
+                </p>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => navigate('/reportes')}
+                  style={{ color: 'var(--accent)', whiteSpace: 'nowrap' }}
+                >
+                  Ver ganancia completa <ArrowRight size={13} />
+                </button>
+              </div>
+
               {p.cogsEstimado > 0 && (
                 <p style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 10, fontStyle: 'italic' }}>
                   Nota: {p.conCostoReal} entregados con costo real (cruzados con su venta) y {p.cogsEstimado} con costo estimado ({formatGs(COGS_PROMEDIO)}). Cargá la referencia en cada venta para precisión total.
@@ -889,7 +896,7 @@ export default function EntregasPage() {
                   <span style={{ fontSize: 13, fontWeight: 700 }}>En tránsito · {p.enProceso} paquetes todavía volando</span>
                 </div>
                 <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
-                  Estos NO están en la ganancia firme porque aún no cerraron. Esto es la <strong>proyección</strong> si cierran como tu historial ({p.tasaEntrega}% de entrega).
+                  Estos NO están en la contribución firme porque aún no cerraron. Esto es la <strong>proyección</strong> si cierran como tu historial ({p.tasaEntrega}% de entrega).
                 </p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
                   <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
@@ -905,7 +912,7 @@ export default function EntregasPage() {
                     <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>a tu tasa histórica {p.tasaEntrega}%</div>
                   </div>
                   <div style={{ padding: 12, background: p.contribucionProyectada >= 0 ? 'var(--green-dim)' : 'var(--bg-hover)', borderRadius: 10 }}>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Aportaría a tu ganancia</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Aportaría a tu contribución</div>
                     <div style={{ fontSize: 16, fontWeight: 700, color: p.contribucionProyectada >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-display)' }}>
                       {p.contribucionProyectada >= 0 ? '+' : ''}{formatGs(p.contribucionProyectada)}
                     </div>
@@ -918,9 +925,9 @@ export default function EntregasPage() {
             {/* LAS 3 PALANCAS — métricas clave */}
             <div className="kpi-grid">
               <div className="kpi-card">
-                <div className="kpi-label"><TrendingUp size={13} style={{ verticalAlign: -2 }} /> Contribución por envío</div>
-                <div className="kpi-value" style={{ color: p.contribPorEnvio >= 0 ? 'var(--green)' : 'var(--red)' }}>{formatGs(p.contribPorEnvio)}</div>
-                <div className="kpi-sub">Lo que deja cada paquete resuelto</div>
+                <div className="kpi-label"><TrendingUp size={13} style={{ verticalAlign: -2 }} /> Tasa de entrega</div>
+                <div className="kpi-value" style={{ color: p.tasaEntrega >= 70 ? 'var(--green)' : p.tasaEntrega >= 50 ? 'var(--yellow)' : 'var(--red)' }}>{p.tasaEntrega}%</div>
+                <div className="kpi-sub">{p.entregados} de {p.resueltos} resueltos llegaron</div>
               </div>
               <div className="kpi-card">
                 <div className="kpi-label"><PackageX size={13} style={{ verticalAlign: -2 }} /> Tasa de devolución</div>

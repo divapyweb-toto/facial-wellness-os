@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
+import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import CountUp from '../../lib/CountUp'
@@ -14,6 +15,9 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, BarChart, Bar, Legend
 } from 'recharts'
+
+// Costo estimado cuando una venta no tiene el costo real cargado (igual que Entregas)
+const COGS_PROMEDIO = 12000
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
@@ -173,29 +177,39 @@ export default function DashboardPage() {
       const entregadas = ventasMes.filter(v => v.estado === 'entregado')
       const pendientes = ventasMes.filter(v => v.estado === 'pendiente')
       const devueltas = ventasMes.filter(v => v.estado === 'devuelto')
-      const vbruto = entregadas.reduce((s, v) => s + v.total, 0)
-      const ineto = entregadas.reduce((s, v) => s + v.ganancia_neta, 0)
 
-      // ── Punto de equilibrio en vivo ──
-      // Margen neto promedio por venta entregada
-      const margenPromedio = entregadas.length ? ineto / entregadas.length : 0
-      // Ganancia del mes después de cubrir gastos fijos
-      const gananciaReal = ineto - totalGastosMes
-      // ¿Cuántas ventas más faltan para cubrir los gastos? (si todavía no se cubrieron)
+      // ── Fuente única de verdad: el mismo módulo que usan Entregas y Reportes ──
+      // Antes acá había una fórmula propia que NO restaba el flete de las
+      // devoluciones, y sobrestimaba la ganancia en (devueltos × 27.000).
+      const paquetes = ventasMes.map(v => ({
+        n_referencia: v.n_referencia,
+        importe: v.total || 0,
+        categoria: v.estado === 'entregado' ? 'entregado'
+                 : v.estado === 'devuelto' ? 'devuelto'
+                 : 'en_proceso',
+      }))
+      const piramide = calcularPiramide(paquetes, indexarCostos(ventasMes), COGS_PROMEDIO, totalGastosMes)
+
+      // Cada paquete resuelto de más aporta la contribución por envío.
+      const margenPromedio = piramide.contribPorEnvio
+      const gananciaReal = piramide.gananciaFirme
       const faltaParaCubrir = (gananciaReal < 0 && margenPromedio > 0)
         ? Math.ceil(Math.abs(gananciaReal) / margenPromedio)
         : 0
 
       setKpis({
-        ventasBrutas: vbruto,
-        ingresosNetos: ineto,
-        // Margen real ponderado (incluye flete) — consistente con Reportes
-        margenPct: vbruto ? (ineto / vbruto) * 100 : 0,
+        ventasBrutas: piramide.ingreso,
+        // Contribución firme: lo que deja la operación después de flete y producto
+        ingresosNetos: piramide.contribucionFirme,
+        // Margen de contribución sobre lo cobrado
+        margenPct: piramide.ingreso ? (piramide.contribucionFirme / piramide.ingreso) * 100 : 0,
         paquetesEnviados: ventasMes.length,
         entregados: entregadas.length,
         devueltos: devueltas.length,
         pendientesCount: pendientes.length,
-        tasaEntrega: ventasMes.length ? (entregadas.length / ventasMes.length * 100) : 0,
+        // Tasa sobre lo RESUELTO (entregados + devueltos), no sobre los que aún vuelan
+        tasaEntrega: piramide.tasaEntrega,
+        sangradoFlete: piramide.sangradoFlete,
         // Punto de equilibrio
         gastosMes: totalGastosMes,
         margenPromedio,
@@ -384,15 +398,15 @@ export default function DashboardPage() {
           <div className="kpi-icon" style={{ background: 'var(--green-dim)' }}><TrendingUp size={14} color="var(--green)" /></div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-label"><DollarSign size={11} />Ingresos netos</div>
+          <div className="kpi-label"><DollarSign size={11} />Contribución firme</div>
           <div className="kpi-value green"><CountUp value={kpis?.ingresosNetos || 0} format={formatGs} /></div>
-          <div className="kpi-sub">Después de envíos</div>
+          <div className="kpi-sub">Después de flete y producto</div>
           <div className="kpi-icon" style={{ background: 'var(--green-dim)' }}><DollarSign size={14} color="var(--green)" /></div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label"><BarChart3 size={11} />Margen %</div>
           <div className={`kpi-value ${(kpis?.margenPct || 0) > 40 ? 'green' : 'yellow'}`}>{formatPct(kpis?.margenPct || 0)}</div>
-          <div className="kpi-sub">Sobre entregadas (real)</div>
+          <div className="kpi-sub">Contribución sobre lo cobrado</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label"><Package size={11} />Enviados</div>
@@ -423,11 +437,12 @@ export default function DashboardPage() {
                 <CheckCircle2 size={18} color="var(--green)" />
                 <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--green)' }}>¡Gastos cubiertos!</span>
                 <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                  Ganancia real: <strong style={{ color: 'var(--green)' }}>{formatGs(kpis.gananciaReal)}</strong>
+                  Ganancia firme: <strong style={{ color: 'var(--green)' }}>{formatGs(kpis.gananciaReal)}</strong>
                 </span>
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
-                Cubriste {formatGs(kpis.gastosMes)} de gastos. Cada venta nueva (~{formatGs(Math.round(kpis.margenPromedio))} de margen) es ganancia limpia.
+                Cubriste {formatGs(kpis.gastosMes)} de gastos. Cada paquete que cierre bien deja ~{formatGs(Math.round(kpis.margenPromedio))} de contribución.
+                {kpis.sangradoFlete > 0 && ` Ya se descontaron ${formatGs(kpis.sangradoFlete)} de flete de las ${kpis.devueltos} devoluciones.`}
               </div>
             </div>
           ) : (
