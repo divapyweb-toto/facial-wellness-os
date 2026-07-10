@@ -1,11 +1,12 @@
 // src/pages/entregas/EntregasPage.jsx
-import { useState, useRef, useMemo, useEffect } from 'react'
+import { useState, useRef, useMemo, useEffect, Fragment } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar } from 'lucide-react'
+import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown } from 'lucide-react'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
+import { normalizarCiudad, ZONAS } from '../../lib/ciudades'
 
 const COSTO_PAP = 27000
 
@@ -374,6 +375,65 @@ export default function EntregasPage() {
     if (filtroMes === 'todos') return ventasParaPiramide
     return ventasParaPiramide.filter(v => (v.fecha || '').slice(0, 7) === mesEfectivo)
   }, [ventasParaPiramide, filtroMes, mesEfectivo])
+
+  // ── RENTABILIDAD POR CIUDAD ──
+  // Sale de VENTAS (la fuente de verdad de la plata), no de los reportes PaP.
+  // Reusa el mismo módulo de pirámide, con gastos = 0: los gastos generales
+  // (ads, sueldos) no se pueden repartir por ciudad, así que acá se mide
+  // CONTRIBUCIÓN, que es lo que cada ciudad deja después de flete y producto.
+  const [ciudadAbierta, setCiudadAbierta] = useState(null)
+
+  const porCiudad = useMemo(() => {
+    if (!ventasDelMes.length) return []
+    const grupos = {}
+    for (const v of ventasDelMes) {
+      const info = normalizarCiudad(v.ciudad)
+      if (!grupos[info.clave]) grupos[info.clave] = { info, ventas: [] }
+      grupos[info.clave].ventas.push(v)
+    }
+    return Object.values(grupos).map(({ info, ventas }) => {
+      const p = calcularPiramide(ventasComoPaquetes(ventas), refCosto, COGS_PROMEDIO, 0)
+      // Qué producto funciona (o fracasa) en esta ciudad
+      const prodMap = {}
+      for (const v of ventas) {
+        const k = v.producto_nombre || '—'
+        ;(prodMap[k] = prodMap[k] || []).push(v)
+      }
+      const productos = Object.entries(prodMap)
+        .map(([nombre, vs]) => ({ nombre, ...calcularPiramide(ventasComoPaquetes(vs), refCosto, COGS_PROMEDIO, 0) }))
+        .sort((a, b) => a.contribucionFirme - b.contribucionFirme) // el que más sangra, arriba
+      return { ...info, ...p, productos }
+    }).sort((a, b) => b.contribucionFirme - a.contribucionFirme)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ventasDelMes, refCosto])
+
+  // Resumen por zona: ¿conviene mandar lejos?
+  const porZona = useMemo(() => {
+    const z = {}
+    for (const c of porCiudad) {
+      if (!z[c.zona]) z[c.zona] = { zona: c.zona, pedidos: 0, entregados: 0, devueltos: 0, resueltos: 0, contribucion: 0, sangrado: 0 }
+      const t = z[c.zona]
+      t.pedidos += c.total; t.entregados += c.entregados; t.devueltos += c.devueltos
+      t.resueltos += c.resueltos; t.contribucion += c.contribucionFirme; t.sangrado += c.sangradoFlete
+    }
+    return Object.values(z).map(t => ({
+      ...t,
+      tasaEntrega: t.resueltos ? Math.round(t.entregados / t.resueltos * 100) : 0,
+      contribPorEnvio: t.resueltos ? Math.round(t.contribucion / t.resueltos) : 0,
+    })).sort((a, b) => b.contribucion - a.contribucion)
+  }, [porCiudad])
+
+  // Ciudades que te están costando plata. Mínimo 3 resueltos para no
+  // alarmarse por un único pedido devuelto.
+  const alertasCiudad = useMemo(
+    () => porCiudad
+      .filter(c => c.resueltos >= 3 && (c.contribucionFirme < 0 || c.tasaDevolucion >= 35))
+      .sort((a, b) => a.contribucionFirme - b.contribucionFirme)
+      .slice(0, 4),
+    [porCiudad]
+  )
+
+  const sinReconocer = useMemo(() => porCiudad.filter(c => !c.reconocida && c.clave !== '_sin_dato'), [porCiudad])
 
   const piramide = useMemo(() => {
     if (!ventasDelMes.length) return null
@@ -863,6 +923,134 @@ export default function EntregasPage() {
       })()}
 
 
+      {/* ════ RENTABILIDAD POR CIUDAD (sale de ventas, no de PaP) ════ */}
+      {porCiudad.length > 0 && (
+        <>
+          {/* Ciudades que sangran */}
+          {alertasCiudad.length > 0 && (
+            <div className="card" style={{ border: '1px solid var(--red)', padding: '14px 18px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <AlertTriangle size={15} color="var(--red)" />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>Ciudades que te están costando plata</span>
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12, marginTop: 0 }}>
+                Después del flete de las devoluciones, acá perdés o casi no ganás. Considerá dejar de pautar o pedir seña.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+                {alertasCiudad.map(c => (
+                  <div key={c.clave} style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>{c.nombre}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'var(--font-display)', color: c.contribucionFirme < 0 ? 'var(--red)' : 'var(--yellow)', marginTop: 2 }}>
+                      {c.contribucionFirme >= 0 ? '+' : ''}{formatGs(c.contribucionFirme)}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                      {c.tasaDevolucion}% devolución · {formatGs(c.sangradoFlete)} en fletes perdidos
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Resumen por zona: ¿conviene mandar lejos? */}
+          <div className="kpi-grid">
+            {porZona.map(z => (
+              <div key={z.zona} className="kpi-card" style={{ borderLeft: `3px solid ${ZONAS[z.zona]?.color || '#666'}` }}>
+                <div className="kpi-label">{ZONAS[z.zona]?.label || z.zona}</div>
+                <div className="kpi-value" style={{ color: z.contribucion >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                  {formatGs(z.contribucion)}
+                </div>
+                <div className="kpi-sub">
+                  {z.pedidos} pedidos · {z.tasaEntrega}% entrega · {formatGs(z.contribPorEnvio)}/envío
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Tabla por ciudad */}
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <MapPin size={15} color="var(--accent)" />
+              <span style={{ fontSize: 13, fontWeight: 700 }}>Rentabilidad por ciudad</span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                Tocá una fila para ver qué producto funciona ahí
+              </span>
+            </div>
+            <div style={{ overflowX: 'auto', maxHeight: 520 }}>
+              <table className="tabla-responsive">
+                <thead>
+                  <tr>
+                    <th>Ciudad</th><th>Zona</th><th>Pedidos</th><th>Entreg.</th><th>Devuel.</th>
+                    <th>Tasa</th><th>Contribución</th><th>Por envío</th><th>Sangrado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {porCiudad.map(c => {
+                    const abierta = ciudadAbierta === c.clave
+                    const negativa = c.contribucionFirme < 0
+                    return (
+                      <Fragment key={c.clave}>
+                        <tr
+                          onClick={() => setCiudadAbierta(abierta ? null : c.clave)}
+                          style={{ cursor: 'pointer', background: negativa ? 'rgba(239,68,68,0.06)' : undefined }}
+                        >
+                          <td data-label="Ciudad" style={{ fontWeight: 600 }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              {abierta ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                              {c.nombre}
+                              {!c.reconocida && <span title="Ciudad no reconocida" style={{ color: 'var(--yellow)', fontSize: 11 }}>·?</span>}
+                            </span>
+                          </td>
+                          <td data-label="Zona">
+                            <span style={{ fontSize: 10, fontWeight: 600, color: ZONAS[c.zona]?.color }}>{ZONAS[c.zona]?.label}</span>
+                          </td>
+                          <td data-label="Pedidos">{c.total}</td>
+                          <td data-label="Entreg." style={{ color: 'var(--green)' }}>{c.entregados}</td>
+                          <td data-label="Devuel." style={{ color: c.devueltos > 0 ? 'var(--red)' : 'var(--text-muted)' }}>{c.devueltos}</td>
+                          <td data-label="Tasa" style={{ fontWeight: 600, color: c.tasaEntrega >= 70 ? 'var(--green)' : c.tasaEntrega >= 50 ? 'var(--yellow)' : 'var(--red)' }}>
+                            {c.tasaEntrega}%
+                          </td>
+                          <td data-label="Contribución" style={{ fontWeight: 700, color: negativa ? 'var(--red)' : 'var(--green)' }}>
+                            {formatGs(c.contribucionFirme)}
+                          </td>
+                          <td data-label="Por envío" style={{ color: c.contribPorEnvio < 0 ? 'var(--red)' : 'var(--text-secondary)' }}>
+                            {formatGs(c.contribPorEnvio)}
+                          </td>
+                          <td data-label="Sangrado" style={{ color: 'var(--red)', fontSize: 12 }}>{formatGs(c.sangradoFlete)}</td>
+                        </tr>
+                        {abierta && (
+                          <tr>
+                            <td colSpan={9} style={{ background: 'var(--bg-hover)', padding: '10px 16px' }}>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                                Productos en {c.nombre} — el que más sangra, primero
+                              </div>
+                              {c.productos.map(p => (
+                                <div key={p.nombre} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 12, gap: 10, flexWrap: 'wrap' }}>
+                                  <span style={{ fontWeight: 500, flex: 1, minWidth: 140 }}>{p.nombre}</span>
+                                  <span className="muted">{p.total} ped. · {p.devueltos} dev. ({p.tasaDevolucion}%)</span>
+                                  <span style={{ fontWeight: 700, color: p.contribucionFirme < 0 ? 'var(--red)' : 'var(--green)', minWidth: 90, textAlign: 'right' }}>
+                                    {formatGs(p.contribucionFirme)}
+                                  </span>
+                                </div>
+                              ))}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {sinReconocer.length > 0 && (
+              <p style={{ fontSize: 10.5, color: 'var(--text-muted)', padding: '10px 20px', margin: 0, fontStyle: 'italic', borderTop: '1px solid var(--border)' }}>
+                {sinReconocer.length} ciudad{sinReconocer.length === 1 ? '' : 'es'} sin reconocer (marcadas con ·?): {sinReconocer.map(c => c.nombre).join(', ')}. Se muestran tal cual vinieron, sin mezclarse.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+
       {/* ════ SECCIONES LOGÍSTICAS (solo con reporte PaP cargado) ════ */}
       {stats && (<>
 
@@ -973,22 +1161,6 @@ export default function EntregasPage() {
               </span>
             ))}
           </div>
-        </div>
-
-        <div className="card">
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <MapPin size={15} color="var(--accent)" /> Tasa de entrega por ciudad
-          </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={stats.porCiudad} layout="vertical" margin={{ left: 10, right: 30 }}>
-              <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
-              <YAxis type="category" dataKey="ciudad" width={90} tick={{ fontSize: 10, fill: 'var(--text-secondary)' }} />
-              <Tooltip contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }} formatter={(v, n, p) => [`${v}% (${p.payload.entregados}/${p.payload.total})`, 'Entrega']} />
-              <Bar dataKey="tasa" radius={[0, 4, 4, 0]}>
-                {stats.porCiudad.map((c, i) => <Cell key={i} fill={c.tasa >= 70 ? '#22c55e' : c.tasa >= 50 ? '#eab308' : '#ef4444'} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
         </div>
       </div>
 
