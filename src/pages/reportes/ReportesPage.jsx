@@ -1,5 +1,6 @@
 // src/pages/reportes/ReportesPage.jsx
 import { useState, useCallback, useRef } from 'react'
+import ComparadorMeses from './ComparadorMeses'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat } from 'lucide-react'
@@ -11,6 +12,7 @@ import {
 const COLORS = ['#c8f135', '#22c55e', '#3b82f6', '#a78bfa', '#f59e0b', '#ef4444', '#ec4899']
 
 // Badge de variación vs mes anterior
+// eslint-disable-next-line no-unused-vars
 function Delta({ actual, anterior, invertido = false }) {
   if (anterior == null || anterior === 0) return <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>nuevo</span>
   const delta = ((actual - anterior) / anterior) * 100
@@ -25,6 +27,7 @@ function Delta({ actual, anterior, invertido = false }) {
 }
 
 export default function ReportesPage() {
+  const [vista, setVista] = useState('reporte')  // 'reporte' | 'comparar'
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
   const [datos, setDatos] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -378,27 +381,39 @@ export default function ReportesPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Reportes</h1>
-          <p className="page-subtitle">Generá el reporte mensual completo en PDF</p>
+          <p className="page-subtitle">{vista === 'reporte' ? 'Generá el reporte mensual completo en PDF' : 'Compará dos meses de forma honesta'}</p>
         </div>
         <div className="page-actions">
-          <select className="form-select" style={{ width: 'auto' }} value={mes}
-            onChange={e => { setMes(e.target.value); setDatos(null) }}>
-            {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-          </select>
-          <button className="btn btn-secondary" onClick={cargarDatos} disabled={loading}>
-            {loading ? <Loader2 size={14} className="spinning" /> : <FileBarChart2 size={14} />}
-            Generar reporte
-          </button>
-          {datos && (
-            <button className="btn btn-primary" onClick={generarPDF} disabled={generandoPdf}>
-              {generandoPdf ? <Loader2 size={14} className="spinning" /> : <Download size={14} />}
-              Descargar PDF
-            </button>
+          <div className="tabs" style={{ marginRight: 8 }}>
+            <button className={`tab ${vista === 'reporte' ? 'active' : ''}`} onClick={() => setVista('reporte')}>Reporte</button>
+            <button className={`tab ${vista === 'comparar' ? 'active' : ''}`} onClick={() => setVista('comparar')}>Comparar</button>
+          </div>
+          {vista === 'reporte' && (
+            <>
+              <select className="form-select" style={{ width: 'auto' }} value={mes}
+                onChange={e => { setMes(e.target.value); setDatos(null) }}>
+                {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+              <button className="btn btn-secondary" onClick={cargarDatos} disabled={loading}>
+                {loading ? <Loader2 size={14} className="spinning" /> : <FileBarChart2 size={14} />}
+                Generar reporte
+              </button>
+              {datos && (
+                <button className="btn btn-primary" onClick={generarPDF} disabled={generandoPdf}>
+                  {generandoPdf ? <Loader2 size={14} className="spinning" /> : <Download size={14} />}
+                  Descargar PDF
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {!datos && !loading && (
+      {vista === 'comparar' && (
+        <ComparadorMeses mesesDisponibles={mesesDisponibles.map(m => m.value)} gastosPorMes={{}} />
+      )}
+
+      {vista === 'reporte' && !datos && !loading && (
         <div className="empty-state" style={{ padding: 80 }}>
           <div className="empty-state-icon" style={{ width: 64, height: 64, borderRadius: 16 }}>
             <FileBarChart2 size={32} />
@@ -417,7 +432,7 @@ export default function ReportesPage() {
         </div>
       )}
 
-      {datos && (
+      {vista === 'reporte' && datos && (
         <div ref={reportRef} id="reporte-print" style={{ display: 'flex', flexDirection: 'column', gap: 20, background: 'var(--bg-base)', padding: 8 }}>
           {/* Header del reporte */}
           <div className="reporte-head" style={{
