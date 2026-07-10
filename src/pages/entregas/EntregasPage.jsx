@@ -199,7 +199,7 @@ export default function EntregasPage() {
       try {
         // Costos: traer ventas con su referencia y costo_prod real
         const { data: ventas } = await supabase
-          .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha').is('deleted_at', null)
+          .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha, ciudad, producto_nombre, cantidad').is('deleted_at', null)
         if (activo && ventas) {
           setRefCosto(indexarCostos(ventas))
           setVentasParaPiramide(ventas)
@@ -385,13 +385,16 @@ export default function EntregasPage() {
 
   // Muchas ventas viejas se importaron sin ciudad (Shopify manda "-" y el dato
   // real venía en los Note Attributes de Releasit). Pero el reporte de Punto a
-  // Punto SÍ trae la ciudad. Cuando la venta no la tiene, la buscamos ahí por
-  // número de referencia. Sin esto, todo cae en "Sin ciudad".
-  const ciudadPorRef = useMemo(() => {
+  // Punto SÍ trae ciudad y producto. Cuando la venta no los tiene, los buscamos
+  // ahí por número de referencia. Sin esto, todo cae en "Sin ciudad".
+  const datosPaPPorRef = useMemo(() => {
     const m = {}
     for (const p of merged) {
       const ref = normalizarRef(p.n_referencia)
-      if (ref && p.ciudad) m[ref] = p.ciudad
+      if (!ref) continue
+      if (!m[ref]) m[ref] = {}
+      if (p.ciudad && !m[ref].ciudad) m[ref].ciudad = p.ciudad
+      if (p.producto && !m[ref].producto) m[ref].producto = p.producto
     }
     return m
   }, [merged])
@@ -400,7 +403,8 @@ export default function EntregasPage() {
     if (!ventasDelMes.length) return []
     const grupos = {}
     for (const v of ventasDelMes) {
-      const cruda = v.ciudad || ciudadPorRef[normalizarRef(v.n_referencia)] || ''
+      const dePaP = datosPaPPorRef[normalizarRef(v.n_referencia)] || {}
+      const cruda = v.ciudad || dePaP.ciudad || ''
       const info = normalizarCiudad(cruda)
       if (!grupos[info.clave]) grupos[info.clave] = { info, ventas: [] }
       grupos[info.clave].ventas.push(v)
@@ -410,7 +414,8 @@ export default function EntregasPage() {
       // Qué producto funciona (o fracasa) en esta ciudad
       const prodMap = {}
       for (const v of ventas) {
-        const k = v.producto_nombre || '—'
+        const dePaP = datosPaPPorRef[normalizarRef(v.n_referencia)] || {}
+        const k = v.producto_nombre || dePaP.producto || 'Sin producto'
         ;(prodMap[k] = prodMap[k] || []).push(v)
       }
       const productos = Object.entries(prodMap)
@@ -419,7 +424,7 @@ export default function EntregasPage() {
       return { ...info, ...p, productos }
     }).sort((a, b) => b.contribucionFirme - a.contribucionFirme)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ventasDelMes, refCosto, ciudadPorRef])
+  }, [ventasDelMes, refCosto, datosPaPPorRef])
 
   // Resumen por zona: ¿conviene mandar lejos?
   const porZona = useMemo(() => {
