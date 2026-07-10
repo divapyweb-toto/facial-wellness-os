@@ -1,6 +1,7 @@
 // src/pages/stock/StockPage.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
+import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { calcularStockCombo, aplicarStockLoteNuevasVentas, calcularDiferencias, aplicarConteoFisico } from '../../lib/stockEngine'
 import { calcularVelocidades, analizarReposicion, sugerirReposicion, URGENCIA_CFG } from '../../lib/stockIntel'
@@ -238,10 +239,10 @@ export default function StockPage() {
   const sincronizarStock = async () => {
     setSincronizando(true)
     try {
-      const { data: ventas } = await supabase
+      const ventas = await fetchAll(() => supabase
         .from('ventas')
         .select('id, producto_id, cantidad, estado, n_referencia, stock_descontado')
-        .is('deleted_at', null)
+        .is('deleted_at', null))
       const res = await aplicarStockLoteNuevasVentas(ventas || [])
       if (res.descontadas > 0) {
         toast(`Stock sincronizado: ${res.descontadas} ventas descontadas en ${res.productos} producto${res.productos === 1 ? '' : 's'}`, 'success')

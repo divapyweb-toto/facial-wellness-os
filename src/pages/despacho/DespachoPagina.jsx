@@ -5,6 +5,7 @@ import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRu
 import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
 import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
+import { fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import {
   Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X,
@@ -557,11 +558,11 @@ export default function DespachoPagina() {
   const fetchVentasPendientes = async () => {
     setCargVentas(true)
     try {
-      const { data, error } = await supabase
+      const { data, error } = await fetchAllSafe(() => supabase
         .from('ventas')
         .select('id, n_referencia, fecha, cliente_nombre, cliente_telefono, cliente_direccion, ciudad, producto_nombre, cantidad, total, estado_releasit')
         .eq('estado', 'pendiente')
-        .order('fecha', { ascending: false })
+        .order('fecha', { ascending: false }))
       if (error) throw error
       setVentasPend(data || [])
       setSelVentas(new Set())

@@ -1,6 +1,7 @@
 // src/pages/clientes/ClientesPage.jsx
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
+import { fetchAll } from '../../lib/fetchAll'
 import { Users, Search, TrendingUp, Star, ShoppingBag, X, Phone, MapPin } from 'lucide-react'
 
 // Normaliza teléfono para agrupar al mismo cliente
@@ -61,11 +62,11 @@ export default function ClientesPage() {
 
   const cargar = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase
+    // .limit(5000) no servía: Supabase corta en 1.000 igual. Hay que paginar.
+    const data = await fetchAll(() => supabase
       .from('ventas')
       .select('cliente_nombre, cliente_telefono, ciudad, producto_nombre, total, estado, fecha, ganancia_neta, envio_cliente')
-      .order('fecha', { ascending: false })
-      .limit(5000)
+      .order('fecha', { ascending: false }))
     setVentas(data || [])
     setLoading(false)
   }, [])

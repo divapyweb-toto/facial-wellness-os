@@ -3,6 +3,7 @@ import { useState, useRef, useMemo, useEffect, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
+import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown, ArrowRight } from 'lucide-react'
@@ -185,7 +186,11 @@ export default function EntregasPage() {
     let activo = true
     ;(async () => {
       try {
-        const { data } = await supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false })
+        // Paginado: sin esto Supabase corta en 1.000 filas sin avisar
+        const data = await fetchAll(
+          () => supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
+          { columnaOrden: 'nro_guia_pap' }
+        )
         if (activo) setHistorico(data || [])
       } catch (e) { /* tabla vacía o no accesible */ }
       if (activo) setCargandoHist(false)
@@ -199,8 +204,8 @@ export default function EntregasPage() {
     ;(async () => {
       try {
         // Costos: traer ventas con su referencia y costo_prod real
-        const { data: ventas } = await supabase
-          .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha, ciudad, producto_nombre, cantidad').is('deleted_at', null)
+        const ventas = await fetchAll(() => supabase
+          .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha, ciudad, producto_nombre, cantidad').is('deleted_at', null))
         if (activo && ventas) {
           setRefCosto(indexarCostos(ventas))
           setVentasParaPiramide(ventas)
@@ -529,7 +534,7 @@ export default function EntregasPage() {
       let updOk = 0, updVacio = 0, updFail = 0
       let diagnostico = errEntregas ? `Las entregas no se guardaron: ${errEntregas}` : null
       try {
-        const { data: ventas, error: errSel } = await supabase.from('ventas').select('*')
+        const { data: ventas, error: errSel } = await fetchAllSafe(() => supabase.from('ventas').select('*'))
         if (errSel) { diagnostico = diagnostico || ('No pude leer las ventas: ' + errSel.message) }
         else if (!ventas || !ventas.length) { diagnostico = diagnostico || 'La consulta de ventas vino vacía (¿permisos de la tabla ventas?)' }
         else {
@@ -596,7 +601,10 @@ export default function EntregasPage() {
 
       // 3) Recargar el histórico para refrescar la vista con lo recién guardado
       try {
-        const { data } = await supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false })
+        const data = await fetchAll(
+          () => supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
+          { columnaOrden: 'nro_guia_pap' }
+        )
         setHistorico(data || [])
       } catch (e) { /* nada */ }
 

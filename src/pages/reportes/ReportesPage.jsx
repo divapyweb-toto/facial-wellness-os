@@ -1,6 +1,7 @@
 // src/pages/reportes/ReportesPage.jsx
 import { useState, useCallback, useRef } from 'react'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
+import { fetchAll } from '../../lib/fetchAll'
 import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat } from 'lucide-react'
 import {
   BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
@@ -41,13 +42,15 @@ export default function ReportesPage() {
     const inicioPrev = `${yPrev}-${mPrev}-01`
     const finPrev = new Date(yPrev, parseInt(mPrev), 0).toISOString().split('T')[0]
 
-    const [{ data: ventas }, { data: ventasPrev }, { data: gastos }, { data: campanas }, { data: productos }, { data: entregas }] = await Promise.all([
-      supabase.from('ventas').select('*').gte('fecha', inicio).lte('fecha', fin).order('fecha'),
-      supabase.from('ventas').select('*').gte('fecha', inicioPrev).lte('fecha', finPrev),
-      supabase.from('gastos').select('*').gte('fecha', inicio).lte('fecha', fin),
-      supabase.from('campanas_ads').select('*').eq('mes', mes),
-      supabase.from('productos').select('*').eq('activo', true),
-      supabase.from('entregas').select('*').gte('fecha_entrega', inicio).lte('fecha_entrega', fin),
+    // Paginado: un mes a 100 pedidos/día son ~3.000 filas y Supabase corta en 1.000.
+    // El cierre financiero no puede calcularse con datos recortados.
+    const [ventas, ventasPrev, gastos, campanas, productos, entregas] = await Promise.all([
+      fetchAll(() => supabase.from('ventas').select('*').gte('fecha', inicio).lte('fecha', fin).order('fecha')),
+      fetchAll(() => supabase.from('ventas').select('*').gte('fecha', inicioPrev).lte('fecha', finPrev)),
+      fetchAll(() => supabase.from('gastos').select('*').gte('fecha', inicio).lte('fecha', fin)),
+      fetchAll(() => supabase.from('campanas_ads').select('*').eq('mes', mes)),
+      fetchAll(() => supabase.from('productos').select('*').eq('activo', true)),
+      fetchAll(() => supabase.from('entregas').select('*').gte('fecha_entrega', inicio).lte('fecha_entrega', fin), { columnaOrden: 'nro_guia_pap' }),
     ])
 
     const entregadas = (ventas || []).filter(v => v.estado === 'entregado')

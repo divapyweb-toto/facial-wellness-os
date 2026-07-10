@@ -10,6 +10,7 @@
 // ═══════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
+import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { registrarReingresoLote } from '../../lib/stockEngine'
 import { normalizarEscaneo, interpretarEscaneo } from '../../lib/barcode'
@@ -39,11 +40,13 @@ export default function RecepcionPage() {
   const cargar = useCallback(async () => {
     setLoading(true)
     try {
-      const [{ data: vts }, { data: ents }] = await Promise.all([
-        supabase.from('ventas')
+      // Paginado: sin esto Supabase corta en 1.000 filas y un paquete devuelto
+      // podría "no encontrarse" al escanearlo.
+      const [vts, ents] = await Promise.all([
+        fetchAll(() => supabase.from('ventas')
           .select('id, n_referencia, cliente_nombre, producto_nombre, cantidad, estado, stock_descontado, reingresado_at, fecha, ciudad, total')
-          .is('deleted_at', null),
-        supabase.from('entregas').select('n_referencia, nro_guia_pap'),
+          .is('deleted_at', null)),
+        fetchAll(() => supabase.from('entregas').select('n_referencia, nro_guia_pap'), { columnaOrden: 'nro_guia_pap' }),
       ])
       setVentas(vts || [])
       // Índice guía PaP → referencia, para poder escanear la etiqueta del courier

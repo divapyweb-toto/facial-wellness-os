@@ -16,6 +16,7 @@
 // ═══════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { supabase } from '../../lib/supabase'
+import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { interpretarEscaneo } from '../../lib/barcode'
 import { beep } from '../../lib/beep'
@@ -38,10 +39,11 @@ export default function ModalSalida({ onClose, onConfirmado }) {
   const cargar = useCallback(async () => {
     setLoading(true)
     try {
-      const { data } = await supabase
+      // Paginado: si se cortara en 1.000, una guía escaneada podría "no encontrarse"
+      const data = await fetchAll(() => supabase
         .from('ventas')
         .select('id, n_referencia, cliente_nombre, ciudad, producto_nombre, cantidad, total, estado, fecha, despachado_at')
-        .is('deleted_at', null)
+        .is('deleted_at', null))
       setVentas(data || [])
     } catch (e) {
       toast('Error cargando pedidos: ' + e.message, 'error')

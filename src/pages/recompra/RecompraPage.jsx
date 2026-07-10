@@ -1,6 +1,7 @@
 // src/pages/recompra/RecompraPage.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../../lib/supabase'
+import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { RefreshCw, Download, Send, Users, Repeat, Layers, TrendingUp } from 'lucide-react'
 import { segmentarRecompra, familiaProducto, DIAS_COOLDOWN } from '../../lib/recompra'
@@ -26,16 +27,16 @@ export default function RecompraPage() {
     setLoading(true)
     try {
       // 1. Ventas entregadas (fuente de verdad de clientes)
-      const { data: ventas } = await supabase
+      const ventas = await fetchAll(() => supabase
         .from('ventas')
         .select('n_referencia, cliente_nombre, cliente_telefono, producto_nombre, cantidad, fecha, estado')
         .eq('estado', 'entregado')
-        .is('deleted_at', null)
+        .is('deleted_at', null))
 
       // 2. Fecha de entrega REAL desde PaP (tabla entregas), por referencia. Si hay varias, la más reciente.
-      const { data: entregas } = await supabase
-        .from('entregas')
-        .select('n_referencia, fecha_entrega')
+      const entregas = await fetchAll(
+        () => supabase.from('entregas').select('n_referencia, fecha_entrega'),
+        { columnaOrden: 'nro_guia_pap' })
       const fechaEntregaPorRef = {}
       for (const e of (entregas || [])) {
         if (!e.n_referencia || !e.fecha_entrega) continue

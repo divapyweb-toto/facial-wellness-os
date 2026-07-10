@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
+import { fetchAll } from '../../lib/fetchAll'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import CountUp from '../../lib/CountUp'
@@ -156,8 +157,8 @@ export default function DashboardPage() {
 
     // ── Histórico de 6 meses (tendencia de mediano plazo) ──
     const inicio6m = new Date(ahora.getFullYear(), ahora.getMonth() - 5, 1).toISOString().split('T')[0]
-    const { data: ventas6m } = await supabase
-      .from('ventas').select('fecha, total, ganancia_neta, estado').is('deleted_at', null).gte('fecha', inicio6m)
+    const ventas6m = await fetchAll(() => supabase
+      .from('ventas').select('fecha, total, ganancia_neta, estado').is('deleted_at', null).gte('fecha', inicio6m))
     const mesesData = []
     for (let i = 5; i >= 0; i--) {
       const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1)

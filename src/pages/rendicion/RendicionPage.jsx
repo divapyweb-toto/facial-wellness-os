@@ -1,6 +1,7 @@
 // src/pages/rendicion/RendicionPage.jsx
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
+import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
@@ -30,7 +31,9 @@ export default function RendicionPage() {
 
   const cargarHistorico = async () => {
     try {
-      const { data } = await supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false })
+      const data = await fetchAll(
+        () => supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
+        { columnaOrden: 'nro_guia_pap' })
       setHistorico(data || [])
       setSeleccionados(new Set())
     } catch (e) { /* tabla vacía o sin acceso */ }
@@ -40,7 +43,9 @@ export default function RendicionPage() {
     let activo = true
     ;(async () => {
       try {
-        const { data } = await supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false })
+        const data = await fetchAll(
+          () => supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
+          { columnaOrden: 'nro_guia_pap' })
         if (activo) setHistorico(data || [])
       } catch (e) { /* tabla vacía o sin acceso */ }
       if (activo) setCargando(false)
