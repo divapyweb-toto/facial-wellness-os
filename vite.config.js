@@ -7,26 +7,11 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // Separar las librerías pesadas en archivos propios. Así el navegador las
-    // cachea una vez y no las vuelve a bajar cuando cambia tu código — solo
-    // re-baja el chunk chico que cambió, no los ~18 MB de librerías.
-    //
-    // Se usa la forma de FUNCIÓN (no objeto) a propósito: agrupa por lo que
-    // realmente aparece en el árbol de imports, sin romper si alguna librería
-    // no está instalada.
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (!id.includes('node_modules')) return
-          if (id.includes('recharts') || id.includes('d3-')) return 'vendor-charts'
-          if (id.includes('xlsx') || id.includes('exceljs')) return 'vendor-excel'
-          if (id.includes('docx')) return 'vendor-docx'
-          if (id.includes('leaflet')) return 'vendor-map'
-          if (id.includes('/react') || id.includes('/scheduler') || id.includes('react-router') || id.includes('react-dom')) return 'vendor-react'
-          return 'vendor'
-        },
-      },
-    },
-    chunkSizeWarningLimit: 1500,
+    // Nota: NO se separan las librerías en chunks manuales. Se probó y rompía
+    // la app (pantalla negra): librerías como lucide-react usan React.forwardRef
+    // al cargar, y quedaban en un chunk separado de React → "Cannot read
+    // properties of undefined (reading 'forwardRef')". Vite arma los chunks solo.
+    // La velocidad de arranque ya se resolvió cargando los gráficos aparte
+    // (DashboardCharts.jsx con lazy), que es independiente de esto.
   },
 })
