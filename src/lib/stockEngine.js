@@ -58,7 +58,9 @@ async function resolverItemsFisicos(venta) {
 }
 
 // Aplicar un delta de stock a un producto + registrar movimiento.
-async function moverStock(producto_id, producto_nombre, delta, motivo) {
+// `tipo` describe QUÉ pasó de verdad. Si no se pasa, se infiere del signo
+// (compatibilidad con las llamadas viejas de ventas/devoluciones).
+async function moverStock(producto_id, producto_nombre, delta, motivo, tipo = null) {
   if (!producto_id || delta === 0) return
   // Leer stock actual
   const { data: prod } = await supabase.from('productos').select('stock_actual').eq('id', producto_id).single()
@@ -69,7 +71,7 @@ async function moverStock(producto_id, producto_nombre, delta, motivo) {
   try {
     await supabase.from('stock_movimientos').insert({
       producto_id, producto_nombre,
-      tipo: delta < 0 ? 'venta' : 'devolucion',
+      tipo: tipo || (delta < 0 ? 'venta' : 'devolucion'),
       cantidad: Math.abs(delta),
       motivo,
     })
@@ -303,4 +305,83 @@ export async function registrarReingresoLote(ventas) {
 
   const unidades = conProducto.reduce((s, v) => s + (v.cantidad || 1), 0)
   return { reingresadas: aReingresar.length, productos: fisicoIds.length, unidades }
+}
+
+// ═══════════════════════════════════════════════════════════
+// CONTEO FÍSICO DE INVENTARIO
+//
+// Contás la mercadería con la mano y cargás el número. El sistema NO
+// sobrescribe en silencio: calcula la diferencia y deja un movimiento
+// tipo 'ajuste' con el antes y el después.
+//
+// Un ajuste NO es una compra ni una venta. Mezclarlos ensucia el historial
+// y hace imposible saber por qué cambió el stock. Por eso tiene tipo propio.
+//
+// Los combos no se cuentan: no tienen stock propio, se arman de sus
+// componentes. Contar un Pack Gudair sería contar dos veces.
+// ═══════════════════════════════════════════════════════════
+
+// LÓGICA PURA (testeable): compara lo contado contra lo que dice el sistema.
+// productos: [{ id, nombre, stock_actual, costo_unit, es_combo }]
+// conteos:   { [producto_id]: valorTipeado }  (string o número; vacío = no contado)
+// → filas con delta y valorización, + resumen
+export function calcularDiferencias(productos, conteos) {
+  const filas = []
+  for (const p of (productos || [])) {
+    if (p.es_combo) continue // los combos se derivan, no se cuentan
+    const bruto = conteos?.[p.id]
+    const vacio = bruto === '' || bruto === null || bruto === undefined
+    const n = vacio ? null : parseInt(bruto, 10)
+    if (!vacio && (isNaN(n) || n < 0)) continue // basura tipeada: se ignora
+    const sistema = p.stock_actual || 0
+    filas.push({
+      id: p.id,
+      nombre: p.nombre,
+      sistema,
+      contado: vacio ? null : n,
+      delta: vacio ? null : n - sistema,
+      valorDelta: vacio ? 0 : (n - sistema) * (p.costo_unit || 0),
+      costo_unit: p.costo_unit || 0,
+    })
+  }
+  const contadas = filas.filter(f => f.contado !== null)
+  const resumen = {
+    productos: filas.length,
+    contados: contadas.length,
+    coinciden: contadas.filter(f => f.delta === 0).length,
+    faltantes: contadas.filter(f => f.delta < 0).length,
+    sobrantes: contadas.filter(f => f.delta > 0).length,
+    unidadesFaltantes: contadas.filter(f => f.delta < 0).reduce((s, f) => s + Math.abs(f.delta), 0),
+    unidadesSobrantes: contadas.filter(f => f.delta > 0).reduce((s, f) => s + f.delta, 0),
+    valorNeto: contadas.reduce((s, f) => s + f.valorDelta, 0),
+    hayCambios: contadas.some(f => f.delta !== 0),
+  }
+  return { filas, resumen }
+}
+
+// Aplica un conteo físico. Solo toca los productos con diferencia.
+// Idempotente por naturaleza: si volvés a contar lo mismo, delta = 0 y no hace nada.
+export async function aplicarConteoFisico(filas, motivo = 'Conteo físico') {
+  const conDiferencia = (filas || []).filter(f => f.contado !== null && f.delta !== 0)
+  if (!conDiferencia.length) return { ajustados: 0, unidades: 0 }
+
+  const movimientos = []
+  await Promise.all(conDiferencia.map(f => {
+    movimientos.push({
+      producto_id: f.id,
+      producto_nombre: f.nombre,
+      tipo: 'ajuste',
+      cantidad: Math.abs(f.delta),
+      motivo: `${motivo}: sistema ${f.sistema} → contado ${f.contado} (${f.delta > 0 ? '+' : '−'}${Math.abs(f.delta)})`,
+    })
+    return supabase.from('productos').update({ stock_actual: f.contado }).eq('id', f.id)
+  }))
+
+  if (movimientos.length) {
+    try { await supabase.from('stock_movimientos').insert(movimientos) } catch (e) { /* stock ya aplicado */ }
+  }
+  return {
+    ajustados: conDiferencia.length,
+    unidades: conDiferencia.reduce((s, f) => s + Math.abs(f.delta), 0),
+  }
 }

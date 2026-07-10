@@ -2,9 +2,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
-import { calcularStockCombo, aplicarStockLoteNuevasVentas } from '../../lib/stockEngine'
+import { calcularStockCombo, aplicarStockLoteNuevasVentas, calcularDiferencias, aplicarConteoFisico } from '../../lib/stockEngine'
 import { calcularVelocidades, analizarReposicion, sugerirReposicion, URGENCIA_CFG } from '../../lib/stockIntel'
-import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save, Layers, Clock, TrendingUp } from 'lucide-react'
+import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save, Layers, Clock, TrendingUp, CheckCircle } from 'lucide-react'
 
 // Modal: agregar/editar producto completo
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -35,14 +35,15 @@ function ProductoModal({ producto, onClose, onSaved }) {
       ? await supabase.from('productos').insert(data)
       : await supabase.from('productos').update(data).eq('id', producto.id)
     if (error) { toast('Error: ' + error.message, 'error'); setLoading(false); return }
-    // Si al editar cambió el stock a mano, dejar rastro en el historial
+    // Si al editar cambió el stock a mano, dejar rastro auditable en el historial.
+    // Tipo 'ajuste': no es una compra ni una venta, es una corrección.
     if (!esNuevo && producto && data.stock_actual !== producto.stock_actual) {
       const delta = data.stock_actual - producto.stock_actual
       try {
         await supabase.from('stock_movimientos').insert({
           producto_id: producto.id, producto_nombre: data.nombre,
-          tipo: delta > 0 ? 'compra' : 'venta', cantidad: Math.abs(delta),
-          motivo: `Ajuste manual de stock (${delta > 0 ? '+' : '−'}${Math.abs(delta)})`,
+          tipo: 'ajuste', cantidad: Math.abs(delta),
+          motivo: `Ajuste manual: ${producto.stock_actual} → ${data.stock_actual} (${delta > 0 ? '+' : '−'}${Math.abs(delta)})`,
         })
       } catch (e) { /* el stock ya quedó guardado */ }
     }
@@ -208,6 +209,9 @@ export default function StockPage() {
   const [activeTab, setActiveTab] = useState('stock')
   const [confirmSync, setConfirmSync] = useState(false)
   const [sincronizando, setSincronizando] = useState(false)
+  const [conteos, setConteos] = useState({})        // { producto_id: valor tipeado }
+  const [aplicandoConteo, setAplicandoConteo] = useState(false)
+  const [confirmConteo, setConfirmConteo] = useState(false)
 
   const cargar = useCallback(async () => {
     setLoading(true)
@@ -250,6 +254,28 @@ export default function StockPage() {
       toast('Error sincronizando stock: ' + e.message, 'error')
     } finally {
       setSincronizando(false)
+    }
+  }
+
+  // ── Conteo físico de inventario ──
+  const { filas: filasConteo, resumen: resumenConteo } = calcularDiferencias(productos, conteos)
+
+  const aplicarConteo = async () => {
+    setAplicandoConteo(true)
+    try {
+      const res = await aplicarConteoFisico(filasConteo)
+      if (res.ajustados > 0) {
+        toast(`${res.ajustados} producto${res.ajustados === 1 ? '' : 's'} ajustado${res.ajustados === 1 ? '' : 's'} · ${res.unidades} unidades corregidas`, 'success')
+      } else {
+        toast('Todo coincide: no hubo nada que ajustar', 'info')
+      }
+      setConteos({})
+      setConfirmConteo(false)
+      cargar()
+    } catch (e) {
+      toast('Error aplicando el conteo: ' + e.message, 'error')
+    } finally {
+      setAplicandoConteo(false)
     }
   }
 
@@ -341,6 +367,7 @@ export default function StockPage() {
 
       <div className="tabs" style={{ alignSelf: 'flex-start' }}>
         <button className={`tab ${activeTab === 'stock' ? 'active' : ''}`} onClick={() => setActiveTab('stock')}>Stock actual</button>
+        <button className={`tab ${activeTab === 'conteo' ? 'active' : ''}`} onClick={() => setActiveTab('conteo')}>Conteo físico</button>
         <button className={`tab ${activeTab === 'historial' ? 'active' : ''}`} onClick={() => setActiveTab('historial')}>Historial</button>
       </div>
 
@@ -504,6 +531,100 @@ export default function StockPage() {
         </>
       )}
 
+      {activeTab === 'conteo' && (
+        <>
+          <div className="card" style={{ padding: '14px 18px' }}>
+            <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
+              Contá la mercadería con la mano y cargá el número real. El sistema calcula la diferencia y deja un <strong>ajuste auditable</strong> en el historial — nunca sobrescribe en silencio. Los productos que dejes vacíos no se tocan. Los combos no aparecen: se arman de sus componentes.
+            </p>
+          </div>
+
+          {resumenConteo.contados > 0 && (
+            <div className="kpi-grid">
+              <div className="kpi-card">
+                <div className="kpi-label">Contados</div>
+                <div className="kpi-value">{resumenConteo.contados}<span style={{ fontSize: 14, color: 'var(--text-muted)' }}>/{resumenConteo.productos}</span></div>
+                <div className="kpi-sub">{resumenConteo.coinciden} coinciden con el sistema</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label">Falta mercadería</div>
+                <div className="kpi-value" style={{ color: resumenConteo.faltantes ? 'var(--red)' : 'var(--text-primary)' }}>{resumenConteo.faltantes}</div>
+                <div className="kpi-sub">{resumenConteo.unidadesFaltantes} unidades menos de lo esperado</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label">Sobra mercadería</div>
+                <div className="kpi-value" style={{ color: resumenConteo.sobrantes ? 'var(--yellow)' : 'var(--text-primary)' }}>{resumenConteo.sobrantes}</div>
+                <div className="kpi-sub">{resumenConteo.unidadesSobrantes} unidades más de lo esperado</div>
+              </div>
+              <div className="kpi-card">
+                <div className="kpi-label">Valor de la diferencia</div>
+                <div className="kpi-value" style={{ color: resumenConteo.valorNeto < 0 ? 'var(--red)' : resumenConteo.valorNeto > 0 ? 'var(--green)' : 'var(--text-primary)' }}>
+                  {formatGs(resumenConteo.valorNeto)}
+                </div>
+                <div className="kpi-sub">A costo de compra</div>
+              </div>
+            </div>
+          )}
+
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="table-wrapper">
+              <table className="tabla-responsive">
+                <thead>
+                  <tr>
+                    <th>Producto</th>
+                    <th>Dice el sistema</th>
+                    <th>Contaste</th>
+                    <th>Diferencia</th>
+                    <th>Valor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filasConteo.map(f => {
+                    const sinContar = f.contado === null
+                    return (
+                      <tr key={f.id}>
+                        <td data-label="Producto" style={{ fontWeight: 500 }}>{f.nombre}</td>
+                        <td data-label="Dice el sistema" style={{ fontWeight: 600 }}>{f.sistema}</td>
+                        <td data-label="Contaste">
+                          <input
+                            className="form-input"
+                            type="number"
+                            min="0"
+                            inputMode="numeric"
+                            placeholder="—"
+                            value={conteos[f.id] ?? ''}
+                            onChange={e => setConteos(prev => ({ ...prev, [f.id]: e.target.value }))}
+                            style={{ width: 90, padding: '6px 8px', fontSize: 14, fontFamily: 'var(--font-display)', textAlign: 'center' }}
+                          />
+                        </td>
+                        <td data-label="Diferencia" style={{ fontWeight: 700, color: sinContar ? 'var(--text-muted)' : f.delta === 0 ? 'var(--green)' : f.delta < 0 ? 'var(--red)' : 'var(--yellow)' }}>
+                          {sinContar ? '—' : f.delta === 0 ? 'OK' : `${f.delta > 0 ? '+' : ''}${f.delta}`}
+                        </td>
+                        <td data-label="Valor" style={{ color: sinContar || f.delta === 0 ? 'var(--text-muted)' : f.valorDelta < 0 ? 'var(--red)' : 'var(--green)', fontSize: 12 }}>
+                          {sinContar || f.delta === 0 ? '—' : formatGs(f.valorDelta)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button className="btn btn-primary" onClick={() => setConfirmConteo(true)} disabled={!resumenConteo.hayCambios || aplicandoConteo}>
+              <CheckCircle size={15} /> Aplicar conteo
+            </button>
+            {Object.keys(conteos).length > 0 && (
+              <button className="btn btn-ghost" onClick={() => setConteos({})} disabled={aplicandoConteo}>Limpiar</button>
+            )}
+            {!resumenConteo.hayCambios && resumenConteo.contados > 0 && (
+              <span style={{ fontSize: 12, color: 'var(--green)' }}>Todo coincide con el sistema. Nada que ajustar.</span>
+            )}
+          </div>
+        </>
+      )}
+
       {activeTab === 'historial' && (
         <div className="table-wrapper">
           <table className="tabla-responsive">
@@ -542,6 +663,45 @@ export default function StockPage() {
           onClose={() => setModalProducto(null)}
           onSaved={cargar}
         />
+      )}
+
+      {confirmConteo && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && !aplicandoConteo && setConfirmConteo(false)}>
+          <div className="modal">
+            <div className="modal-header">
+              <h2 className="modal-title">Aplicar conteo físico</h2>
+              {!aplicandoConteo && <button className="modal-close" onClick={() => setConfirmConteo(false)}><X size={18} /></button>}
+            </div>
+            <div style={{ padding: '4px 4px 8px' }}>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6, marginTop: 0 }}>
+                Se van a ajustar <strong>{filasConteo.filter(f => f.contado !== null && f.delta !== 0).length} producto(s)</strong> para que el stock refleje lo que contaste.
+              </p>
+              <div style={{ maxHeight: 220, overflowY: 'auto', margin: '10px 0' }}>
+                {filasConteo.filter(f => f.contado !== null && f.delta !== 0).map(f => (
+                  <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 12.5 }}>
+                    <span style={{ fontWeight: 500 }}>{f.nombre}</span>
+                    <span className="muted">{f.sistema} → <strong style={{ color: 'var(--text-primary)' }}>{f.contado}</strong></span>
+                    <span style={{ fontWeight: 700, color: f.delta < 0 ? 'var(--red)' : 'var(--yellow)', minWidth: 46, textAlign: 'right' }}>
+                      {f.delta > 0 ? '+' : ''}{f.delta}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 0 }}>
+                Cada ajuste queda registrado en el historial con el antes y el después. Los productos que dejaste vacíos no se tocan.
+                {resumenConteo.valorNeto !== 0 && (
+                  <> Impacto en el valor del inventario: <strong style={{ color: resumenConteo.valorNeto < 0 ? 'var(--red)' : 'var(--green)' }}>{formatGs(resumenConteo.valorNeto)}</strong>.</>
+                )}
+              </p>
+            </div>
+            <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
+              <button className="btn btn-ghost" onClick={() => setConfirmConteo(false)} disabled={aplicandoConteo}>Cancelar</button>
+              <button className="btn btn-primary" onClick={aplicarConteo} disabled={aplicandoConteo}>
+                {aplicandoConteo ? 'Aplicando…' : 'Aplicar y registrar ajustes'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {confirmSync && (
