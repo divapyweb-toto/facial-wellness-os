@@ -34,7 +34,6 @@ const navDinero = [
 ]
 const navHerramientas = [
   { to: '/calculadora', icon: Calculator,    label: 'Calculadora' },
-  { to: '/importar',    icon: Upload,        label: 'Importar'    },
 ]
 const navMovilFijo = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Inicio'   },

@@ -1,39 +1,35 @@
 // src/lib/flete.js
 // ═══════════════════════════════════════════════════════════
-// TARIFA DE FLETE DE PUNTO A PUNTO
+// COSTO DE FLETE DE CADA VENTA
 //
-// El costo por envío cambió con el tiempo. Para que los reportes históricos
-// queden EXACTOS, cada envío se valoriza con la tarifa que regía en su fecha,
-// no con la tarifa de hoy.
+// El costo de envío NO es una tarifa fija: depende de la transportadora que
+// se usó (Punto a Punto, Multienvíos, Tiemsa, TSI…, cada una con su precio).
+// Por eso cada venta guarda su propio `costo_envio` al crearse, tomado de la
+// transportadora elegida en ese momento. Ese es el dato real e histórico.
 //
-// Si mañana sube de nuevo, agregás una línea más acá y todo el sistema queda
-// consistente — es el único lugar donde vive esta tabla.
+// Los reportes usan ESE costo_envio. Solo si una venta no lo tiene cargado
+// (importada sin dato, o muy vieja) se usa la tarifa vigente de PaP como
+// respaldo, para no romper el cálculo.
 // ═══════════════════════════════════════════════════════════
 
-// Tramos de tarifa, del más nuevo al más viejo. `desde` = primera fecha (incl.)
-// en que rige ese precio.
-const TRAMOS = [
-  { desde: '2026-07-10', costo: 29000 }, // subió el 10-jul-2026
-  { desde: '0000-00-00', costo: 27000 }, // tarifa histórica hasta el 09-jul-2026
-]
+// Tarifa vigente de Punto a Punto — se usa como respaldo cuando una venta no
+// tiene costo_envio, y como valor por defecto en formularios de venta nueva.
+export const FLETE_RESPALDO = 29000
 
-// Costo de flete para un envío según su fecha (YYYY-MM-DD).
-// Si no hay fecha, usa la tarifa vigente hoy (la más nueva).
-export function costoFlete(fecha) {
-  const f = fecha ? String(fecha).slice(0, 10) : TRAMOS[0].desde
-  for (const t of TRAMOS) {
-    if (f >= t.desde) return t.costo
-  }
-  return TRAMOS[TRAMOS.length - 1].costo
+// Costo de flete de un paquete/venta: su costo_envio real, o el respaldo.
+// Acepta tanto `costo_envio` (como viene de la BD) como `costoEnvio` (camel).
+export function fleteDe(p) {
+  const c = p?.costo_envio ?? p?.costoEnvio
+  return (c != null && c > 0) ? c : FLETE_RESPALDO
 }
 
-// Tarifa vigente hoy (para formularios de venta nueva, calculadora, etc.)
-export function costoFleteActual() {
-  return TRAMOS[0].costo
-}
-
-// Suma el flete de una lista de paquetes, cada uno a la tarifa de SU fecha.
-// paquetes: [{ fecha }]
+// Suma el flete de una lista de paquetes, cada uno con SU propio costo.
 export function sumarFlete(paquetes) {
-  return (paquetes || []).reduce((s, p) => s + costoFlete(p.fecha), 0)
+  return (paquetes || []).reduce((s, p) => s + fleteDe(p), 0)
+}
+
+// Tarifa vigente hoy (valor por defecto para una venta nueva cuando todavía
+// no se eligió transportadora). Es la de PaP.
+export function costoFleteActual() {
+  return FLETE_RESPALDO
 }

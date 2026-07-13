@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
-import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock } from 'lucide-react'
+import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, MessageCircle } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
 
 const formatGs = (n) => Math.round(n || 0).toLocaleString('es-PY') + ' Gs.'
@@ -126,6 +126,45 @@ export default function RendicionPage() {
   const montoSeleccionado = stats.listaSinRendir
     .filter(m => seleccionados.has(m.nro_guia_pap))
     .reduce((s, m) => s + (m.importe || 0), 0)
+
+  // ── Armar mensaje para el grupo de WhatsApp de PaP ──────
+  // Genera un texto listo para copiar y pegar, reclamando los paquetes
+  // entregados que todavía no te rindieron. Usa los seleccionados; si no hay
+  // ninguno seleccionado, usa todos los sin rendir.
+  const [copiado, setCopiado] = useState(false)
+  const armarMensajeWhatsApp = () => {
+    const elegidos = seleccionados.size
+      ? stats.listaSinRendir.filter(m => seleccionados.has(m.nro_guia_pap))
+      : stats.listaSinRendir
+    if (!elegidos.length) return
+
+    const total = elegidos.reduce((s, m) => s + (m.importe || 0), 0)
+    const lineas = elegidos.map(m => {
+      const guia = m.nro_guia_pap || '—'
+      const ref = m.n_referencia ? `Ped. ${m.n_referencia}` : ''
+      const ciudad = m.ciudad || ''
+      const monto = formatGs(m.importe || 0)
+      const dias = m.diasSinRendir != null ? `${m.diasSinRendir} días` : ''
+      const partes = [`Guía ${guia}`, ref, ciudad, monto, dias].filter(Boolean)
+      return `• ${partes.join(' · ')}`
+    })
+
+    const encabezado = elegidos.length === 1
+      ? `Hola! Consulto por este paquete entregado que todavía no me rindieron:`
+      : `Hola! Consulto por estos ${elegidos.length} paquetes entregados que todavía no me rindieron:`
+    const pie = `\nTotal a rendir: ${formatGs(total)}\nGracias!`
+    const mensaje = `${encabezado}\n\n${lineas.join('\n')}\n${pie}`
+
+    // Copiar al portapapeles
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(mensaje).then(() => {
+        setCopiado(true)
+        setTimeout(() => setCopiado(false), 2500)
+      }).catch(() => { /* si falla, el textarea de respaldo queda visible */ })
+    }
+    setTextoWhatsApp(mensaje)
+  }
+  const [textoWhatsApp, setTextoWhatsApp] = useState('')
 
   // ── Marcar como rendido manual ─────────────────────────
   const marcarRendidoManual = async () => {
@@ -310,8 +349,62 @@ export default function RendicionPage() {
                   </button>
                 </div>
               )}
+
+              {/* Reclamar por WhatsApp a PaP */}
+              {stats.listaSinRendir.length > 0 && (
+                <button
+                  onClick={armarMensajeWhatsApp}
+                  style={{
+                    padding: '7px 14px', fontSize: 12, fontWeight: 700, borderRadius: 8, cursor: 'pointer', border: 'none',
+                    background: copiado ? 'var(--green)' : '#25D366', color: '#fff',
+                    display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+                  }}
+                  title={seleccionados.size ? 'Copiar los seleccionados para WhatsApp' : 'Copiar todos los sin rendir para WhatsApp'}
+                >
+                  <MessageCircle size={13} />
+                  {copiado ? '¡Copiado!' : `Reclamar por WhatsApp${seleccionados.size ? ` (${seleccionados.size})` : ` (${stats.listaSinRendir.length})`}`}
+                </button>
+              )}
             </div>
           </div>
+
+          {/* Mensaje generado, listo para pegar */}
+          {textoWhatsApp && (
+            <div className="card" style={{ padding: '14px 18px', marginTop: 12, border: '1px solid #25D366' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <MessageCircle size={14} color="#25D366" /> Mensaje para el grupo de PaP {copiado && <span style={{ color: 'var(--green)', fontWeight: 600 }}>· copiado al portapapeles</span>}
+                </span>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    onClick={() => { navigator.clipboard?.writeText(textoWhatsApp); setCopiado(true); setTimeout(() => setCopiado(false), 2500) }}
+                    style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-hover)', color: 'var(--text-primary)' }}
+                  >
+                    Copiar de nuevo
+                  </button>
+                  <button
+                    onClick={() => setTextoWhatsApp('')}
+                    style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)' }}
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+              <textarea
+                readOnly
+                value={textoWhatsApp}
+                onFocus={e => e.target.select()}
+                style={{
+                  width: '100%', minHeight: 140, fontSize: 12, lineHeight: 1.6, fontFamily: 'var(--font-body)',
+                  padding: 12, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-input, var(--bg-card))',
+                  color: 'var(--text-primary)', resize: 'vertical',
+                }}
+              />
+              <p style={{ fontSize: 10.5, color: 'var(--text-muted)', margin: '6px 0 0' }}>
+                Ya está copiado. Abrí el grupo de PaP en WhatsApp y pegá (Cmd+V). Si editaste la selección, tocá "Reclamar" de nuevo.
+              </p>
+            </div>
+          )}
 
           <div style={{ overflowX: 'auto', maxHeight: 480, overflowY: 'auto' }}>
             <table className="tabla-responsive" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 580 }}>

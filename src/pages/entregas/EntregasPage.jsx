@@ -364,7 +364,8 @@ export default function EntregasPage() {
   const ventasComoPaquetes = (ventasMes) => ventasMes.map(v => ({
     n_referencia: v.n_referencia,
     importe: v.total || 0,
-    fecha: v.fecha,  // para valorizar el flete a la tarifa vigente en su fecha
+    fecha: v.fecha,
+    costo_envio: v.costo_envio,  // flete real de esta venta (su transportadora)
     categoria: v.estado === 'entregado' ? 'entregado'
              : v.estado === 'devuelto' ? 'devuelto'
              : 'en_proceso',

@@ -6,6 +6,7 @@ import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
 import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
 import { costoFleteActual } from '../../lib/flete'
+import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
 import { fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import {
@@ -127,13 +128,18 @@ function mapearPedido(row) {
   const producto_nombre = row['Lineitem name'] || ''
   const cantidad = parseInt(row['Lineitem quantity']) || 1
   const total = parseInt((row['Total'] || '0').replace(/[^0-9]/g, '')) || 0
+  // ¿PaP hace cobranza en esta ciudad? Si no, no se puede despachar por PaP
+  // aunque el pedido esté confirmado.
+  const cobranzaOk = tieneCobranzaPaP(ciudad)
   const faltantes = []
   if (cfg.despachar) {
     if (!nombre) faltantes.push('nombre')
     if (!telefono) faltantes.push('teléfono')
     if (!direccion) faltantes.push('dirección')
   }
-  return { n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion, telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado, cfg, despachar: cfg.despachar, faltantes }
+  // despachable = estado ok (confirmado/ayuda) Y la ciudad tiene cobranza PaP
+  const despachar = cfg.despachar && cobranzaOk
+  return { n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion, telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado, cfg, cobranzaOk, despachar, faltantes }
 }
 
 // ─── Match de producto del catálogo (resuelve costo_prod) ───
@@ -384,6 +390,8 @@ export default function DespachoPagina() {
     ayuda: todos.filter(p => p.estado_releasit === 'ayuda').length,
     pending: todos.filter(p => p.estado_releasit === 'pending').length,
     cancelados: todos.filter(p => p.estado_releasit === 'cancelado').length,
+    // Confirmados/ayuda pero de ciudad SIN cobranza PaP (no se pueden despachar)
+    fueraCobertura: todos.filter(p => p.cfg.despachar && !p.cobranzaOk).length,
     total: todos.length,
     valorDespacho: paraDespacho.reduce((s, p) => s + p.total, 0),
     ticketProm: paraDespacho.length ? Math.round(paraDespacho.reduce((s, p) => s + p.total, 0) / paraDespacho.length) : 0,
@@ -925,10 +933,16 @@ export default function DespachoPagina() {
                   </span>
                 ))}
               </div>
+              {stats.fueraCobertura > 0 && (
+                <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: 'rgba(234,179,8,0.1)', border: '1px solid var(--yellow)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <MapPin size={16} color="var(--yellow)" style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    <strong style={{ color: 'var(--yellow)' }}>{stats.fueraCobertura} pedido{stats.fueraCobertura === 1 ? '' : 's'} confirmado{stats.fueraCobertura === 1 ? '' : 's'} pero fuera de cobertura PaP.</strong> Punto a Punto no hace cobranza en esas ciudades, así que no se despachan por acá. Buscalos abajo marcados con 📍.
+                  </span>
+                </div>
+              )}
             </div>
           )}
-
-          {/* Desglose producto + ciudad */}
           {paraDespacho.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div className="card card-sm">
@@ -1070,7 +1084,9 @@ export default function DespachoPagina() {
                       <td data-label="Despacho">
                         {p.despachar
                           ? <span className="badge badge-green" style={{ fontSize: 10 }}>✓ Despachar</span>
-                          : <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>
+                          : (p.cfg.despachar && !p.cobranzaOk)
+                            ? <span className="badge" style={{ fontSize: 10, background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', border: '1px solid var(--yellow)' }} title="PaP no hace cobranza en esta ciudad">📍 Sin cobranza PaP</span>
+                            : <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>
                         }
                       </td>
                     </tr>

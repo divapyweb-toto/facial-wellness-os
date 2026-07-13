@@ -20,7 +20,7 @@
 // (percentil 90 de los días que tardan las entregas).
 // ═══════════════════════════════════════════════════════════
 
-import { costoFlete, sumarFlete } from './flete'
+import { sumarFlete } from './flete'
 
 // Normaliza una referencia para cruzar ventas ⋈ entregas
 export function normRef(ref) {

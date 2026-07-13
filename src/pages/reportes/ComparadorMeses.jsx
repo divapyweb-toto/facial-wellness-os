@@ -76,7 +76,7 @@ export default function ComparadorMeses({ mesesDisponibles = [], gastosPorMes = 
     try {
       const [vts, ents] = await Promise.all([
         fetchAll(() => supabase.from('ventas')
-          .select('n_referencia, fecha, total, estado, costo_prod, producto_nombre')
+          .select('n_referencia, fecha, total, estado, costo_prod, costo_envio, producto_nombre')
           .is('deleted_at', null)),
         fetchAll(() => supabase.from('entregas').select('n_referencia, fecha_entrega'), { columnaOrden: 'nro_guia_pap' }),
       ])
