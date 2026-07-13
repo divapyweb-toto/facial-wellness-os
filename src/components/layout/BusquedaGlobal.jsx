@@ -7,7 +7,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
-import { Search, X, ShoppingCart, Users, Package, DollarSign, BarChart3, Truck, Megaphone, LayoutDashboard, Calculator, Upload, FileBarChart2, MapPin, Settings, Shield, CornerDownLeft } from 'lucide-react'
+import { Search, X, ShoppingCart, Users, Package, DollarSign, BarChart3, Truck, Megaphone, LayoutDashboard, Calculator, FileBarChart2, MapPin, Settings, Shield, CornerDownLeft } from 'lucide-react'
 
 // Secciones navegables (con sus iconos y palabras clave)
 const SECCIONES = [
@@ -21,7 +21,6 @@ const SECCIONES = [
   { to: '/despacho', label: 'Despacho', icon: Package, keys: 'envios preparar paquetes' },
   { to: '/entregas', label: 'Entregas', icon: MapPin, keys: 'mapa zonas reparto' },
   { to: '/calculadora', label: 'Calculadora', icon: Calculator, keys: 'roas margen breakeven' },
-  { to: '/importar', label: 'Importar', icon: Upload, keys: 'csv shopify subir datos' },
   { to: '/reportes', label: 'Reportes', icon: FileBarChart2, keys: 'informes pdf exportar' },
   { to: '/config', label: 'Configuración', icon: Settings, keys: 'ajustes productos precios usuarios admin' },
   { to: '/sistema', label: 'Sistema', icon: Shield, keys: 'papelera errores auditoria borrados admin' },

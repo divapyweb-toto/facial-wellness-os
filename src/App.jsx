@@ -16,7 +16,6 @@ const ReportesPage = lazy(() => import('./pages/reportes/ReportesPage'))
 const ConfigPage = lazy(() => import('./pages/config/ConfigPage'))
 const ClientesPage = lazy(() => import('./pages/clientes/ClientesPage'))
 const CalculadoraPage = lazy(() => import('./pages/calculadora/CalculadoraPage'))
-const ImportarPage = lazy(() => import('./pages/importar/ImportarPage'))
 const DespachoPagina = lazy(() => import('./pages/despacho/DespachoPagina'))
 const RecompraPage = lazy(() => import('./pages/recompra/RecompraPage'))
 const RecepcionPage = lazy(() => import('./pages/recepcion/RecepcionPage'))
@@ -63,7 +62,6 @@ export default function App() {
           <Route path="entregas" element={<Suspense fallback={<PageLoader />}><EntregasPage /></Suspense>} />
           <Route path="recepcion" element={<Suspense fallback={<PageLoader />}><RecepcionPage /></Suspense>} />
           <Route path="calculadora" element={<Suspense fallback={<PageLoader />}><CalculadoraPage /></Suspense>} />
-          <Route path="importar" element={<Suspense fallback={<PageLoader />}><ImportarPage /></Suspense>} />
           <Route path="reportes" element={<Suspense fallback={<PageLoader />}><ReportesPage /></Suspense>} />
           <Route path="recompra" element={<Suspense fallback={<PageLoader />}><RecompraPage /></Suspense>} />
           <Route path="config" element={<Suspense fallback={<PageLoader />}><ConfigPage /></Suspense>} />

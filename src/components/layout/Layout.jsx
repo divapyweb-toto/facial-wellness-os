@@ -6,7 +6,7 @@ import { useAuth } from '../../lib/AuthContext'
 import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
-  Users, Calculator, Upload, BarChart3, PackageCheck, MapPin, X,
+  Users, Calculator, BarChart3, PackageCheck, MapPin, X,
   Grid3X3, Search as SearchIcon, Repeat, PackageOpen,
 } from 'lucide-react'
 
