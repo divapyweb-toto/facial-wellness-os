@@ -383,19 +383,43 @@ export default function DespachoPagina() {
   const [busqVentas, setBusqVentas] = useState('')
 
   // ── Memos CSV ──────────────────────────────────────────
-  const paraDespacho = useMemo(() => todos.filter(p => p.despachar), [todos])
-  const excluidos = useMemo(() => todos.filter(p => !p.despachar), [todos])
+  // Pedidos que el usuario fuerza a despachar aunque la ciudad no matchee
+  // cobranza (porque él sabe que PaP igual llega, o corrigió el nombre).
+  const [forzados, setForzados] = useState(new Set())
+
+  // Aplica el override: un pedido va a despacho si el filtro lo aprobó O si el
+  // usuario lo forzó manualmente.
+  const todosConOverride = useMemo(
+    () => todos.map(p => ({
+      ...p,
+      despachar: p.despachar || forzados.has(p.n_referencia),
+      forzado: forzados.has(p.n_referencia),
+    })),
+    [todos, forzados]
+  )
+
+  const paraDespacho = useMemo(() => todosConOverride.filter(p => p.despachar), [todosConOverride])
+  const excluidos = useMemo(() => todosConOverride.filter(p => !p.despachar), [todosConOverride])
+
+  const toggleForzar = (ref) => {
+    setForzados(prev => {
+      const s = new Set(prev)
+      if (s.has(ref)) s.delete(ref); else s.add(ref)
+      return s
+    })
+  }
   const stats = useMemo(() => ({
     confirmados: todos.filter(p => p.estado_releasit === 'confirmado').length,
     ayuda: todos.filter(p => p.estado_releasit === 'ayuda').length,
     pending: todos.filter(p => p.estado_releasit === 'pending').length,
     cancelados: todos.filter(p => p.estado_releasit === 'cancelado').length,
     // Confirmados/ayuda pero de ciudad SIN cobranza PaP (no se pueden despachar)
-    fueraCobertura: todos.filter(p => p.cfg.despachar && !p.cobranzaOk).length,
+    // Confirmados/ayuda de ciudad SIN cobranza que NO fueron forzados a despachar
+    fueraCobertura: todos.filter(p => p.cfg.despachar && !p.cobranzaOk && !forzados.has(p.n_referencia)).length,
     total: todos.length,
     valorDespacho: paraDespacho.reduce((s, p) => s + p.total, 0),
     ticketProm: paraDespacho.length ? Math.round(paraDespacho.reduce((s, p) => s + p.total, 0) / paraDespacho.length) : 0,
-  }), [todos, paraDespacho])
+  }), [todos, paraDespacho, forzados])
   const porProducto = useMemo(() => {
     const m = {}
     paraDespacho.forEach(p => { const t = getTipo(p.producto_nombre); m[t] = (m[t] || 0) + p.cantidad })
@@ -408,16 +432,16 @@ export default function DespachoPagina() {
   }, [paraDespacho])
   const conFaltantes = useMemo(() => paraDespacho.filter(p => p.faltantes.length > 0), [paraDespacho])
   const tablaFiltrada = useMemo(() => {
-    if (!busqueda.trim()) return todos
+    if (!busqueda.trim()) return todosConOverride
     const q = busqueda.toLowerCase()
-    return todos.filter(p =>
+    return todosConOverride.filter(p =>
       p.cliente_nombre.toLowerCase().includes(q) ||
       p.ciudad.toLowerCase().includes(q) ||
       p.n_referencia.includes(q) ||
       p.telefono.includes(q) ||
       getTipo(p.producto_nombre).toLowerCase().includes(q)
     )
-  }, [todos, busqueda])
+  }, [todosConOverride, busqueda])
 
   // ── Memos Ventas ───────────────────────────────────────
   const ventasFiltradas = useMemo(() => {
@@ -937,7 +961,7 @@ export default function DespachoPagina() {
                 <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: 'rgba(234,179,8,0.1)', border: '1px solid var(--yellow)', display: 'flex', alignItems: 'center', gap: 10 }}>
                   <MapPin size={16} color="var(--yellow)" style={{ flexShrink: 0 }} />
                   <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                    <strong style={{ color: 'var(--yellow)' }}>{stats.fueraCobertura} pedido{stats.fueraCobertura === 1 ? '' : 's'} confirmado{stats.fueraCobertura === 1 ? '' : 's'} pero fuera de cobertura PaP.</strong> Punto a Punto no hace cobranza en esas ciudades, así que no se despachan por acá. Buscalos abajo marcados con 📍.
+                    <strong style={{ color: 'var(--yellow)' }}>{stats.fueraCobertura} pedido{stats.fueraCobertura === 1 ? '' : 's'} confirmado{stats.fueraCobertura === 1 ? '' : 's'} pero fuera de cobertura PaP.</strong> Punto a Punto no figura con cobranza en esas ciudades, así que no se despachan. Buscalos abajo marcados con 📍 — si sabés que PaP igual llega, tocá el botón para despacharlos igual.
                   </span>
                 </div>
               )}
@@ -1082,12 +1106,27 @@ export default function DespachoPagina() {
                         </span>
                       </td>
                       <td data-label="Despacho">
-                        {p.despachar
-                          ? <span className="badge badge-green" style={{ fontSize: 10 }}>✓ Despachar</span>
-                          : (p.cfg.despachar && !p.cobranzaOk)
-                            ? <span className="badge" style={{ fontSize: 10, background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', border: '1px solid var(--yellow)' }} title="PaP no hace cobranza en esta ciudad">📍 Sin cobranza PaP</span>
-                            : <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>
-                        }
+                        {p.forzado ? (
+                          <button
+                            onClick={() => toggleForzar(p.n_referencia)}
+                            title="Forzado por vos. Clic para volver a excluir."
+                            style={{ cursor: 'pointer', border: '1px solid var(--green)', background: 'rgba(34,197,94,0.12)', color: 'var(--green)', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700 }}
+                          >
+                            ✓ Despachar (forzado)
+                          </button>
+                        ) : p.despachar ? (
+                          <span className="badge badge-green" style={{ fontSize: 10 }}>✓ Despachar</span>
+                        ) : (p.cfg.despachar && !p.cobranzaOk) ? (
+                          <button
+                            onClick={() => toggleForzar(p.n_referencia)}
+                            title="PaP no figura con cobranza en esta ciudad. Si sabés que igual llega, clic para despacharlo."
+                            style={{ cursor: 'pointer', background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 600 }}
+                          >
+                            📍 Sin cobranza · forzar
+                          </button>
+                        ) : (
+                          <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>
+                        )}
                       </td>
                     </tr>
                   ))}

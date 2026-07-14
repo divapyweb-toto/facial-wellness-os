@@ -106,28 +106,100 @@ export function normalizarCiudadPaP(raw) {
     .trim()
 }
 
+// Abreviaturas y apodos comunes que la gente escribe en Shopify.
+// Se resuelven ANTES del matching flexible, para que "CDE" → Ciudad del Este.
+const ABREVIATURAS = {
+  'cde': 'ciudad del este',
+  'cde capital': 'ciudad del este',
+  'este': 'ciudad del este',
+  'pjc': 'pedro juan caballero',
+  'pj caballero': 'pedro juan caballero',
+  'fdm': 'fernando de la mora',
+  'fdo de la mora': 'fernando de la mora',
+  'mra': 'mariano roque alonso',
+  'm roque alonso': 'mariano roque alonso',
+  'san lo': 'san lorenzo',
+  'cnel oviedo': 'coronel oviedo',
+  'coronel oviedo': 'coronel oviedo',
+  'encarna': 'encarnacion',
+  'pdte franco': 'presidente franco',
+  'pte franco': 'presidente franco',
+  'sj bautista': 'san juan bautista',
+  'campo nueve': 'campo 9',
+  'campo9': 'campo 9',
+  'dr juan eulogio estigarribia': 'campo 9', // Campo 9 = Dr. J. E. Estigarribia
+  'j augusto saldivar': 'j. augusto saldivar',
+  'san ber': 'san bernardino',
+}
+
+// Distancia de Levenshtein (cuántas ediciones para pasar de a → b).
+// Sirve para tolerar errores de tipeo: "estw" vs "este" = 1 edición.
+function distancia(a, b) {
+  const m = a.length, n = b.length
+  if (Math.abs(m - n) > 3) return 99 // muy distintas, ni calcular
+  const dp = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)])
+  for (let j = 0; j <= n; j++) dp[0][j] = j
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const costo = a[i - 1] === b[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + costo)
+    }
+  }
+  return dp[m][n]
+}
+
+// ¿Dos nombres son "el mismo" tolerando typos? Umbral según el largo:
+// nombres largos toleran más ediciones, cortos casi ninguna (para no confundir
+// ciudades distintas que se parecen).
+function esParecido(a, b) {
+  if (a === b) return true
+  const largo = Math.max(a.length, b.length)
+  if (largo < 5) return false            // muy corto: solo exacto
+  const d = distancia(a, b)
+  if (largo >= 8) return d <= 2           // "ciudad del este" tolera 2 typos
+  return d <= 1                           // 5–7 letras: 1 typo
+}
+
+// Resuelve el nombre real de una ciudad tras normalizar y aplicar abreviaturas.
+function resolverNombre(raw) {
+  const n = normalizarCiudadPaP(raw)
+  if (!n) return ''
+  return ABREVIATURAS[n] || n
+}
+
+// Busca la ciudad de cobranza que corresponde al texto ingresado.
+// Devuelve la clave de la ciudad (normalizada) o null.
+function buscarCiudad(raw) {
+  const n = resolverNombre(raw)
+  if (!n) return null
+  // 1) exacto
+  if (CIUDADES_COBRANZA[n]) return n
+  // 2) el texto contiene el nombre de una ciudad de cobranza (ej. "cde capital"
+  //    ya resuelto, o "luque centro" → contiene "luque")
+  for (const c of Object.keys(CIUDADES_COBRANZA)) {
+    if (n === c) return c
+    if (n.startsWith(c + ' ') || n.endsWith(' ' + c) || n.includes(' ' + c + ' ')) return c
+  }
+  // 3) tolerancia a errores de tipeo (Levenshtein)
+  let mejor = null, mejorD = 99
+  for (const c of Object.keys(CIUDADES_COBRANZA)) {
+    if (esParecido(n, c)) {
+      const d = distancia(n, c)
+      if (d < mejorD) { mejorD = d; mejor = c }
+    }
+  }
+  return mejor
+}
+
 // ¿PaP hace cobranza en esta ciudad?
 export function tieneCobranzaPaP(ciudad) {
-  const n = normalizarCiudadPaP(ciudad)
-  if (!n) return false
-  if (CIUDADES_COBRANZA[n]) return true
-  // Coincidencia flexible: si el nombre normalizado empieza igual (ej. "ciudad
-  // del este centro" → "ciudad del este"). Evita falsos negativos por sufijos.
-  for (const c of Object.keys(CIUDADES_COBRANZA)) {
-    if (n === c || n.startsWith(c + ' ') || c.startsWith(n + ' ')) return true
-  }
-  return false
+  return buscarCiudad(ciudad) != null
 }
 
 // Zona PaP de la ciudad (o null si no tiene cobranza)
 export function zonaPaP(ciudad) {
-  const n = normalizarCiudadPaP(ciudad)
-  const z = CIUDADES_COBRANZA[n]
-  if (z) return z
-  for (const c of Object.keys(CIUDADES_COBRANZA)) {
-    if (n === c || n.startsWith(c + ' ')) return CIUDADES_COBRANZA[c]
-  }
-  return null
+  const c = buscarCiudad(ciudad)
+  return c ? CIUDADES_COBRANZA[c] : null
 }
 
 // Cantidad de ciudades con cobranza (para mostrar en la UI)
