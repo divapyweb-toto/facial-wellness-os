@@ -20,7 +20,7 @@ import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { interpretarEscaneo } from '../../lib/barcode'
 import { beep } from '../../lib/beep'
-import { ScanLine, CheckCircle, AlertTriangle, X, Truck, Clock } from 'lucide-react'
+import { ScanLine, CheckCircle, AlertTriangle, X, Truck, Clock, ListChecks } from 'lucide-react'
 
 const DIAS_OLVIDADO = 3
 const fmtGs = (n) => `Gs. ${Number(n || 0).toLocaleString('es-PY')}`
@@ -121,6 +121,31 @@ export default function ModalSalida({ onClose, onConfirmado }) {
   const onSubmit = (e) => { e.preventDefault(); procesar(valor); setValor('') }
   const quitar = (id) => setTanda(prev => prev.filter(t => t.id !== id))
 
+  // ── Modo manual (por si te olvidaste de escanear y ya despachaste) ──
+  const [modoManual, setModoManual] = useState(false)
+
+  // Agrega a la tanda TODOS los pendientes que no estén ya cargados
+  const agregarTodos = () => {
+    const yaEnTanda = new Set(tanda.map(t => t.id))
+    const nuevos = esperados
+      .filter(v => !yaEnTanda.has(v.id))
+      .map(v => ({ ...v, _raro: v.estado !== 'pendiente' }))
+    if (!nuevos.length) return
+    setTanda(prev => [...nuevos, ...prev])
+    beep(true)
+    setUltimo({ tipo: 'ok', titulo: `${nuevos.length} agregados a la tanda`, detalle: 'Todos los pendientes quedaron listos para confirmar la salida.' })
+  }
+
+  // Agrega o quita un pedido puntual de la tanda (para seleccionar 1 por 1)
+  const toggleManual = (venta) => {
+    if (tandaIds.has(venta.id)) {
+      quitar(venta.id)
+    } else {
+      setTanda(prev => [{ ...venta, _raro: venta.estado !== 'pendiente' }, ...prev])
+      beep(true)
+    }
+  }
+
   const confirmar = async () => {
     if (!tanda.length) return
     setConfirmando(true)
@@ -215,6 +240,78 @@ export default function ModalSalida({ onClose, onConfirmado }) {
             </div>
           )}
         </div>
+
+        {/* Acciones manuales — por si te olvidaste de escanear y ya despachaste */}
+        {!loading && esperados.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={agregarTodos}
+                disabled={confirmando}
+                className="btn btn-secondary btn-sm"
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                title="Agrega todos los pendientes a la tanda de una vez"
+              >
+                <CheckCircle size={13} /> Marcar todos ({esperados.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setModoManual(m => !m)}
+                disabled={confirmando}
+                className="btn btn-ghost btn-sm"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--accent)' }}
+                title="Elegí uno por uno de la lista"
+              >
+                <ListChecks size={13} /> {modoManual ? 'Ocultar lista' : 'Elegir 1 por 1'}
+              </button>
+            </div>
+
+            {/* Lista para seleccionar 1 por 1 */}
+            {modoManual && (
+              <div style={{ marginTop: 10, border: '1px solid var(--border)', borderRadius: 10, maxHeight: 260, overflowY: 'auto' }}>
+                {esperados.map(v => {
+                  const enTanda = tandaIds.has(v.id)
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => toggleManual(v)}
+                      disabled={confirmando}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+                        padding: '9px 12px', border: 'none', borderBottom: '1px solid var(--border-subtle)',
+                        background: enTanda ? 'var(--green-dim)' : 'transparent', cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{
+                        width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+                        border: `1.5px solid ${enTanda ? 'var(--green)' : 'var(--border)'}`,
+                        background: enTanda ? 'var(--green)' : 'transparent',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        {enTanda && <CheckCircle size={12} color="#fff" />}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>
+                          #{v.n_referencia} · {v.cliente_nombre || '—'}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                          {v.producto_nombre} ×{v.cantidad || 1} · {v.ciudad || '—'} · {fmtGs(v.total)}
+                        </div>
+                      </div>
+                      {(diasDesde(v.fecha) ?? 0) >= DIAS_OLVIDADO && (
+                        <span style={{ fontSize: 10, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>
+                          {diasDesde(v.fecha)}d
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Contador — el número que tiene que coincidir con el recibo de PaP */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
