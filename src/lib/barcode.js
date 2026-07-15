@@ -46,8 +46,21 @@ export function normalizarEscaneo(valor) {
 // → { ref, fecha, raw }
 export function interpretarEscaneo(bruto) {
   const s = String(bruto || '').trim()
-  const m = s.match(/^(\d{6})-(.+)$/) // código propio: 260709-1595
-  if (m) return { fecha: m[1], ref: normalizarEscaneo(m[2]), raw: normalizarEscaneo(s) }
+  // Código propio AAMMDD + separador + REF (ej: 260715-1881).
+  // El separador puede NO ser un guión: según el layout de teclado, el lector
+  // puede tipear '/', '\'', '.', espacio, etc. en su lugar. Aceptamos cualquiera.
+  // También el caso sin separador (260715 1881 pegado): 6 dígitos de fecha +
+  // el resto como referencia.
+  let m = s.match(/^(\d{6})[^0-9A-Za-z]+(.+)$/)      // 260715-1881, 260715/1881, 260715 1881
+  if (!m) m = s.match(/^(\d{6})(\d{2,})$/)            // 2607151881 (todo pegado)
+  if (m) {
+    // Validar que los 6 dígitos parezcan una fecha AAMMDD (mes 01-12, día 01-31)
+    const mes = parseInt(m[1].slice(2, 4), 10)
+    const dia = parseInt(m[1].slice(4, 6), 10)
+    if (mes >= 1 && mes <= 12 && dia >= 1 && dia <= 31) {
+      return { fecha: m[1], ref: normalizarEscaneo(m[2]), raw: normalizarEscaneo(s) }
+    }
+  }
   return { fecha: null, ref: normalizarEscaneo(s), raw: normalizarEscaneo(s) }
 }
 
