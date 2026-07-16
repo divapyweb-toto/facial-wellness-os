@@ -28,6 +28,9 @@ export default function RendicionPage() {
   // ── Selección manual ───────────────────────────────────
   const [seleccionados, setSeleccionados] = useState(new Set())
   const [marcando, setMarcando] = useState(false)
+  // Referencias de ventas pagadas por adelantado: PaP no las cobra ni te las
+  // rinde (ya tenés esa plata), así que se excluyen de "por cobrar".
+  const [refsPrepago, setRefsPrepago] = useState(new Set())
 
   const cargarHistorico = async () => {
     try {
@@ -48,17 +51,30 @@ export default function RendicionPage() {
           { columnaOrden: 'nro_guia_pap' })
         if (activo) setHistorico(data || [])
       } catch (e) { /* tabla vacía o sin acceso */ }
+      // Cargar qué ventas fueron prepago (para no contarlas como "PaP me debe")
+      try {
+        const prep = await fetchAll(() => supabase
+          .from('ventas').select('n_referencia').eq('pago_anticipado', true))
+        if (activo) {
+          const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
+          setRefsPrepago(new Set((prep || []).map(v => norm(v.n_referencia))))
+        }
+      } catch (e) { /* la columna puede no existir todavía; se ignora */ }
       if (activo) setCargando(false)
     })()
     return () => { activo = false }
   }, [])
 
   const stats = useMemo(() => {
-    const items = historico.map(h => ({ ...h, categoria: categorizar(h.estado_pap, h.motivo) }))
+    const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
+    const esPrepago = (m) => refsPrepago.has(norm(m.n_referencia)) || refsPrepago.has(norm(m.nro_guia_ref))
+    const items = historico.map(h => ({ ...h, categoria: categorizar(h.estado_pap, h.motivo), _prepago: esPrepago(h) }))
     const entregados = items.filter(m => m.categoria === 'entregado')
     const proceso = items.filter(m => m.categoria === 'en_proceso')
     const rendidos = entregados.filter(m => m.rendido)
-    const sinRendir = entregados.filter(m => !m.rendido)
+    // Sin rendir = entregados, no rendidos, Y que NO sean prepago (esos ya
+    // los cobraste vos por transferencia; PaP no te debe nada de ellos).
+    const sinRendir = entregados.filter(m => !m.rendido && !m._prepago)
 
     const yaRendido = rendidos.reduce((s, m) => s + (m.importe || 0), 0)
     const porCobrar = sinRendir.reduce((s, m) => s + (m.importe || 0), 0)
@@ -103,7 +119,7 @@ export default function RendicionPage() {
       nRendidos: rendidos.length, nSinRendir: sinRendir.length, nProceso: proceso.length,
       demoradas, montoDemorado, cobroEstimadoHasta, hayDatos, tasaCobrado, umbralDemora,
     }
-  }, [historico])
+  }, [historico, refsPrepago])
 
   // ── Selección ─────────────────────────────────────────
   const toggleSel = (guia) => {

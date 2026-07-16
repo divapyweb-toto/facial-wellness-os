@@ -181,6 +181,13 @@ export default function DashboardPage() {
       }))
       const piramide = calcularPiramide(paquetes, indexarCostos(ventasMes), COGS_PROMEDIO, totalGastosMes)
 
+      // ── Desglose de cobro sobre lo entregado ──
+      // Transferencia (prepago): plata que YA está en tu cuenta.
+      // COD: la cobra PaP y te la rinde después.
+      const ingresoTransferencia = entregadas.filter(v => v.pago_anticipado).reduce((s, v) => s + (v.total || 0), 0)
+      const ingresoCOD = entregadas.filter(v => !v.pago_anticipado).reduce((s, v) => s + (v.total || 0), 0)
+      const cantTransferencia = entregadas.filter(v => v.pago_anticipado).length
+
       // Cada paquete resuelto de más aporta la contribución por envío.
       const margenPromedio = piramide.contribPorEnvio
       const gananciaReal = piramide.gananciaFirme
@@ -207,6 +214,10 @@ export default function DashboardPage() {
         gananciaReal,
         faltaParaCubrir,
         cubierto: gananciaReal >= 0,
+        // Desglose de cobro
+        ingresoTransferencia,
+        ingresoCOD,
+        cantTransferencia,
       })
     }
 
@@ -414,6 +425,36 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Desglose de cobro: transferencia (ya en banco) vs COD (por rendir PaP) */}
+      {kpis && kpis.cantTransferencia > 0 && (
+        <div className="card" style={{ padding: '16px 18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <Banknote size={15} color="var(--green)" />
+            <span style={{ fontWeight: 700, fontSize: 14 }}>Cómo cobraste lo entregado</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--green-dim)', border: '1px solid var(--green)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Ya cobrado · transferencia</div>
+              <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--green)', marginTop: 4 }}>
+                {formatGs(kpis.ingresoTransferencia)}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                {kpis.cantTransferencia} pedido{kpis.cantTransferencia === 1 ? '' : 's'} · ya está en tu cuenta
+              </div>
+            </div>
+            <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--bg-hover)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Por rendir · COD</div>
+              <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--text-primary)', marginTop: 4 }}>
+                {formatGs(kpis.ingresoCOD)}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                lo cobra PaP y te lo rinde
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Punto de equilibrio en vivo */}
       {kpis && (kpis.gastosMes > 0 || kpis.entregados > 0) && (

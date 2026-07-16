@@ -164,9 +164,9 @@ function descargarCabeceraXLSX(pedidos) {
       p.cliente_nombre, p.ciudad, p.direccion, p.telefono,
       getTipo(p.producto_nombre),
       1,
-      null,
-      'efectivo a cobrar',
-      p.total,
+      p.prepago ? 'urgente' : null,                          // prepago = prioridad urgente
+      p.prepago ? 'ya esta pagado' : 'efectivo a cobrar',    // forma de pago
+      p.prepago ? 0 : p.total,                               // importe a cobrar (0 si ya pagó)
       isNaN(refNum) ? p.n_referencia : refNum,
       getDesc(p.producto_nombre, p.cantidad),
     ])
@@ -294,22 +294,41 @@ async function descargarGuiasDOCX(pedidos) {
       ]),
     )
 
-    // ── A COBRAR (contra entrega) ──
+    // ── Recuadro de cobro: COD normal o YA PAGADO ──
     const B = { style: BorderStyle.SINGLE, size: 10, color: '000000' }
-    children.push(
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 100, after: 0 },
-        border: { top: B, left: B, right: B },
-        children: [new TextRun({ text: 'A COBRAR CONTRA ENTREGA', bold: true, size: 18, color: '222222', characterSpacing: 30 })],
-      }),
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { before: 30, after: 50 },
-        border: { bottom: B, left: B, right: B },
-        children: [new TextRun({ text: `Gs. ${Number(p.total || 0).toLocaleString('es-PY')}`, bold: true, size: 40 })],
-      }),
-    )
+    if (p.prepago) {
+      // Pago anticipado: el repartidor NO cobra nada. Sin monto para no confundir.
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 100, after: 0 },
+          border: { top: B, left: B, right: B },
+          children: [new TextRun({ text: 'YA PAGADO', bold: true, size: 34, color: '1a7a3a' })],
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 20, after: 50 },
+          border: { bottom: B, left: B, right: B },
+          children: [new TextRun({ text: 'NO COBRAR — ENTREGAR', bold: true, size: 20, color: '1a7a3a', characterSpacing: 20 })],
+        }),
+      )
+    } else {
+      // Contra entrega (COD): el repartidor cobra el monto.
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 100, after: 0 },
+          border: { top: B, left: B, right: B },
+          children: [new TextRun({ text: 'A COBRAR CONTRA ENTREGA', bold: true, size: 18, color: '222222', characterSpacing: 30 })],
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 30, after: 50 },
+          border: { bottom: B, left: B, right: B },
+          children: [new TextRun({ text: `Gs. ${Number(p.total || 0).toLocaleString('es-PY')}`, bold: true, size: 40 })],
+        }),
+      )
+    }
 
     if (i < pedidos.length - 1) children.push(new Paragraph({ children: [new PageBreak()] }))
   })
@@ -387,15 +406,20 @@ export default function DespachoPagina() {
   // cobranza (porque él sabe que PaP igual llega, o corrigió el nombre).
   const [forzados, setForzados] = useState(new Set())
 
-  // Aplica el override: un pedido va a despacho si el filtro lo aprobó O si el
-  // usuario lo forzó manualmente.
+  // Pedidos que el cliente PAGÓ POR ADELANTADO (transferencia verificada en
+  // WhatsApp). El repartidor no cobra: la guía dice "YA PAGADO" y la cabecera
+  // va con importe 0. El usuario los marca a mano acá.
+  const [prepagos, setPrepagos] = useState(new Set())
+
+  // Aplica los overrides: despacho forzado + marca de prepago.
   const todosConOverride = useMemo(
     () => todos.map(p => ({
       ...p,
       despachar: p.despachar || forzados.has(p.n_referencia),
       forzado: forzados.has(p.n_referencia),
+      prepago: prepagos.has(p.n_referencia),
     })),
-    [todos, forzados]
+    [todos, forzados, prepagos]
   )
 
   const paraDespacho = useMemo(() => todosConOverride.filter(p => p.despachar), [todosConOverride])
@@ -403,6 +427,14 @@ export default function DespachoPagina() {
 
   const toggleForzar = (ref) => {
     setForzados(prev => {
+      const s = new Set(prev)
+      if (s.has(ref)) s.delete(ref); else s.add(ref)
+      return s
+    })
+  }
+
+  const togglePrepago = (ref) => {
+    setPrepagos(prev => {
       const s = new Set(prev)
       if (s.has(ref)) s.delete(ref); else s.add(ref)
       return s
@@ -416,6 +448,9 @@ export default function DespachoPagina() {
     // Confirmados/ayuda pero de ciudad SIN cobranza PaP (no se pueden despachar)
     // Confirmados/ayuda de ciudad SIN cobranza que NO fueron forzados a despachar
     fueraCobertura: todos.filter(p => p.cfg.despachar && !p.cobranzaOk && !forzados.has(p.n_referencia)).length,
+    // De los que se despachan, cuántos pagaron por adelantado (transferencia)
+    prepagos: paraDespacho.filter(p => p.prepago).length,
+    montoPrepago: paraDespacho.filter(p => p.prepago).reduce((s, p) => s + (p.total || 0), 0),
     total: todos.length,
     valorDespacho: paraDespacho.reduce((s, p) => s + p.total, 0),
     ticketProm: paraDespacho.length ? Math.round(paraDespacho.reduce((s, p) => s + p.total, 0) / paraDespacho.length) : 0,
@@ -520,6 +555,19 @@ export default function DespachoPagina() {
       else { vistos.add(ref); nuevas.push(p) }
     }
 
+    // Ventas que YA estaban cargadas pero ahora marcaste como prepago:
+    // actualizar su flag para que reportes y guías queden consistentes.
+    const prepagoExistentes = paraDespacho
+      .filter(p => p.prepago && refsExistentes.has(String(p.n_referencia)))
+      .map(p => String(p.n_referencia))
+    if (prepagoExistentes.length) {
+      try {
+        await supabase.from('ventas')
+          .update({ pago_anticipado: true, metodo_pago_nombre: 'Transferencia (anticipado)' })
+          .in('n_referencia', prepagoExistentes)
+      } catch (e) { console.warn('No se pudo actualizar prepago existentes:', e?.message) }
+    }
+
     if (!nuevas.length) {
       setResultado({ ok: 0, fail: 0, duplicados })
       setCargando(false)
@@ -553,7 +601,8 @@ export default function DespachoPagina() {
         costo_envio: costoFleteActual(),
         envio_cliente: 0,
         metodo_envio_nombre: 'Punto a Punto AC',
-        metodo_pago_nombre: 'Efectivo COD',
+        metodo_pago_nombre: p.prepago ? 'Transferencia (anticipado)' : 'Efectivo COD',
+        pago_anticipado: !!p.prepago,  // pagó por adelantado (transferencia verificada)
         estado_releasit: p.estado_releasit,
       }
     })
@@ -965,6 +1014,14 @@ export default function DespachoPagina() {
                   </span>
                 </div>
               )}
+              {stats.prepagos > 0 && (
+                <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: 'var(--green-dim)', border: '1px solid var(--green)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <CheckCircle size={16} color="var(--green)" style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    <strong style={{ color: 'var(--green)' }}>{stats.prepagos} pedido{stats.prepagos === 1 ? '' : 's'} pagado{stats.prepagos === 1 ? '' : 's'} por adelantado ({formatGs(stats.montoPrepago)}).</strong> En la guía dirán "YA PAGADO — NO COBRAR" y en la cabecera van con importe 0. El repartidor no cobra nada de esos.
+                  </span>
+                </div>
+              )}
             </div>
           )}
           {paraDespacho.length > 0 && (
@@ -1084,6 +1141,7 @@ export default function DespachoPagina() {
                     <th>Total</th>
                     <th>Estado</th>
                     <th>Despacho</th>
+                    <th>Pago</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1126,6 +1184,25 @@ export default function DespachoPagina() {
                           </button>
                         ) : (
                           <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>
+                        )}
+                      </td>
+                      <td data-label="Pago">
+                        {p.despachar ? (
+                          <button
+                            onClick={() => togglePrepago(p.n_referencia)}
+                            title={p.prepago ? 'Pagó por transferencia. Clic para volver a contra entrega.' : 'Marcar como pagado por adelantado (transferencia). El repartidor no cobra.'}
+                            style={{
+                              cursor: 'pointer', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700,
+                              display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+                              border: `1px solid ${p.prepago ? 'var(--green)' : 'var(--border)'}`,
+                              background: p.prepago ? 'rgba(34,197,94,0.12)' : 'transparent',
+                              color: p.prepago ? 'var(--green)' : 'var(--text-muted)',
+                            }}
+                          >
+                            {p.prepago ? '💳 Ya pagó' : '💳 Contra entrega'}
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
                         )}
                       </td>
                     </tr>
