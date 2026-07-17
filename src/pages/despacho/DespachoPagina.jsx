@@ -7,8 +7,25 @@ import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
 import { costoFleteActual } from '../../lib/flete'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
-import { fetchAllSafe } from '../../lib/fetchAll'
+import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
+import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
 import { useToast } from '../../lib/toast'
+
+// Helpers locales para el cruce ventas ⋈ entregas del historial de riesgo
+const normRefRiesgo = (ref) => {
+  if (!ref) return ''
+  let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
+  if (/^\d+$/.test(r)) r = String(parseInt(r, 10))
+  return r
+}
+const categoriaPaP = (estado, motivo) => {
+  const e = (estado || '').toLowerCase(), m = (motivo || '').toLowerCase()
+  if (e.includes('entregado')) return 'entregado'
+  if (e.includes('devuelto') || e.includes('devolucion') || m.includes('devolucion') ||
+      m.includes('rechaz') || m.includes('inubicable') || m.includes('fuera de cobertura') ||
+      m.includes('no desea') || m.includes('cancelad') || m.includes('rehus')) return 'devuelto'
+  return 'en_proceso'
+}
 import {
   Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X,
   Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp, RefreshCw, Info, ScanLine,
@@ -411,15 +428,32 @@ export default function DespachoPagina() {
   // va con importe 0. El usuario los marca a mano acá.
   const [prepagos, setPrepagos] = useState(new Set())
 
-  // Aplica los overrides: despacho forzado + marca de prepago.
+  // Historial de riesgo de clientes (tel normalizado → historial). Se llena al
+  // cargar el CSV. Vacío = todos OK (sin datos, beneficio de la duda).
+  const [historialRiesgo, setHistorialRiesgo] = useState(new Map())
+  // Pedidos que el admin habilitó manualmente pese al riesgo (override).
+  const [riesgoHabilitado, setRiesgoHabilitado] = useState(new Set())
+
+  // Aplica los overrides: despacho forzado + marca de prepago + riesgo cliente.
   const todosConOverride = useMemo(
-    () => todos.map(p => ({
-      ...p,
-      despachar: p.despachar || forzados.has(p.n_referencia),
-      forzado: forzados.has(p.n_referencia),
-      prepago: prepagos.has(p.n_referencia),
-    })),
-    [todos, forzados, prepagos]
+    () => todos.map(p => {
+      const tel = normalizarTel(p.telefono)
+      const ev = evaluarRiesgo(historialRiesgo.get(tel))
+      const habilitado = riesgoHabilitado.has(p.n_referencia)
+      // Un pedido bloqueado por riesgo NO se despacha salvo que el admin lo habilite.
+      const bloqueadoPorRiesgo = ev.nivel === 'bloqueado' && !habilitado
+      const despacharBase = (p.despachar || forzados.has(p.n_referencia))
+      return {
+        ...p,
+        riesgo: ev,
+        riesgoHabilitado: habilitado,
+        bloqueadoPorRiesgo,
+        despachar: despacharBase && !bloqueadoPorRiesgo,
+        forzado: forzados.has(p.n_referencia),
+        prepago: prepagos.has(p.n_referencia),
+      }
+    }),
+    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado]
   )
 
   const paraDespacho = useMemo(() => todosConOverride.filter(p => p.despachar), [todosConOverride])
@@ -440,6 +474,15 @@ export default function DespachoPagina() {
       return s
     })
   }
+
+  // El admin habilita (o vuelve a bloquear) un pedido marcado por riesgo.
+  const toggleRiesgo = (ref) => {
+    setRiesgoHabilitado(prev => {
+      const s = new Set(prev)
+      if (s.has(ref)) s.delete(ref); else s.add(ref)
+      return s
+    })
+  }
   const stats = useMemo(() => ({
     confirmados: todos.filter(p => p.estado_releasit === 'confirmado').length,
     ayuda: todos.filter(p => p.estado_releasit === 'ayuda').length,
@@ -451,10 +494,13 @@ export default function DespachoPagina() {
     // De los que se despachan, cuántos pagaron por adelantado (transferencia)
     prepagos: paraDespacho.filter(p => p.prepago).length,
     montoPrepago: paraDespacho.filter(p => p.prepago).reduce((s, p) => s + (p.total || 0), 0),
+    // Clientes riesgosos entre los pedidos del CSV
+    bloqueados: todosConOverride.filter(p => p.riesgo?.nivel === 'bloqueado' && !p.riesgoHabilitado).length,
+    enRiesgo: todosConOverride.filter(p => p.riesgo?.nivel === 'riesgo').length,
     total: todos.length,
     valorDespacho: paraDespacho.reduce((s, p) => s + p.total, 0),
     ticketProm: paraDespacho.length ? Math.round(paraDespacho.reduce((s, p) => s + p.total, 0) / paraDespacho.length) : 0,
-  }), [todos, paraDespacho, forzados])
+  }), [todos, todosConOverride, paraDespacho, forzados])
   const porProducto = useMemo(() => {
     const m = {}
     paraDespacho.forEach(p => { const t = getTipo(p.producto_nombre); m[t] = (m[t] || 0) + p.cantidad })
@@ -510,9 +556,44 @@ export default function DespachoPagina() {
       setStep('preview')
       setResultado(null)
       setBusqueda('')
+      cargarHistorialRiesgo(mapped)  // evaluar riesgo de los clientes del CSV
       toast(`${mapped.length} pedidos procesados`, 'success')
     }
     reader.readAsText(file)
+  }
+
+  // Historial de riesgo de los clientes del CSV. Se cruza el teléfono de cada
+  // pedido contra el historial de ventas/entregas para detectar clientes que
+  // no reciben (devoluciones repetidas).
+  const cargarHistorialRiesgo = async (pedidos) => {
+    try {
+      // Teléfonos únicos del CSV
+      const tels = [...new Set(pedidos.map(p => normalizarTel(p.telefono)).filter(Boolean))]
+      if (!tels.length) { setHistorialRiesgo(new Map()); return }
+
+      // Traer las ventas históricas de esos clientes (columnas livianas)
+      const ventasHist = await fetchAll(() => supabase.from('ventas')
+        .select('cliente_telefono, n_referencia, estado, fecha, producto_nombre')
+        .is('deleted_at', null).in('cliente_telefono', tels), { columnaOrden: 'fecha' })
+
+      // Estado real de PaP para esas ventas (más preciso que ventas.estado)
+      const refs = [...new Set((ventasHist || []).map(v => v.n_referencia).filter(Boolean))]
+      let estadoPaP = {}
+      if (refs.length) {
+        try {
+          const ents = await fetchAll(() => supabase.from('entregas')
+            .select('n_referencia, nro_guia_ref, estado_pap, motivo')
+            .in('n_referencia', refs), { columnaOrden: 'nro_guia_pap' })
+          for (const eItem of (ents || [])) {
+            const k = normRefRiesgo(eItem.n_referencia) || normRefRiesgo(eItem.nro_guia_ref)
+            if (k) estadoPaP[k] = categoriaPaP(eItem.estado_pap, eItem.motivo)
+          }
+        } catch (err) { /* si falla, se usa ventas.estado */ }
+      }
+      setHistorialRiesgo(construirHistorialClientes(ventasHist || [], estadoPaP))
+    } catch (e) {
+      setHistorialRiesgo(new Map())  // ante cualquier error, no bloquear nada
+    }
   }
 
   const cargarVentas = async () => {
@@ -1014,6 +1095,15 @@ export default function DespachoPagina() {
                   </span>
                 </div>
               )}
+              {(stats.bloqueados > 0 || stats.enRiesgo > 0) && (
+                <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid var(--red)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                  <AlertTriangle size={16} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {stats.bloqueados > 0 && <><strong style={{ color: 'var(--red)' }}>{stats.bloqueados} pedido{stats.bloqueados === 1 ? '' : 's'} bloqueado{stats.bloqueados === 1 ? '' : 's'} por historial de no recepción.</strong> Esos clientes ya no recibieron varias veces — no se despachan. Buscalos con 🚫: podés habilitarlos bajo tu criterio o exigir pago anticipado. </>}
+                    {stats.enRiesgo > 0 && <>{stats.bloqueados > 0 ? '' : <strong style={{ color: 'var(--yellow)' }}>Atención: </strong>}<span style={{ color: 'var(--yellow)' }}>{stats.enRiesgo} cliente{stats.enRiesgo === 1 ? '' : 's'} con algún antecedente (⚠) — conviene pedirles pago anticipado.</span></>}
+                  </span>
+                </div>
+              )}
               {stats.prepagos > 0 && (
                 <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: 'var(--green-dim)', border: '1px solid var(--green)', display: 'flex', alignItems: 'center', gap: 10 }}>
                   <CheckCircle size={16} color="var(--green)" style={{ flexShrink: 0 }} />
@@ -1140,6 +1230,7 @@ export default function DespachoPagina() {
                     <th>Cant.</th>
                     <th>Total</th>
                     <th>Estado</th>
+                    <th>Cliente</th>
                     <th>Despacho</th>
                     <th>Pago</th>
                   </tr>
@@ -1162,6 +1253,30 @@ export default function DespachoPagina() {
                         <span style={{ fontSize: 11, fontWeight: 600, color: p.cfg.color, whiteSpace: 'nowrap' }}>
                           {p.cfg.label}
                         </span>
+                      </td>
+                      <td data-label="Cliente">
+                        {p.riesgo?.nivel === 'bloqueado' ? (
+                          <button
+                            onClick={() => toggleRiesgo(p.n_referencia)}
+                            title={`${motivoRiesgo(p.riesgo)}\n\nClic para habilitar el despacho bajo tu criterio.`}
+                            style={{ cursor: 'pointer', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap',
+                              border: `1px solid ${p.riesgoHabilitado ? 'var(--green)' : 'var(--red)'}`,
+                              background: p.riesgoHabilitado ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+                              color: p.riesgoHabilitado ? 'var(--green)' : 'var(--red)' }}
+                          >
+                            {p.riesgoHabilitado ? '✓ Habilitado' : `🚫 ${p.riesgo.fallos}/${p.riesgo.pedidos} no recibió`}
+                          </button>
+                        ) : p.riesgo?.nivel === 'riesgo' ? (
+                          <span
+                            title={motivoRiesgo(p.riesgo)}
+                            style={{ borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
+                              background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', border: '1px solid var(--yellow)' }}
+                          >
+                            ⚠ {p.riesgo.fallos}/{p.riesgo.pedidos} · conviene prepago
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
+                        )}
                       </td>
                       <td data-label="Despacho">
                         {p.forzado ? (
