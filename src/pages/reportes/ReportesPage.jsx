@@ -48,12 +48,12 @@ export default function ReportesPage() {
     // Paginado: un mes a 100 pedidos/día son ~3.000 filas y Supabase corta en 1.000.
     // El cierre financiero no puede calcularse con datos recortados.
     const [ventas, ventasPrev, gastos, campanas, productos, entregas] = await Promise.all([
-      fetchAll(() => supabase.from('ventas').select('*').gte('fecha', inicio).lte('fecha', fin).order('fecha')),
-      fetchAll(() => supabase.from('ventas').select('*').gte('fecha', inicioPrev).lte('fecha', finPrev)),
-      fetchAll(() => supabase.from('gastos').select('*').gte('fecha', inicio).lte('fecha', fin)),
+      fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono').gte('fecha', inicio).lte('fecha', fin).order('fecha')),
+      fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta').gte('fecha', inicioPrev).lte('fecha', finPrev)),
+      fetchAll(() => supabase.from('gastos').select('fecha, monto').gte('fecha', inicio).lte('fecha', fin)),
       fetchAll(() => supabase.from('campanas_ads').select('*').gte('mes', inicio.slice(0, 7)).lte('mes', fin.slice(0, 7))),
-      fetchAll(() => supabase.from('productos').select('*').eq('activo', true)),
-      fetchAll(() => supabase.from('entregas').select('*').gte('fecha_entrega', inicio).lte('fecha_entrega', fin), { columnaOrden: 'nro_guia_pap' }),
+      fetchAll(() => supabase.from('productos').select('id, nombre, costo_unit, activo').eq('activo', true)),
+      fetchAll(() => supabase.from('entregas').select('n_referencia, categoria, estado_pap, motivo, importe, rendido, dias_rendicion, fecha_entrega').gte('fecha_entrega', inicio).lte('fecha_entrega', fin), { columnaOrden: 'nro_guia_pap' }),
     ])
 
     const entregadas = (ventas || []).filter(v => v.estado === 'entregado')

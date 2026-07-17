@@ -4,7 +4,7 @@
 // Dos meses libres, recorte automático hasta la fecha, y dos vistas:
 // Actividad (lo que ocurrió) y Resultado (solo ventas maduras).
 // ═══════════════════════════════════════════════════════════
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import {
@@ -59,58 +59,34 @@ export default function ComparadorMeses() {
   const [entRef, setEntRef] = useState({})
   const [estadoPaP, setEstadoPaP] = useState({})   // ref → categoría real de PaP
   const [gastosPorMes, setGastosPorMes] = useState({})
+  const [mesesDisponibles, setMesesDisponibles] = useState([])
   const [loading, setLoading] = useState(true)
 
-  // Cargar ventas + entregas (con estado) + gastos (una vez). El comparador es
-  // autosuficiente: no depende de que otra pantalla le pase datos.
-  const cargar = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [vts, ents, gastos] = await Promise.all([
-        fetchAll(() => supabase.from('ventas')
-          .select('n_referencia, fecha, total, estado, costo_prod, costo_envio, producto_nombre')
-          .is('deleted_at', null)),
-        // Traemos estado_pap y motivo para saber el estado REAL de cada envío,
-        // sin depender de que ventas.estado esté actualizado.
-        fetchAll(() => supabase.from('entregas')
-          .select('n_referencia, nro_guia_ref, fecha_entrega, estado_pap, motivo'),
-          { columnaOrden: 'nro_guia_pap' }),
-        fetchAll(() => supabase.from('gastos').select('fecha, monto')),
-      ])
-      setVentas(vts || [])
-
-      // fecha de entrega + estado real por referencia
-      const ref = {}
-      const est = {}
-      for (const e of (ents || [])) {
-        const k = normRef(e.n_referencia) || normRef(e.nro_guia_ref)
-        if (!k) continue
-        if (e.fecha_entrega && (!ref[k] || e.fecha_entrega > ref[k])) ref[k] = e.fecha_entrega
-        est[k] = categorizarPaP(e.estado_pap, e.motivo)
-      }
-      setEntRef(ref)
-      setEstadoPaP(est)
-
-      // Gastos agrupados por mes (YYYY-MM)
-      const gm = {}
-      for (const g of (gastos || [])) {
-        const mes = String(g.fecha || '').slice(0, 7)
-        if (mes) gm[mes] = (gm[mes] || 0) + (g.monto || 0)
-      }
-      setGastosPorMes(gm)
-    } finally {
-      setLoading(false)
-    }
+  // ── Paso 1: lista de meses disponibles (consulta LIVIANA) ──
+  // En vez de bajar todas las ventas para saber qué meses hay, solo pedimos la
+  // fecha más vieja y la más nueva, y generamos los meses entre ambas.
+  useEffect(() => {
+    let activo = true
+    ;(async () => {
+      try {
+        const [min, max] = await Promise.all([
+          supabase.from('ventas').select('fecha').is('deleted_at', null).order('fecha', { ascending: true }).limit(1),
+          supabase.from('ventas').select('fecha').is('deleted_at', null).order('fecha', { ascending: false }).limit(1),
+        ])
+        const fMin = min.data?.[0]?.fecha, fMax = max.data?.[0]?.fecha
+        if (!fMin || !fMax) { if (activo) { setMesesDisponibles([]); setLoading(false) }; return }
+        const meses = []
+        let [y, m] = fMin.slice(0, 7).split('-').map(Number)
+        const [yF, mF] = fMax.slice(0, 7).split('-').map(Number)
+        while (y < yF || (y === yF && m <= mF)) {
+          meses.push(`${y}-${String(m).padStart(2, '0')}`)
+          m++; if (m > 12) { m = 1; y++ }
+        }
+        if (activo) setMesesDisponibles(meses.reverse())  // más nuevo primero
+      } catch (e) { if (activo) setMesesDisponibles([]) }
+    })()
+    return () => { activo = false }
   }, [])
-
-  useEffect(() => { cargar() }, [cargar])
-
-  // Meses disponibles: TODOS los que tienen ventas (no solo los últimos 6).
-  const mesesDisponibles = useMemo(() => {
-    const set = new Set()
-    for (const v of ventas) { const m = String(v.fecha || '').slice(0, 7); if (m) set.add(m) }
-    return [...set].sort().reverse()
-  }, [ventas])
 
   // Elegir por defecto los dos meses más recientes
   useEffect(() => {
@@ -122,6 +98,79 @@ export default function ComparadorMeses() {
       setMesA(mesesDisponibles[0])
     }
   }, [mesesDisponibles, mesA, mesB])
+
+  // ── Paso 2: cargar datos SOLO de los meses elegidos (reactivo) ──
+  // Cada vez que cambian mesA o mesB, bajamos únicamente esos meses. Así el
+  // comparador no arrastra toda la historia y responde rápido.
+  useEffect(() => {
+    if (!mesA && !mesB) return
+    let activo = true
+    setLoading(true)
+    ;(async () => {
+      try {
+        // Rango de fechas de un mes YYYY-MM → [primer día, último día]
+        const rango = (mes) => {
+          const [y, m] = mes.split('-').map(Number)
+          const ini = `${mes}-01`
+          const fin = new Date(y, m, 0)
+          const finBuf = new Date(y, m, 0); finBuf.setDate(finBuf.getDate() + 31) // margen para entregas posteriores
+          const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+          return { ini, fin: iso(fin), finBuf: iso(finBuf) }
+        }
+        const meses = [...new Set([mesA, mesB].filter(Boolean))]
+
+        // Ventas y gastos de esos meses; entregas con margen para las que se
+        // entregaron después del mes de la venta.
+        const cargasVentas = meses.map(mes => {
+          const r = rango(mes)
+          return fetchAll(() => supabase.from('ventas')
+            .select('n_referencia, fecha, total, estado, costo_prod, costo_envio, producto_nombre')
+            .is('deleted_at', null).gte('fecha', r.ini).lte('fecha', r.fin))
+        })
+        const cargasEnt = meses.map(mes => {
+          const r = rango(mes)
+          return fetchAll(() => supabase.from('entregas')
+            .select('n_referencia, nro_guia_ref, fecha_entrega, estado_pap, motivo')
+            .gte('fecha_entrega', r.ini).lte('fecha_entrega', r.finBuf), { columnaOrden: 'nro_guia_pap' })
+        })
+        const cargasGastos = meses.map(mes => {
+          const r = rango(mes)
+          return fetchAll(() => supabase.from('gastos').select('fecha, monto').gte('fecha', r.ini).lte('fecha', r.fin))
+        })
+
+        const [vtsArr, entArr, gastosArr] = await Promise.all([
+          Promise.all(cargasVentas), Promise.all(cargasEnt), Promise.all(cargasGastos),
+        ])
+        if (!activo) return
+
+        const vts = vtsArr.flat()
+        const ents = entArr.flat()
+        const gastos = gastosArr.flat()
+
+        setVentas(vts)
+
+        const ref = {}, est = {}
+        for (const e of ents) {
+          const k = normRef(e.n_referencia) || normRef(e.nro_guia_ref)
+          if (!k) continue
+          if (e.fecha_entrega && (!ref[k] || e.fecha_entrega > ref[k])) ref[k] = e.fecha_entrega
+          est[k] = categorizarPaP(e.estado_pap, e.motivo)
+        }
+        setEntRef(ref)
+        setEstadoPaP(est)
+
+        const gm = {}
+        for (const g of gastos) {
+          const mes = String(g.fecha || '').slice(0, 7)
+          if (mes) gm[mes] = (gm[mes] || 0) + (g.monto || 0)
+        }
+        setGastosPorMes(gm)
+      } finally {
+        if (activo) setLoading(false)
+      }
+    })()
+    return () => { activo = false }
+  }, [mesA, mesB])
 
   // Índice de costo real por referencia
   const refCosto = useMemo(() => {
