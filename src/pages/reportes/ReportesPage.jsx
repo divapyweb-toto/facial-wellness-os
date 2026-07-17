@@ -73,14 +73,18 @@ export default function ReportesPage() {
       return { ...p, tasaDevolucion: res ? Math.round(p.devueltos / res * 100) : 0 }
     }).sort((a, b) => b.ingresos - a.ingresos)
 
-    // Por día (para chart)
-    const diasDelMes = new Date(year, parseInt(month), 0).getDate()
+    // Por día (para chart). Recorre los días del rango del período elegido.
     const porDia = []
-    for (let d = 1; d <= diasDelMes; d++) {
-      const fechaStr = `${year}-${month}-${String(d).padStart(2, '0')}`
-      const ventasDia = entregadas.filter(v => v.fecha === fechaStr)
-      if (ventasDia.length > 0 || d <= new Date().getDate()) {
-        porDia.push({ dia: d, ventas: ventasDia.reduce((s, v) => s + v.total, 0), neto: ventasDia.reduce((s, v) => s + (v.ganancia_neta || 0), 0), cantidad: ventasDia.length })
+    {
+      const dIni = new Date(inicio + 'T00:00:00')
+      const dFin = new Date(fin + 'T00:00:00')
+      const hoyStr = new Date().toISOString().slice(0, 10)
+      for (let d = new Date(dIni); d <= dFin; d.setDate(d.getDate() + 1)) {
+        const fechaStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+        const ventasDia = entregadas.filter(v => v.fecha === fechaStr)
+        if (ventasDia.length > 0 || fechaStr <= hoyStr) {
+          porDia.push({ dia: d.getDate(), ventas: ventasDia.reduce((s, v) => s + v.total, 0), neto: ventasDia.reduce((s, v) => s + (v.ganancia_neta || 0), 0), cantidad: ventasDia.length })
+        }
       }
     }
 
