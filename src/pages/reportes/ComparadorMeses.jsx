@@ -125,7 +125,7 @@ export default function ComparadorMeses() {
           const r = rango(mes)
           return fetchAll(() => supabase.from('ventas')
             .select('n_referencia, fecha, total, estado, costo_prod, costo_envio, producto_nombre')
-            .is('deleted_at', null).gte('fecha', r.ini).lte('fecha', r.fin))
+            .is('deleted_at', null).gte('fecha', r.ini).lte('fecha', r.fin), { columnaOrden: 'fecha' })
         })
         const cargasEnt = meses.map(mes => {
           const r = rango(mes)
@@ -135,7 +135,7 @@ export default function ComparadorMeses() {
         })
         const cargasGastos = meses.map(mes => {
           const r = rango(mes)
-          return fetchAll(() => supabase.from('gastos').select('fecha, monto').gte('fecha', r.ini).lte('fecha', r.fin))
+          return fetchAll(() => supabase.from('gastos').select('fecha, monto').gte('fecha', r.ini).lte('fecha', r.fin), { columnaOrden: 'fecha' })
         })
 
         const [vtsArr, entArr, gastosArr] = await Promise.all([
