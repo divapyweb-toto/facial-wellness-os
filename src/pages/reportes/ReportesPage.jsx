@@ -3,7 +3,8 @@ import { useState, useCallback, useRef } from 'react'
 import ComparadorMeses from './ComparadorMeses'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
-import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat } from 'lucide-react'
+import { calcularPeriodo, agruparSerie } from '../../lib/periodos'
+import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat, FileText } from 'lucide-react'
 import {
   BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -28,7 +29,9 @@ function Delta({ actual, anterior, invertido = false }) {
 
 export default function ReportesPage() {
   const [vista, setVista] = useState('reporte')  // 'reporte' | 'comparar'
+  const [tipoPeriodo, setTipoPeriodo] = useState('mensual')  // diario | semanal | mensual | anual
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
+  const [fechaRef, setFechaRef] = useState(new Date().toISOString().substring(0, 10))  // ancla para diario/semanal
   const [datos, setDatos] = useState(null)
   const [loading, setLoading] = useState(false)
   const [generandoPdf, setGenerandoPdf] = useState(false)
@@ -36,14 +39,11 @@ export default function ReportesPage() {
 
   const cargarDatos = useCallback(async () => {
     setLoading(true)
-    const [year, month] = mes.split('-')
-    const inicio = `${year}-${month}-01`
-    const fin = new Date(year, parseInt(month), 0).toISOString().split('T')[0]
-    // Mes anterior (para comparar)
-    const dPrev = new Date(year, parseInt(month) - 2, 1)
-    const yPrev = dPrev.getFullYear(), mPrev = String(dPrev.getMonth() + 1).padStart(2, '0')
-    const inicioPrev = `${yPrev}-${mPrev}-01`
-    const finPrev = new Date(yPrev, parseInt(mPrev), 0).toISOString().split('T')[0]
+    // Referencia: para diario/semanal se necesita el día exacto; para mensual/anual, el mes.
+    const referencia = (tipoPeriodo === 'diario' || tipoPeriodo === 'semanal') ? fechaRef : (mes + '-15')
+    const P = calcularPeriodo(tipoPeriodo, referencia)
+    const inicio = P.inicio, fin = P.fin
+    const inicioPrev = P.inicioPrev, finPrev = P.finPrev
 
     // Paginado: un mes a 100 pedidos/día son ~3.000 filas y Supabase corta en 1.000.
     // El cierre financiero no puede calcularse con datos recortados.
@@ -51,7 +51,7 @@ export default function ReportesPage() {
       fetchAll(() => supabase.from('ventas').select('*').gte('fecha', inicio).lte('fecha', fin).order('fecha')),
       fetchAll(() => supabase.from('ventas').select('*').gte('fecha', inicioPrev).lte('fecha', finPrev)),
       fetchAll(() => supabase.from('gastos').select('*').gte('fecha', inicio).lte('fecha', fin)),
-      fetchAll(() => supabase.from('campanas_ads').select('*').eq('mes', mes)),
+      fetchAll(() => supabase.from('campanas_ads').select('*').gte('mes', inicio.slice(0, 7)).lte('mes', fin.slice(0, 7))),
       fetchAll(() => supabase.from('productos').select('*').eq('activo', true)),
       fetchAll(() => supabase.from('entregas').select('*').gte('fecha_entrega', inicio).lte('fecha_entrega', fin), { columnaOrden: 'nro_guia_pap' }),
     ])
@@ -190,7 +190,9 @@ export default function ReportesPage() {
     const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida
 
     setDatos({
-      mes, ventasBrutas: ventasBrutasCalc,
+      mes, periodo: P, tipoPeriodo,
+      serie: agruparSerie(ventas || [], P),
+      ventasBrutas: ventasBrutasCalc,
       ingresosNetos: ingresosNetosCalc,
       totalGastos, totalGastoAds,
       cogsEntregadas, cogsPendientes, costoMercaderiaVendida,
@@ -208,7 +210,7 @@ export default function ReportesPage() {
       clientesUnicos, recompradores, alertas,
     })
     setLoading(false)
-  }, [mes])
+  }, [mes, tipoPeriodo, fechaRef])
 
   const generarPDF = () => {
     if (!datos) return
@@ -363,14 +365,141 @@ export default function ReportesPage() {
     }, 150)
   }
 
+  // ── PDF COMPLETO PARA ANÁLISIS ──
+  // Documento denso y estructurado (todo en tablas de texto) pensado para subir
+  // a un chat de Claude y que analice. Se abre en una ventana nueva y se imprime.
+  const generarPDFCompleto = () => {
+    if (!datos) return
+    const d = datos
+    const gs = (n) => 'Gs. ' + Number(n || 0).toLocaleString('es-PY')
+    const pct = (n) => (n == null ? '—' : Number(n).toFixed(1) + '%')
+    const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))
+
+    // Embudo: pedidos → confirmados → despachados → entregados → cobrados
+    const totalPedidos = d.paquetesEnviados || 0
+    const entregados = d.entregados || 0
+    const devueltos = d.devueltos || 0
+    const pendientes = d.pendientesCount || 0
+    const cobrados = entregados  // los entregados COD ya cobrados vía PaP + prepagos
+
+    const filaTabla = (cols) => '<tr>' + cols.map((c, i) => `<td${i > 0 ? ' class="num"' : ''}>${c}</td>`).join('') + '</tr>'
+    const tabla = (headers, filas) => `<table><thead><tr>${headers.map((h, i) => `<th${i > 0 ? ' class="num"' : ''}>${esc(h)}</th>`).join('')}</tr></thead><tbody>${filas.join('')}</tbody></table>`
+
+    // Serie temporal
+    const serieFilas = (d.serie || []).map(s => filaTabla([
+      esc(s.label), s.pedidos, s.entregados, s.devueltos, gs(s.ventasBrutas), gs(s.ingresoEntregado),
+    ]))
+    // Por producto
+    const prodFilas = (d.porProducto || []).map(p => filaTabla([
+      esc(p.nombre), p.ventas, p.entregados, p.devueltos, pct(p.tasaDevolucion), gs(p.ingresos),
+    ]))
+    // Por ciudad
+    const ciudadFilas = (d.ciudades || []).slice(0, 30).map(c => filaTabla([
+      esc(c.ciudad || c.nombre), c.total ?? c.pedidos, c.entregados ?? '—', c.devueltos ?? '—',
+      c.tasaEntrega != null ? pct(c.tasaEntrega) : '—',
+    ]))
+    // Motivos de devolución
+    const motivoFilas = (d.motivos || []).map(m => filaTabla([esc(m.motivo || m.nombre), m.cantidad ?? m.count]))
+    // Campañas
+    const campFilas = (d.campanas || []).map(c => filaTabla([
+      esc(c.producto || c.nombre || '—'), gs(c.gasto || c.inversion || 0), c.alcance ?? '—', c.clicks ?? '—',
+    ]))
+
+    const win = window.open('', '_blank')
+    if (!win) { toast('Permití las ventanas emergentes para descargar el PDF', 'error'); return }
+    win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<title>Reporte completo — ${esc(d.periodo?.etiqueta || d.mes)}</title>
+<style>
+  @page { size: A4 portrait; margin: 14mm 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; font-size: 11px; line-height: 1.5; margin: 0; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  h2 { font-size: 14px; margin: 22px 0 8px; padding-bottom: 4px; border-bottom: 2px solid #1a1a1a; }
+  .sub { color: #666; font-size: 11px; margin-bottom: 4px; }
+  .kpigrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }
+  .kpi { border: 1px solid #ddd; border-radius: 6px; padding: 8px 10px; }
+  .kpi .lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .4px; color: #777; }
+  .kpi .val { font-size: 16px; font-weight: 700; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 4px; font-size: 10px; }
+  th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; }
+  th { background: #f2f2f2; font-weight: 700; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  h2 { page-break-after: avoid; }
+  .foot { margin-top: 8px; font-size: 9px; color: #999; }
+  .formula { font-size: 9.5px; color: #777; margin: -2px 0 8px; }
+</style></head><body>
+
+<h1>Facial Wellness — Reporte completo</h1>
+<div class="sub">${esc(d.periodo?.etiqueta || d.mes)} · comparado con ${esc(d.periodo?.etiquetaPrev || 'período anterior')} · generado ${new Date().toLocaleString('es-PY')}</div>
+<div class="sub">Documento de datos para análisis. Todas las cifras en guaraníes (Gs.).</div>
+
+<h2>1. Resumen del período</h2>
+<div class="kpigrid">
+  <div class="kpi"><div class="lbl">Ventas brutas (entregadas)</div><div class="val">${gs(d.ventasBrutas)}</div></div>
+  <div class="kpi"><div class="lbl">Contribución firme</div><div class="val">${gs(d.ingresosNetos)}</div></div>
+  <div class="kpi"><div class="lbl">Utilidad neta</div><div class="val">${gs(d.utilidadNeta)}</div></div>
+  <div class="kpi"><div class="lbl">Margen %</div><div class="val">${pct(d.margenPct)}</div></div>
+  <div class="kpi"><div class="lbl">Pedidos enviados</div><div class="val">${totalPedidos}</div></div>
+  <div class="kpi"><div class="lbl">Tasa de entrega</div><div class="val">${pct(d.tasaEntrega)}</div></div>
+  <div class="kpi"><div class="lbl">Gasto en ads</div><div class="val">${gs(d.totalGastoAds)}</div></div>
+  <div class="kpi"><div class="lbl">Gastos totales</div><div class="val">${gs(d.totalGastos)}</div></div>
+  <div class="kpi"><div class="lbl">Costo mercadería vendida</div><div class="val">${gs(d.costoMercaderiaVendida)}</div></div>
+</div>
+<div class="formula">Contribución firme = ingreso entregadas − flete (todos los envíos) − costo de producto entregado. Utilidad neta = contribución firme − gastos del período.</div>
+
+<h2>2. Serie temporal (${d.periodo?.granularidad === 'mes' ? 'por mes' : 'por día'})</h2>
+${serieFilas.length ? tabla(['Período', 'Pedidos', 'Entregados', 'Devueltos', 'Ventas brutas', 'Ingreso entregado'], serieFilas) : '<p>Sin datos en el rango.</p>'}
+
+<h2>3. Embudo de conversión</h2>
+${tabla(['Etapa', 'Cantidad', '% del total'], [
+  filaTabla(['Pedidos enviados', totalPedidos, '100%']),
+  filaTabla(['Entregados', entregados, totalPedidos ? pct(entregados / totalPedidos * 100) : '—']),
+  filaTabla(['Devueltos', devueltos, totalPedidos ? pct(devueltos / totalPedidos * 100) : '—']),
+  filaTabla(['En proceso / pendientes', pendientes, totalPedidos ? pct(pendientes / totalPedidos * 100) : '—']),
+  filaTabla(['Cobrados (entregados)', cobrados, totalPedidos ? pct(cobrados / totalPedidos * 100) : '—']),
+])}
+
+<h2>4. Por producto</h2>
+${prodFilas.length ? tabla(['Producto', 'Ventas', 'Entregados', 'Devueltos', 'Tasa dev.', 'Contribución'], prodFilas) : '<p>Sin datos.</p>'}
+
+<h2>5. Por ciudad (top 30)</h2>
+${ciudadFilas.length ? tabla(['Ciudad', 'Pedidos', 'Entregados', 'Devueltos', 'Tasa entrega'], ciudadFilas) : '<p>Sin datos.</p>'}
+
+<h2>6. Motivos de devolución</h2>
+${motivoFilas.length ? tabla(['Motivo', 'Cantidad'], motivoFilas) : '<p>Sin devoluciones registradas.</p>'}
+
+<h2>7. Inversión en publicidad</h2>
+${campFilas.length ? tabla(['Campaña / producto', 'Gasto', 'Alcance', 'Clicks'], campFilas) : '<p>Sin campañas cargadas en el período.</p>'}
+<div class="formula">Gasto total en ads: ${gs(d.totalGastoAds)}${totalPedidos ? ` · CPA aproximado (gasto ads / pedidos): ${gs(Math.round((d.totalGastoAds || 0) / totalPedidos))}` : ''}${entregados ? ` · CPA por entrega: ${gs(Math.round((d.totalGastoAds || 0) / entregados))}` : ''}</div>
+
+<h2>8. Clientes</h2>
+${tabla(['Métrica', 'Valor'], [
+  filaTabla(['Clientes únicos', d.clientesUnicos ?? '—']),
+  filaTabla(['Recompradores', d.recompradores ?? '—']),
+  filaTabla(['Ticket promedio (entregado)', entregados ? gs(Math.round((d.ventasBrutas || 0) / entregados)) : '—']),
+])}
+
+${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a => `<li>${esc(typeof a === 'string' ? a : (a.texto || a.mensaje || JSON.stringify(a)))}</li>`).join('')}</ul>` : ''}
+
+<div class="foot">Facial Wellness OS · reporte generado automáticamente · ${new Date().toISOString().slice(0, 10)}</div>
+</body></html>`)
+    win.document.close()
+    setTimeout(() => { win.focus(); win.print() }, 400)
+  }
+
   const mesesDisponibles = []
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 12; i++) {
     const d = new Date(); d.setMonth(d.getMonth() - i)
     mesesDisponibles.push({
       value: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
       label: d.toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }),
     })
   }
+  // Años disponibles (para el período anual): del año actual hacia atrás
+  const añosDisponibles = []
+  { const yNow = new Date().getFullYear(); for (let y = yNow; y >= yNow - 3; y--) añosDisponibles.push(String(y)) }
 
   const nombreMes = datos
     ? (() => { const [y, m] = datos.mes.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }) })()
@@ -381,7 +510,7 @@ export default function ReportesPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Reportes</h1>
-          <p className="page-subtitle">{vista === 'reporte' ? 'Generá el reporte mensual completo en PDF' : 'Compará dos meses de forma honesta'}</p>
+          <p className="page-subtitle">{vista === 'reporte' ? 'Reporte por período: diario, semanal, mensual o anual' : 'Compará dos meses de forma honesta'}</p>
         </div>
         <div className="page-actions">
           <div className="tabs" style={{ marginRight: 8 }}>
@@ -390,19 +519,41 @@ export default function ReportesPage() {
           </div>
           {vista === 'reporte' && (
             <>
-              <select className="form-select" style={{ width: 'auto' }} value={mes}
-                onChange={e => { setMes(e.target.value); setDatos(null) }}>
-                {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
+              <div className="tabs" style={{ marginRight: 4 }}>
+                {[['diario', 'Diario'], ['semanal', 'Semanal'], ['mensual', 'Mensual'], ['anual', 'Anual']].map(([t, lbl]) => (
+                  <button key={t} className={`tab ${tipoPeriodo === t ? 'active' : ''}`}
+                    onClick={() => { setTipoPeriodo(t); setDatos(null) }}>{lbl}</button>
+                ))}
+              </div>
+              {(tipoPeriodo === 'diario' || tipoPeriodo === 'semanal') ? (
+                <input type="date" className="form-select" style={{ width: 'auto' }} value={fechaRef}
+                  onChange={e => { setFechaRef(e.target.value); setDatos(null) }} />
+              ) : tipoPeriodo === 'anual' ? (
+                <select className="form-select" style={{ width: 'auto' }} value={mes.slice(0, 4)}
+                  onChange={e => { setMes(e.target.value + '-01'); setDatos(null) }}>
+                  {añosDisponibles.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              ) : (
+                <select className="form-select" style={{ width: 'auto' }} value={mes}
+                  onChange={e => { setMes(e.target.value); setDatos(null) }}>
+                  {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              )}
               <button className="btn btn-secondary" onClick={cargarDatos} disabled={loading}>
                 {loading ? <Loader2 size={14} className="spinning" /> : <FileBarChart2 size={14} />}
-                Generar reporte
+                Generar
               </button>
               {datos && (
-                <button className="btn btn-primary" onClick={generarPDF} disabled={generandoPdf}>
-                  {generandoPdf ? <Loader2 size={14} className="spinning" /> : <Download size={14} />}
-                  Descargar PDF
-                </button>
+                <>
+                  <button className="btn btn-secondary" onClick={generarPDF} disabled={generandoPdf} title="PDF visual para leer o archivar">
+                    {generandoPdf ? <Loader2 size={14} className="spinning" /> : <Download size={14} />}
+                    PDF ejecutivo
+                  </button>
+                  <button className="btn btn-primary" onClick={generarPDFCompleto} disabled={generandoPdf} title="PDF denso con todos los datos, para subir a Claude y analizar">
+                    <FileText size={14} />
+                    PDF completo para análisis
+                  </button>
+                </>
               )}
             </>
           )}
@@ -451,7 +602,7 @@ export default function ReportesPage() {
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: 'var(--accent)', textTransform: 'capitalize' }}>
-                {nombreMes}
+                {datos?.periodo?.etiqueta || nombreMes}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
                 Ciudad del Este, Paraguay
@@ -553,7 +704,7 @@ export default function ReportesPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
             <div className="chart-card">
               <div className="chart-header">
-                <span className="chart-title">Ventas diarias — {nombreMes}</span>
+                <span className="chart-title">Ventas diarias — {datos?.periodo?.etiqueta || nombreMes}</span>
               </div>
               <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={datos.porDia} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
