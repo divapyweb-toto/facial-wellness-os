@@ -1,6 +1,5 @@
 // src/pages/reportes/ReportesPage.jsx
 import { useState, useCallback, useRef } from 'react'
-import ComparadorMeses from './ComparadorMeses'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { agruparSerie } from '../../lib/periodos'
@@ -28,7 +27,6 @@ function Delta({ actual, anterior, invertido = false }) {
 }
 
 export default function ReportesPage() {
-  const [vista, setVista] = useState('reporte')  // 'reporte' | 'comparar'
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
   const [datos, setDatos] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -512,45 +510,33 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
       <div className="page-header">
         <div>
           <h1 className="page-title">Reportes</h1>
-          <p className="page-subtitle">{vista === 'reporte' ? 'Reporte mensual completo, con PDF ejecutivo y PDF para análisis' : 'Compará dos meses de forma honesta'}</p>
+          <p className="page-subtitle">Reporte mensual completo, con PDF ejecutivo y PDF para análisis</p>
         </div>
         <div className="page-actions">
-          <div className="tabs" style={{ marginRight: 8 }}>
-            <button className={`tab ${vista === 'reporte' ? 'active' : ''}`} onClick={() => setVista('reporte')}>Reporte</button>
-            <button className={`tab ${vista === 'comparar' ? 'active' : ''}`} onClick={() => setVista('comparar')}>Comparar</button>
-          </div>
-          {vista === 'reporte' && (
+          <select className="form-select" style={{ width: 'auto' }} value={mes}
+            onChange={e => { setMes(e.target.value); setDatos(null) }}>
+            {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+          <button className="btn btn-secondary" onClick={cargarDatos} disabled={loading}>
+            {loading ? <Loader2 size={14} className="spinning" /> : <FileBarChart2 size={14} />}
+            Generar
+          </button>
+          {datos && (
             <>
-              <select className="form-select" style={{ width: 'auto' }} value={mes}
-                onChange={e => { setMes(e.target.value); setDatos(null) }}>
-                {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
-              <button className="btn btn-secondary" onClick={cargarDatos} disabled={loading}>
-                {loading ? <Loader2 size={14} className="spinning" /> : <FileBarChart2 size={14} />}
-                Generar
+              <button className="btn btn-secondary" onClick={generarPDF} disabled={generandoPdf} title="PDF visual para leer o archivar">
+                {generandoPdf ? <Loader2 size={14} className="spinning" /> : <Download size={14} />}
+                PDF ejecutivo
               </button>
-              {datos && (
-                <>
-                  <button className="btn btn-secondary" onClick={generarPDF} disabled={generandoPdf} title="PDF visual para leer o archivar">
-                    {generandoPdf ? <Loader2 size={14} className="spinning" /> : <Download size={14} />}
-                    PDF ejecutivo
-                  </button>
-                  <button className="btn btn-primary" onClick={generarPDFCompleto} disabled={generandoPdf} title="PDF denso con todos los datos, para subir a Claude y analizar">
-                    <FileText size={14} />
-                    PDF completo para análisis
-                  </button>
-                </>
-              )}
+              <button className="btn btn-primary" onClick={generarPDFCompleto} disabled={generandoPdf} title="PDF denso con todos los datos, para subir a Claude y analizar">
+                <FileText size={14} />
+                PDF completo para análisis
+              </button>
             </>
           )}
         </div>
       </div>
 
-      {vista === 'comparar' && (
-        <ComparadorMeses />
-      )}
-
-      {vista === 'reporte' && !datos && !loading && (
+      {!datos && !loading && (
         <div className="empty-state" style={{ padding: 80 }}>
           <div className="empty-state-icon" style={{ width: 64, height: 64, borderRadius: 16 }}>
             <FileBarChart2 size={32} />
@@ -569,7 +555,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
         </div>
       )}
 
-      {vista === 'reporte' && datos && (
+      {datos && (
         <div ref={reportRef} id="reporte-print" style={{ display: 'flex', flexDirection: 'column', gap: 20, background: 'var(--bg-base)', padding: 8 }}>
           {/* Header del reporte */}
           <div className="reporte-head" style={{
