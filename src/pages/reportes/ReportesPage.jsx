@@ -561,7 +561,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
       </div>
 
       {vista === 'comparar' && (
-        <ComparadorMeses mesesDisponibles={mesesDisponibles.map(m => m.value)} gastosPorMes={{}} />
+        <ComparadorMeses />
       )}
 
       {vista === 'reporte' && !datos && !loading && (

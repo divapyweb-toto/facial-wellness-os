@@ -22,6 +22,19 @@
 
 import { sumarFlete } from './flete'
 
+// Traduce el estado y motivo que reporta Punto a Punto a una categoría simple:
+// 'entregado' | 'devuelto' | 'en_proceso'. Es la misma lógica que usa Rendición.
+export function categorizarPaP(estado, motivo) {
+  const e = (estado || '').toLowerCase(); const m = (motivo || '').toLowerCase()
+  if (e.includes('entregado')) return 'entregado'
+  if (e.includes('devuelto')) return 'devuelto'
+  if (m.includes('rechaz') || m.includes('inubicable') || m.includes('fuera de cobertura') ||
+      m.includes('fin de custodia') || m.includes('problema de direccion') || m.includes('no desea') ||
+      m.includes('cancelad') || m.includes('no ingreso') || m.includes('rehus')) return 'devuelto'
+  if (e.includes('devolucion') || m.includes('devolucion')) return 'devuelto'
+  return 'en_proceso'
+}
+
 // Normaliza una referencia para cruzar ventas ⋈ entregas
 export function normRef(ref) {
   if (!ref) return ''
@@ -102,7 +115,7 @@ export function metricasActividad(ventas, mes, diaCorte, gastoAds = 0) {
 // ── MÉTRICAS DE RESULTADO ──
 // Solo ventas MADURAS (con antigüedad ≥ ventana de maduración a la fecha de
 // corte). Así se comparan peras con peras: ventas que tuvieron tiempo de cerrar.
-export function metricasResultado(ventas, mes, diaCorte, ventanaDias, refCosto, cogsPromedio, hoy = new Date()) {
+export function metricasResultado(ventas, mes, diaCorte, ventanaDias, refCosto, cogsPromedio, hoy = new Date(), estadoPaP = {}) {
   const vs = ventasDeMes(ventas, mes, diaCorte)
 
   // Una venta es "madura" si pasaron ≥ ventanaDias desde que se hizo, contados
@@ -115,10 +128,20 @@ export function metricasResultado(ventas, mes, diaCorte, ventanaDias, refCosto, 
     return d != null && d >= ventanaDias
   })
 
-  const entregados = maduras.filter(v => v.estado === 'entregado')
-  const devueltos = maduras.filter(v => v.estado === 'devuelto')
+  // Estado REAL de cada venta: primero lo que dice PaP (más confiable), y si PaP
+  // todavía no tiene datos de esa referencia, se cae a ventas.estado.
+  const estadoDe = (v) => {
+    const cat = estadoPaP?.[normRef(v.n_referencia)]
+    if (cat) return cat
+    if (v.estado === 'entregado') return 'entregado'
+    if (v.estado === 'devuelto') return 'devuelto'
+    return 'en_proceso'
+  }
+
+  const entregados = maduras.filter(v => estadoDe(v) === 'entregado')
+  const devueltos = maduras.filter(v => estadoDe(v) === 'devuelto')
   const resueltos = entregados.length + devueltos.length
-  const enTransito = maduras.length - resueltos // maduras que aún no cerraron (raro pero posible)
+  const enTransito = maduras.length - resueltos // maduras que aún no cerraron
 
   const ingreso = entregados.reduce((s, v) => s + (v.total || 0), 0)
   const cogs = entregados.reduce((s, v) => {
