@@ -39,6 +39,17 @@ const NOMBRE = {
   bebird:  'Bebird Pro',
 }
 
+// Link directo al producto en la tienda (con variante), por familia.
+const URL_PRODUCTO = {
+  nasal:   'https://facialwellnesspy.com/products/tiras-nasales-30-unidades?variant=46259804930199',
+  parche:  'https://facialwellnesspy.com/products/parches-bucales-30-unidades?variant=46259804536983',
+  lengua:  'https://facialwellnesspy.com/products/raspador-de-lengua-facial-wellness-higiene-bucal-avanzada?variant=46521995952279',
+  jaw:     'https://facialwellnesspy.com/products/ejercitadores-de-mandibula-pack-3-jawflex-pro?variant=46295196336279',
+  botella: 'https://facialwellnesspy.com/products/gudair-botella-flexible-flow-500-%F0%9F%92%A7?variant=46892729270423',
+  gudair:  'https://facialwellnesspy.com/products/pack-gudair-tira-nasal-parche-bucal-30-unidades-c-u?variant=46259805061271',
+  bebird:  'https://facialwellnesspy.com/products/bebird-pro%E2%84%A2-limpieza-de-oidos-con-camara-hd-en-tiempo-real?variant=46462553129111',
+}
+
 // Clasifica cualquier nombre de producto en su familia.
 // Misma lógica que el matcher de Importar/Despacho (probado con 500 pedidos),
 // soporta nombres en español e inglés ("Nose Strips" = nasal, "Mouth Tape" = parche).
@@ -62,9 +73,7 @@ function diasDesde(hoy, fecha) {
 
 function ofertaTexto(familiaOfrecida, esReposicion) {
   const nombre = NOMBRE[familiaOfrecida]
-  return esReposicion
-    ? `Reponer ${nombre} ×1 — Gs. 69.000, envío gratis`
-    : `${nombre} ×1 — Gs. 69.000, envío gratis`
+  return esReposicion ? `Reponer ${nombre}` : nombre
 }
 
 // ─── FUNCIÓN PRINCIPAL (pura) ───
@@ -122,6 +131,8 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
         nombre, telefono: tel,
         productoComprado: NOMBRE[elegido],
         productoOfrecido: NOMBRE[elegido],
+        familiaOfrecida: elegido,
+        urlOfrecido: URL_PRODUCTO[elegido],
         diasDesdeEntrega: vencido[elegido].dias,
         grupo: 1,
         ofertaSugerida: ofertaTexto(elegido, true),
@@ -144,6 +155,8 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
           nombre, telefono: tel,
           productoComprado: NOMBRE[famComprado],
           productoOfrecido: NOMBRE[famFalta],
+          familiaOfrecida: famFalta,
+          urlOfrecido: URL_PRODUCTO[famFalta],
           diasDesdeEntrega: d,
           grupo: 2,
           ofertaSugerida: ofertaTexto(famFalta, false),
@@ -164,6 +177,8 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
         nombre, telefono: tel,
         productoComprado: NOMBRE[elegido.familia],
         productoOfrecido: NOMBRE[CROSSSELL_MAP[elegido.familia]],
+        familiaOfrecida: CROSSSELL_MAP[elegido.familia],
+        urlOfrecido: URL_PRODUCTO[CROSSSELL_MAP[elegido.familia]],
         diasDesdeEntrega: elegido.d,
         grupo: 3,
         ofertaSugerida: ofertaTexto(CROSSSELL_MAP[elegido.familia], false),

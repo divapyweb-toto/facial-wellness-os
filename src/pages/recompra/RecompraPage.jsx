@@ -112,16 +112,32 @@ export default function RecompraPage() {
   }, [seg, filtro])
 
   // Arma el mensaje de WhatsApp para un cliente y lo copia al portapapeles.
+  // Objetivo: vender el producto y cerrar YA con pago anticipado por transferencia.
   const mensajeWhatsApp = (r) => {
     const nombre = (r.nombre || '').split(' ')[0] || 'Hola'
-    let cuerpo
+    const link = r.urlOfrecido ? `\n\n👉 Mirá el producto acá:\n${r.urlOfrecido}` : ''
+
+    // Gancho según el tipo de recompra
+    let gancho
     if (r.tipo === 'reponer') {
-      cuerpo = `¡Hola ${nombre}! 👋 Vimos que ya hace un tiempo compraste tu ${r.productoComprado} y seguro se te está por acabar. Te reservamos una reposición: ${r.ofertaSugerida}. ¿Te lo mandamos?`
+      gancho = `¡Hola ${nombre}! 👋 Ya pasó un tiempo desde que recibiste tus ${r.productoComprado} — a esta altura se te deben estar por acabar. No te quedes sin ✋`
     } else if (r.tipo === 'combo') {
-      cuerpo = `¡Hola ${nombre}! 👋 Para aprovechar al máximo tu ${r.productoComprado}, lo ideal es sumarle ${r.productoOfrecido} y completar el combo sueño. Te lo dejamos a: ${r.ofertaSugerida}. ¿Lo querés?`
+      gancho = `¡Hola ${nombre}! 👋 Para sacarle el máximo a tus ${r.productoComprado}, te falta la otra mitad: sumale ${r.productoOfrecido} y completá el combo para dormir y respirar mejor 😴`
     } else {
-      cuerpo = `¡Hola ${nombre}! 👋 Gracias por tu compra de ${r.productoComprado}. Creemos que te va a encantar ${r.productoOfrecido}: ${r.ofertaSugerida}. ¿Te interesa?`
+      gancho = `¡Hola ${nombre}! 👋 Vas a querer esto: ${r.productoOfrecido}. Es el complemento perfecto para lo que ya usás y a la gente le encanta 🔥`
     }
+
+    // Cierre agresivo empujando el pago anticipado por transferencia
+    const cierre = `📦 Por alta demanda el envío estándar tarda unos días, pero si asegurás tu pedido HOY con pago anticipado te lo priorizamos y sale en 24hs 🚀
+
+💸 *Formas de pago (anticipado):*
+🏦 Transferencia → Alias: *6103233* (CI José Ramírez)
+💳 Giros Tigo → *0981 948 800*
+
+Pasame el comprobante y lo despacho hoy mismo ✅`
+
+    const cuerpo = `${gancho}${link}\n\n${cierre}`
+
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(cuerpo).then(() => {
         setCopiado(r.telefono)

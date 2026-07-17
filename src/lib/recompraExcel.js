@@ -11,7 +11,7 @@ const GRUPOS_META = {
   g3: { num: '3', tab: '3 · Cross-sell',  color: 'FFE8973A', nombre: 'Cross-sell durable' },
 }
 
-const HEAD = ['Nombre', 'Teléfono', 'Producto comprado', 'Días desde entrega', 'Grupo', 'Oferta sugerida']
+const HEAD = ['Nombre', 'Teléfono', 'Producto comprado', 'Días desde entrega', 'Grupo', 'Ofrecer', 'Link producto']
 const FUENTE = 'Helvetica Neue'
 
 function fechaHoy() {
@@ -30,10 +30,10 @@ export async function generarExcelRecompra(segmentado) {
     const meta = GRUPOS_META[key]
     const rows = segmentado[key] || []
     const ws = wb.addWorksheet(meta.tab, { properties: { tabColor: { argb: meta.color } } })
-    ws.columns = [{ width: 24 }, { width: 16 }, { width: 20 }, { width: 18 }, { width: 8 }, { width: 46 }]
+    ws.columns = [{ width: 24 }, { width: 16 }, { width: 20 }, { width: 18 }, { width: 8 }, { width: 24 }, { width: 60 }]
 
     // ── Banda de marca (filas 1-2 fusionadas, fondo casi negro) ──
-    ws.mergeCells('A1:F1'); ws.mergeCells('A2:F2')
+    ws.mergeCells('A1:G1'); ws.mergeCells('A2:G2')
     const t1 = ws.getCell('A1')
     t1.value = 'FACIAL WELLNESS'
     t1.font = { name: FUENTE, size: 20, bold: true, color: { argb: 'FFFFFFFF' } }
@@ -61,7 +61,7 @@ export async function generarExcelRecompra(segmentado) {
 
     // ── Filas de datos (o aviso si vacío) ──
     if (rows.length === 0) {
-      ws.mergeCells('A5:F5')
+      ws.mergeCells('A5:G5')
       const e = ws.getCell('A5')
       e.value = 'Sin clientes en este grupo hoy.'
       e.font = { name: FUENTE, size: 10, italic: true, color: { argb: 'FF999999' } }
@@ -71,7 +71,7 @@ export async function generarExcelRecompra(segmentado) {
       rows.forEach((row, idx) => {
         const r = ws.getRow(5 + idx)
         const zebra = idx % 2 === 1 ? 'FFF2F6FA' : 'FFFFFFFF'
-        const vals = [row.nombre || '—', row.telefono || '', row.productoComprado, row.diasDesdeEntrega, `G${row.grupo}`, row.ofertaSugerida]
+        const vals = [row.nombre || '—', row.telefono || '', row.productoComprado, row.diasDesdeEntrega, `G${row.grupo}`, row.ofertaSugerida, row.urlOfrecido || '']
         vals.forEach((v, i) => {
           const c = r.getCell(i + 1)
           c.value = v
