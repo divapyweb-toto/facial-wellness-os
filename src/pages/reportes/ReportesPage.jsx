@@ -3,7 +3,7 @@ import { useState, useCallback, useRef } from 'react'
 import ComparadorMeses from './ComparadorMeses'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
-import { calcularPeriodo, agruparSerie } from '../../lib/periodos'
+import { agruparSerie } from '../../lib/periodos'
 import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat, FileText } from 'lucide-react'
 import {
   BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
@@ -29,9 +29,7 @@ function Delta({ actual, anterior, invertido = false }) {
 
 export default function ReportesPage() {
   const [vista, setVista] = useState('reporte')  // 'reporte' | 'comparar'
-  const [tipoPeriodo, setTipoPeriodo] = useState('mensual')  // diario | semanal | mensual | anual
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
-  const [fechaRef, setFechaRef] = useState(new Date().toISOString().substring(0, 10))  // ancla para diario/semanal
   const [datos, setDatos] = useState(null)
   const [loading, setLoading] = useState(false)
   const [generandoPdf, setGenerandoPdf] = useState(false)
@@ -39,11 +37,16 @@ export default function ReportesPage() {
 
   const cargarDatos = useCallback(async () => {
     setLoading(true)
-    // Referencia: para diario/semanal se necesita el día exacto; para mensual/anual, el mes.
-    const referencia = (tipoPeriodo === 'diario' || tipoPeriodo === 'semanal') ? fechaRef : (mes + '-15')
-    const P = calcularPeriodo(tipoPeriodo, referencia)
-    const inicio = P.inicio, fin = P.fin
-    const inicioPrev = P.inicioPrev, finPrev = P.finPrev
+    // Rango del mes elegido y del mes anterior (para comparar)
+    const [year, month] = mes.split('-').map(Number)
+    const inicio = `${mes}-01`
+    const fin = new Date(year, month, 0).toISOString().slice(0, 10)
+    const dPrev = new Date(year, month - 2, 1)
+    const inicioPrev = `${dPrev.getFullYear()}-${String(dPrev.getMonth() + 1).padStart(2, '0')}-01`
+    const finPrev = new Date(dPrev.getFullYear(), dPrev.getMonth() + 1, 0).toISOString().slice(0, 10)
+    // Objeto de período mensual (para etiquetas y la serie por día)
+    const P = { tipo: 'mensual', granularidad: 'dia', inicio, fin, inicioPrev, finPrev,
+      etiqueta: new Date(year, month - 1, 1).toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }) }
 
     // Paginado: un mes a 100 pedidos/día son ~3.000 filas y Supabase corta en 1.000.
     // El cierre financiero no puede calcularse con datos recortados.
@@ -73,18 +76,15 @@ export default function ReportesPage() {
       return { ...p, tasaDevolucion: res ? Math.round(p.devueltos / res * 100) : 0 }
     }).sort((a, b) => b.ingresos - a.ingresos)
 
-    // Por día (para chart). Recorre los días del rango del período elegido.
+    // Por día del mes (para el gráfico)
+    const diasDelMes = new Date(year, month, 0).getDate()
+    const hoyStr = new Date().toISOString().slice(0, 10)
     const porDia = []
-    {
-      const dIni = new Date(inicio + 'T00:00:00')
-      const dFin = new Date(fin + 'T00:00:00')
-      const hoyStr = new Date().toISOString().slice(0, 10)
-      for (let d = new Date(dIni); d <= dFin; d.setDate(d.getDate() + 1)) {
-        const fechaStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-        const ventasDia = entregadas.filter(v => v.fecha === fechaStr)
-        if (ventasDia.length > 0 || fechaStr <= hoyStr) {
-          porDia.push({ dia: d.getDate(), ventas: ventasDia.reduce((s, v) => s + v.total, 0), neto: ventasDia.reduce((s, v) => s + (v.ganancia_neta || 0), 0), cantidad: ventasDia.length })
-        }
+    for (let d = 1; d <= diasDelMes; d++) {
+      const fechaStr = `${mes}-${String(d).padStart(2, '0')}`
+      const ventasDia = entregadas.filter(v => v.fecha === fechaStr)
+      if (ventasDia.length > 0 || fechaStr <= hoyStr) {
+        porDia.push({ dia: d, ventas: ventasDia.reduce((s, v) => s + v.total, 0), neto: ventasDia.reduce((s, v) => s + (v.ganancia_neta || 0), 0), cantidad: ventasDia.length })
       }
     }
 
@@ -194,7 +194,7 @@ export default function ReportesPage() {
     const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida
 
     setDatos({
-      mes, periodo: P, tipoPeriodo,
+      mes, periodo: P,
       serie: agruparSerie(ventas || [], P),
       ventasBrutas: ventasBrutasCalc,
       ingresosNetos: ingresosNetosCalc,
@@ -214,7 +214,7 @@ export default function ReportesPage() {
       clientesUnicos, recompradores, alertas,
     })
     setLoading(false)
-  }, [mes, tipoPeriodo, fechaRef])
+  }, [mes])
 
   const generarPDF = () => {
     if (!datos) return
@@ -502,8 +502,6 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
     })
   }
   // Años disponibles (para el período anual): del año actual hacia atrás
-  const añosDisponibles = []
-  { const yNow = new Date().getFullYear(); for (let y = yNow; y >= yNow - 3; y--) añosDisponibles.push(String(y)) }
 
   const nombreMes = datos
     ? (() => { const [y, m] = datos.mes.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }) })()
@@ -514,7 +512,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
       <div className="page-header">
         <div>
           <h1 className="page-title">Reportes</h1>
-          <p className="page-subtitle">{vista === 'reporte' ? 'Reporte por período: diario, semanal, mensual o anual' : 'Compará dos meses de forma honesta'}</p>
+          <p className="page-subtitle">{vista === 'reporte' ? 'Reporte mensual completo, con PDF ejecutivo y PDF para análisis' : 'Compará dos meses de forma honesta'}</p>
         </div>
         <div className="page-actions">
           <div className="tabs" style={{ marginRight: 8 }}>
@@ -523,26 +521,10 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
           </div>
           {vista === 'reporte' && (
             <>
-              <div className="tabs" style={{ marginRight: 4 }}>
-                {[['diario', 'Diario'], ['semanal', 'Semanal'], ['mensual', 'Mensual'], ['anual', 'Anual']].map(([t, lbl]) => (
-                  <button key={t} className={`tab ${tipoPeriodo === t ? 'active' : ''}`}
-                    onClick={() => { setTipoPeriodo(t); setDatos(null) }}>{lbl}</button>
-                ))}
-              </div>
-              {(tipoPeriodo === 'diario' || tipoPeriodo === 'semanal') ? (
-                <input type="date" className="form-select" style={{ width: 'auto' }} value={fechaRef}
-                  onChange={e => { setFechaRef(e.target.value); setDatos(null) }} />
-              ) : tipoPeriodo === 'anual' ? (
-                <select className="form-select" style={{ width: 'auto' }} value={mes.slice(0, 4)}
-                  onChange={e => { setMes(e.target.value + '-01'); setDatos(null) }}>
-                  {añosDisponibles.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
-              ) : (
-                <select className="form-select" style={{ width: 'auto' }} value={mes}
-                  onChange={e => { setMes(e.target.value); setDatos(null) }}>
-                  {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                </select>
-              )}
+              <select className="form-select" style={{ width: 'auto' }} value={mes}
+                onChange={e => { setMes(e.target.value); setDatos(null) }}>
+                {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
               <button className="btn btn-secondary" onClick={cargarDatos} disabled={loading}>
                 {loading ? <Loader2 size={14} className="spinning" /> : <FileBarChart2 size={14} />}
                 Generar
