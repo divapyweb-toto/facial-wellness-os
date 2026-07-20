@@ -64,11 +64,11 @@ export default function AdsPage() {
       const [vts, ents, camp] = await Promise.all([
         fetchAll(() => supabase.from('ventas')
           .select('n_referencia, total, estado, costo_prod, costo_envio, producto_nombre, fecha')
-          .is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin), { columnaOrden: 'fecha' }),
+          .is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin)),
         fetchAll(() => supabase.from('entregas')
-          .select('n_referencia, nro_guia_ref, estado_pap, motivo')
+          .select('n_referencia, nro_guia_ref, estado_pap, motivo, fecha_entrega')
           .gte('fecha_entrega', inicio).lte('fecha_entrega', finBufStr), { columnaOrden: 'nro_guia_pap' }),
-        supabase.from('campanas_ads').select('*').eq('mes', mes).is('deleted_at', null),
+        supabase.from('campanas_ads').select('*').eq('mes', mes),
       ])
 
       setVentas(vts || [])
@@ -120,7 +120,9 @@ export default function AdsPage() {
     return FAMILIAS.map(([fam, nombre]) => {
       const vs = ventasPorFamilia[fam] || []
       return { familia: fam, nombre, ventas: vs, m: calcularMetricasAds(Number(gastos[fam]) || 0, vs, estadoPaP) }
-    }).filter(f => f.ventas.length > 0 || (Number(gastos[f.familia]) || 0) > 0)
+    })
+    // Mostramos todas las familias siempre, así siempre podés cargar el gasto
+    // aunque ese producto todavía no tenga ventas registradas este mes.
   }, [modo, gastos, ventasPorFamilia, ventas, estadoPaP])
 
   // Totales del mes (para el resumen de arriba)
@@ -137,16 +139,17 @@ export default function AdsPage() {
   const guardar = async () => {
     setGuardando(true)
     try {
-      // Reemplazar el gasto del mes: borrar lo anterior e insertar lo nuevo
+      // Reemplazar el gasto del mes: borrar lo anterior e insertar lo nuevo.
+      // Solo columnas seguras: mes, familia, gasto.
       await supabase.from('campanas_ads').delete().eq('mes', mes)
       let filasIns = []
       if (modo === 'total') {
         const g = Number(gastos.total) || 0
-        if (g > 0) filasIns.push({ mes, familia: 'total', gasto: g, plataforma: 'Meta' })
+        if (g > 0) filasIns.push({ mes, familia: 'total', gasto: g })
       } else {
         filasIns = FAMILIAS
           .filter(([f]) => (Number(gastos[f]) || 0) > 0)
-          .map(([f]) => ({ mes, familia: f, gasto: Number(gastos[f]), plataforma: 'Meta' }))
+          .map(([f]) => ({ mes, familia: f, gasto: Number(gastos[f]) }))
       }
       if (filasIns.length) {
         const { error } = await supabase.from('campanas_ads').insert(filasIns)
