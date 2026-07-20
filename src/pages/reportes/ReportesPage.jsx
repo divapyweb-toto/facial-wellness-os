@@ -403,8 +403,9 @@ export default function ReportesPage() {
     // Motivos de devolución
     const motivoFilas = (d.motivos || []).map(m => filaTabla([esc(m.motivo || m.nombre), m.cantidad ?? m.count]))
     // Campañas
+    const NOMBRE_FAM_ADS = { nasal: 'Tiras Nasales', parche: 'Parches Bucales', gudair: 'Pack Gudair', lengua: 'Raspador de Lengua', jaw: 'JawFlex Pro', botella: 'Botella Flexible', bebird: 'Bebird Pro', total: 'Total del mes' }
     const campFilas = (d.campanas || []).map(c => filaTabla([
-      esc(c.producto || c.nombre || '—'), gs(c.gasto || c.inversion || 0), c.alcance ?? '—', c.clicks ?? '—',
+      esc(NOMBRE_FAM_ADS[c.familia] || c.producto || c.nombre || '—'), gs(c.gasto || c.inversion || 0),
     ]))
 
     const win = window.open('', '_blank')
@@ -473,7 +474,7 @@ ${ciudadFilas.length ? tabla(['Ciudad', 'Pedidos', 'Entregados', 'Devueltos', 'T
 ${motivoFilas.length ? tabla(['Motivo', 'Cantidad'], motivoFilas) : '<p>Sin devoluciones registradas.</p>'}
 
 <h2>7. Inversión en publicidad</h2>
-${campFilas.length ? tabla(['Campaña / producto', 'Gasto', 'Alcance', 'Clicks'], campFilas) : '<p>Sin campañas cargadas en el período.</p>'}
+${campFilas.length ? tabla(['Producto / campaña', 'Gasto'], campFilas) : '<p>Sin campañas cargadas en el período.</p>'}
 <div class="formula">Gasto total en ads: ${gs(d.totalGastoAds)}${totalPedidos ? ` · CPA aproximado (gasto ads / pedidos): ${gs(Math.round((d.totalGastoAds || 0) / totalPedidos))}` : ''}${entregados ? ` · CPA por entrega: ${gs(Math.round((d.totalGastoAds || 0) / entregados))}` : ''}</div>
 
 <h2>8. Clientes</h2>
@@ -807,25 +808,22 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
               <table className="tabla-responsive">
                 <thead>
                   <tr>
-                    <th>Campaña</th>
+                    <th>Producto / campaña</th>
                     <th>Plataforma</th>
                     <th>Gasto</th>
-                    <th>Ingresos</th>
-                    <th>ROAS</th>
-                    <th>ROI %</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {datos.campanas.map(c => (
-                    <tr key={c.id}>
-                      <td data-label="Campaña" style={{ fontWeight: 500 }}>{c.nombre}</td>
-                      <td data-label="Plataforma"><span className="badge badge-purple">{c.plataforma}</span></td>
-                      <td data-label="Gasto" style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
-                      <td data-label="Ingresos" style={{ color: 'var(--green)' }}>{formatGs(c.ingresos_atribuidos)}</td>
-                      <td data-label="ROAS"><span style={{ fontWeight: 700, color: parseFloat(c.roas) >= 2 ? 'var(--green)' : 'var(--yellow)' }}>{c.roas}x</span></td>
-                      <td data-label="ROI %"><span style={{ fontWeight: 700, color: parseFloat(c.roi_pct) > 0 ? 'var(--green)' : 'var(--red)' }}>{c.roi_pct}%</span></td>
-                    </tr>
-                  ))}
+                  {datos.campanas.map((c, i) => {
+                    const NF = { nasal: 'Tiras Nasales', parche: 'Parches Bucales', gudair: 'Pack Gudair', lengua: 'Raspador de Lengua', jaw: 'JawFlex Pro', botella: 'Botella Flexible', bebird: 'Bebird Pro', total: 'Total del mes' }
+                    return (
+                      <tr key={c.id || i}>
+                        <td data-label="Producto" style={{ fontWeight: 500 }}>{NF[c.familia] || c.nombre || '—'}</td>
+                        <td data-label="Plataforma"><span className="badge badge-purple">{c.plataforma || 'Meta'}</span></td>
+                        <td data-label="Gasto" style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
