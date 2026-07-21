@@ -524,6 +524,33 @@ export default function EntregasPage() {
         COLS_ENTREGAS.forEach(c => { if (m[c] !== undefined) o[c] = m[c] })
         return o
       })
+
+      // 1.5) REGLA "una vez rendido, queda rendido":
+      //   Traigo las guías que YA están rendidas en la base (por el Excel del
+      //   martes o un reporte anterior). Si este reporte no las marca como
+      //   rendidas todavía, NO las desmarco — conservo lo que ya había.
+      //   El reporte SÍ puede marcar nuevas como rendidas, nunca desmarcar.
+      const guiasSubidas = limpio.map(m => m.nro_guia_pap).filter(Boolean)
+      const yaRendidas = {}
+      for (let i = 0; i < guiasSubidas.length; i += 200) {
+        const chunk = guiasSubidas.slice(i, i + 200)
+        try {
+          const { data } = await supabase.from('entregas')
+            .select('nro_guia_pap, fecha_rendido, dias_rendicion')
+            .in('nro_guia_pap', chunk).eq('rendido', true)
+          for (const row of (data || [])) yaRendidas[String(row.nro_guia_pap)] = row
+        } catch (e) { /* si falla la consulta, se sigue igual (no se pierde nada) */ }
+      }
+      for (const m of limpio) {
+        const prev = yaRendidas[String(m.nro_guia_pap)]
+        if (prev && !m.rendido) {
+          // Estaba rendida y este reporte no lo dice: mantenerla rendida.
+          m.rendido = true
+          if (m.fecha_rendido == null) m.fecha_rendido = prev.fecha_rendido
+          if (m.dias_rendicion == null) m.dias_rendicion = prev.dias_rendicion
+        }
+      }
+
       let ok = 0, errEntregas = null
       for (let i = 0; i < limpio.length; i += 100) {
         const lote = limpio.slice(i, i + 100)
