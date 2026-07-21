@@ -4,7 +4,8 @@ import { supabase, formatGs } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2 } from 'lucide-react'
+import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2, SlidersHorizontal } from 'lucide-react'
+import { getConfig, guardarConfigLote, cargarConfig, DEFAULTS } from '../../lib/config'
 
 // ─── Modal producto ───────────────────────────────────────
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -242,6 +243,105 @@ function UsuarioModal({ onClose, onSaved }) {
 }
 
 // ─── Config Page ──────────────────────────────────────────
+// Reglas del negocio editables: flete, umbrales de riesgo, ventanas de recompra,
+// datos de pago. Todo lo que antes estaba fijo en el código.
+function ReglasNegocio() {
+  const { toast } = useToast()
+  const [form, setForm] = useState(() => {
+    const f = {}
+    for (const k of Object.keys(DEFAULTS)) f[k] = String(getConfig(k))
+    return f
+  })
+  const [guardando, setGuardando] = useState(false)
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const setNum = (k, v) => setForm(f => ({ ...f, [k]: v.replace(/[^\d.]/g, '') }))
+
+  const guardar = async () => {
+    setGuardando(true)
+    try {
+      await guardarConfigLote(form)
+      await cargarConfig()
+      toast('Reglas guardadas — ya se aplican en todo el sistema', 'success')
+    } catch (e) {
+      toast('Error al guardar: ' + e.message, 'error')
+    } finally { setGuardando(false) }
+  }
+
+  const restaurar = (k) => set(k, String(DEFAULTS[k]))
+
+  const Campo = ({ clave, label, sufijo, ayuda }) => (
+    <div className="form-group">
+      <label className="form-label">{label}</label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input className="form-input" value={form[clave]}
+          onChange={e => (typeof DEFAULTS[clave] === 'number' ? setNum(clave, e.target.value) : set(clave, e.target.value))}
+          style={{ maxWidth: 200 }} />
+        {sufijo && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{sufijo}</span>}
+        {String(form[clave]) !== String(DEFAULTS[clave]) && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => restaurar(clave)} title={`Volver a ${DEFAULTS[clave]}`}>
+            ↺ {DEFAULTS[clave]}
+          </button>
+        )}
+      </div>
+      {ayuda && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{ayuda}</span>}
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 640 }}>
+      <div className="card" style={{ padding: '16px 20px' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>🚚 Envío</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          Tarifa de Punto a Punto. Se usa como respaldo cuando una venta no tiene su propio costo, y en reportes.
+        </p>
+        <Campo clave="flete_pap" label="Flete PaP" sufijo="Gs. por paquete"
+          ayuda="El día que PaP cambie la tarifa, la cambiás acá y listo — sin tocar código." />
+      </div>
+
+      <div className="card" style={{ padding: '16px 20px' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>🚫 Riesgo de cliente</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          Cuándo un cliente se bloquea o se marca en riesgo en Despacho.
+        </p>
+        <Campo clave="riesgo_bloqueo_fallos" label="Bloquear desde (fallos)" sufijo="o más fallos"
+          ayuda="Junto con la tasa de abajo. Ej: 2 fallos y 50%+ → bloqueado." />
+        <Campo clave="riesgo_bloqueo_tasa" label="Tasa de bloqueo" sufijo="(0.5 = 50%)" />
+        <Campo clave="riesgo_tasa" label="Tasa de riesgo (aviso)" sufijo="(0.34 = 34%)"
+          ayuda="Con al menos 1 fallo y esta tasa → se marca 'conviene prepago'." />
+      </div>
+
+      <div className="card" style={{ padding: '16px 20px' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>🔁 Recompra</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          Cada cuánto un cliente entra en la lista de recompra.
+        </p>
+        <Campo clave="recompra_dias_reposicion" label="Reponer consumible cada" sufijo="días (× cantidad)"
+          ayuda="Un consumible se ofrece a los N días × unidades compradas." />
+        <Campo clave="recompra_dias_crosssell" label="Ofrecer producto nuevo desde" sufijo="días" />
+        <Campo clave="recompra_dias_cooldown" label="No repetir contacto por" sufijo="días"
+          ayuda="Tras marcar 'contactado', el cliente no reaparece por este tiempo." />
+      </div>
+
+      <div className="card" style={{ padding: '16px 20px' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>💸 Datos de pago (mensajes de WhatsApp)</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          Lo que aparece en el mensaje de recompra cuando pedís pago anticipado.
+        </p>
+        <Campo clave="pago_alias" label="Alias transferencia" />
+        <Campo clave="pago_alias_titular" label="Titular / CI" />
+        <Campo clave="pago_tigo" label="Número Giros Tigo" />
+      </div>
+
+      <div style={{ position: 'sticky', bottom: 0, display: 'flex', justifyContent: 'flex-end', padding: '12px 0' }}>
+        <button className="btn btn-primary" onClick={guardar} disabled={guardando}>
+          <Save size={14} /> {guardando ? 'Guardando…' : 'Guardar reglas'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function ConfigPage() {
   const { isAdmin } = useAuth()
   const navigate = useNavigate()
@@ -284,6 +384,7 @@ export default function ConfigPage() {
     { key: 'productos', icon: Package, label: 'Productos' },
     { key: 'pago', icon: CreditCard, label: 'Métodos de pago' },
     { key: 'envio', icon: Truck, label: 'Métodos de envío' },
+    { key: 'reglas', icon: SlidersHorizontal, label: 'Reglas del negocio' },
     { key: 'usuarios', icon: Users, label: 'Usuarios' },
   ]
 
@@ -474,6 +575,9 @@ export default function ConfigPage() {
           </div>
         </div>
       )}
+
+      {/* REGLAS DEL NEGOCIO */}
+      {activeTab === 'reglas' && <ReglasNegocio />}
 
       {/* Modals */}
       {modal?.tipo === 'producto' && (

@@ -1,3 +1,4 @@
+import { getVentanasRecompra } from './config'
 // src/lib/recompra.js
 // ═══════════════════════════════════════════════════════════
 // MOTOR DE SEGMENTACIÓN DE RECOMPRA / CROSS-SELL
@@ -82,6 +83,7 @@ function ofertaTexto(familiaOfrecida, esReposicion) {
 // hoy: Date  (inyectable para testear)
 // → { g1, g2, g3 }  cada uno: [{ nombre, telefono, productoComprado, diasDesdeEntrega, grupo, ofertaSugerida }]
 export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date()) {
+  const { diasReposicion, diasCrosssell } = getVentanasRecompra()
   // Agrupar por teléfono. Saltar: sin teléfono, excluidos, producto no clasificable.
   const porCliente = new Map()
   for (const l of (lineas || [])) {
@@ -116,7 +118,7 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
       if (!evs.length) continue
       const reciente = evs.reduce((a, b) => new Date(a.fechaEntrega) >= new Date(b.fechaEntrega) ? a : b)
       const d = diasDesde(hoy, reciente.fechaEntrega)
-      const ventana = DIAS_REPOSICION * (reciente.cantidad || 1)
+      const ventana = diasReposicion * (reciente.cantidad || 1)
       if (d != null && d >= ventana) vencido[fam] = { dias: d, fechaEntrega: reciente.fechaEntrega }
     }
 
@@ -150,7 +152,7 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
       const evs = holdings[famComprado].filter(e => e.fechaEntrega)
       const reciente = evs.reduce((a, b) => new Date(a.fechaEntrega) >= new Date(b.fechaEntrega) ? a : b)
       const d = diasDesde(hoy, reciente.fechaEntrega)
-      if (d != null && d >= DIAS_CROSSSELL) {
+      if (d != null && d >= diasCrosssell) {
         g2.push({
           nombre, telefono: tel,
           productoComprado: NOMBRE[famComprado],
@@ -170,7 +172,7 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
     const candidatos = ls
       .filter(l => CROSSSELL_MAP[l.familia] && l.fechaEntrega)
       .map(l => ({ familia: l.familia, d: diasDesde(hoy, l.fechaEntrega) }))
-      .filter(c => c.d != null && c.d >= DIAS_CROSSSELL)
+      .filter(c => c.d != null && c.d >= diasCrosssell)
     if (candidatos.length) {
       const elegido = candidatos.reduce((a, b) => a.d <= b.d ? a : b) // más reciente
       g3.push({

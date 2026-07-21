@@ -1,7 +1,8 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { useAuth } from './lib/AuthContext'
 import { ToastProvider } from './lib/toast'
+import { cargarConfig } from './lib/config'
 import Layout from './components/layout/Layout'
 import LoginPage from './pages/auth/LoginPage'
 // Páginas más usadas: carga directa (inicio instantáneo)
@@ -45,6 +46,10 @@ function PrivateRoute({ children }) {
 }
 
 export default function App() {
+  // Cargar la configuración central (flete, umbrales, ventanas, pago) una vez
+  // al iniciar. Si falla, se usan los defaults y el sistema anda igual.
+  useEffect(() => { cargarConfig() }, [])
+
   return (
     <ToastProvider>
       <Routes>

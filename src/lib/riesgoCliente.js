@@ -18,6 +18,8 @@ const BLOQUEO_FALLOS = 2      // mínimo de fallos para considerar bloqueo
 const BLOQUEO_TASA = 0.5      // + tasa de fallo ≥ 50%
 const RIESGO_TASA = 0.34      // riesgo: al menos 1 fallo y tasa ≥ 34%
 
+import { getUmbralesRiesgo } from './config'
+
 // Normaliza un teléfono paraguayo para cruzar clientes entre pedidos.
 export function normalizarTel(t) {
   if (!t) return ''
@@ -80,9 +82,10 @@ export function evaluarRiesgo(h) {
   const entregados = h?.entregados || 0
   if (pedidos === 0) return { nivel: 'ok', pedidos: 0, fallos: 0, entregados: 0, tasa: 0 }
   const tasa = fallos / pedidos
+  const { bloqueoFallos, bloqueoTasa, riesgoTasa } = getUmbralesRiesgo()
   let nivel = 'ok'
-  if (fallos >= BLOQUEO_FALLOS && tasa >= BLOQUEO_TASA) nivel = 'bloqueado'
-  else if (fallos >= 1 && tasa >= RIESGO_TASA) nivel = 'riesgo'
+  if (fallos >= bloqueoFallos && tasa >= bloqueoTasa) nivel = 'bloqueado'
+  else if (fallos >= 1 && tasa >= riesgoTasa) nivel = 'riesgo'
   return { nivel, pedidos, fallos, entregados, tasa }
 }
 

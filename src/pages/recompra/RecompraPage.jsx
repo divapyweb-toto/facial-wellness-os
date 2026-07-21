@@ -4,7 +4,8 @@ import { supabase } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { RefreshCw, Download, Repeat, MessageCircle, Loader2 } from 'lucide-react'
-import { segmentarRecompra, familiaProducto, DIAS_COOLDOWN } from '../../lib/recompra'
+import { segmentarRecompra, familiaProducto } from '../../lib/recompra'
+import { getVentanasRecompra, getDatosPago } from '../../lib/config'
 import { generarExcelRecompra } from '../../lib/recompraExcel'
 
 // Normaliza referencia para cruzar ventas ↔ entregas (mismo criterio que el matcher)
@@ -53,7 +54,7 @@ export default function RecompraPage() {
       }
 
       // 3. Teléfonos en cooldown (contactados en los últimos 25 días)
-      const desde = new Date(Date.now() - DIAS_COOLDOWN * 86400000).toISOString()
+      const desde = new Date(Date.now() - getVentanasRecompra().diasCooldown * 86400000).toISOString()
       const { data: logs } = await supabase
         .from('recompra_log')
         .select('telefono')
@@ -128,11 +129,12 @@ export default function RecompraPage() {
     }
 
     // Cierre agresivo empujando el pago anticipado por transferencia
+    const pago = getDatosPago()
     const cierre = `📦 Por alta demanda el envío estándar tarda unos días, pero si asegurás tu pedido HOY con pago anticipado te lo priorizamos y sale en 24hs 🚀
 
 💸 *Formas de pago (anticipado):*
-🏦 Transferencia → Alias: *6103233* (CI José Ramírez)
-💳 Giros Tigo → *0981 948 800*
+🏦 Transferencia → Alias: *${pago.alias}* (${pago.titular})
+💳 Giros Tigo → *${pago.tigo}*
 
 Pasame el comprobante y lo despacho hoy mismo ✅`
 
@@ -197,7 +199,7 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
       {/* Explicación breve */}
       <div className="card" style={{ padding: '12px 16px' }}>
         <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
-          Clientes que ya recibieron su producto y es buen momento para ofrecerles algo. Tocá <strong style={{ color: '#25D366' }}>WhatsApp</strong> y se abre el chat con el mensaje listo. Después marcá <strong>Contactado</strong> para no repetirlo en {DIAS_COOLDOWN} días.
+          Clientes que ya recibieron su producto y es buen momento para ofrecerles algo. Tocá <strong style={{ color: '#25D366' }}>WhatsApp</strong> y se abre el chat con el mensaje listo. Después marcá <strong>Contactado</strong> para no repetirlo en {getVentanasRecompra().diasCooldown} días.
         </p>
       </div>
 
