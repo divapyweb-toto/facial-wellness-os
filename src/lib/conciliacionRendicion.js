@@ -29,15 +29,20 @@ function esTransferencia(forma) {
 }
 
 // Parsea las filas crudas del Excel (ya convertidas a objetos por SheetJS).
-// Espera columnas: NroGuia, NroGuiaRef, FechaIng, Nombre, Estado, Importe, Cobrado, FormaPago
+// OJO: los headers del archivo de PaP vienen CON espacios (" Importe ", " Cobrado "),
+// así que normalizamos cada fila quitando espacios de las claves antes de leer.
 export function parsearFilasRendicion(rows) {
   const out = []
-  for (const r of (rows || [])) {
+  for (const rRaw of (rows || [])) {
+    // Normalizar claves: quitar espacios alrededor (" Cobrado " → "Cobrado")
+    const r = {}
+    for (const k of Object.keys(rRaw)) r[String(k).trim()] = rRaw[k]
+
     const nroGuia = r.NroGuia ?? r.nroGuia ?? r['Nro Guia'] ?? ''
     if (!nroGuia) continue
     const cobradoRaw = r.Cobrado
     const cobrado = (typeof cobradoRaw === 'number') ? cobradoRaw
-      : (String(cobradoRaw).trim() === '-' || String(cobradoRaw).trim() === '') ? null
+      : (cobradoRaw == null || String(cobradoRaw).trim() === '-' || String(cobradoRaw).trim() === '') ? null
       : Number(String(cobradoRaw).replace(/[^\d.-]/g, '')) || 0
     out.push({
       nroGuia: String(nroGuia).trim(),
@@ -53,6 +58,23 @@ export function parsearFilasRendicion(rows) {
     })
   }
   return out
+}
+
+// Combina las filas de VARIOS archivos de rendición en una sola lista,
+// deduplicando por nro de guía (si la misma guía aparece en dos archivos,
+// se queda con una sola). Útil para cargar varios martes de una vez.
+export function combinarArchivosRendicion(listasFilas) {
+  const vistas = new Set()
+  const combinado = []
+  for (const filas of (listasFilas || [])) {
+    for (const f of (filas || [])) {
+      const k = String(f.nroGuia).trim()
+      if (!k || vistas.has(k)) continue
+      vistas.add(k)
+      combinado.push(f)
+    }
+  }
+  return combinado
 }
 
 // Concilia las filas del archivo contra las entregas del sistema.
@@ -96,14 +118,18 @@ export function conciliarRendicion(filas, entregas) {
     // Marcar rendido (tanto efectivo como transferencia: la guía ya cerró su ciclo)
     if (e.nro_guia_pap) marcarRendido.push({ nro_guia_pap: e.nro_guia_pap, formaPago: f.formaPago, cobrado: f.cobrado })
 
-    // Conciliación: para efectivo, comparar lo que PaP cobró vs lo que esperaba el sistema
-    if (f.efectivo) {
+    // Conciliación: para efectivo, comparar lo que PaP cobró vs lo que esperaba el sistema.
+    // Solo marcamos faltante REAL: el sistema tiene que tener un importe válido y la
+    // diferencia tiene que ser significativa (no redondeo). Si el sistema no tiene
+    // importe cargado, no inventamos un faltante.
+    if (f.efectivo && f.cobrado != null) {
       const esperado = Number(e.importe) || 0
       const cobrado = f.cobrado || 0
-      if (esperado > 0 && cobrado < esperado) {
+      const falta = esperado - cobrado
+      if (esperado > 0 && falta > 1000) {
         discrepancias.push({
           nroGuia: f.nroGuia, ref: f.nroGuiaRef, nombre: f.nombre,
-          esperado, cobrado, falta: esperado - cobrado, motivo: 'PaP cobró menos de lo esperado',
+          esperado, cobrado, falta, motivo: 'PaP cobró menos de lo esperado',
         })
       }
     }

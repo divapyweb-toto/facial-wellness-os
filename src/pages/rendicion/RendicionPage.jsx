@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx'
 import { supabase } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
-import { parsearFilasRendicion, conciliarRendicion } from '../../lib/conciliacionRendicion'
+import { parsearFilasRendicion, conciliarRendicion, combinarArchivosRendicion } from '../../lib/conciliacionRendicion'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
 
@@ -178,30 +178,39 @@ export default function RendicionPage() {
     setMarcando(false)
   }
 
-  // ── Importar el reporte de rendición del martes ──
-  const handleArchivoRendicion = (file) => {
-    if (!file) return
-    if (!/\.xlsx?$/i.test(file.name)) { toast('Subí el Excel de rendición (.xlsx)', 'error'); return }
-    setNombreArchivo(file.name)
+  // ── Importar reporte(s) de rendición del martes (uno o varios) ──
+  const handleArchivosRendicion = async (fileList) => {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
+    const invalidos = files.filter(f => !/\.xlsx?$/i.test(f.name))
+    if (invalidos.length) { toast('Solo archivos Excel (.xlsx)', 'error'); return }
+    setNombreArchivo(files.length === 1 ? files[0].name : `${files.length} archivos`)
     setImportando(true)
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target.result, { cellDates: true })
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
-        const filas = parsearFilasRendicion(rows)
-        if (!filas.length) { toast('No se encontraron guías en el archivo', 'error'); setImportando(false); return }
-        const resultado = conciliarRendicion(filas, historico)
-        setConciliacion(resultado)
-        toast(`${filas.length} guías leídas — revisá la conciliación`, 'success')
-      } catch (err) {
-        toast('No se pudo leer el archivo: ' + err.message, 'error')
-      } finally {
-        setImportando(false)
-      }
+    try {
+      const leerArchivo = (file) => new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          try {
+            const wb = XLSX.read(e.target.result, { cellDates: true })
+            const ws = wb.Sheets[wb.SheetNames[0]]
+            const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
+            resolve(parsearFilasRendicion(rows))
+          } catch (err) { reject(err) }
+        }
+        reader.onerror = reject
+        reader.readAsArrayBuffer(file)
+      })
+      const listas = await Promise.all(files.map(leerArchivo))
+      const filas = combinarArchivosRendicion(listas)
+      if (!filas.length) { toast('No se encontraron guías en el/los archivo(s)', 'error'); setImportando(false); return }
+      const resultado = conciliarRendicion(filas, historico)
+      setConciliacion(resultado)
+      toast(`${filas.length} guías leídas de ${files.length} archivo(s) — revisá la conciliación`, 'success')
+    } catch (err) {
+      toast('No se pudo leer: ' + (err?.message || err), 'error')
+    } finally {
+      setImportando(false)
     }
-    reader.readAsArrayBuffer(file)
   }
 
   // Confirmar: marca como rendidas las guías conciliadas
@@ -280,13 +289,13 @@ export default function RendicionPage() {
               <FileCheck size={16} color="var(--accent)" /> Importar rendición del martes
             </h3>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
-              Subí el Excel que te manda PaP y marca todo como rendido + concilia la plata.
+              Subí uno o varios Excel de PaP (podés seleccionar varios martes juntos) y marca todo como rendido + concilia la plata.
             </p>
           </div>
-          <input ref={fileRendRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
-            onChange={e => handleArchivoRendicion(e.target.files[0])} />
+          <input ref={fileRendRef} type="file" accept=".xlsx,.xls" multiple style={{ display: "none" }}
+            onChange={e => handleArchivosRendicion(e.target.files)} />
           <button className="btn btn-primary" onClick={() => fileRendRef.current?.click()} disabled={importando}>
-            <Upload size={14} /> {importando ? 'Procesando…' : 'Subir Excel'}
+            <Upload size={14} /> {importando ? "Procesando…" : "Subir Excel(es)"}
           </button>
         </div>
 
