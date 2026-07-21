@@ -93,7 +93,8 @@ export default function AdsPage() {
       const gs = {}
       let modoGuardado = 'producto'
       for (const c of (camp.data || [])) {
-        const fam = c.familia || 'total'
+        // La familia se guarda en `nombre` (o `familia` en datos viejos)
+        const fam = c.nombre || c.familia || 'total'
         gs[fam] = String(c.gasto || '')
         if (fam === 'total') modoGuardado = 'total'
       }
@@ -147,16 +148,18 @@ export default function AdsPage() {
     setGuardando(true)
     try {
       // Reemplazar el gasto del mes: borrar lo anterior e insertar lo nuevo.
-      // Solo columnas seguras: mes, familia, gasto.
-      await supabase.from('campanas_ads').delete().eq('mes', mes)
+      // Guardamos la familia en la columna `nombre` (que YA existe en la tabla),
+      // así funciona sin depender de ningún cambio de esquema.
+      const del = await supabase.from('campanas_ads').delete().eq('mes', mes)
+      if (del.error) throw del.error
       let filasIns = []
       if (modo === 'total') {
         const g = Number(gastos.total) || 0
-        if (g > 0) filasIns.push({ mes, familia: 'total', gasto: g })
+        if (g > 0) filasIns.push({ mes, nombre: 'total', gasto: g })
       } else {
         filasIns = FAMILIAS
           .filter(([f]) => (Number(gastos[f]) || 0) > 0)
-          .map(([f]) => ({ mes, familia: f, gasto: Number(gastos[f]) }))
+          .map(([f]) => ({ mes, nombre: f, gasto: Number(gastos[f]) }))
       }
       if (filasIns.length) {
         const { error } = await supabase.from('campanas_ads').insert(filasIns)

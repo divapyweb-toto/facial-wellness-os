@@ -405,7 +405,7 @@ export default function ReportesPage() {
     // Campañas
     const NOMBRE_FAM_ADS = { nasal: 'Tiras Nasales', parche: 'Parches Bucales', gudair: 'Pack Gudair', lengua: 'Raspador de Lengua', jaw: 'JawFlex Pro', botella: 'Botella Flexible', bebird: 'Bebird Pro', total: 'Total del mes' }
     const campFilas = (d.campanas || []).map(c => filaTabla([
-      esc(NOMBRE_FAM_ADS[c.familia] || c.producto || c.nombre || '—'), gs(c.gasto || c.inversion || 0),
+      esc(NOMBRE_FAM_ADS[c.nombre] || NOMBRE_FAM_ADS[c.familia] || c.nombre || '—'), gs(c.gasto || c.inversion || 0),
     ]))
 
     const win = window.open('', '_blank')
@@ -818,7 +818,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
                     const NF = { nasal: 'Tiras Nasales', parche: 'Parches Bucales', gudair: 'Pack Gudair', lengua: 'Raspador de Lengua', jaw: 'JawFlex Pro', botella: 'Botella Flexible', bebird: 'Bebird Pro', total: 'Total del mes' }
                     return (
                       <tr key={c.id || i}>
-                        <td data-label="Producto" style={{ fontWeight: 500 }}>{NF[c.familia] || c.nombre || '—'}</td>
+                        <td data-label="Producto" style={{ fontWeight: 500 }}>{NF[c.nombre] || NF[c.familia] || c.nombre || '—'}</td>
                         <td data-label="Plataforma"><span className="badge badge-purple">{c.plataforma || 'Meta'}</span></td>
                         <td data-label="Gasto" style={{ color: 'var(--red)' }}>{formatGs(c.gasto)}</td>
                       </tr>
