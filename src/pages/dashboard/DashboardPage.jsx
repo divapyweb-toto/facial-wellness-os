@@ -141,8 +141,23 @@ export default function DashboardPage() {
 
     // Gastos del mes (costo fijo para el punto de equilibrio)
     const { data: gastosMes } = await supabase
-      .from('gastos').select('monto').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
+      .from('gastos').select('monto, categoria').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
     const totalGastosMes = (gastosMes || []).reduce((s, g) => s + (g.monto || 0), 0)
+
+    // Gasto de Meta Ads del mes (viene del módulo Campañas). Se descuenta de la
+    // ganancia igual que cualquier gasto — es plata que sale. Fuente única: acá.
+    let totalAdsMes = 0
+    try {
+      const { data: adsRows } = await supabase.from('campanas_ads').select('gasto').eq('mes', inicioMes.slice(0, 7))
+      totalAdsMes = (adsRows || []).reduce((s, c) => s + (c.gasto || 0), 0)
+    } catch (e) { /* sin gasto de ads cargado */ }
+
+    // Protección anti-doble: ¿hay ads en Campañas Y también un gasto de "Publicidad"?
+    const gastoPublicidad = (gastosMes || []).filter(g => /public|ads|meta|marketing/i.test(g.categoria || '')).reduce((s, g) => s + (g.monto || 0), 0)
+    const posibleDoble = totalAdsMes > 0 && gastoPublicidad > 0
+
+    // Total de gastos que se descuenta de la ganancia = gastos + ads
+    const totalGastosConAds = totalGastosMes + totalAdsMes
 
     // ── Histórico de 6 meses (tendencia de mediano plazo) ──
     const inicio6m = new Date(ahora.getFullYear(), ahora.getMonth() - 5, 1).toISOString().split('T')[0]
@@ -180,7 +195,7 @@ export default function DashboardPage() {
                  : v.estado === 'devuelto' ? 'devuelto'
                  : 'en_proceso',
       }))
-      const piramide = calcularPiramide(paquetes, indexarCostos(ventasMes), COGS_PROMEDIO, totalGastosMes)
+      const piramide = calcularPiramide(paquetes, indexarCostos(ventasMes), COGS_PROMEDIO, totalGastosConAds)
 
       // ── Desglose de cobro sobre lo entregado ──
       // Transferencia (prepago): plata que YA está en tu cuenta.
@@ -211,6 +226,8 @@ export default function DashboardPage() {
         sangradoFlete: piramide.sangradoFlete,
         // Punto de equilibrio
         gastosMes: totalGastosMes,
+        gastoAds: totalAdsMes,
+        posibleDobleAds: posibleDoble,
         margenPromedio,
         gananciaReal,
         faltaParaCubrir,
@@ -295,6 +312,14 @@ export default function DashboardPage() {
     const hace5 = new Date(); hace5.setDate(hace5.getDate() - 5)
     const { data: viejos } = await supabase.from('ventas').select('id').eq('estado', 'pendiente').lt('fecha', hace5.toISOString().split('T')[0])
     if (viejos?.length) alertasActivas.push({ tipo: 'pendiente', color: 'yellow', msg: `${viejos.length} pedido(s) pendiente(s) con más de 5 días sin resolver` })
+
+    // Advertencia anti-doble-conteo: ads cargado en Campañas Y en Gastos (Publicidad)
+    if (posibleDoble) {
+      alertasActivas.push({
+        tipo: 'doble_ads', color: 'yellow', ruta: '/finanzas', accion: 'Revisar gastos',
+        msg: 'Cargaste Meta Ads en Campañas y también un gasto de "Publicidad" este mes. Se está descontando dos veces — borrá el gasto de Publicidad (el ads ya cuenta desde Campañas).',
+      })
+    }
 
     // ── Alertas inteligentes de negocio (cada dato por separado: si uno falla,
     //    las demás alertas igual salen) ──

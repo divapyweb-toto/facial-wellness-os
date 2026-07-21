@@ -189,7 +189,12 @@ export default function ReportesPage() {
     //  Lo que ya cerró: dinero cobrado (entregadas) − flete de resueltos − costo mercadería vendida − gastos
     const dineroEntro = ventasBrutasCalc                        // lo cobrado (entregadas)
     const costoMercaderiaVendida = cogsEntregadas               // costo de lo entregado/vendido
-    const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida
+    // Ganancia = cobrado − flete − costo mercadería − gastos − gasto en ads (Meta).
+    // El ads viene del módulo Campañas y también es plata que sale.
+    const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida - totalGastoAds
+    // Protección anti-doble: ¿hay gasto de "Publicidad" en Gastos Y también ads en Campañas?
+    const gastoPublicidadRep = (gastos || []).filter(g => /public|ads|meta|marketing/i.test(g.categoria || '')).reduce((s, g) => s + (g.monto || 0), 0)
+    const posibleDobleAdsRep = totalGastoAds > 0 && gastoPublicidadRep > 0
 
     setDatos({
       mes, periodo: P,
@@ -205,6 +210,7 @@ export default function ReportesPage() {
       entregados: entregadas.length, devueltos: devueltas.length, pendientesCount: pendientes.length,
       tasaEntrega: (ventas || []).length ? (entregadas.length / (ventas || []).length) * 100 : 0,
       utilidadNeta: utilidadNetaCalc,
+      posibleDobleAds: posibleDobleAdsRep,
       porProducto: porProductoArr,
       porDia, campanas: campanas || [],
       ventas: ventas || [],
@@ -450,7 +456,7 @@ export default function ReportesPage() {
   <div class="kpi"><div class="lbl">Gastos totales</div><div class="val">${gs(d.totalGastos)}</div></div>
   <div class="kpi"><div class="lbl">Costo mercadería vendida</div><div class="val">${gs(d.costoMercaderiaVendida)}</div></div>
 </div>
-<div class="formula">Contribución firme = ingreso entregadas − flete (todos los envíos) − costo de producto entregado. Utilidad neta = contribución firme − gastos del período.</div>
+<div class="formula">Contribución firme = ingreso entregadas − flete (todos los envíos) − costo de producto entregado. Utilidad neta = contribución firme − gasto en Meta Ads − otros gastos del período.</div>
 
 <h2>2. Serie temporal (${d.periodo?.granularidad === 'mes' ? 'por mes' : 'por día'})</h2>
 ${serieFilas.length ? tabla(['Período', 'Pedidos', 'Entregados', 'Devueltos', 'Ventas brutas', 'Ingreso entregado'], serieFilas) : '<p>Sin datos en el rango.</p>'}
@@ -604,6 +610,11 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
           </div>
 
           {/* Desglose de utilidad (P&L) */}
+          {datos.posibleDobleAds && (
+            <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(234,179,8,0.1)', border: '1px solid var(--yellow)', fontSize: 12.5, color: 'var(--text-secondary)' }}>
+              ⚠️ Tenés Meta Ads cargado en Campañas <strong>y</strong> un gasto de "Publicidad" este período. Se está restando dos veces. Borrá el gasto de Publicidad — el ads ya se cuenta desde Campañas.
+            </div>
+          )}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
               Cómo se arma tu utilidad firme
@@ -612,9 +623,10 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
               {[
                 { l: 'Ingresos cobrados (entregadas, con envío)', v: datos.ventasBrutas, signo: '+' },
                 { l: 'Costo de mercadería vendida (entregadas)', v: datos.costoMercaderiaVendida, signo: '−' },
-                { l: `Flete a Punto a Punto (${datos.entregados + datos.devueltos} resueltos × 27.000)`, v: datos.fleteFirme, signo: '−' },
-                { l: 'Gastos del mes', v: datos.totalGastos, signo: '−' },
-              ].filter(r => r.v !== undefined).map((r, i) => (
+                { l: `Flete a Punto a Punto (${datos.entregados + datos.devueltos} resueltos)`, v: datos.fleteFirme, signo: '−' },
+                { l: 'Gasto en Meta Ads', v: datos.totalGastoAds, signo: '−' },
+                { l: 'Otros gastos del mes', v: datos.totalGastos, signo: '−' },
+              ].filter(r => r.v !== undefined && r.v !== 0).map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 13 }}>
                   <span style={{ color: 'var(--text-secondary)' }}>{r.l}</span>
                   <span style={{ fontWeight: 600, color: r.signo === '−' ? 'var(--red)' : 'var(--text-primary)' }}>{r.signo} {formatGs(r.v)}</span>
