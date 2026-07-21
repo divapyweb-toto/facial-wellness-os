@@ -23,6 +23,7 @@ const navPrincipal = [
 const navLogistica = [
   { to: '/despacho',  icon: PackageCheck,    label: 'Despacho'  },
   { to: '/entregas',  icon: MapPin,          label: 'Entregas'  },
+  { to: '/inteligencia', icon: BarChart3,    label: 'Inteligencia' },
   { to: '/recepcion', icon: PackageOpen,     label: 'Recepción' },
   { to: '/rendicion', icon: Truck,           label: 'Rendición' },
 ]
