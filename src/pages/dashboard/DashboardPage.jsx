@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
+import { construirAlertasNegocio } from '../../lib/alertasNegocio'
 import { fetchAll } from '../../lib/fetchAll'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
@@ -294,7 +295,64 @@ export default function DashboardPage() {
     const hace5 = new Date(); hace5.setDate(hace5.getDate() - 5)
     const { data: viejos } = await supabase.from('ventas').select('id').eq('estado', 'pendiente').lt('fecha', hace5.toISOString().split('T')[0])
     if (viejos?.length) alertasActivas.push({ tipo: 'pendiente', color: 'yellow', msg: `${viejos.length} pedido(s) pendiente(s) con más de 5 días sin resolver` })
-    setAlertas(alertasActivas)
+
+    // ── Alertas inteligentes de negocio (cada dato por separado: si uno falla,
+    //    las demás alertas igual salen) ──
+    const datosAlertas = {}
+    try {
+      // Ventas mes actual vs mes anterior
+      const inicioMesAnt = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1).toISOString().slice(0, 10)
+      const finMesAnt = new Date(ahora.getFullYear(), ahora.getMonth(), 0).toISOString().slice(0, 10)
+      const { data: vAct } = await supabase.from('ventas').select('total').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
+      const { data: vAnt } = await supabase.from('ventas').select('total').is('deleted_at', null).gte('fecha', inicioMesAnt).lte('fecha', finMesAnt)
+      datosAlertas.ventasMesActual = (vAct || []).reduce((s, v) => s + (v.total || 0), 0)
+      datosAlertas.ventasMesAnterior = (vAnt || []).reduce((s, v) => s + (v.total || 0), 0)
+    } catch (e) { /* sin comparación de ventas */ }
+
+    try {
+      // Recompra pendientes (clientes listos hoy, estimación)
+      const desdeR = new Date(); desdeR.setMonth(desdeR.getMonth() - 8)
+      const [{ data: vEnt }, { data: logs }] = await Promise.all([
+        supabase.from('ventas').select('cliente_telefono, fecha, estado').eq('estado', 'entregado').is('deleted_at', null).gte('fecha', desdeR.toISOString().slice(0, 10)).limit(1000),
+        supabase.from('recompra_log').select('telefono, fecha_envio').gte('fecha_envio', new Date(Date.now() - 25 * 86400000).toISOString()),
+      ])
+      const enCooldown = new Set((logs || []).map(l => String(l.telefono).replace(/\D/g, '')))
+      const hace15 = Date.now() - 15 * 86400000
+      const candidatos = new Set()
+      for (const v of (vEnt || [])) {
+        const tel = String(v.cliente_telefono || '').replace(/\D/g, '')
+        if (!tel || enCooldown.has(tel)) continue
+        if (v.fecha && new Date(v.fecha).getTime() < hace15) candidatos.add(tel)
+      }
+      datosAlertas.recompraPendientes = candidatos.size
+    } catch (e) { /* sin alerta de recompra */ }
+
+    try {
+      // Plata de PaP sin rendir
+      const { data: sinRend } = await supabase.from('entregas').select('importe').eq('cobrado', true).eq('rendido', false).limit(2000)
+      datosAlertas.montoSinRendir = (sinRend || []).reduce((s, e) => s + (Number(e.importe) || 0), 0)
+      datosAlertas.cantSinRendir = (sinRend || []).length
+    } catch (e) { /* sin alerta de rendición */ }
+
+    try {
+      // Tasa de entrega este mes vs mes anterior (independiente, para la alerta)
+      const inicioMesAnt2 = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1).toISOString().slice(0, 10)
+      const finMesAnt2 = new Date(ahora.getFullYear(), ahora.getMonth(), 0).toISOString().slice(0, 10)
+      const tasa = (arr) => {
+        const ent = (arr || []).filter(v => v.estado === 'entregado').length
+        const dev = (arr || []).filter(v => v.estado === 'devuelto').length
+        return { tasa: (ent + dev) ? ent / (ent + dev) : 0, resueltos: ent + dev }
+      }
+      const { data: vMesTasa } = await supabase.from('ventas').select('estado').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
+      const { data: vAntTasa } = await supabase.from('ventas').select('estado').is('deleted_at', null).gte('fecha', inicioMesAnt2).lte('fecha', finMesAnt2)
+      const tAct = tasa(vMesTasa), tAnt = tasa(vAntTasa)
+      datosAlertas.tasaEntregaActual = tAct.tasa
+      datosAlertas.tasaEntregaAnterior = tAnt.tasa
+      datosAlertas.entregasResueltas = tAct.resueltos
+    } catch (e) { /* sin alerta de entrega */ }
+
+    const alertasInteligentes = construirAlertasNegocio(datosAlertas)
+    setAlertas([...alertasActivas, ...alertasInteligentes])
 
     // Ventas recientes
     const { data: recientes } = await supabase.from('ventas').select('*').order('created_at', { ascending: false }).limit(8)
@@ -346,12 +404,14 @@ export default function DashboardPage() {
       {alertas.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {alertas.map((a, i) => (
-            <div key={i} className={`alert alert-${a.color === 'red' ? 'error' : 'warning'}`}>
+            <div key={i} className={`alert alert-${a.color === 'red' ? 'error' : a.color === 'green' ? 'success' : 'warning'}`}>
               <AlertTriangle size={14} />
               <span style={{ flex: 1 }}>{a.msg}</span>
-              {a.tipo === 'stock' && (
+              {a.ruta ? (
+                <button className="btn btn-ghost btn-sm" onClick={() => navigate(a.ruta)}>{a.accion || 'Ver'}</button>
+              ) : a.tipo === 'stock' ? (
                 <button className="btn btn-ghost btn-sm" onClick={() => navigate('/stock')}>Ver</button>
-              )}
+              ) : null}
             </div>
           ))}
         </div>
