@@ -4,6 +4,7 @@ import { supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { calcularStockCombo, aplicarStockLoteNuevasVentas, calcularDiferencias, aplicarConteoFisico } from '../../lib/stockEngine'
+import { calcularCostoPonderado, calcularCostoCombo } from '../../lib/costoPonderado'
 import { calcularVelocidades, analizarReposicion, sugerirReposicion, URGENCIA_CFG } from '../../lib/stockIntel'
 import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save, Layers, Clock, TrendingUp, CheckCircle } from 'lucide-react'
 
@@ -128,32 +129,64 @@ function ProductoModal({ producto, onClose, onSaved }) {
 }
 
 // Modal: agregar stock
-function CompraModal({ producto, onClose, onSaved }) {
+function CompraModal({ producto, productos, onClose, onSaved }) {
   const { toast } = useToast()
   const [cantidad, setCantidad] = useState('')
+  const [costoNuevo, setCostoNuevo] = useState('')
   const [motivo, setMotivo] = useState('Compra de mercadería')
   const [loading, setLoading] = useState(false)
 
+  const cant = parseInt(cantidad) || 0
+  const costo = parseInt(costoNuevo) || 0
+  // Cálculo en vivo del promedio ponderado
+  const calc = calcularCostoPonderado(producto.stock_actual, producto.costo_unit, cant, costo)
+
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!cantidad || cantidad <= 0) { toast('Ingresá una cantidad válida', 'error'); return }
+    if (!cant || cant <= 0) { toast('Ingresá una cantidad válida', 'error'); return }
     setLoading(true)
-    const cant = parseInt(cantidad)
+
+    // Nuevo costo: si cargaste el costo de la compra, se pondera; si lo dejaste
+    // vacío, se mantiene el costo actual (solo suma stock, como antes).
+    const nuevoCosto = costo > 0 ? calc.nuevoCosto : producto.costo_unit
+    const nuevoStock = producto.stock_actual + cant
+
     const { error } = await supabase.from('productos')
-      .update({ stock_actual: producto.stock_actual + cant })
+      .update({ stock_actual: nuevoStock, costo_unit: nuevoCosto })
       .eq('id', producto.id)
     if (error) { toast('Error al actualizar stock', 'error'); setLoading(false); return }
-    // Registrar el movimiento; si falla, revertir el stock para no descuadrar
+
+    // Registrar el movimiento; si falla, revertir para no descuadrar
+    const motivoFull = costo > 0
+      ? `${motivo} · ${cant} uds a ${formatGs(costo)} · costo prom. ${formatGs(producto.costo_unit)} → ${formatGs(nuevoCosto)}`
+      : motivo
     const { error: errMov } = await supabase.from('stock_movimientos').insert({
       producto_id: producto.id, producto_nombre: producto.nombre,
-      tipo: 'compra', cantidad: cant, motivo,
+      tipo: 'compra', cantidad: cant, motivo: motivoFull,
     })
     if (errMov) {
-      await supabase.from('productos').update({ stock_actual: producto.stock_actual }).eq('id', producto.id)
+      await supabase.from('productos').update({ stock_actual: producto.stock_actual, costo_unit: producto.costo_unit }).eq('id', producto.id)
       toast('No se pudo registrar el movimiento — stock sin cambios', 'error')
       setLoading(false); return
     }
-    toast(`+${cant} unidades agregadas a ${producto.nombre}`, 'success')
+
+    // Si cambió el costo de este producto, recalcular el costo de los combos que lo usan
+    if (costo > 0 && nuevoCosto !== producto.costo_unit) {
+      try {
+        const costoPorId = {}
+        for (const p of (productos || [])) costoPorId[p.id] = p.id === producto.id ? nuevoCosto : p.costo_unit
+        const combosAfectados = (productos || []).filter(p =>
+          p.es_combo && (p.componente_1_id === producto.id || p.componente_2_id === producto.id))
+        for (const c of combosAfectados) {
+          const costoCombo = calcularCostoCombo(c, costoPorId)
+          await supabase.from('productos').update({ costo_unit: costoCombo }).eq('id', c.id)
+        }
+      } catch (e) { /* el combo se puede recalcular después; el producto ya quedó bien */ }
+    }
+
+    toast(costo > 0
+      ? `+${cant} uds · costo promedio actualizado a ${formatGs(nuevoCosto)}`
+      : `+${cant} unidades agregadas a ${producto.nombre}`, 'success')
     onSaved(); onClose()
     setLoading(false)
   }
@@ -162,7 +195,7 @@ function CompraModal({ producto, onClose, onSaved }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="modal-header">
-          <h2 className="modal-title">Agregar stock</h2>
+          <h2 className="modal-title">Reponer stock</h2>
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -170,24 +203,45 @@ function CompraModal({ producto, onClose, onSaved }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 13, fontWeight: 600 }}>{producto.nombre}</span>
               <span style={{ fontWeight: 700, color: producto.stock_actual <= producto.stock_alerta ? 'var(--red)' : 'var(--green)' }}>
-                {producto.stock_actual} uds actuales
+                {producto.stock_actual} uds · costo {formatGs(producto.costo_unit)}
               </span>
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">Unidades a agregar *</label>
+            <label className="form-label">Unidades que comprás *</label>
             <input className="form-input" type="number" min="1" value={cantidad}
-              onChange={e => setCantidad(e.target.value)} required autoFocus placeholder="50" />
+              onChange={e => setCantidad(e.target.value)} required autoFocus placeholder="200" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Costo por unidad de esta compra</label>
+            <input className="form-input" type="number" min="0" value={costoNuevo}
+              onChange={e => setCostoNuevo(e.target.value)} placeholder="9000" />
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              Si lo dejás vacío, solo suma stock y mantiene el costo actual.
+            </span>
           </div>
           <div className="form-group">
             <label className="form-label">Motivo</label>
             <input className="form-input" value={motivo} onChange={e => setMotivo(e.target.value)} />
           </div>
-          {cantidad > 0 && (
-            <div style={{ fontSize: 13, color: 'var(--accent)', fontWeight: 600, padding: '8px 12px', background: 'var(--accent-dim)', borderRadius: 6 }}>
-              Nuevo stock: {producto.stock_actual + parseInt(cantidad || 0)} unidades
+
+          {cant > 0 && (
+            <div style={{ fontSize: 13, padding: '10px 14px', background: 'var(--accent-dim)', borderRadius: 8, lineHeight: 1.7 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Nuevo stock</span>
+                <strong style={{ color: 'var(--accent)' }}>{producto.stock_actual + cant} uds</strong>
+              </div>
+              {costo > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Nuevo costo promedio</span>
+                  <strong style={{ color: 'var(--accent)' }}>
+                    {formatGs(producto.costo_unit)} → {formatGs(calc.nuevoCosto)}
+                  </strong>
+                </div>
+              )}
             </div>
           )}
+
           <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancelar</button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
@@ -430,7 +484,7 @@ export default function StockPage() {
                           </button>
                           {!p.es_combo && (
                             <button className="btn btn-secondary btn-sm" onClick={() => setModalCompra(p)}>
-                              <Plus size={12} /> Stock
+                              <Plus size={12} /> Reponer
                             </button>
                           )}
                         </div>
@@ -521,7 +575,7 @@ export default function StockPage() {
                     </button>
                     {!p.es_combo && (
                       <button className="btn btn-primary btn-sm" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setModalCompra(p)}>
-                        <Plus size={12} /> Agregar stock
+                        <Plus size={12} /> Reponer stock
                       </button>
                     )}
                   </div>
@@ -657,7 +711,7 @@ export default function StockPage() {
         </div>
       )}
 
-      {modalCompra && <CompraModal producto={modalCompra} onClose={() => setModalCompra(null)} onSaved={cargar} />}
+      {modalCompra && <CompraModal producto={modalCompra} productos={productos} onClose={() => setModalCompra(null)} onSaved={cargar} />}
       {modalProducto && (
         <ProductoModal
           producto={modalProducto === 'nuevo' ? null : modalProducto}
