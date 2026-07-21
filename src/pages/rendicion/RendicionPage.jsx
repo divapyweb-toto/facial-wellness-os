@@ -1,9 +1,11 @@
 // src/pages/rendicion/RendicionPage.jsx
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import * as XLSX from 'xlsx'
 import { supabase } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
-import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock } from 'lucide-react'
+import { parsearFilasRendicion, conciliarRendicion } from '../../lib/conciliacionRendicion'
+import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
 
 const formatGs = (n) => Math.round(n || 0).toLocaleString('es-PY') + ' Gs.'
@@ -24,6 +26,12 @@ export default function RendicionPage() {
   const { toast } = useToast()
   const [historico, setHistorico] = useState([])
   const [cargando, setCargando] = useState(true)
+
+  // ── Importar reporte de rendición del martes ──
+  const [conciliacion, setConciliacion] = useState(null) // resultado a confirmar
+  const [nombreArchivo, setNombreArchivo] = useState('')
+  const [importando, setImportando] = useState(false)
+  const fileRendRef = useRef(null)
 
   // ── Selección manual ───────────────────────────────────
   const [seleccionados, setSeleccionados] = useState(new Set())
@@ -170,6 +178,59 @@ export default function RendicionPage() {
     setMarcando(false)
   }
 
+  // ── Importar el reporte de rendición del martes ──
+  const handleArchivoRendicion = (file) => {
+    if (!file) return
+    if (!/\.xlsx?$/i.test(file.name)) { toast('Subí el Excel de rendición (.xlsx)', 'error'); return }
+    setNombreArchivo(file.name)
+    setImportando(true)
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { cellDates: true })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
+        const filas = parsearFilasRendicion(rows)
+        if (!filas.length) { toast('No se encontraron guías en el archivo', 'error'); setImportando(false); return }
+        const resultado = conciliarRendicion(filas, historico)
+        setConciliacion(resultado)
+        toast(`${filas.length} guías leídas — revisá la conciliación`, 'success')
+      } catch (err) {
+        toast('No se pudo leer el archivo: ' + err.message, 'error')
+      } finally {
+        setImportando(false)
+      }
+    }
+    reader.readAsArrayBuffer(file)
+  }
+
+  // Confirmar: marca como rendidas las guías conciliadas
+  const confirmarRendicion = async () => {
+    if (!conciliacion?.marcarRendido.length) return
+    setImportando(true)
+    const hoy = new Date().toISOString().split('T')[0]
+    // Mapa guía → fecha_entrega para calcular días
+    const fechaPorGuia = {}
+    for (const h of historico) fechaPorGuia[String(h.nro_guia_pap)] = h.fecha_entrega
+
+    const updates = conciliacion.marcarRendido.map(m => {
+      const fEnt = fechaPorGuia[String(m.nro_guia_pap)] ? new Date(fechaPorGuia[String(m.nro_guia_pap)]) : null
+      const dias = fEnt ? Math.max(0, Math.round((Date.now() - fEnt.getTime()) / 86400000)) : null
+      return supabase.from('entregas')
+        .update({ rendido: true, fecha_rendido: hoy, dias_rendicion: dias })
+        .eq('nro_guia_pap', m.nro_guia_pap)
+    })
+    const results = await Promise.all(updates)
+    const ok = results.filter(r => !r.error).length
+    if (ok > 0) {
+      await cargarHistorico()
+      toast(`${ok} guías marcadas como rendidas`, 'success')
+    }
+    setConciliacion(null)
+    setNombreArchivo('')
+    setImportando(false)
+  }
+
   // ── CARGANDO ───────────────────────────────────────────
   if (cargando) {
     return (
@@ -209,6 +270,73 @@ export default function RendicionPage() {
         <p className="page-subtitle">
           PaP cobra al cliente y te deposita después. Acá controlás esa plata: {stats.nRendidos} rendidas · {stats.nSinRendir} por cobrar.
         </p>
+      </div>
+
+      {/* Importar reporte de rendición del martes */}
+      <div className="card" style={{ padding: '16px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{ margin: '0 0 2px', fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <FileCheck size={16} color="var(--accent)" /> Importar rendición del martes
+            </h3>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+              Subí el Excel que te manda PaP y marca todo como rendido + concilia la plata.
+            </p>
+          </div>
+          <input ref={fileRendRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
+            onChange={e => handleArchivoRendicion(e.target.files[0])} />
+          <button className="btn btn-primary" onClick={() => fileRendRef.current?.click()} disabled={importando}>
+            <Upload size={14} /> {importando ? 'Procesando…' : 'Subir Excel'}
+          </button>
+        </div>
+
+        {/* Panel de conciliación (previo a confirmar) */}
+        {conciliacion && (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+            {/* Alerta fuerte si PaP rindió de menos */}
+            {conciliacion.totalFaltante > 0 && (
+              <div style={{ padding: '12px 16px', borderRadius: 8, background: 'rgba(239,68,68,0.12)', border: '2px solid var(--red)', marginBottom: 14 }}>
+                <div style={{ fontWeight: 800, color: 'var(--red)', fontSize: 15, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <AlertTriangle size={18} /> ¡PaP te rindió {formatGs(conciliacion.totalFaltante)} DE MENOS!
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6 }}>
+                  {conciliacion.discrepancias.length} guía(s) donde PaP cobró menos de lo que valía el pedido. Es tu plata — reclamala:
+                </div>
+                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {conciliacion.discrepancias.slice(0, 8).map((d, i) => (
+                    <div key={i} style={{ fontSize: 12, display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+                      <span>{d.nombre || d.ref} (guía {d.nroGuia})</span>
+                      <span style={{ color: 'var(--red)', fontWeight: 600 }}>esperabas {formatGs(d.esperado)}, cobró {formatGs(d.cobrado)} · falta {formatGs(d.falta)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Resumen de la conciliación */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 14 }}>
+              <ConcKPI label="PaP te rinde (efectivo)" valor={formatGs(conciliacion.totalEfectivo)} sub={`${conciliacion.countEfectivo} guías`} color="var(--green)" />
+              <ConcKPI label="Ya cobraste (transferencia)" valor={formatGs(conciliacion.totalTransferencia)} sub={`${conciliacion.countTransf} prepagos`} />
+              <ConcKPI label="Se marcan rendidas" valor={conciliacion.marcarRendido.length} sub={`de ${conciliacion.totalGuias} del archivo`} color="var(--accent)" />
+              {conciliacion.noEncontradas.length > 0 && (
+                <ConcKPI label="No están en el sistema" valor={conciliacion.noEncontradas.length} sub="revisar" color="var(--yellow)" />
+              )}
+            </div>
+
+            {conciliacion.noEncontradas.length > 0 && (
+              <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginBottom: 12 }}>
+                ⚠️ {conciliacion.noEncontradas.length} guía(s) del archivo no están cargadas en el sistema (importá primero el reporte de Gestión en Entregas para que crucen): {conciliacion.noEncontradas.slice(0, 5).map(n => n.nroGuia).join(', ')}{conciliacion.noEncontradas.length > 5 ? '…' : ''}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn btn-ghost" onClick={() => { setConciliacion(null); setNombreArchivo(''); }}>Cancelar</button>
+              <button className="btn btn-primary" onClick={confirmarRendicion} disabled={importando || !conciliacion.marcarRendido.length}>
+                <CheckCircle size={14} /> Confirmar y marcar {conciliacion.marcarRendido.length} rendidas
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Alerta de demoras */}
@@ -394,6 +522,16 @@ export default function RendicionPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function ConcKPI({ label, valor, sub, color }) {
+  return (
+    <div style={{ background: 'var(--bg-surface)', borderRadius: 8, padding: '10px 14px' }}>
+      <div style={{ fontSize: 10.5, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.3 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: color || 'var(--text-primary)', marginTop: 2 }}>{valor}</div>
+      {sub && <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 1 }}>{sub}</div>}
     </div>
   )
 }
