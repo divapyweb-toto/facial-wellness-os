@@ -54,33 +54,42 @@ export default function AdsPage() {
   // Cargar ventas del mes + estado real de PaP + gasto ya guardado
   const cargar = useCallback(async () => {
     setLoading(true)
+    const [y, m] = mes.split('-').map(Number)
+    const inicio = `${mes}-01`
+    const fin = new Date(y, m, 0).toISOString().slice(0, 10)
+    const finBuf = new Date(y, m, 0); finBuf.setDate(finBuf.getDate() + 31)
+    const finBufStr = finBuf.toISOString().slice(0, 10)
+
+    // Cada consulta va POR SEPARADO: si una falla, las otras igual funcionan.
+    // (Antes un Promise.all hacía que un error en entregas borrara las ventas.)
+
+    // 1. Ventas del mes (lo más importante)
+    let vts = []
     try {
-      const [y, m] = mes.split('-').map(Number)
-      const inicio = `${mes}-01`
-      const fin = new Date(y, m, 0).toISOString().slice(0, 10)
-      const finBuf = new Date(y, m, 0); finBuf.setDate(finBuf.getDate() + 31)
-      const finBufStr = finBuf.toISOString().slice(0, 10)
+      vts = await fetchAll(() => supabase.from('ventas')
+        .select('n_referencia, total, estado, costo_prod, costo_envio, producto_nombre, fecha')
+        .is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin))
+    } catch (e) {
+      toast('No se pudieron cargar las ventas: ' + (e?.message || e), 'error')
+    }
+    setVentas(vts || [])
 
-      const [vts, ents, camp] = await Promise.all([
-        fetchAll(() => supabase.from('ventas')
-          .select('n_referencia, total, estado, costo_prod, costo_envio, producto_nombre, fecha')
-          .is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin)),
-        fetchAll(() => supabase.from('entregas')
-          .select('n_referencia, nro_guia_ref, estado_pap, motivo, fecha_entrega')
-          .gte('fecha_entrega', inicio).lte('fecha_entrega', finBufStr), { columnaOrden: 'nro_guia_pap' }),
-        supabase.from('campanas_ads').select('*').eq('mes', mes),
-      ])
-
-      setVentas(vts || [])
-
-      const est = {}
+    // 2. Estado real de PaP (si falla, se usa ventas.estado y listo)
+    const est = {}
+    try {
+      const ents = await fetchAll(() => supabase.from('entregas')
+        .select('n_referencia, nro_guia_ref, estado_pap, motivo')
+        .gte('fecha_entrega', inicio).lte('fecha_entrega', finBufStr))
       for (const e of (ents || [])) {
         const k = normRef(e.n_referencia) || normRef(e.nro_guia_ref)
         if (k) est[k] = categoriaPaP(e.estado_pap, e.motivo)
       }
-      setEstadoPaP(est)
+    } catch (e) { /* sin datos de PaP: se usa el estado guardado en la venta */ }
+    setEstadoPaP(est)
 
-      // Cargar gasto guardado (por familia o total)
+    // 3. Gasto ya guardado del mes (si falla, se carga vacío)
+    try {
+      const camp = await supabase.from('campanas_ads').select('*').eq('mes', mes)
       const gs = {}
       let modoGuardado = 'producto'
       for (const c of (camp.data || [])) {
@@ -90,11 +99,9 @@ export default function AdsPage() {
       }
       setGastos(gs)
       if (Object.keys(gs).length) setModo(modoGuardado)
-    } catch (e) {
-      toast('Error cargando datos: ' + e.message, 'error')
-    } finally {
-      setLoading(false)
-    }
+    } catch (e) { /* sin gasto guardado todavía */ }
+
+    setLoading(false)
   }, [mes])
 
   useEffect(() => { cargar() }, [cargar])
