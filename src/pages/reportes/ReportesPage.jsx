@@ -8,6 +8,20 @@ import {
   BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts'
+import { familiaProducto } from '../../lib/recompra'
+import { calcularMetricasAds } from '../../lib/metricasAds'
+
+// Normaliza n_referencia igual que metricasAds/AdsPage (para cruzar ventas ↔ entregas)
+const normRef = (ref) => {
+  if (!ref) return ''
+  let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
+  if (/^\d+$/.test(r)) r = String(parseInt(r, 10))
+  return r
+}
+const FAMILIAS_ADS_REP = [
+  ['nasal', 'Tiras Nasales'], ['parche', 'Parches Bucales'], ['gudair', 'Pack Gudair'],
+  ['lengua', 'Raspador de Lengua'], ['jaw', 'JawFlex Pro'], ['botella', 'Botella Flexible'], ['bebird', 'Bebird Pro'],
+]
 
 const COLORS = ['#c8f135', '#22c55e', '#3b82f6', '#a78bfa', '#f59e0b', '#ef4444', '#ec4899']
 
@@ -51,7 +65,7 @@ export default function ReportesPage() {
     const [ventas, ventasPrev, gastos, campanas, productos, entregas] = await Promise.all([
       fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono').gte('fecha', inicio).lte('fecha', fin).order('fecha')),
       fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta').gte('fecha', inicioPrev).lte('fecha', finPrev)),
-      fetchAll(() => supabase.from('gastos').select('fecha, monto').gte('fecha', inicio).lte('fecha', fin)),
+      fetchAll(() => supabase.from('gastos').select('fecha, monto, categoria, concepto').gte('fecha', inicio).lte('fecha', fin)),
       fetchAll(() => supabase.from('campanas_ads').select('*').gte('mes', inicio.slice(0, 7)).lte('mes', fin.slice(0, 7))),
       fetchAll(() => supabase.from('productos').select('id, nombre, costo_unit, activo').eq('activo', true)),
       fetchAll(() => supabase.from('entregas').select('n_referencia, categoria, estado_pap, motivo, importe, rendido, dias_rendicion, fecha_entrega').gte('fecha_entrega', inicio).lte('fecha_entrega', fin), { columnaOrden: 'nro_guia_pap' }),
@@ -106,11 +120,22 @@ export default function ReportesPage() {
     const rendidas = entEntregadas.filter(e => e.rendido)
     const sinRendir = entEntregadas.filter(e => !e.rendido)
     const diasRend = rendidas.map(e => e.dias_rendicion).filter(d => d != null && d >= 0)
+    const diasOrden = [...diasRend].sort((a, b) => a - b)
+    const medianaCobro = diasOrden.length
+      ? (diasOrden.length % 2
+          ? diasOrden[(diasOrden.length - 1) / 2]
+          : (diasOrden[diasOrden.length / 2 - 1] + diasOrden[diasOrden.length / 2]) / 2)
+      : null
+    const cobroTrancados = diasRend.filter(d => d > 14).length  // cobros que tardaron +14 días (inflan el promedio)
     const cobranza = {
       cobrado: rendidas.reduce((s, e) => s + (e.importe || 0), 0),
       porCobrar: sinRendir.reduce((s, e) => s + (e.importe || 0), 0),
       nRendidas: rendidas.length, nSinRendir: sinRendir.length,
-      tiempoCobro: diasRend.length ? diasRend.reduce((a, b) => a + b, 0) / diasRend.length : null,
+      // Mediana = cobro TÍPICO (robusto). Promedio = sensible a outliers: pocos cobros trancados lo disparan.
+      medianaCobro,
+      promedioCobro: diasRend.length ? diasRend.reduce((a, b) => a + b, 0) / diasRend.length : null,
+      cobroMax: diasOrden.length ? diasOrden[diasOrden.length - 1] : null,
+      cobroTrancados,
       hayCobranza: entItems.some(e => e.rendido || e.fecha_rendido),
     }
 
@@ -196,6 +221,21 @@ export default function ReportesPage() {
     const gastoPublicidadRep = (gastos || []).filter(g => /public|ads|meta|marketing/i.test(g.categoria || '')).reduce((s, g) => s + (g.monto || 0), 0)
     const posibleDobleAdsRep = totalGastoAds > 0 && gastoPublicidadRep > 0
 
+    // ── Detalle de Meta Ads por producto (recalculado igual que la página Campañas) ──
+    // campanas_ads solo guarda { mes, nombre(familia), gasto }; CPA/ROAS/ganancia se calculan al vuelo.
+    const estadoPaPRep = {}
+    ;(entregas || []).forEach(e => { const k = normRef(e.n_referencia); if (k && e.categoria) estadoPaPRep[k] = e.categoria })
+    const gastoPorFam = {}
+    ;(campanas || []).forEach(c => { const f = c.nombre || c.familia; if (f) gastoPorFam[f] = (gastoPorFam[f] || 0) + (Number(c.gasto) || 0) })
+    const adsDetalle = FAMILIAS_ADS_REP.map(([fam, label]) => {
+      const vs = (ventas || []).filter(v => familiaProducto(v.producto_nombre) === fam)
+      const gasto = gastoPorFam[fam] || 0
+      if (!vs.length && !gasto) return null
+      return { familia: fam, label, ...calcularMetricasAds(gasto, vs, estadoPaPRep) }
+    }).filter(Boolean)
+    const ventasConFamilia = (ventas || []).filter(v => familiaProducto(v.producto_nombre))
+    const adsTotal = { label: 'TOTAL', ...calcularMetricasAds(totalGastoAds, ventasConFamilia, estadoPaPRep) }
+
     setDatos({
       mes, periodo: P,
       serie: agruparSerie(ventas || [], P),
@@ -213,6 +253,8 @@ export default function ReportesPage() {
       posibleDobleAds: posibleDobleAdsRep,
       porProducto: porProductoArr,
       porDia, campanas: campanas || [],
+      gastos: gastos || [],
+      adsDetalle, adsTotal,
       ventas: ventas || [],
       comparativa, cobranza, ciudades, porDiaSemana, motivos,
       clientesUnicos, recompradores, alertas,
@@ -408,10 +450,33 @@ export default function ReportesPage() {
     ]))
     // Motivos de devolución
     const motivoFilas = (d.motivos || []).map(m => filaTabla([esc(m.motivo || m.nombre), m.cantidad ?? m.count]))
-    // Campañas
-    const NOMBRE_FAM_ADS = { nasal: 'Tiras Nasales', parche: 'Parches Bucales', gudair: 'Pack Gudair', lengua: 'Raspador de Lengua', jaw: 'JawFlex Pro', botella: 'Botella Flexible', bebird: 'Bebird Pro', total: 'Total del mes' }
-    const campFilas = (d.campanas || []).map(c => filaTabla([
-      esc(NOMBRE_FAM_ADS[c.nombre] || NOMBRE_FAM_ADS[c.familia] || c.nombre || '—'), gs(c.gasto || c.inversion || 0),
+    // Meta Ads — detalle por producto (CPA/ROAS/ganancia recalculados como en Campañas)
+    const veredictoTxt = { gana: 'Rinde', pierde: 'Pierde', ajustar: 'Ajustar', sin_gasto: '—' }
+    const roas = (n) => (n == null ? '—' : Number(n).toFixed(2) + 'x')
+    const adsRow = (a, bold) => `<tr${bold ? ' style="font-weight:700;background:#f7f7f7"' : ''}>${[
+      esc(a.label),
+      a.gasto ? gs(a.gasto) : '—',
+      a.despachados ?? 0,
+      a.entregados ?? 0,
+      a.gasto ? gs(a.cpaReal) : '—',
+      a.gasto ? roas(a.roasReal) : '—',
+      gs(a.cobrado || 0),
+      gs(a.gananciaNeta || 0),
+      a.gasto ? (veredictoTxt[a.veredicto] || a.veredicto || '—') : '—',
+    ].map((c, i) => `<td${i > 0 ? ' class="num"' : ''}>${c}</td>`).join('')}</tr>`
+    const adsFilas = (d.adsDetalle || []).map(a => adsRow(a, false))
+    if (d.adsTotal && (d.adsTotal.gasto || d.adsTotal.despachados)) adsFilas.push(adsRow({ ...d.adsTotal, label: 'TOTAL' }, true))
+
+    // Gastos operativos — detalle (por categoría + por ítem)
+    const gastosArr = (d.gastos || [])
+    const gastoCatMap = {}
+    gastosArr.forEach(g => { const c = (g.categoria || '').trim() || 'Sin categoría'; gastoCatMap[c] = (gastoCatMap[c] || 0) + (g.monto || 0) })
+    const totalGastosOp = gastosArr.reduce((s, g) => s + (g.monto || 0), 0)
+    const gastoCatFilas = Object.entries(gastoCatMap).sort((a, b) => b[1] - a[1]).map(([cat, monto]) => filaTabla([
+      esc(cat), gs(monto), totalGastosOp ? pct(monto / totalGastosOp * 100) : '—',
+    ]))
+    const gastoItemFilas = [...gastosArr].sort((a, b) => (b.monto || 0) - (a.monto || 0)).map(g => filaTabla([
+      esc((g.fecha || '').slice(0, 10)), esc(g.categoria || '—'), esc(g.concepto || '—'), gs(g.monto || 0),
     ]))
 
     const win = window.open('', '_blank')
@@ -479,18 +544,35 @@ ${ciudadFilas.length ? tabla(['Ciudad', 'Pedidos', 'Entregados', 'Devueltos', 'T
 <h2>6. Motivos de devolución</h2>
 ${motivoFilas.length ? tabla(['Motivo', 'Cantidad'], motivoFilas) : '<p>Sin devoluciones registradas.</p>'}
 
-<h2>7. Inversión en publicidad</h2>
-${campFilas.length ? tabla(['Producto / campaña', 'Gasto'], campFilas) : '<p>Sin campañas cargadas en el período.</p>'}
-<div class="formula">Gasto total en ads: ${gs(d.totalGastoAds)}${totalPedidos ? ` · CPA aproximado (gasto ads / pedidos): ${gs(Math.round((d.totalGastoAds || 0) / totalPedidos))}` : ''}${entregados ? ` · CPA por entrega: ${gs(Math.round((d.totalGastoAds || 0) / entregados))}` : ''}</div>
+<h2>7. Meta Ads — detalle por producto</h2>
+${adsFilas.length ? tabla(['Producto', 'Gasto', 'Pedidos', 'Entreg.', 'CPA/entrega', 'ROAS real', 'Cobrado', 'Ganancia neta', 'Veredicto'], adsFilas) : '<p>Sin campañas cargadas en el período.</p>'}
+<div class="formula">CPA/entrega = gasto ÷ entregados (costo por cliente que paga). ROAS real = cobrado ÷ gasto (sobre lo cobrado, no lo facturado). Ganancia neta = cobrado − gasto ads − costo producto entregado − flete. Gasto total en ads: ${gs(d.totalGastoAds)}.${d.posibleDobleAds ? ' ⚠ Hay gasto categoría publicidad en Gastos Y ads en Campañas el mismo mes: posible doble conteo.' : ''}</div>
 
-<h2>8. Clientes</h2>
+<h2>8. Gastos operativos — detalle</h2>
+${gastoCatFilas.length ? tabla(['Categoría', 'Monto', '% del total'], gastoCatFilas) : '<p>Sin gastos operativos cargados en el período.</p>'}
+${gastoItemFilas.length ? `<div class="formula">Desglose por ítem (${gastoItemFilas.length} gasto${gastoItemFilas.length > 1 ? 's' : ''}, de mayor a menor):</div>${tabla(['Fecha', 'Categoría', 'Concepto', 'Monto'], gastoItemFilas)}` : ''}
+<div class="formula">Total gastos operativos: ${gs(totalGastosOp)}. No incluye Meta Ads (sección 7) ni costo de mercadería vendida (sección 1).</div>
+
+<h2>9. Cobranza (PaP)</h2>
+${tabla(['Métrica', 'Valor'], [
+  filaTabla(['Cobrado (rendido)', gs(d.cobranza?.cobrado || 0)]),
+  filaTabla(['Por cobrar (sin rendir)', gs(d.cobranza?.porCobrar || 0)]),
+  filaTabla(['Entregas rendidas', d.cobranza?.nRendidas ?? '—']),
+  filaTabla(['Cobro típico (mediana)', d.cobranza?.medianaCobro != null ? d.cobranza.medianaCobro.toFixed(1) + ' días' : '—']),
+  filaTabla(['Cobro promedio', d.cobranza?.promedioCobro != null ? d.cobranza.promedioCobro.toFixed(1) + ' días' : '—']),
+  filaTabla(['Cobro más lento', d.cobranza?.cobroMax != null ? d.cobranza.cobroMax + ' días' : '—']),
+  filaTabla(['Cobros trancados (+14 días)', d.cobranza?.cobroTrancados ?? 0]),
+])}
+<div class="formula">Se reporta la MEDIANA (cobro típico) por robustez: pocos cobros trancados inflan el promedio. Si "cobros trancados" es alto, reclamá esas guías en Rendición.</div>
+
+<h2>10. Clientes</h2>
 ${tabla(['Métrica', 'Valor'], [
   filaTabla(['Clientes únicos', d.clientesUnicos ?? '—']),
   filaTabla(['Recompradores', d.recompradores ?? '—']),
   filaTabla(['Ticket promedio (entregado)', entregados ? gs(Math.round((d.ventasBrutas || 0) / entregados)) : '—']),
 ])}
 
-${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a => `<li>${esc(typeof a === 'string' ? a : (a.texto || a.mensaje || JSON.stringify(a)))}</li>`).join('')}</ul>` : ''}
+${(d.alertas && d.alertas.length) ? `<h2>11. Alertas</h2><ul>${d.alertas.map(a => `<li>${esc(typeof a === 'string' ? a : (a.texto || a.mensaje || JSON.stringify(a)))}</li>`).join('')}</ul>` : ''}
 
 <div class="foot">Facial Wellness OS · reporte generado automáticamente · ${new Date().toISOString().slice(0, 10)}</div>
 </body></html>`)
@@ -678,9 +760,13 @@ ${(d.alertas && d.alertas.length) ? `<h2>9. Alertas</h2><ul>${d.alertas.map(a =>
                 <div className="kpi-sub">{datos.cobranza.nSinRendir} sin rendir</div>
               </div>
               <div className="kpi-card">
-                <div className="kpi-label">Tiempo de cobro</div>
-                <div className="kpi-value" style={{ fontSize: 15 }}>{datos.cobranza.tiempoCobro != null ? `${datos.cobranza.tiempoCobro.toFixed(1)} días` : '—'}</div>
-                <div className="kpi-sub">Entrega → depósito</div>
+                <div className="kpi-label">Tiempo de cobro (mediana)</div>
+                <div className="kpi-value" style={{ fontSize: 15 }}>{datos.cobranza.medianaCobro != null ? `${datos.cobranza.medianaCobro.toFixed(1)} días` : '—'}</div>
+                <div className="kpi-sub">
+                  Entrega → depósito · típico
+                  {datos.cobranza.promedioCobro != null ? ` · prom. ${datos.cobranza.promedioCobro.toFixed(1)}d` : ''}
+                  {datos.cobranza.cobroTrancados > 0 ? ` · ${datos.cobranza.cobroTrancados} trancado${datos.cobranza.cobroTrancados > 1 ? 's' : ''} +14d` : ''}
+                </div>
               </div>
             </div>
           )}
