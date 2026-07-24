@@ -152,14 +152,16 @@ export default function AdsPage() {
       // así funciona sin depender de ningún cambio de esquema.
       const del = await supabase.from('campanas_ads').delete().eq('mes', mes)
       if (del.error) throw del.error
+      // FIX plataforma NOT NULL: la tabla campanas_ads viene de un esquema anterior
+      // donde `plataforma` es obligatoria. Sin este campo el insert falla.
       let filasIns = []
       if (modo === 'total') {
         const g = Number(gastos.total) || 0
-        if (g > 0) filasIns.push({ mes, nombre: 'total', gasto: g })
+        if (g > 0) filasIns.push({ mes, nombre: 'total', gasto: g, plataforma: 'Meta' })
       } else {
         filasIns = FAMILIAS
           .filter(([f]) => (Number(gastos[f]) || 0) > 0)
-          .map(([f]) => ({ mes, nombre: f, gasto: Number(gastos[f]) }))
+          .map(([f]) => ({ mes, nombre: f, gasto: Number(gastos[f]), plataforma: 'Meta' }))
       }
       if (filasIns.length) {
         const { error } = await supabase.from('campanas_ads').insert(filasIns)
