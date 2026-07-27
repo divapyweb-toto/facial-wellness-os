@@ -152,20 +152,30 @@ export default function AdsPage() {
       // así funciona sin depender de ningún cambio de esquema.
       const del = await supabase.from('campanas_ads').delete().eq('mes', mes)
       if (del.error) throw del.error
-      // FIX plataforma NOT NULL: la tabla campanas_ads viene de un esquema anterior
-      // donde `plataforma` es obligatoria. Sin este campo el insert falla.
+      // FIX plataforma: la tabla viene de un esquema anterior donde `plataforma` es
+      // obligatoria Y tiene un CHECK con lista blanca de valores. No sabemos con qué
+      // grafía se creó, así que probamos variantes de Meta/Facebook hasta que una pase.
       let filasIns = []
       if (modo === 'total') {
         const g = Number(gastos.total) || 0
-        if (g > 0) filasIns.push({ mes, nombre: 'total', gasto: g, plataforma: 'Meta' })
+        if (g > 0) filasIns.push({ mes, nombre: 'total', gasto: g })
       } else {
         filasIns = FAMILIAS
           .filter(([f]) => (Number(gastos[f]) || 0) > 0)
-          .map(([f]) => ({ mes, nombre: f, gasto: Number(gastos[f]), plataforma: 'Meta' }))
+          .map(([f]) => ({ mes, nombre: f, gasto: Number(gastos[f]) }))
       }
       if (filasIns.length) {
-        const { error } = await supabase.from('campanas_ads').insert(filasIns)
-        if (error) throw error
+        const CANDIDATOS_PLATAFORMA = ['meta', 'Meta', 'META', 'facebook', 'Facebook', 'FACEBOOK', 'meta_ads', 'Meta Ads', 'facebook_ads']
+        let guardado = false
+        let ultimoError = null
+        for (const plat of CANDIDATOS_PLATAFORMA) {
+          const { error } = await supabase.from('campanas_ads').insert(filasIns.map(f => ({ ...f, plataforma: plat })))
+          if (!error) { guardado = true; break }
+          ultimoError = error
+          // Si el error no es por la columna plataforma, no tiene sentido seguir probando.
+          if (!/plataforma/i.test(error.message || '')) break
+        }
+        if (!guardado) throw ultimoError
       }
       toast('Gasto de ads guardado', 'success')
     } catch (e) {
