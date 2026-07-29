@@ -10,6 +10,7 @@ import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
 import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, TRANSPORTADORAS } from '../../lib/transportadoras'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
+import { construirHistorialCiudades, evaluarCiudad } from '../../lib/riesgoCiudad'
 import { useToast } from '../../lib/toast'
 
 // Helpers locales para el cruce ventas ⋈ entregas del historial de riesgo
@@ -515,6 +516,9 @@ export default function DespachoPagina() {
   const [riesgoHabilitado, setRiesgoHabilitado] = useState(new Set())
   // Transportadora elegida a mano por pedido (pisa la sugerencia automática).
   const [transpOverride, setTranspOverride] = useState({})
+  // Historial de entrega por ciudad + ciudades forzadas a mano por el admin.
+  const [historialCiudad, setHistorialCiudad] = useState(new Map())
+  const [ciudadHabilitada, setCiudadHabilitada] = useState(new Set())
 
   // Aplica los overrides: despacho forzado + marca de prepago + riesgo cliente.
   const todosConOverride = useMemo(
@@ -528,12 +532,19 @@ export default function DespachoPagina() {
       // Transportadora: la elegida a mano, o la sugerida por ciudad.
       const transportadora = transpOverride[p.n_referencia] || p.transportadora
       const tarifa = transportadora ? tarifaDe(transportadora, p.ciudad) : null
+      // Riesgo de la CIUDAD con esa transportadora (0% de entrega = plata quemada).
+      const evCiudad = evaluarCiudad(historialCiudad, p.ciudad, transportadora)
+      const ciudadOk = ciudadHabilitada.has(p.n_referencia)
+      const bloqueadoPorCiudad = evCiudad.nivel === 'bloqueado' && !ciudadOk
       return {
         ...p,
         riesgo: ev,
         riesgoHabilitado: habilitado,
         bloqueadoPorRiesgo,
-        despachar: despacharBase && !bloqueadoPorRiesgo,
+        riesgoCiudad: evCiudad,
+        ciudadHabilitada: ciudadOk,
+        bloqueadoPorCiudad,
+        despachar: despacharBase && !bloqueadoPorRiesgo && !bloqueadoPorCiudad,
         forzado: forzados.has(p.n_referencia),
         prepago: prepagos.has(p.n_referencia),
         transportadora,
@@ -543,7 +554,7 @@ export default function DespachoPagina() {
         costo_envio: tarifa,
       }
     }),
-    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride]
+    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada]
   )
 
   const paraDespacho = useMemo(() => todosConOverride.filter(p => p.despachar), [todosConOverride])
@@ -566,6 +577,15 @@ export default function DespachoPagina() {
   }
 
   // El admin habilita (o vuelve a bloquear) un pedido marcado por riesgo.
+  // Forzar el envío a una ciudad bloqueada (decisión consciente del admin).
+  const toggleCiudad = (ref) => {
+    setCiudadHabilitada(prev => {
+      const s = new Set(prev)
+      if (s.has(ref)) s.delete(ref); else s.add(ref)
+      return s
+    })
+  }
+
   const toggleRiesgo = (ref) => {
     setRiesgoHabilitado(prev => {
       const s = new Set(prev)
@@ -683,6 +703,31 @@ export default function DespachoPagina() {
       setHistorialRiesgo(construirHistorialClientes(ventasHist || [], estadoPaP))
     } catch (e) {
       setHistorialRiesgo(new Map())  // ante cualquier error, no bloquear nada
+    }
+
+    // ── Historial de entrega POR CIUDAD (para bloquear ciudades que no entregan) ──
+    // Se carga aparte y con su propio try: si falla, no se bloquea ninguna ciudad.
+    try {
+      const [ents, vts] = await Promise.all([
+        fetchAllSafe(() => supabase.from('entregas').select('n_referencia, ciudad, estado_pap, motivo'), { columnaOrden: 'nro_guia_pap' }),
+        fetchAllSafe(() => supabase.from('ventas').select('n_referencia, transportadora').is('deleted_at', null), { columnaOrden: 'n_referencia' }),
+      ])
+      const listaEnt = (ents?.data ?? ents) || []
+      const listaVta = (vts?.data ?? vts) || []
+      // La transportadora sale de la VENTA (ahí se decidió al despachar).
+      const transpPorRef = {}
+      listaVta.forEach(v => {
+        const k = normRefRiesgo(v.n_referencia)
+        if (k) transpPorRef[k] = v.transportadora || 'pap'
+      })
+      const paraHist = listaEnt.map(e => ({
+        n_referencia: e.n_referencia,
+        ciudad: e.ciudad,
+        categoria: categoriaPaP(e.estado_pap, e.motivo),
+      }))
+      setHistorialCiudad(construirHistorialCiudades(paraHist, transpPorRef))
+    } catch (e) {
+      setHistorialCiudad(new Map())
     }
   }
 
@@ -1398,6 +1443,29 @@ export default function DespachoPagina() {
                                   ? 'No cubre esta ciudad'
                                   : `${formatGs(p.costo_envio || 0)}${p.transpManual ? ' · manual' : ''}`}
                               </span>
+                              {p.riesgoCiudad?.nivel === 'bloqueado' && (
+                                <button
+                                  onClick={() => toggleCiudad(p.n_referencia)}
+                                  title={p.riesgoCiudad.motivo}
+                                  style={{
+                                    fontSize: 9, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
+                                    border: '1px solid var(--red)', whiteSpace: 'nowrap',
+                                    background: p.ciudadHabilitada ? 'var(--red)' : 'transparent',
+                                    color: p.ciudadHabilitada ? '#fff' : 'var(--red)',
+                                  }}
+                                >
+                                  {p.ciudadHabilitada
+                                    ? '⚠ Forzado'
+                                    : `Ciudad ${Math.round((p.riesgoCiudad.tasa ?? 0) * 100)}% · forzar`}
+                                </button>
+                              )}
+                              {p.riesgoCiudad?.nivel === 'riesgo' && (
+                                <span style={{ fontSize: 9, color: 'var(--orange, #f59e0b)', whiteSpace: 'nowrap' }} title={p.riesgoCiudad.motivo}>
+                                  {p.riesgoCiudad.alternativa
+                                    ? `↔ Mejor por ${labelTransportadora(p.riesgoCiudad.alternativa.transportadora)} (${Math.round(p.riesgoCiudad.alternativa.tasa * 100)}%)`
+                                    : `Ciudad ${Math.round((p.riesgoCiudad.tasa ?? 0) * 100)}% entrega`}
+                                </span>
+                              )}
                             </div>
                           )
                         })()}

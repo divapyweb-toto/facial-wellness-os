@@ -3,6 +3,8 @@ import { useState, useRef, useMemo, useEffect, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
+import { tasaPorTransportadora } from '../../lib/riesgoCiudad'
+import { labelTransportadora } from '../../lib/transportadoras'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
@@ -182,6 +184,8 @@ export default function EntregasPage() {
   const [verSinRendir, setVerSinRendir] = useState(false)
   const [refCosto, setRefCosto] = useState({})       // costo real de producto por referencia de venta
   const [ventasParaPiramide, setVentasParaPiramide] = useState([]) // ventas completas: fuente única de la ganancia
+  // Referencia → transportadora, para separar la tasa de entrega por courier.
+  const [transpPorRef, setTranspPorRef] = useState({})
 
   // Cargar el histórico guardado en Supabase al entrar (así no "desaparece" al refrescar)
   useEffect(() => {
@@ -207,10 +211,17 @@ export default function EntregasPage() {
       try {
         // Costos: traer ventas con su referencia y costo_prod real
         const ventas = await fetchAll(() => supabase
-          .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha, ciudad, producto_nombre, cantidad').is('deleted_at', null))
+          .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha, ciudad, producto_nombre, cantidad, transportadora').is('deleted_at', null))
         if (activo && ventas) {
           setRefCosto(indexarCostos(ventas))
           setVentasParaPiramide(ventas)
+          // Mapa referencia → transportadora (la venta es donde se decidió al despachar)
+          const mapa = {}
+          ventas.forEach(v => {
+            const k = String(v.n_referencia || '').replace(/[^0-9]/g, '')
+            if (k) mapa[k] = v.transportadora || 'pap'
+          })
+          setTranspPorRef(mapa)
         }
         // Nota: esta página NO consulta gastos a propósito. La logística mide
         // contribución (flete + producto). Los gastos generales viven en Reportes.
@@ -870,6 +881,46 @@ export default function EntregasPage() {
                 )}
               </div>
             </div>
+
+            {/* TASA DE ENTREGA POR TRANSPORTADORA */}
+            {(() => {
+              const tp = tasaPorTransportadora(mergedFiltrado, transpPorRef)
+              const cols = Object.entries(tp).filter(([k, v]) => k !== 'total' && v.resueltos > 0)
+              if (!cols.length) return null
+              const pct = (x) => x == null ? '—' : `${Math.round(x * 100)}%`
+              const colorTasa = (t) => t == null ? 'var(--text-muted)' : t >= 0.85 ? 'var(--green)' : t >= 0.7 ? 'var(--accent)' : 'var(--red)'
+              return (
+                <div className="card" style={{ padding: '16px 20px' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    Tasa de entrega por transportadora
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
+                    Solo paquetes cerrados (entregados + devueltos). Los que vuelven pagan flete igual, así que cada punto vale plata.
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+                    {cols.map(([id, v]) => (
+                      <div key={id} className="kpi-card">
+                        <div className="kpi-label">{labelTransportadora(id)}</div>
+                        <div className="kpi-value" style={{ fontSize: 22, color: colorTasa(v.tasa) }}>{pct(v.tasa)}</div>
+                        <div className="kpi-sub">{v.entregados} de {v.resueltos} · {v.devueltos} devueltos</div>
+                      </div>
+                    ))}
+                    {tp.total && cols.length > 1 && (
+                      <div className="kpi-card">
+                        <div className="kpi-label">Total</div>
+                        <div className="kpi-value" style={{ fontSize: 22 }}>{pct(tp.total.tasa)}</div>
+                        <div className="kpi-sub">{tp.total.entregados} de {tp.total.resueltos}</div>
+                      </div>
+                    )}
+                  </div>
+                  {cols.length < 2 && (
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 10 }}>
+                      Todavía no hay paquetes cerrados de la otra transportadora — cuando los haya, se comparan acá.
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* LA PIRÁMIDE — hasta donde llega la logística (CM2) */}
             <div className="card" style={{ padding: '16px 20px' }}>
