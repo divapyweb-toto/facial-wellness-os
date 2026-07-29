@@ -193,17 +193,44 @@ const HEADERS_LUCERO = ['CODIGO','EMPRESA','TELEFONO','DIRECCION','NOMBRE Y APEL
 // Empresa vinculada en el panel de Lucero. Tiene que coincidir exacto.
 const EMPRESA_LUCERO = 'Facial Wellness'
 
+// ── CÓDIGO DE LUCERO ──
+// Sus códigos chocan entre clientes distintos (el índice único no está scopeado
+// por empresa), así que acordamos mandarlo VACÍO y que ellos generen el suyo.
+//
+// OJO: sin código, su importador pierde la protección anti-duplicados ("si el
+// mismo código ya existe, lo omite"). Subir dos veces el mismo archivo crea
+// envíos duplicados. Por eso el nombre del archivo lleva el rango de refs y la
+// referencia va SIEMPRE en NOTAS, para poder rastrear y detectar repetidos.
+//
+// Si Lucero acepta códigos con prefijo (FW-2025), poné 'prefijo' acá: es mejor
+// solución — no choca con otros clientes Y conserva el anti-duplicados.
+const MODO_CODIGO_LUCERO = 'prefijo'    // 'vacio' | 'prefijo' | 'numero'
+const PREFIJO_LUCERO = 'FW-'
+
+function codigoLucero(ref) {
+  if (MODO_CODIGO_LUCERO === 'vacio') return ''
+  if (MODO_CODIGO_LUCERO === 'prefijo') return `${PREFIJO_LUCERO}${String(ref || '').trim()}`
+  const n = parseInt(ref)
+  return isNaN(n) ? String(ref || '').trim() : n
+}
+
 // Los campos vacíos van como 'N/A', no en blanco: su sistema los rechaza.
+// (CODIGO es la excepción: ahí el vacío es intencional.)
 const oNA = (v) => { const s = String(v ?? '').trim(); return s === '' ? 'N/A' : s }
 
 function descargarCabeceraLuceroXLSX(pedidos) {
   const aoa = [HEADERS_LUCERO]
   pedidos.forEach(p => {
-    const refNum = parseInt(p.n_referencia)
-    // Prepago: Lucero NO tiene que cobrar. Importe 0 + aviso explícito en NOTAS.
-    const notas = p.prepago ? 'YA PAGADO - NO COBRAR' : 'N/A'
+    // La referencia va en NOTAS sí o sí: si el CODIGO va vacío, este es el único
+    // rastro que queda para cruzar el envío de Lucero con la venta del OS.
+    const partes = []
+    if (p.prepago) partes.push('YA PAGADO - NO COBRAR')   // primero: es lo urgente
+    // La referencia solo se duplica en NOTAS si el CODIGO va vacío. Con prefijo
+    // (FW-2025) el código ya la lleva y repetirla solo ensucia la guía.
+    if (MODO_CODIGO_LUCERO === 'vacio' && p.n_referencia) partes.push(`Ref ${p.n_referencia}`)
+    const notas = partes.length ? partes.join(' · ') : 'N/A'
     aoa.push([
-      isNaN(refNum) ? oNA(p.n_referencia) : refNum,   // CODIGO
+      codigoLucero(p.n_referencia),                    // CODIGO (vacío: lo genera Lucero)
       EMPRESA_LUCERO,                                  // EMPRESA (siempre fijo)
       oNA(p.telefono),                                 // TELEFONO
       oNA(p.direccion),                                // DIRECCION
@@ -216,7 +243,7 @@ function descargarCabeceraLuceroXLSX(pedidos) {
       p.prepago ? 0 : (p.total || 0),                  // IMPORTE a cobrar
       oNA(p.fecha),                                    // FECHA
       'N/A',                                           // UBICACIÓN (no hay link de maps en Shopify)
-      notas,                                           // NOTAS
+      notas,                                           // NOTAS (aviso de pago + Ref del OS)
     ])
   })
   const ws = XLSX.utils.aoa_to_sheet(aoa)

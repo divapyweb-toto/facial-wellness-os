@@ -37,6 +37,11 @@ function normalizarRef(ref) {
   if (!ref) return ''
   // Quitar #, espacios y cualquier separador
   let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
+  // Prefijo de transportadora (ej. Lucero: 'FW-2025' → '2025'). Los códigos que
+  // mandamos a Lucero van prefijados para no chocar con los de otros clientes;
+  // al volver hay que sacarlo para poder cruzar con la venta, que guarda '2025'.
+  const conPrefijo = r.match(/^[A-Za-z]{1,4}0*(\d+)$/)
+  if (conPrefijo) return String(parseInt(conPrefijo[1], 10))
   // Si es puramente numérico, quitar ceros a la izquierda (PaP '00123' = venta '123')
   if (/^\d+$/.test(r)) {
     r = String(parseInt(r, 10))
