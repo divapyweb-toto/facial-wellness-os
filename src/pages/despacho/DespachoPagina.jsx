@@ -7,7 +7,7 @@ import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
 import { costoFleteActual } from '../../lib/flete'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
-import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, TRANSPORTADORAS } from '../../lib/transportadoras'
+import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, TRANSPORTADORAS } from '../../lib/transportadoras'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
 import { useToast } from '../../lib/toast'
@@ -513,6 +513,8 @@ export default function DespachoPagina() {
   const [historialRiesgo, setHistorialRiesgo] = useState(new Map())
   // Pedidos que el admin habilitó manualmente pese al riesgo (override).
   const [riesgoHabilitado, setRiesgoHabilitado] = useState(new Set())
+  // Transportadora elegida a mano por pedido (pisa la sugerencia automática).
+  const [transpOverride, setTranspOverride] = useState({})
 
   // Aplica los overrides: despacho forzado + marca de prepago + riesgo cliente.
   const todosConOverride = useMemo(
@@ -523,6 +525,9 @@ export default function DespachoPagina() {
       // Un pedido bloqueado por riesgo NO se despacha salvo que el admin lo habilite.
       const bloqueadoPorRiesgo = ev.nivel === 'bloqueado' && !habilitado
       const despacharBase = (p.despachar || forzados.has(p.n_referencia))
+      // Transportadora: la elegida a mano, o la sugerida por ciudad.
+      const transportadora = transpOverride[p.n_referencia] || p.transportadora
+      const tarifa = transportadora ? tarifaDe(transportadora, p.ciudad) : null
       return {
         ...p,
         riesgo: ev,
@@ -531,9 +536,14 @@ export default function DespachoPagina() {
         despachar: despacharBase && !bloqueadoPorRiesgo,
         forzado: forzados.has(p.n_referencia),
         prepago: prepagos.has(p.n_referencia),
+        transportadora,
+        transpManual: !!transpOverride[p.n_referencia],
+        // Si la transportadora elegida no cubre la ciudad, tarifa queda null y
+        // se avisa en la UI en vez de guardar un costo inventado.
+        costo_envio: tarifa,
       }
     }),
-    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado]
+    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride]
   )
 
   const paraDespacho = useMemo(() => todosConOverride.filter(p => p.despachar), [todosConOverride])
@@ -759,9 +769,12 @@ export default function DespachoPagina() {
         cliente_direccion: p.direccion,
         producto_id: prod ? prod.id : null,
         costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
-        costo_envio: costoFleteActual(),
+        // Flete REAL de la transportadora elegida en ESA ciudad. Se congela acá:
+        // si mañana cambia la tarifa, los reportes viejos no se mueven.
+        costo_envio: p.costo_envio ?? tarifaDe(p.transportadora || 'pap', p.ciudad) ?? costoFleteActual(),
+        transportadora: p.transportadora || 'pap',
         envio_cliente: 0,
-        metodo_envio_nombre: 'Punto a Punto AC',
+        metodo_envio_nombre: (TRANSPORTADORAS[p.transportadora] || TRANSPORTADORAS.pap).nombre,
         metodo_pago_nombre: p.prepago ? 'Transferencia (anticipado)' : 'Efectivo COD',
         pago_anticipado: !!p.prepago,  // pagó por adelantado (transferencia verificada)
         estado_releasit: p.estado_releasit,
@@ -1334,6 +1347,7 @@ export default function DespachoPagina() {
                     <th>Cant.</th>
                     <th>Total</th>
                     <th>Estado</th>
+                    <th>Transportadora</th>
                     <th>Cliente</th>
                     <th>Despacho</th>
                     <th>Pago</th>
@@ -1357,6 +1371,36 @@ export default function DespachoPagina() {
                         <span style={{ fontSize: 11, fontWeight: 600, color: p.cfg.color, whiteSpace: 'nowrap' }}>
                           {p.cfg.label}
                         </span>
+                      </td>
+                      <td data-label="Transportadora" onClick={e => e.stopPropagation()}>
+                        {(() => {
+                          const disponibles = transportadorasDisponibles(p.ciudad)
+                          if (!disponibles.length) {
+                            return <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>Sin cobertura</span>
+                          }
+                          const cubre = p.transportadora && disponibles.includes(p.transportadora)
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <select
+                                className="form-input"
+                                value={p.transportadora || ''}
+                                onChange={e => setTranspOverride(prev => ({ ...prev, [p.n_referencia]: e.target.value }))}
+                                style={{ fontSize: 11, padding: '3px 6px', height: 'auto', minWidth: 96 }}
+                              >
+                                {Object.values(TRANSPORTADORAS).map(t => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.label}{disponibles.includes(t.id) ? '' : ' (no cubre)'}
+                                  </option>
+                                ))}
+                              </select>
+                              <span style={{ fontSize: 9, color: cubre ? 'var(--text-dim)' : 'var(--red)', whiteSpace: 'nowrap' }}>
+                                {!cubre
+                                  ? 'No cubre esta ciudad'
+                                  : `${formatGs(p.costo_envio || 0)}${p.transpManual ? ' · manual' : ''}`}
+                              </span>
+                            </div>
+                          )
+                        })()}
                       </td>
                       <td data-label="Cliente">
                         {p.riesgo?.nivel === 'bloqueado' ? (
