@@ -111,7 +111,17 @@ export function normalizarCiudadPaP(raw) {
 const ABREVIATURAS = {
   'cde': 'ciudad del este',
   'cde capital': 'ciudad del este',
+  'c del este': 'ciudad del este',
+  'cdel este': 'ciudad del este',
   'este': 'ciudad del este',
+  'asu': 'asuncion',
+  'asuncion py': 'asuncion',
+  'minga': 'minga guazu',
+  'mariano': 'mariano roque alonso',
+  'franco': 'presidente franco',
+  'oviedo': 'coronel oviedo',
+  'pedro juan': 'pedro juan caballero',
+  's lorenzo': 'san lorenzo',
   'pjc': 'pedro juan caballero',
   'pj caballero': 'pedro juan caballero',
   'fdm': 'fernando de la mora',
@@ -167,28 +177,36 @@ function resolverNombre(raw) {
   return ABREVIATURAS[n] || n
 }
 
-// Busca la ciudad de cobranza que corresponde al texto ingresado.
-// Devuelve la clave de la ciudad (normalizada) o null.
-function buscarCiudad(raw) {
+// Busca, dentro de CUALQUIER lista de ciudades, la que corresponde al texto ingresado.
+// Aplica normalización + abreviaturas + coincidencia parcial + tolerancia a typos.
+// Se exporta para que otras transportadoras (Lucero) reutilicen la misma inteligencia
+// en vez de duplicarla. `lista` = array de nombres ya normalizados.
+export function emparejarCiudad(raw, lista) {
   const n = resolverNombre(raw)
   if (!n) return null
   // 1) exacto
-  if (CIUDADES_COBRANZA[n]) return n
-  // 2) el texto contiene el nombre de una ciudad de cobranza (ej. "cde capital"
-  //    ya resuelto, o "luque centro" → contiene "luque")
-  for (const c of Object.keys(CIUDADES_COBRANZA)) {
+  if (lista.includes(n)) return n
+  // 2) el texto contiene el nombre de una ciudad de la lista
+  //    (ej. "luque centro" → contiene "luque")
+  for (const c of lista) {
     if (n === c) return c
     if (n.startsWith(c + ' ') || n.endsWith(' ' + c) || n.includes(' ' + c + ' ')) return c
   }
   // 3) tolerancia a errores de tipeo (Levenshtein)
   let mejor = null, mejorD = 99
-  for (const c of Object.keys(CIUDADES_COBRANZA)) {
+  for (const c of lista) {
     if (esParecido(n, c)) {
       const d = distancia(n, c)
       if (d < mejorD) { mejorD = d; mejor = c }
     }
   }
   return mejor
+}
+
+// Busca la ciudad de cobranza que corresponde al texto ingresado.
+// Devuelve la clave de la ciudad (normalizada) o null.
+function buscarCiudad(raw) {
+  return emparejarCiudad(raw, Object.keys(CIUDADES_COBRANZA))
 }
 
 // ¿PaP hace cobranza en esta ciudad?
