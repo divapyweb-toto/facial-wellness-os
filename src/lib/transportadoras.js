@@ -46,69 +46,198 @@ export function labelTransportadora(id) {
   return (TRANSPORTADORAS[id] || TRANSPORTADORAS.pap).label
 }
 
-// ─── Tarifario de Lucero del Este ───────────────────────────
-// Claves normalizadas (minúscula, sin tildes) para poder cruzar con lo que
-// escribe el cliente en el checkout. Fuente: tarifario vigente de Lucero.
-// TODO: cuando exista la tabla `tarifas_envio` en Supabase, esto pasa a ser
-// el respaldo y el precio real se lee de la base (para histórico correcto).
-export const TARIFAS_LUCERO = {
-  'ciudad del este': 20000,
-  'asuncion': 25000,
-  'lambare': 25000,
-  'san lorenzo': 25000,
-  'hernandarias': 25000,
-  'presidente franco': 25000,
-  'fernando de la mora': 30000,
-  'luque': 30000,
-  'mariano roque alonso': 30000,
-  'villa elisa': 30000,
-  'minga guazu': 30000,
-  'aregua': 35000,
-  'capiata': 35000,
-  'itaugua': 35000,
-  'limpio': 35000,
-  'nemby': 35000,
+// ─── Tarifario oficial Lucero del Este 2026 ─────────────────
+// [precio, velocidad]  ·  velocidad: 'diaria' (24hs) | 'frecuente' (24-48hs) | 'programada' (48-72hs, 1-2 veces por semana)
+// Claves normalizadas (minúscula, sin tildes) para cruzar con lo que escribe el cliente.
+// OJO: esta lista REEMPLAZA el tarifario anterior — todas las ciudades subieron
+// 5.000 y Minga Guazú 10.000. Con estos precios Lucero solo es más barato que
+// PaP en Ciudad del Este.
+// TODO: mover a la tabla `tarifas_envio` para tener histórico de precios.
+export const TARIFAS_LUCERO_INFO = {
+  'ciudad del este': [25000, 'diaria'],             // Ciudad del Este
+  'asuncion': [30000, 'diaria'],                    // Asunción
+  'hernandarias': [30000, 'frecuente'],             // Hernandarias
+  'lambare': [30000, 'diaria'],                     // Lambaré
+  'presidente franco': [30000, 'frecuente'],        // Presidente Franco
+  'san lorenzo': [30000, 'diaria'],                 // San Lorenzo
+  'fernando de la mora': [35000, 'frecuente'],      // Fernando de la Mora
+  'loma pyta': [35000, 'frecuente'],                // Loma Pytã
+  'luque': [35000, 'frecuente'],                    // Luque
+  'mariano roque alonso': [35000, 'frecuente'],     // Mariano Roque Alonso
+  'thompson': [35000, 'frecuente'],                 // Thompson
+  'villa elisa': [35000, 'frecuente'],              // Villa Elisa
+  'villeta': [35000, 'frecuente'],                  // Villeta
+  'altos (cordillera)': [40000, 'programada'],      // Altos (Cordillera)
+  'aregua': [40000, 'programada'],                  // Areguá
+  'atyra': [40000, 'programada'],                   // Atyrá
+  'barrero': [40000, 'programada'],                 // Barrero
+  'blas garay': [40000, 'programada'],              // Blas Garay
+  'caacupe': [40000, 'programada'],                 // Caacupé
+  'caaguazu': [40000, 'programada'],                // Caaguazú
+  'cambyreta': [40000, 'programada'],               // Cambyreta
+  'campo 9': [40000, 'programada'],                 // Campo 9
+  'capiata': [40000, 'programada'],                 // Capiatá
+  'capitan miranda': [40000, 'programada'],         // Capitán Miranda
+  'carmen del parana': [40000, 'programada'],       // Carmen del Paraná
+  'colonia torin': [40000, 'programada'],           // Colonia Torín
+  'coronel oviedo': [40000, 'programada'],          // Coronel Oviedo
+  'dr. j. eulogio estigarribia': [40000, 'programada'],// Dr. J. Eulogio Estigarribia
+  'encarnacion': [40000, 'programada'],             // Encarnación
+  'eusebio ayala': [40000, 'programada'],           // Eusebio Ayala
+  'fram': [40000, 'programada'],                    // Fram
+  'guarambare': [40000, 'programada'],              // Guarambaré
+  'ita': [40000, 'programada'],                     // Itá
+  'itacurubi': [40000, 'programada'],               // Itacurubí
+  'itagua': [40000, 'programada'],                  // Itaguá
+  'j. augusto saldivar': [40000, 'programada'],     // J. Augusto Saldívar
+  'jose domingo ocampos': [40000, 'programada'],    // José Domingo Ocampos
+  'juan e. o\'leary': [40000, 'programada'],         // Juan E. O'Leary
+  'juan leon mallorquin': [40000, 'programada'],    // Juan León Mallorquín
+  'juan manuel frutos': [40000, 'programada'],      // Juan Manuel Frutos
+  'la paz': [40000, 'programada'],                  // La paz
+  'limpio': [40000, 'programada'],                  // Limpio
+  'los cedrales': [40000, 'programada'],            // Los Cedrales
+  'mauricio jose troche': [40000, 'programada'],    // Mauricio Jose Troche
+  'mbocajaty (departamento del guaira)': [40000, 'programada'],// Mbocajaty (departamento del Guaira)
+  'minga guazu': [40000, 'frecuente'],              // Minga Guazú
+  'naranjal': [40000, 'programada'],                // Naranjal
+  'natalicio talavera': [40000, 'programada'],      // Natalicio Talavera
+  'nemby': [40000, 'programada'],                   // Ñemby
+  'nueva italia': [40000, 'programada'],            // Nueva Italia
+  'paraguari': [40000, 'programada'],               // Paraguarí
+  'pastoreo': [40000, 'programada'],                // Pastoreo
+  'piribebuy': [40000, 'programada'],               // Piribebuy
+  'san antonio': [40000, 'programada'],             // San Antonio
+  'san bernardino': [40000, 'programada'],          // San Bernardino
+  'san juan del parana': [40000, 'programada'],     // San Juan Del Paraná
+  'santa rita': [40000, 'programada'],              // Santa Rita
+  'santa rosa del monday': [40000, 'programada'],   // Santa Rosa del Monday
+  'tavapy': [40000, 'programada'],                  // Tavapy
+  'tobati': [40000, 'programada'],                  // Tobatí
+  'yaguaron': [40000, 'programada'],                // Yaguarón
+  'yataity (departamento del guaira)': [40000, 'programada'],// Yataity  (departamento del Guaira)
+  'yguazu': [40000, 'programada'],                  // Yguazú
+  'ypacarai': [40000, 'programada'],                // Ypacaraí
+  'ypane': [40000, 'programada'],                   // Ypané
+  'pedro juan caballero': [45000, 'programada'],    // Pedro Juan Caballero
+  'san cristobal': [45000, 'programada'],           // San Cristóbal
+  'villarrica': [45000, 'programada'],              // Villarrica
+  'carapegua': [50000, 'programada'],               // Carapeguá
+  'san jose de los arroyos': [50000, 'programada'], // San José de los Arroyos
+  'villa hayes': [50000, 'programada'],             // Villa Hayes
 }
+
+// Solo el precio (compatibilidad con el resto del código)
+export const TARIFAS_LUCERO = Object.fromEntries(
+  Object.entries(TARIFAS_LUCERO_INFO).map(([c, [p]]) => [c, p])
+)
+
+// Velocidad de entrega por ciudad
+export const velocidadLucero = (ciudadNorm) => TARIFAS_LUCERO_INFO[ciudadNorm]?.[1] || null
 
 const CIUDADES_LUCERO = Object.keys(TARIFAS_LUCERO)
 
 // Nombre canónico en MAYÚSCULAS, como lo espera la planilla de Lucero.
 // Si mandás la ciudad con otra grafía, su sistema la marca como no reconocida.
 export const NOMBRE_OFICIAL_LUCERO = {
-  'ciudad del este': 'CIUDAD DEL ESTE',
+  'altos (cordillera)': 'ALTOS (CORDILLERA)',
+  'aregua': 'AREGUÁ',
   'asuncion': 'ASUNCIÓN',
-  'lambare': 'LAMBARÉ',
-  'san lorenzo': 'SAN LORENZO',
-  'hernandarias': 'HERNANDARIAS',
-  'presidente franco': 'PRESIDENTE FRANCO',
+  'atyra': 'ATYRÁ',
+  'barrero': 'BARRERO',
+  'blas garay': 'BLAS GARAY',
+  'caacupe': 'CAACUPÉ',
+  'caaguazu': 'CAAGUAZÚ',
+  'cambyreta': 'CAMBYRETA',
+  'campo 9': 'CAMPO 9',
+  'capiata': 'CAPIATÁ',
+  'capitan miranda': 'CAPITÁN MIRANDA',
+  'carapegua': 'CARAPEGUÁ',
+  'carmen del parana': 'CARMEN DEL PARANÁ',
+  'ciudad del este': 'CIUDAD DEL ESTE',
+  'colonia torin': 'COLONIA TORÍN',
+  'coronel oviedo': 'CORONEL OVIEDO',
+  'dr. j. eulogio estigarribia': 'DR. J. EULOGIO ESTIGARRIBIA',
+  'encarnacion': 'ENCARNACIÓN',
+  'eusebio ayala': 'EUSEBIO AYALA',
   'fernando de la mora': 'FERNANDO DE LA MORA',
+  'fram': 'FRAM',
+  'guarambare': 'GUARAMBARÉ',
+  'hernandarias': 'HERNANDARIAS',
+  'ita': 'ITÁ',
+  'itacurubi': 'ITACURUBÍ',
+  'itagua': 'ITAGUÁ',
+  'j. augusto saldivar': 'J. AUGUSTO SALDÍVAR',
+  'jose domingo ocampos': 'JOSÉ DOMINGO OCAMPOS',
+  'juan e. o\'leary': 'JUAN E. O\'LEARY',
+  'juan leon mallorquin': 'JUAN LEÓN MALLORQUÍN',
+  'juan manuel frutos': 'JUAN MANUEL FRUTOS',
+  'la paz': 'LA PAZ',
+  'lambare': 'LAMBARÉ',
+  'limpio': 'LIMPIO',
+  'loma pyta': 'LOMA PYTÃ',
+  'los cedrales': 'LOS CEDRALES',
   'luque': 'LUQUE',
   'mariano roque alonso': 'MARIANO ROQUE ALONSO',
-  'villa elisa': 'VILLA ELISA',
+  'mauricio jose troche': 'MAURICIO JOSE TROCHE',
+  'mbocajaty (departamento del guaira)': 'MBOCAJATY (DEPARTAMENTO DEL GUAIRA)',
   'minga guazu': 'MINGA GUAZÚ',
-  'aregua': 'AREGUÁ',
-  'capiata': 'CAPIATÁ',
-  'itaugua': 'ITAUGUÁ',
-  'limpio': 'LIMPIO',
+  'naranjal': 'NARANJAL',
+  'natalicio talavera': 'NATALICIO TALAVERA',
   'nemby': 'ÑEMBY',
+  'nueva italia': 'NUEVA ITALIA',
+  'paraguari': 'PARAGUARÍ',
+  'pastoreo': 'PASTOREO',
+  'pedro juan caballero': 'PEDRO JUAN CABALLERO',
+  'piribebuy': 'PIRIBEBUY',
+  'presidente franco': 'PRESIDENTE FRANCO',
+  'san antonio': 'SAN ANTONIO',
+  'san bernardino': 'SAN BERNARDINO',
+  'san cristobal': 'SAN CRISTÓBAL',
+  'san jose de los arroyos': 'SAN JOSÉ DE LOS ARROYOS',
+  'san juan del parana': 'SAN JUAN DEL PARANÁ',
+  'san lorenzo': 'SAN LORENZO',
+  'santa rita': 'SANTA RITA',
+  'santa rosa del monday': 'SANTA ROSA DEL MONDAY',
+  'tavapy': 'TAVAPY',
+  'thompson': 'THOMPSON',
+  'tobati': 'TOBATÍ',
+  'villa elisa': 'VILLA ELISA',
+  'villa hayes': 'VILLA HAYES',
+  'villarrica': 'VILLARRICA',
+  'villeta': 'VILLETA',
+  'yaguaron': 'YAGUARÓN',
+  'yataity (departamento del guaira)': 'YATAITY  (DEPARTAMENTO DEL GUAIRA)',
+  'yguazu': 'YGUAZÚ',
+  'ypacarai': 'YPACARAÍ',
+  'ypane': 'YPANÉ',
 }
 
-// ─── Ruteo: qué transportadora conviene en cada ciudad ───────
-// Tasa de entrega que Lucero necesita para EMPATAR a PaP, según su tarifa
-// (con ticket ~127.000, COGS ~25.000 y PaP a 29.000 con 83% de entrega).
-// Sirve para mostrar el criterio en la UI y para revisar la decisión cuando
-// haya datos reales de Lucero.
+// ─── Ruteo: qué transportadora conviene en cada ciudad ───
+// Con el tarifario oficial 2026, Lucero solo es MÁS BARATO que PaP en Ciudad
+// del Este. En el resto hay que pagar por la velocidad, o no conviene.
+//
+// El envío que le cobrás al cliente (33.000 en Grupo A) es el MISMO con las dos
+// transportadoras, así que no entra en esta comparación: no cambia cuál gana.
+//
+// Regla:
+//   1. Lucero si es más barato que PaP.
+//   2. Lucero si cuesta hasta SOBREPRECIO_ACEPTABLE más Y entrega rápido
+//      (diaria o frecuente) — se paga la velocidad porque rinde al día siguiente
+//      y libera capital de trabajo.
+//   3. PaP en todo lo demás.
+//   4. Si PaP no cubre, va Lucero aunque sea caro: mejor caro que no despachar.
+export const SOBREPRECIO_ACEPTABLE = 1000
+
+// Tasa de entrega que Lucero necesita para EMPATAR a PaP según su tarifa,
+// con precio nuevo (112.000 Grupo A ×1), COGS ~13.600 y PaP 29.000 al 83%.
+// Sirve para revisar la decisión cuando haya datos reales de Lucero.
 export const TASA_EQUILIBRIO = {
-  20000: 0.742,   // puede entregar 8.8pp PEOR que PaP y aún conviene
-  25000: 0.791,   // puede entregar 3.9pp PEOR que PaP y aún conviene
-  30000: 0.840,   // necesita 1.0pp MEJOR que PaP
-  35000: 0.889,   // necesita 5.9pp MEJOR que PaP → por eso quedan en PaP
+  25000: 0.755,   // Ciudad del Este — puede entregar 7.5pp PEOR y aún conviene
+  30000: 0.806,   // puede entregar 2.4pp PEOR y aún conviene
+  35000: 0.857,   // necesita 2.7pp MEJOR
+  40000: 0.908,   // necesita 7.8pp MEJOR → no se asume
 }
-
-// Tarifa máxima de Lucero que aceptamos rutear automáticamente.
-// Con 30.000 el equilibrio pide solo 1pp más de entrega (asumible por su
-// velocidad). Con 35.000 pide 5.9pp, que no se puede asumir sin datos.
-export const TARIFA_MAX_LUCERO = 30000
 
 // Resuelve la ciudad del texto libre contra el tarifario de Lucero.
 // Devuelve la clave normalizada o null.
@@ -147,37 +276,40 @@ export function transportadorasDisponibles(ciudad) {
 export function sugerirTransportadora(ciudad) {
   const cL = ciudadLucero(ciudad)
   const hayPaP = tieneCobranzaPaP(ciudad)
+  const flete = getFlete()
 
   if (cL) {
     const tarifa = TARIFAS_LUCERO[cL]
-    if (tarifa <= TARIFA_MAX_LUCERO) {
-      const flete = getFlete()
-      const dif = tarifa - flete
-      const motivo = dif < 0
-        ? `Lucero ${Math.abs(dif).toLocaleString('es-PY')} más barato y rinde al día siguiente`
-        : dif === 0
-          ? 'Misma tarifa y rinde al día siguiente'
-          : `+${dif.toLocaleString('es-PY')} pero rinde al día siguiente`
-      return { transportadora: 'lucero', motivo, tarifa }
+    const vel = velocidadLucero(cL)
+    const dif = tarifa - flete
+    const rapida = vel === 'diaria' || vel === 'frecuente'
+
+    if (!hayPaP) {
+      return { transportadora: 'lucero', motivo: 'PaP no cubre esta ciudad', tarifa, velocidad: vel }
     }
-    // Lucero cubre pero está a 35.000: necesitaría 5.9pp más de entrega.
-    if (hayPaP) {
+    if (dif < 0) {
       return {
-        transportadora: 'pap',
-        motivo: `Lucero cuesta ${TARIFAS_LUCERO[cL].toLocaleString('es-PY')} acá — no compensa`,
-        tarifa: getFlete(),
+        transportadora: 'lucero',
+        motivo: `${Math.abs(dif).toLocaleString('es-PY')} más barato que PaP${rapida ? ' y más rápido' : ''}`,
+        tarifa, velocidad: vel,
       }
     }
-    // PaP no cubre y Lucero sí, aunque sea caro: mejor caro que sin despachar.
-    return {
-      transportadora: 'lucero',
-      motivo: 'PaP no cubre esta ciudad',
-      tarifa: TARIFAS_LUCERO[cL],
+    if (dif <= SOBREPRECIO_ACEPTABLE && rapida) {
+      return {
+        transportadora: 'lucero',
+        motivo: dif === 0 ? 'Misma tarifa y rinde al día siguiente' : `+${dif.toLocaleString('es-PY')} pero entrega ${vel === 'diaria' ? 'en 24hs' : 'en 24-48hs'} y rinde al día siguiente`,
+        tarifa, velocidad: vel,
+      }
     }
+    // Más caro de lo aceptable, o lento: va PaP.
+    const porQue = vel === 'programada'
+      ? `Lucero sale ${tarifa.toLocaleString('es-PY')} y entrega 1-2 veces por semana`
+      : `Lucero sale +${dif.toLocaleString('es-PY')} acá — no compensa`
+    return { transportadora: 'pap', motivo: porQue, tarifa: flete, velocidad: null }
   }
 
-  if (hayPaP) return { transportadora: 'pap', motivo: 'Lucero no cubre esta ciudad', tarifa: getFlete() }
-  return { transportadora: null, motivo: 'Ninguna transportadora cubre esta ciudad', tarifa: null }
+  if (hayPaP) return { transportadora: 'pap', motivo: 'Lucero no cubre esta ciudad', tarifa: flete, velocidad: null }
+  return { transportadora: null, motivo: 'Ninguna transportadora cubre esta ciudad', tarifa: null, velocidad: null }
 }
 
 // Nombre de ciudad tal cual lo espera la planilla de Lucero.
