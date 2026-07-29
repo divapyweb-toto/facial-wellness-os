@@ -90,16 +90,27 @@ export default function RendicionPage() {
 
     const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null && d >= 0)
     const diasProm = diasRend.length ? diasRend.reduce((a, b) => a + b, 0) / diasRend.length : null
+    // MEDIANA = cobro típico. El promedio se dispara con pocas rendiciones trancadas
+    // y arrastra con él las proyecciones y el umbral de demora.
+    const ordenados = [...diasRend].sort((a, b) => a - b)
+    const diasMediana = ordenados.length
+      ? (ordenados.length % 2
+          ? ordenados[(ordenados.length - 1) / 2]
+          : (ordenados[ordenados.length / 2 - 1] + ordenados[ordenados.length / 2]) / 2)
+      : null
+    const trancados = diasRend.filter(d => d > 14).length
 
     const hoy = new Date()
     const listaSinRendir = sinRendir.map(m => {
       const fEnt = m.fecha_entrega ? new Date(m.fecha_entrega) : null
       const diasSinRendir = fEnt ? Math.max(0, Math.round((hoy - fEnt) / 86400000)) : null
-      const fechaEstimada = (fEnt && diasProm != null) ? new Date(fEnt.getTime() + diasProm * 86400000) : null
+      const fechaEstimada = (fEnt && diasMediana != null) ? new Date(fEnt.getTime() + diasMediana * 86400000) : null
       return { ...m, diasSinRendir, fechaEstimada }
     }).sort((a, b) => (b.diasSinRendir ?? -1) - (a.diasSinRendir ?? -1))
 
-    const umbralDemora = diasProm != null ? Math.max(15, diasProm * 2) : 15
+    // El umbral se calcula sobre la MEDIANA, no sobre el promedio. Con el promedio,
+    // cada rendición trancada subía el propio umbral que debía detectarla.
+    const umbralDemora = diasMediana != null ? Math.max(15, diasMediana * 2) : 15
     const demoradas = listaSinRendir.filter(m => m.diasSinRendir != null && m.diasSinRendir > umbralDemora)
     const montoDemorado = demoradas.reduce((s, m) => s + (m.importe || 0), 0)
 
@@ -123,7 +134,7 @@ export default function RendicionPage() {
     const tasaCobrado = totalGestionado ? Math.round(yaRendido / totalGestionado * 100) : 0
 
     return {
-      yaRendido, porCobrar, enTransito, diasProm, listaSinRendir, historicoRend, datosGrafico,
+      yaRendido, porCobrar, enTransito, diasProm, diasMediana, trancados, umbralDemora, listaSinRendir, historicoRend, datosGrafico,
       nRendidos: rendidos.length, nSinRendir: sinRendir.length, nProceso: proceso.length,
       demoradas, montoDemorado, cobroEstimadoHasta, hayDatos, tasaCobrado, umbralDemora,
     }
@@ -388,17 +399,21 @@ export default function RendicionPage() {
           <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
             <CalendarClock size={13} /> TIEMPO DE COBRO
           </div>
-          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{stats.diasProm != null ? `${stats.diasProm.toFixed(1)} días` : '—'}</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>De la entrega al depósito</div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{stats.diasMediana != null ? `${stats.diasMediana.toFixed(1)} días` : '—'}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+            Típico (mediana), de la entrega al depósito
+            {stats.diasProm != null ? ` · prom. ${stats.diasProm.toFixed(1)}d` : ''}
+            {stats.trancados > 0 ? ` · ${stats.trancados} trancada${stats.trancados > 1 ? 's' : ''} +14d` : ''}
+          </div>
         </div>
       </div>
 
       {/* Proyección de cobro */}
-      {stats.porCobrar > 0 && stats.cobroEstimadoHasta && (
+      {stats.porCobrar > 0 && stats.cobroEstimadoHasta && stats.diasMediana != null && (
         <div className="card" style={{ background: 'var(--green-dim)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <TrendingUp size={20} color="var(--green)" />
           <div style={{ fontSize: 13 }}>
-            Al ritmo actual de <b>{stats.diasProm.toFixed(1)} días</b>, deberías terminar de cobrar
+            Al ritmo típico de <b>{stats.diasMediana.toFixed(1)} días</b>, deberías terminar de cobrar
             los <b style={{ color: 'var(--green)' }}>{formatGs(stats.porCobrar)}</b> pendientes
             alrededor del <b>{stats.cobroEstimadoHasta.toLocaleDateString('es-PY', { day: '2-digit', month: 'long' })}</b>.
           </div>
