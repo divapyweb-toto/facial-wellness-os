@@ -16,6 +16,9 @@ import { supabase } from './supabase'
 // Valores por defecto = los que estaban en el código.
 const DEFAULTS = {
   flete_pap: 29000,
+  // Envío que le cobrás al cliente en productos del Grupo A (lo paga él, va
+  // dentro del total). Grupo B tiene envío gratis y no usa este valor.
+  envio_cliente: 33000,
   riesgo_bloqueo_fallos: 2,
   riesgo_bloqueo_tasa: 0.5,
   riesgo_tasa: 0.34,
@@ -88,6 +91,7 @@ export async function guardarConfigLote(pares) {
 
 // ── Getters específicos (los que usan los módulos) ──
 export const getFlete = () => getConfig('flete_pap')
+export const getEnvioCliente = () => getConfig('envio_cliente')
 export const getUmbralesRiesgo = () => ({
   bloqueoFallos: getConfig('riesgo_bloqueo_fallos'),
   bloqueoTasa: getConfig('riesgo_bloqueo_tasa'),

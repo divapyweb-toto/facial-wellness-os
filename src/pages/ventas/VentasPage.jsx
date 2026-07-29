@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, formatGs, estadoConfig, getEstadoConfig } from '../../lib/supabase'
 import { costoFleteActual } from '../../lib/flete'
+import { getEnvioCliente } from '../../lib/config'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
 import { logError } from '../../lib/errorLog'
@@ -157,7 +158,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
       : null
     const metodoPagoNombre = metodosPago.find(m => m.id === form.metodo_pago_id)?.nombre || ''
     const costoEnvio = envioSel?.costo_propio || costoFleteActual()
-    const envioCliente = productoSel?.grupo_envio === 'A' ? (envioSel?.costo_cliente || 29000) : 0
+    const envioCliente = productoSel?.grupo_envio === 'A' ? (envioSel?.costo_cliente || getEnvioCliente()) : 0
 
     const { data: ventaCreada, error } = await supabase.from('ventas').insert({
       ...form,
@@ -223,7 +224,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
 
           {productoSel && (() => {
             const envSel = metodosEnvio.find(m => m.id === form.metodo_envio_id)
-            const envioCli = productoSel.grupo_envio === 'A' ? (envSel?.costo_cliente || 29000) : 0
+            const envioCli = productoSel.grupo_envio === 'A' ? (envSel?.costo_cliente || getEnvioCliente()) : 0
             const costoEnv = envSel?.costo_propio || costoFleteActual()
             const costoProd = productoSel.costo_unit * form.cantidad
             const totalCliente = total + envioCli
