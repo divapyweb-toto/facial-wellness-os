@@ -7,6 +7,7 @@ import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
 import { costoFleteActual } from '../../lib/flete'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
+import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, TRANSPORTADORAS } from '../../lib/transportadoras'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
 import { useToast } from '../../lib/toast'
@@ -145,18 +146,28 @@ function mapearPedido(row) {
   const producto_nombre = row['Lineitem name'] || ''
   const cantidad = parseInt(row['Lineitem quantity']) || 1
   const total = parseInt((row['Total'] || '0').replace(/[^0-9]/g, '')) || 0
-  // ¿PaP hace cobranza en esta ciudad? Si no, no se puede despachar por PaP
-  // aunque el pedido esté confirmado.
-  const cobranzaOk = tieneCobranzaPaP(ciudad)
+  // ¿Alguna transportadora hace cobranza en esta ciudad? Si ninguna cubre,
+  // no se puede despachar aunque el pedido esté confirmado.
+  const sugerencia = sugerirTransportadora(ciudad)
+  const transportadora = sugerencia.transportadora
+  const cobranzaOk = transportadora != null
   const faltantes = []
   if (cfg.despachar) {
     if (!nombre) faltantes.push('nombre')
     if (!telefono) faltantes.push('teléfono')
     if (!direccion) faltantes.push('dirección')
   }
-  // despachable = estado ok (confirmado/ayuda) Y la ciudad tiene cobranza PaP
+  // despachable = estado ok (confirmado/ayuda) Y alguna transportadora cubre la ciudad
   const despachar = cfg.despachar && cobranzaOk
-  return { n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion, telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado, cfg, cobranzaOk, despachar, faltantes }
+  return {
+    n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion,
+    referencia_dir: refDir,          // separada: Lucero la pide en su propia columna
+    telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado,
+    cfg, cobranzaOk, despachar, faltantes,
+    transportadora,                  // 'pap' | 'lucero' — editable después en la UI
+    motivoTransportadora: sugerencia.motivo,
+    costo_envio: sugerencia.tarifa,  // tarifa real de ESA transportadora en ESA ciudad
+  }
 }
 
 // ─── Match de producto del catálogo (resuelve costo_prod) ───
@@ -169,6 +180,55 @@ function matchProducto(nombreVenta, productos) {
     .filter(x => { const c = (x.nombre || '').toLowerCase().trim(); return c && (n.includes(c) || c.includes(n)) })
     .sort((a, b) => (b.nombre || '').length - (a.nombre || '').length)
   return cand[0] || null
+}
+
+// ─── Cabecera XLSX — formato Lucero del Este ────────────────
+// La estructura tiene que ser EXACTA: su importador detecta las columnas por
+// nombre. Ojo con las tildes, son inconsistentes en la plantilla original:
+// CODIGO / TELEFONO / DIRECCION van SIN tilde, pero UBICACIÓN va CON tilde.
+// Copiadas literal del archivo oficial — no "corregir" la ortografía.
+const HEADERS_LUCERO = ['CODIGO','EMPRESA','TELEFONO','DIRECCION','NOMBRE Y APELLIDO','CIUDAD','BARRIO','REFERENCIA','CANTIDAD','PRODUCTO','IMPORTE','FECHA','UBICACIÓN','NOTAS']
+
+// Empresa vinculada en el panel de Lucero. Tiene que coincidir exacto.
+const EMPRESA_LUCERO = 'Facial Wellness'
+
+// Los campos vacíos van como 'N/A', no en blanco: su sistema los rechaza.
+const oNA = (v) => { const s = String(v ?? '').trim(); return s === '' ? 'N/A' : s }
+
+function descargarCabeceraLuceroXLSX(pedidos) {
+  const aoa = [HEADERS_LUCERO]
+  pedidos.forEach(p => {
+    const refNum = parseInt(p.n_referencia)
+    // Prepago: Lucero NO tiene que cobrar. Importe 0 + aviso explícito en NOTAS.
+    const notas = p.prepago ? 'YA PAGADO - NO COBRAR' : 'N/A'
+    aoa.push([
+      isNaN(refNum) ? oNA(p.n_referencia) : refNum,   // CODIGO
+      EMPRESA_LUCERO,                                  // EMPRESA (siempre fijo)
+      oNA(p.telefono),                                 // TELEFONO
+      oNA(p.direccion),                                // DIRECCION
+      oNA(p.cliente_nombre),                           // NOMBRE Y APELLIDO
+      ciudadParaPlanillaLucero(p.ciudad),              // CIUDAD (nombre oficial en mayúscula)
+      'N/A',                                           // BARRIO (Shopify no lo pide)
+      oNA(p.referencia_dir),                           // REFERENCIA (punto de referencia)
+      1,                                               // CANTIDAD (siempre 1: es bultos, no unidades)
+      oNA(getDesc(p.producto_nombre, p.cantidad)),     // PRODUCTO
+      p.prepago ? 0 : (p.total || 0),                  // IMPORTE a cobrar
+      oNA(p.fecha),                                    // FECHA
+      'N/A',                                           // UBICACIÓN (no hay link de maps en Shopify)
+      notas,                                           // NOTAS
+    ])
+  })
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  ws['!cols'] = [{wch:12},{wch:18},{wch:15},{wch:40},{wch:28},{wch:20},{wch:12},{wch:30},{wch:10},{wch:35},{wch:12},{wch:12},{wch:14},{wch:24}]
+  // Teléfono como texto: si Excel lo toma como número le come el 0 inicial.
+  pedidos.forEach((p, i) => {
+    const cell = 'C' + (i + 2)
+    if (ws[cell]) { ws[cell].t = 's'; ws[cell].z = '@' }
+  })
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Hoja1')
+  const refs = pedidos.map(p => p.n_referencia).filter(Boolean)
+  XLSX.writeFile(wb, `Lucero_${refs[0]}-${refs[refs.length-1]}.xlsx`)
 }
 
 // ─── Generar y descargar Cabecera XLSX (formato Punto a Punto AC) ─
@@ -290,6 +350,18 @@ async function descargarGuiasDOCX(pedidos) {
       }))
     }
 
+    // ── TRANSPORTADORA ──
+    // Va grande y arriba: es lo que mira el que arma los paquetes para separar
+    // la pila de PAP de la de Lucero.
+    children.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 40, after: 80 },
+      children: [new TextRun({
+        text: `TRANSPORTADORA: ${labelTransportadora(p.transportadora)}`,
+        bold: true, size: 26,
+      })],
+    }))
+
     // ── DESTINATARIO ──
     children.push(
       seccion('DESTINATARIO'),
@@ -375,12 +447,17 @@ async function descargarGuiasDOCX(pedidos) {
 
 // ─── Map venta DB → formato pedido (para XLSX/DOCX) ─────
 function ventaAPedido(v) {
+  // Si la venta ya tiene transportadora guardada (despachada antes), se respeta.
+  // Si no, se sugiere por ciudad — así las ventas viejas también salen ruteadas.
+  const sug = sugerirTransportadora(v.ciudad || '')
+  const transportadora = v.transportadora || sug.transportadora
   return {
     n_referencia: v.n_referencia || '',
     cliente_nombre: v.cliente_nombre || '—',
     ciudad: v.ciudad || '',
     departamento: '',
     direccion: v.cliente_direccion || '',
+    referencia_dir: '',
     telefono: v.cliente_telefono || '',
     producto_nombre: v.producto_nombre || '',
     cantidad: v.cantidad || 1,
@@ -390,6 +467,9 @@ function ventaAPedido(v) {
     cfg: ESTADO_CONFIG[v.estado_releasit] || ESTADO_CONFIG['pending'],
     despachar: true,
     faltantes: [],
+    transportadora,
+    motivoTransportadora: sug.motivo,
+    costo_envio: v.costo_envio ?? sug.tarifa,
   }
 }
 
@@ -698,16 +778,30 @@ export default function DespachoPagina() {
     if (fail > 0) toast(`${fail} fallaron`, 'error')
   }
 
+  // Descarga una cabecera POR transportadora: cada una tiene su propio formato
+  // y su propio panel. Si todos los pedidos van por la misma, baja un solo archivo.
   const descargarExcel = () => {
     if (!paraDespacho.length) return
-    descargarCabeceraXLSX(paraDespacho)
-    toast('Cabecera Excel (.xlsx) descargada', 'success')
+    const dePaP = paraDespacho.filter(p => (p.transportadora || 'pap') === 'pap')
+    const deLucero = paraDespacho.filter(p => p.transportadora === 'lucero')
+    if (dePaP.length) descargarCabeceraXLSX(dePaP)
+    if (deLucero.length) descargarCabeceraLuceroXLSX(deLucero)
+    const partes = []
+    if (dePaP.length) partes.push(`${dePaP.length} PAP`)
+    if (deLucero.length) partes.push(`${deLucero.length} Lucero`)
+    toast(`Cabecera descargada — ${partes.join(' · ')}`, 'success')
   }
 
+  // Un solo documento de guías (como se venía imprimiendo), pero ORDENADO por
+  // transportadora: así salen de la impresora ya separadas en dos pilas.
   const descargarGuiasDoc = async () => {
     if (!paraDespacho.length) return
     try {
-      await descargarGuiasDOCX(paraDespacho)
+      const orden = { pap: 0, lucero: 1 }
+      const ordenadas = [...paraDespacho].sort(
+        (a, b) => (orden[a.transportadora] ?? 0) - (orden[b.transportadora] ?? 0)
+      )
+      await descargarGuiasDOCX(ordenadas)
       toast('Guías Word (.docx) descargadas', 'success')
     } catch (e) {
       toast('Error generando las guías: ' + e.message, 'error')
@@ -756,14 +850,24 @@ export default function DespachoPagina() {
 
   const descargarExcelVentas = () => {
     if (!pedidosSeleccionados.length) { toast('Seleccioná al menos una venta', 'error'); return }
-    descargarCabeceraXLSX(pedidosSeleccionados)
-    toast('Cabecera Excel (.xlsx) descargada', 'success')
+    const dePaP = pedidosSeleccionados.filter(p => (p.transportadora || 'pap') === 'pap')
+    const deLucero = pedidosSeleccionados.filter(p => p.transportadora === 'lucero')
+    if (dePaP.length) descargarCabeceraXLSX(dePaP)
+    if (deLucero.length) descargarCabeceraLuceroXLSX(deLucero)
+    const partes = []
+    if (dePaP.length) partes.push(`${dePaP.length} PAP`)
+    if (deLucero.length) partes.push(`${deLucero.length} Lucero`)
+    toast(`Cabecera descargada — ${partes.join(' · ')}`, 'success')
   }
 
   const descargarGuiasVentas = async () => {
     if (!pedidosSeleccionados.length) { toast('Seleccioná al menos una venta', 'error'); return }
     try {
-      await descargarGuiasDOCX(pedidosSeleccionados)
+      const orden = { pap: 0, lucero: 1 }
+      const ordenadas = [...pedidosSeleccionados].sort(
+        (a, b) => (orden[a.transportadora] ?? 0) - (orden[b.transportadora] ?? 0)
+      )
+      await descargarGuiasDOCX(ordenadas)
       toast('Guías Word (.docx) descargadas', 'success')
     } catch (e) {
       toast('Error al generar las guías: ' + e.message, 'error')
