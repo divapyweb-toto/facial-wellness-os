@@ -63,9 +63,19 @@ function limpiarTel(tel) {
 
 // Categoriza mirando ESTADO y MOTIVO juntos. El motivo manda cuando el estado
 // es intermedio: un "Custodio" con motivo "Inubicable" es una devolución, no un proceso.
+// Tope de sanidad para el Importe que manda PaP. Tu pedido más caro razonable
+// es Bebird Pro ×3 (~1.100.000), así que 2.000.000 deja margen de sobra y filtra
+// la basura de los borradores.
+const IMPORTE_MAX_RAZONABLE = 2000000
+
 function categorizar(estado, motivo) {
   const e = (estado || '').toLowerCase()
   const m = (motivo || '').toLowerCase()
+  // 0) NO ES UN PAQUETE EN VIAJE. 'Borrador' es una guía que PaP nunca despachó,
+  //    y 'NO INGRESO A PAP' nunca entró al sistema. No están en tránsito, no hay
+  //    flete comprometido y no deben entrar en ninguna proyección de cierre.
+  //    Los borradores de PaP además suelen traer el Importe en basura.
+  if (e.includes('borrador') || e.includes('no ingreso')) return 'no_despachado'
   // 1) Entregado (lo más claro)
   if (e.includes('entregado')) return 'entregado'
   // 2) Devuelto definitivo por estado
@@ -109,6 +119,8 @@ function combinar(paqData, gesData) {
 
   const guias = new Set([...pmap.keys(), ...gmap.keys()])
   const out = []
+  // Registros cuyo Importe vino corrupto desde PaP (se avisan en pantalla).
+  const importesDescartados = []
 
   guias.forEach(guia => {
     if (!guia || guia === 'undefined') return
@@ -119,7 +131,19 @@ function combinar(paqData, gesData) {
     const estado = (p && p['Estado']) ? p['Estado'] : (g ? g['Estado'] : '')
     const motivo = ((p && p['Motivo']) || (g && g['Motivo']) || '')
     const cat = categorizar(estado, motivo)
-    const importe = parseInt((p ? p['Importe'] : g['Importe']) || 0) || 0
+    // TOPE DE SANIDAD. Los borradores de PaP traen el Importe corrupto (se han
+    // visto valores de 900+ millones), y un solo registro basura envenena todas
+    // las sumas del sistema. Tu pedido más caro posible es Bebird ×3 ≈ 1.100.000,
+    // así que cualquier cosa por encima del tope es dato roto, no una venta.
+    const importeCrudo = parseInt((p ? p['Importe'] : g['Importe']) || 0) || 0
+    const importe = importeCrudo > IMPORTE_MAX_RAZONABLE ? 0 : importeCrudo
+    if (importeCrudo > IMPORTE_MAX_RAZONABLE) {
+      importesDescartados.push({
+        ref: normalizarRef((p && p['NroGuiaRef']) ? p['NroGuiaRef'] : (g ? g['NroGuiaRef'] : '')),
+        valor: importeCrudo,
+        estado,
+      })
+    }
     const ref = normalizarRef((p && p['NroGuiaRef']) ? p['NroGuiaRef'] : (g ? g['NroGuiaRef'] : ''))
     const ciudad = ((g ? g['Ciudad'] : (p ? p['Ciudad'] : '')) || '').trim()
     const mensajero = (g ? g['Recurso'] : '') || ''
@@ -159,6 +183,8 @@ function combinar(paqData, gesData) {
     })
   })
 
+  // Se cuelgan del array para que quien lo use pueda avisar sin cambiar la firma.
+  out.importesDescartados = importesDescartados
   return out
 }
 
