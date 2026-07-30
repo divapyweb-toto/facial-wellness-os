@@ -164,10 +164,15 @@ function combinar(paqData, gesData) {
 }
 
 const CAT_CFG = {
-  entregado:  { label: 'Entregado', color: '#22c55e' },
-  devuelto:   { label: 'Devuelto',  color: '#ef4444' },
-  en_proceso: { label: 'En proceso', color: '#eab308' },
+  entregado:     { label: 'Entregado', color: '#22c55e' },
+  devuelto:      { label: 'Devuelto',  color: '#ef4444' },
+  en_proceso:    { label: 'En proceso', color: '#eab308' },
+  // Guías que PaP nunca despachó (Borrador / NO INGRESO A PAP).
+  no_despachado: { label: 'No despachado', color: '#6b7280' },
 }
+// Acceso seguro: si mañana aparece una categoría nueva, la fila se pinta gris
+// en vez de romper la página entera con "Cannot read properties of undefined".
+const catCfg = (cat) => CAT_CFG[cat] || { label: cat || '—', color: '#6b7280' }
 
 // ═══════════════════════════════════════════════════════════
 // COMPONENTE
@@ -1350,7 +1355,7 @@ export default function EntregasPage() {
                 <tr key={i}>
                   <td data-label="Ref." className="mono">{m.n_referencia ? `#${m.n_referencia}` : '—'}</td>
                   <td data-label="Guía PaP" className="muted" style={{ fontSize: 11 }}>{m.nro_guia_pap}</td>
-                  <td data-label="Estado"><span style={{ fontSize: 11, fontWeight: 600, color: CAT_CFG[m.categoria].color, whiteSpace: 'nowrap' }}>{m.estado_pap}</span></td>
+                  <td data-label="Estado"><span style={{ fontSize: 11, fontWeight: 600, color: catCfg(m.categoria).color, whiteSpace: 'nowrap' }}>{m.estado_pap}</span></td>
                   <td data-label="Ciudad" className="muted">{m.ciudad || '—'}</td>
                   <td data-label="Mensajero" className="muted" style={{ fontSize: 11 }}>{(m.mensajero || '—').split(' - ')[0]}</td>
                   <td data-label="Producto" style={{ fontSize: 11 }}>{(m.producto || '—').slice(0, 28)}</td>

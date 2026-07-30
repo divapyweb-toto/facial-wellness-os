@@ -108,7 +108,9 @@ export function tasaPorMes(entregas) {
   const map = {}
   for (const e of (entregas || [])) {
     if (!e.fecha) continue
-    if (e.categoria === 'en_proceso') continue
+    // Solo lo RESUELTO cuenta para la tasa. 'en_proceso' todavía no cerró y
+    // 'no_despachado' nunca salió — ninguno debe crear un mes con 0%.
+    if (e.categoria !== 'entregado' && e.categoria !== 'devuelto') continue
     const mes = String(e.fecha).slice(0, 7)
     if (!map[mes]) map[mes] = { mes, entregados: 0, devueltos: 0 }
     if (e.categoria === 'entregado') map[mes].entregados++
