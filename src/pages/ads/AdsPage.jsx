@@ -1,6 +1,7 @@
 // src/pages/ads/AdsPage.jsx
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
+import { categorizarPaP as categoriaPaP } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { familiaProducto } from '../../lib/recompra'
@@ -24,14 +25,6 @@ const normRef = (ref) => {
   let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
   if (/^\d+$/.test(r)) r = String(parseInt(r, 10))
   return r
-}
-const categoriaPaP = (estado, motivo) => {
-  const e = (estado || '').toLowerCase(), m = (motivo || '').toLowerCase()
-  if (e.includes('entregado')) return 'entregado'
-  if (e.includes('devuelto') || e.includes('devolucion') || m.includes('devolucion') ||
-      m.includes('rechaz') || m.includes('inubicable') || m.includes('fuera de cobertura') ||
-      m.includes('no desea') || m.includes('cancelad') || m.includes('rehus')) return 'devuelto'
-  return 'en_proceso'
 }
 
 const VEREDICTO_CFG = {

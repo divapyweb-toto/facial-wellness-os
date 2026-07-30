@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../../lib/supabase'
+import { sanearEntrega } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { parsearFilasRendicion, conciliarRendicion, combinarArchivosRendicion } from '../../lib/conciliacionRendicion'
@@ -10,17 +11,6 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGri
 
 const formatGs = (n) => Math.round(n || 0).toLocaleString('es-PY') + ' Gs.'
 const fechaCorta = (d) => d ? new Date(d).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'
-
-function categorizar(estado, motivo) {
-  const e = (estado || '').toLowerCase(); const m = (motivo || '').toLowerCase()
-  if (e.includes('entregado')) return 'entregado'
-  if (e.includes('devuelto')) return 'devuelto'
-  if (m.includes('rechaz') || m.includes('inubicable') || m.includes('fuera de cobertura') ||
-      m.includes('fin de custodia') || m.includes('problema de direccion') || m.includes('no desea') ||
-      m.includes('cancelad') || m.includes('no ingreso') || m.includes('rehus')) return 'devuelto'
-  if (e.includes('devolucion') || m.includes('devolucion')) return 'devuelto'
-  return 'en_proceso'
-}
 
 export default function RendicionPage() {
   const { toast } = useToast()
@@ -76,7 +66,7 @@ export default function RendicionPage() {
   const stats = useMemo(() => {
     const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
     const esPrepago = (m) => refsPrepago.has(norm(m.n_referencia)) || refsPrepago.has(norm(m.nro_guia_ref))
-    const items = historico.map(h => ({ ...h, categoria: categorizar(h.estado_pap, h.motivo), _prepago: esPrepago(h) }))
+    const items = historico.map(h => ({ ...sanearEntrega(h), _prepago: esPrepago(h) }))
     const entregados = items.filter(m => m.categoria === 'entregado')
     const proceso = items.filter(m => m.categoria === 'en_proceso')
     const rendidos = entregados.filter(m => m.rendido)

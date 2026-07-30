@@ -3,6 +3,7 @@ import { useState, useRef, useMemo, useEffect, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
+import { categorizarPaP as categorizar, importeSano, esImporteCorrupto, sanearEntrega, IMPORTE_MAX_RAZONABLE } from '../../lib/estadosPaP'
 import { tasaPorTransportadora } from '../../lib/riesgoCiudad'
 import { labelTransportadora } from '../../lib/transportadoras'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
@@ -63,32 +64,6 @@ function limpiarTel(tel) {
 
 // Categoriza mirando ESTADO y MOTIVO juntos. El motivo manda cuando el estado
 // es intermedio: un "Custodio" con motivo "Inubicable" es una devolución, no un proceso.
-// Tope de sanidad para el Importe que manda PaP. Tu pedido más caro razonable
-// es Bebird Pro ×3 (~1.100.000), así que 2.000.000 deja margen de sobra y filtra
-// la basura de los borradores.
-const IMPORTE_MAX_RAZONABLE = 2000000
-
-function categorizar(estado, motivo) {
-  const e = (estado || '').toLowerCase()
-  const m = (motivo || '').toLowerCase()
-  // 0) NO ES UN PAQUETE EN VIAJE. 'Borrador' es una guía que PaP nunca despachó,
-  //    y 'NO INGRESO A PAP' nunca entró al sistema. No están en tránsito, no hay
-  //    flete comprometido y no deben entrar en ninguna proyección de cierre.
-  //    Los borradores de PaP además suelen traer el Importe en basura.
-  if (e.includes('borrador') || e.includes('no ingreso')) return 'no_despachado'
-  // 1) Entregado (lo más claro)
-  if (e.includes('entregado')) return 'entregado'
-  // 2) Devuelto definitivo por estado
-  if (e.includes('devuelto')) return 'devuelto'
-  // 3) Motivos que implican devolución aunque el estado sea intermedio (Custodio, etc.)
-  if (m.includes('rechaz') || m.includes('inubicable') || m.includes('fuera de cobertura') ||
-      m.includes('fin de custodia') || m.includes('problema de direccion') || m.includes('no desea') ||
-      m.includes('cancelad') || m.includes('no ingreso') || m.includes('rehus') || m.includes('rechazado')) return 'devuelto'
-  // 4) Devolución en proceso: no se cobró, va camino a volver
-  if (e.includes('devolucion') || m.includes('devolucion')) return 'devuelto'
-  // 5) Resto (Custodio sin motivo de devolución, Asignado a ruta, No gestionado) → todavía en proceso
-  return 'en_proceso'
-}
 
 function toISODate(v) {
   if (!v) return null
@@ -136,8 +111,8 @@ function combinar(paqData, gesData) {
     // las sumas del sistema. Tu pedido más caro posible es Bebird ×3 ≈ 1.100.000,
     // así que cualquier cosa por encima del tope es dato roto, no una venta.
     const importeCrudo = parseInt((p ? p['Importe'] : g['Importe']) || 0) || 0
-    const importe = importeCrudo > IMPORTE_MAX_RAZONABLE ? 0 : importeCrudo
-    if (importeCrudo > IMPORTE_MAX_RAZONABLE) {
+    const importe = importeSano(importeCrudo)
+    if (esImporteCorrupto(importeCrudo)) {
       importesDescartados.push({
         ref: normalizarRef((p && p['NroGuiaRef']) ? p['NroGuiaRef'] : (g ? g['NroGuiaRef'] : '')),
         valor: importeCrudo,
@@ -272,8 +247,8 @@ export default function EntregasPage() {
   const merged = useMemo(() => {
     const map = new Map()
     historico.forEach(h => {
-      const cat = categorizar(h.estado_pap, h.motivo)
-      map.set(String(h.nro_guia_pap), { ...h, categoria: cat, cobrado: cat === 'entregado' ? (h.importe || 0) : 0 })
+      // Se sanea al leer: las filas viejas traen categoría e importe mal guardados.
+      map.set(String(h.nro_guia_pap), sanearEntrega(h))
     })
     reportesNuevos.forEach(r => map.set(String(r.nro_guia_pap), r))
     return Array.from(map.values())
