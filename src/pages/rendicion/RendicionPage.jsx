@@ -6,6 +6,7 @@ import { sanearEntrega } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { parsearFilasRendicion, conciliarRendicion, combinarArchivosRendicion } from '../../lib/conciliacionRendicion'
+import { esRendicionLucero, parsearRendicionLucero, rendicionLuceroAEntregas, resumenRendicionLucero } from '../../lib/rendicionLucero'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
 
@@ -15,6 +16,7 @@ const fechaCorta = (d) => d ? new Date(d).toLocaleDateString('es-PY', { day: '2-
 export default function RendicionPage() {
   const { toast } = useToast()
   const [historico, setHistorico] = useState([])
+  const [resumenLucero, setResumenLucero] = useState(null)
   const [cargando, setCargando] = useState(true)
 
   // ── Importar reporte de rendición del martes ──
@@ -188,31 +190,73 @@ export default function RendicionPage() {
     setNombreArchivo(files.length === 1 ? files[0].name : `${files.length} archivos`)
     setImportando(true)
     try {
+      // Se lee cada archivo en los dos formatos: como matriz cruda (para detectar
+      // y parsear el de Lucero, cuyo encabezado NO está en la primera fila) y como
+      // objetos (para el de PaP, que sí lo tiene).
       const leerArchivo = (file) => new Promise((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = (e) => {
           try {
             const wb = XLSX.read(e.target.result, { cellDates: true })
             const ws = wb.Sheets[wb.SheetNames[0]]
-            const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
-            resolve(parsearFilasRendicion(rows))
+            resolve({
+              nombre: file.name,
+              crudo: XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }),
+              objetos: XLSX.utils.sheet_to_json(ws, { defval: '' }),
+            })
           } catch (err) { reject(err) }
         }
         reader.onerror = reject
         reader.readAsArrayBuffer(file)
       })
-      const listas = await Promise.all(files.map(leerArchivo))
-      const filas = combinarArchivosRendicion(listas)
-      if (!filas.length) { toast('No se encontraron guías en el/los archivo(s)', 'error'); setImportando(false); return }
-      const resultado = conciliarRendicion(filas, historico)
-      setConciliacion(resultado)
-      toast(`${filas.length} guías leídas de ${files.length} archivo(s) — revisá la conciliación`, 'success')
+      const leidos = await Promise.all(files.map(leerArchivo))
+
+      // ── Se separan por transportadora según el formato del archivo ──
+      const deLucero = leidos.filter(a => esRendicionLucero(a.crudo))
+      const dePaP = leidos.filter(a => !esRendicionLucero(a.crudo))
+
+      // ── LUCERO: el archivo crea los registros de entrega (no existen todavía) ──
+      if (deLucero.length) {
+        const lotes = deLucero.map(a => parsearRendicionLucero(a.crudo))
+        const registros = lotes.flatMap(rendicionLuceroAEntregas)
+        const resumenes = lotes.map(l => ({ ...resumenRendicionLucero(l), lote: l.lote, fecha: l.fecha, estadoLote: l.estadoLote, pagado: l.pagado, totalPago: l.totalPago, tarifas: l.tarifas, bruto: l.bruto }))
+        const noCuadra = resumenes.filter(r => !r.todoCuadra)
+        let guardados = 0, errorLucero = null
+        for (let i = 0; i < registros.length; i += 100) {
+          const chunk = registros.slice(i, i + 100)
+          const { error } = await supabase.from('entregas').upsert(chunk, { onConflict: 'nro_guia_pap' })
+          if (error) { if (!errorLucero) errorLucero = error.message } else guardados += chunk.length
+        }
+        setResumenLucero(resumenes)
+        if (errorLucero) {
+          toast('Lucero: error al guardar — ' + errorLucero, 'error')
+        } else if (noCuadra.length) {
+          toast(`Lucero: ${guardados} envíos guardados, pero ${noCuadra.length} lote(s) NO cuadran con su propia cabecera`, 'error')
+        } else {
+          toast(`Lucero: ${guardados} envíos del lote ${resumenes.map(r => r.lote).join(', ')} — todo cuadra`, 'success')
+        }
+        await cargarHistorico()
+      }
+
+      // ── PaP: flujo de conciliación de siempre ──
+      if (dePaP.length) {
+        const listas = dePaP.map(a => parsearFilasRendicion(a.objetos))
+        const filas = combinarArchivosRendicion(listas)
+        if (!filas.length) {
+          if (!deLucero.length) toast('No se encontraron guías en el/los archivo(s)', 'error')
+        } else {
+          const resultado = conciliarRendicion(filas, historico)
+          setConciliacion(resultado)
+          toast(`${filas.length} guías de PaP leídas — revisá la conciliación`, 'success')
+        }
+      }
     } catch (err) {
       toast('No se pudo leer: ' + (err?.message || err), 'error')
     } finally {
       setImportando(false)
     }
   }
+
 
   // Confirmar: marca como rendidas las guías conciliadas
   const confirmarRendicion = async () => {
@@ -290,7 +334,7 @@ export default function RendicionPage() {
               <FileCheck size={16} color="var(--accent)" /> Importar rendición del martes
             </h3>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
-              Subí uno o varios Excel de PaP (podés seleccionar varios martes juntos) y marca todo como rendido + concilia la plata.
+              Subí los Excel de PaP o de Lucero — el formato se detecta solo. PaP concilia lo ya entregado; Lucero además da de alta sus envíos.
             </p>
           </div>
           <input ref={fileRendRef} type="file" accept=".xlsx,.xls" multiple style={{ display: "none" }}
@@ -299,6 +343,36 @@ export default function RendicionPage() {
             <Upload size={14} /> {importando ? "Procesando…" : "Subir Excel(es)"}
           </button>
         </div>
+
+        {/* Resultado de la rendición de Lucero */}
+        {resumenLucero && resumenLucero.length > 0 && (
+          <div className="card" style={{ padding: '14px 18px', marginTop: 12, borderLeft: '3px solid var(--accent)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h3 style={{ margin: 0, fontSize: 14 }}>Rendición de Lucero del Este</h3>
+              <button className="btn" style={{ fontSize: 11, padding: '3px 10px' }} onClick={() => setResumenLucero(null)}>Cerrar</button>
+            </div>
+            {resumenLucero.map((r, i) => (
+              <div key={i} style={{ marginBottom: i < resumenLucero.length - 1 ? 14 : 0 }}>
+                <div style={{ fontSize: 12, marginBottom: 6 }}>
+                  <b>Lote {r.lote}</b> · {r.fecha} · {r.cantidad} envío{r.cantidad !== 1 ? 's' : ''} ·{' '}
+                  <span style={{ color: r.pagado ? 'var(--green)' : 'var(--orange, #f59e0b)', fontWeight: 700 }}>
+                    {r.pagado ? 'ya depositado' : `${r.estadoLote} — todavía no te depositaron`}
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
+                  <div className="kpi-card"><div className="kpi-label">Bruto cobrado</div><div className="kpi-value" style={{ fontSize: 16 }}>{formatGs(r.bruto)}</div></div>
+                  <div className="kpi-card"><div className="kpi-label">Fletes Lucero</div><div className="kpi-value" style={{ fontSize: 16, color: 'var(--red)' }}>−{formatGs(r.tarifas)}</div></div>
+                  <div className="kpi-card"><div className="kpi-label">Te depositan</div><div className="kpi-value" style={{ fontSize: 16, color: 'var(--green)' }}>{formatGs(r.totalPago)}</div></div>
+                </div>
+                <div style={{ fontSize: 11, marginTop: 6, color: r.todoCuadra ? 'var(--text-muted)' : 'var(--red)' }}>
+                  {r.todoCuadra
+                    ? 'Las sumas del detalle cuadran con la cabecera del archivo.'
+                    : '⚠ El detalle NO cuadra con la cabecera del archivo — revisalo con Lucero antes de darlo por bueno.'}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Panel de conciliación (previo a confirmar) */}
         {conciliacion && (
