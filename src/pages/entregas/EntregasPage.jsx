@@ -6,6 +6,7 @@ import { supabase, formatGs } from '../../lib/supabase'
 import { categorizarPaP as categorizar, importeSano, esImporteCorrupto, sanearEntrega, soloColumnasEntregas, IMPORTE_MAX_RAZONABLE } from '../../lib/estadosPaP'
 import { tasaPorTransportadora } from '../../lib/riesgoCiudad'
 import { labelTransportadora } from '../../lib/transportadoras'
+import { etiquetaMes } from '../../lib/fechas'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
@@ -283,13 +284,6 @@ export default function EntregasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [merged, filtroMes, mesEfectivo])
 
-  // Etiqueta legible de un mes "YYYY-MM" → "Junio 2026"
-  const etiquetaMes = (ym) => {
-    if (!ym) return ''
-    const [y, m] = ym.split('-')
-    const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
-    return `${meses[parseInt(m) - 1] || ''} ${y}`
-  }
 
   // AUTO-GUARDADO: al subir reportes, guarda y actualiza las ventas solo (con debounce
   // para esperar a que carguen ambos archivos si los subís juntos).

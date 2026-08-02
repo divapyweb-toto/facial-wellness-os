@@ -1,0 +1,1 @@
+import{m as r}from"./periodos-8eW-R3om.js";function u(t){if(!t)return"";const[e,n]=t.split("-");return`${r[parseInt(n,10)-1]||""} ${e}`}function i(t=12,e=new Date){const n=[],s=new Date(e.getFullYear(),e.getMonth(),1);for(let o=0;o<t;o++)n.push(`${s.getFullYear()}-${String(s.getMonth()+1).padStart(2,"0")}`),s.setMonth(s.getMonth()-1);return n}export{u as e,i as m};

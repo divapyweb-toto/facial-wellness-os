@@ -1,5 +1,6 @@
 // src/pages/ads/AdsPage.jsx
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { mesesRecientes, etiquetaMes } from '../../lib/fechas'
 import { supabase, formatGs } from '../../lib/supabase'
 import { categorizarPaP as categoriaPaP } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
@@ -37,6 +38,10 @@ const VEREDICTO_CFG = {
 export default function AdsPage() {
   const { toast } = useToast()
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
+  // Últimos 6 meses siempre disponibles con un clic, aunque el mes todavía
+  // no tenga gasto cargado (a diferencia de Entregas, acá se quiere poder
+  // cargar retroactivo, no solo ver lo que ya existe).
+  const mesesRapidos = useMemo(() => mesesRecientes(6), [])
   const [modo, setModo] = useState('producto')       // 'producto' | 'total'
   const [gastos, setGastos] = useState({})            // familia → gasto (string)
   const [ventas, setVentas] = useState([])
@@ -192,6 +197,32 @@ export default function AdsPage() {
             {guardando ? <Loader2 size={14} className="spinning" /> : <Save size={14} />} Guardar
           </button>
         </div>
+      </div>
+
+      {/* Selector de mes — antes solo estaba el input nativo, que en Chrome no
+          siempre se nota como clickeable para volver a un mes anterior. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '10px 14px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', marginRight: 4 }}>Mes:</span>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {mesesRapidos.map(mm => (
+            <button
+              key={mm}
+              onClick={() => setMes(mm)}
+              className="btn btn-sm"
+              style={{
+                background: mes === mm ? 'var(--accent)' : 'var(--bg-hover)',
+                color: mes === mm ? '#000' : 'var(--text-secondary)',
+                border: 'none', fontWeight: mes === mm ? 700 : 500,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {etiquetaMes(mm)}
+            </button>
+          ))}
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+          ¿más atrás de {etiquetaMes(mesesRapidos[mesesRapidos.length - 1])}? usá el campo de fecha de arriba
+        </span>
       </div>
 
       {/* Toggle de modo */}
