@@ -66,15 +66,15 @@ export default function RendicionPage() {
     return () => { activo = false }
   }, [])
 
-  const stats = useMemo(() => {
-    const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
-    const esPrepago = (m) => refsPrepago.has(norm(m.n_referencia)) || refsPrepago.has(norm(m.nro_guia_ref))
-    const items = historico.map(h => ({ ...sanearEntrega(h), _prepago: esPrepago(h) }))
+  // Calcula el bloque completo de KPIs de cobranza para una lista de items YA
+  // saneados y filtrados (por transportadora, o todos juntos). Función pura
+  // para poder calcularla por separado en PaP, Lucero y el total, sin mezclar
+  // ciclos de cobro que no tienen nada que ver entre sí (PaP rinde en ~7 días,
+  // Lucero al día siguiente — promediarlos da un número que no describe a nadie).
+  function calcularStatsCobranza(items) {
     const entregados = items.filter(m => m.categoria === 'entregado')
     const proceso = items.filter(m => m.categoria === 'en_proceso')
     const rendidos = entregados.filter(m => m.rendido)
-    // Sin rendir = entregados, no rendidos, Y que NO sean prepago (esos ya
-    // los cobraste vos por transferencia; PaP no te debe nada de ellos).
     const sinRendir = entregados.filter(m => !m.rendido && !m._prepago)
 
     const yaRendido = rendidos.reduce((s, m) => s + (m.importe || 0), 0)
@@ -83,8 +83,6 @@ export default function RendicionPage() {
 
     const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null && d >= 0)
     const diasProm = diasRend.length ? diasRend.reduce((a, b) => a + b, 0) / diasRend.length : null
-    // MEDIANA = cobro típico. El promedio se dispara con pocas rendiciones trancadas
-    // y arrastra con él las proyecciones y el umbral de demora.
     const ordenados = [...diasRend].sort((a, b) => a - b)
     const diasMediana = ordenados.length
       ? (ordenados.length % 2
@@ -101,8 +99,6 @@ export default function RendicionPage() {
       return { ...m, diasSinRendir, fechaEstimada }
     }).sort((a, b) => (b.diasSinRendir ?? -1) - (a.diasSinRendir ?? -1))
 
-    // El umbral se calcula sobre la MEDIANA, no sobre el promedio. Con el promedio,
-    // cada rendición trancada subía el propio umbral que debía detectarla.
     const umbralDemora = diasMediana != null ? Math.max(15, diasMediana * 2) : 15
     const demoradas = listaSinRendir.filter(m => m.diasSinRendir != null && m.diasSinRendir > umbralDemora)
     const montoDemorado = demoradas.reduce((s, m) => s + (m.importe || 0), 0)
@@ -126,12 +122,37 @@ export default function RendicionPage() {
     const totalGestionado = yaRendido + porCobrar
     const tasaCobrado = totalGestionado ? Math.round(yaRendido / totalGestionado * 100) : 0
 
+    // Costo de flete de lo YA entregado (útil sobre todo para Lucero, donde el
+    // flete es el real de la tarifa, no una estimación).
+    const fleteTotal = entregados.reduce((s, m) => s + (m.costo_envio || 0), 0)
+
     return {
-      yaRendido, porCobrar, enTransito, diasProm, diasMediana, trancados, umbralDemora, listaSinRendir, historicoRend, datosGrafico,
-      nRendidos: rendidos.length, nSinRendir: sinRendir.length, nProceso: proceso.length,
-      demoradas, montoDemorado, cobroEstimadoHasta, hayDatos, tasaCobrado, umbralDemora,
+      yaRendido, porCobrar, enTransito, diasProm, diasMediana, trancados, umbralDemora,
+      listaSinRendir, historicoRend, datosGrafico, fleteTotal,
+      nEntregados: entregados.length, nRendidos: rendidos.length, nSinRendir: sinRendir.length, nProceso: proceso.length,
+      demoradas, montoDemorado, cobroEstimadoHasta, hayDatos, tasaCobrado,
+    }
+  }
+
+  const [vista, setVista] = useState('todas')  // 'todas' | 'pap' | 'lucero'
+
+  const { statsPaP, statsLucero, statsTotal, hayLucero } = useMemo(() => {
+    const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
+    const esPrepago = (m) => refsPrepago.has(norm(m.n_referencia)) || refsPrepago.has(norm(m.nro_guia_ref))
+    const items = historico.map(h => ({ ...sanearEntrega(h), _prepago: esPrepago(h) }))
+    const itemsPaP = items.filter(m => (m.transportadora || 'pap') === 'pap')
+    const itemsLucero = items.filter(m => m.transportadora === 'lucero')
+    return {
+      statsPaP: calcularStatsCobranza(itemsPaP),
+      statsLucero: calcularStatsCobranza(itemsLucero),
+      statsTotal: calcularStatsCobranza(items),
+      hayLucero: itemsLucero.length > 0,
     }
   }, [historico, refsPrepago])
+
+  // La pestaña activa decide qué alimenta los KPIs y la tabla de pendientes.
+  const stats = vista === 'pap' ? statsPaP : vista === 'lucero' ? statsLucero : statsTotal
+  const NOMBRE_TRANSP = { pap: 'PaP', lucero: 'Lucero', todas: 'todas las transportadoras' }
 
   // ── Selección ─────────────────────────────────────────
   const toggleSel = (guia) => {
@@ -339,11 +360,37 @@ export default function RendicionPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(16px, 4vw, 24px)' }}>
       <div>
-        <h1 className="page-title">Rendición · Cobranza con Punto a Punto</h1>
+        <h1 className="page-title">Rendición · Cobranza</h1>
         <p className="page-subtitle">
-          PaP cobra al cliente y te deposita después. Acá controlás esa plata: {stats.nRendidos} rendidas · {stats.nSinRendir} por cobrar.
+          Cada transportadora cobra al cliente y te deposita después, con su propio ritmo — por eso van separadas.
+          {' '}Viendo {NOMBRE_TRANSP[vista]}: {stats.nRendidos} rendidas · {stats.nSinRendir} por cobrar.
         </p>
       </div>
+
+      {/* Selector de transportadora: cada una tiene un ciclo de cobro distinto,
+          mezclarlas en un solo número no describe a ninguna de las dos. */}
+      {hayLucero && (
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[
+            ['todas', 'Todas'],
+            ['pap', 'PAP'],
+            ['lucero', 'Lucero'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setVista(id)}
+              style={{
+                padding: '7px 16px', fontSize: 12, fontWeight: 700, borderRadius: 8, cursor: 'pointer',
+                border: vista === id ? '1px solid var(--accent)' : '1px solid var(--border)',
+                background: vista === id ? 'var(--accent)' : 'transparent',
+                color: vista === id ? '#0a0a0a' : 'var(--text-secondary)',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Importar reporte de rendición del martes */}
       <div className="card" style={{ padding: '16px 20px' }}>
@@ -450,7 +497,7 @@ export default function RendicionPage() {
             <div style={{ fontWeight: 600 }}>
               {stats.demoradas.length} entregas llevan más de {Math.round(stats.umbralDemora)} días sin que te depositen · {formatGs(stats.montoDemorado)}
             </div>
-            <div style={{ fontSize: 12, marginTop: 2 }}>Reclamá estas a PaP — están en la lista de abajo, marcadas en rojo.</div>
+            <div style={{ fontSize: 12, marginTop: 2 }}>Reclamá estas a {NOMBRE_TRANSP[vista]} — están en la lista de abajo, marcadas en rojo.</div>
           </div>
         </div>
       )}
@@ -459,7 +506,7 @@ export default function RendicionPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
         <div className="card" style={{ borderLeft: '3px solid var(--yellow)' }}>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-            <Clock size={13} /> PAP TE DEBE
+            <Clock size={13} /> TE DEBE ({NOMBRE_TRANSP[vista].toUpperCase()})
           </div>
           <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--yellow)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.porCobrar)}</div>
           <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nSinRendir} entregas sin rendir</div>
@@ -478,6 +525,15 @@ export default function RendicionPage() {
           <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{formatGs(stats.enTransito)}</div>
           <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nProceso} en camino, sin resolver</div>
         </div>
+        {vista === 'lucero' && (
+          <div className="card">
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+              <Truck size={13} /> FLETE PAGADO A LUCERO
+            </div>
+            <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--red)' }}>−{formatGs(stats.fleteTotal)}</div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>Tarifa real por ciudad, no estimada · {stats.nEntregados} entregados</div>
+          </div>
+        )}
         <div className="card">
           <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
             <CalendarClock size={13} /> TIEMPO DE COBRO
@@ -506,7 +562,7 @@ export default function RendicionPage() {
       {/* Histórico de rendiciones */}
       {stats.datosGrafico.length > 0 && (
         <div className="card">
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Histórico de depósitos de PaP</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Histórico de depósitos · {NOMBRE_TRANSP[vista]}</div>
           <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>Cuánto te rindió PaP en cada fecha.</p>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={stats.datosGrafico} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
@@ -533,7 +589,7 @@ export default function RendicionPage() {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--yellow)' }}>
-                  Lo que PaP te debe rendir · {formatGs(stats.porCobrar)}
+                  Lo que {NOMBRE_TRANSP[vista]} te debe rendir · {formatGs(stats.porCobrar)}
                 </div>
                 <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
                   Ordenado por antigüedad. Rojo = más de {Math.round(stats.umbralDemora)} días. Usá el checkbox para marcar manualmente lo que ya te depositaron.
@@ -578,7 +634,8 @@ export default function RendicionPage() {
                     />
                   </th>
                   <th style={{ padding: '8px 6px' }}>Ref</th>
-                  <th style={{ padding: '8px 6px' }}>Guía PaP</th>
+                  {vista === 'todas' && <th style={{ padding: '8px 6px' }}>Transp.</th>}
+                  <th style={{ padding: '8px 6px' }}>Guía</th>
                   <th style={{ padding: '8px 6px' }}>Ciudad</th>
                   <th style={{ padding: '8px 6px' }}>Entregado</th>
                   <th style={{ padding: '8px 6px', textAlign: 'center' }}>Días</th>
@@ -612,6 +669,17 @@ export default function RendicionPage() {
                         />
                       </td>
                       <td data-label="Ref" style={{ padding: '8px 6px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
+                      {vista === 'todas' && (
+                        <td data-label="Transp." style={{ padding: '8px 6px' }}>
+                          <span style={{
+                            fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                            background: m.transportadora === 'lucero' ? 'var(--accent-dim, rgba(200,241,53,0.15))' : 'var(--border)',
+                            color: m.transportadora === 'lucero' ? 'var(--accent)' : 'var(--text-secondary)',
+                          }}>
+                            {m.transportadora === 'lucero' ? 'Lucero' : 'PAP'}
+                          </span>
+                        </td>
+                      )}
                       <td data-label="Guía PaP" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
                       <td data-label="Ciudad" style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
                       <td data-label="Entregado" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{fechaCorta(m.fecha_entrega)}</td>
