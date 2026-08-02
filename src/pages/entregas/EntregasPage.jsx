@@ -3,7 +3,7 @@ import { useState, useRef, useMemo, useEffect, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
-import { categorizarPaP as categorizar, importeSano, esImporteCorrupto, sanearEntrega, IMPORTE_MAX_RAZONABLE } from '../../lib/estadosPaP'
+import { categorizarPaP as categorizar, importeSano, esImporteCorrupto, sanearEntrega, soloColumnasEntregas, IMPORTE_MAX_RAZONABLE } from '../../lib/estadosPaP'
 import { tasaPorTransportadora } from '../../lib/riesgoCiudad'
 import { labelTransportadora } from '../../lib/transportadoras'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
@@ -534,18 +534,13 @@ export default function EntregasPage() {
   const handleFiles = (files) => { Array.from(files).forEach(procesarFile) }
 
   // Columnas reales de la tabla entregas (sin telefono/nombre_cliente que son solo para el match)
-  const COLS_ENTREGAS = ['nro_guia_pap', 'n_referencia', 'estado_pap', 'categoria', 'motivo', 'importe', 'cobrado', 'costo_envio', 'fecha_ingreso', 'fecha_entrega', 'dias_entrega', 'rendido', 'fecha_rendido', 'dias_rendicion', 'mensajero', 'ciudad', 'producto', 'mes']
 
   const guardarEnSistema = async () => {
     if (!merged.length) return
     setGuardando(true)
     try {
       // 1) Guardar las entregas nuevas en la tabla (solo columnas válidas)
-      const limpio = reportesNuevos.map(m => {
-        const o = {}
-        COLS_ENTREGAS.forEach(c => { if (m[c] !== undefined) o[c] = m[c] })
-        return o
-      })
+      const limpio = reportesNuevos.map(soloColumnasEntregas)
 
       // 1.5) REGLA "una vez rendido, queda rendido":
       //   Traigo las guías que YA están rendidas en la base (por el Excel del

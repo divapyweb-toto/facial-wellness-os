@@ -7,6 +7,7 @@ import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { parsearFilasRendicion, conciliarRendicion, combinarArchivosRendicion } from '../../lib/conciliacionRendicion'
 import { esRendicionLucero, parsearRendicionLucero, rendicionLuceroAEntregas, resumenRendicionLucero } from '../../lib/rendicionLucero'
+import { soloColumnasEntregas } from '../../lib/estadosPaP'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
 
@@ -218,20 +219,38 @@ export default function RendicionPage() {
       // ── LUCERO: el archivo crea los registros de entrega (no existen todavía) ──
       if (deLucero.length) {
         const lotes = deLucero.map(a => parsearRendicionLucero(a.crudo))
-        const registros = lotes.flatMap(rendicionLuceroAEntregas)
+        // Solo columnas reales de la tabla: una clave de más rechaza el insert entero.
+        const registros = lotes.flatMap(rendicionLuceroAEntregas).map(soloColumnasEntregas)
         const resumenes = lotes.map(l => ({ ...resumenRendicionLucero(l), lote: l.lote, fecha: l.fecha, estadoLote: l.estadoLote, pagado: l.pagado, totalPago: l.totalPago, tarifas: l.tarifas, bruto: l.bruto }))
         const noCuadra = resumenes.filter(r => !r.todoCuadra)
+        // Guardado tolerante: si la base todavía no tiene alguna columna (ej.
+        // `transportadora` cuando falta correr la migración), se la saca y se
+        // reintenta en vez de perder toda la importación.
         let guardados = 0, errorLucero = null
+        const omitidas = []
         for (let i = 0; i < registros.length; i += 100) {
-          const chunk = registros.slice(i, i + 100)
-          const { error } = await supabase.from('entregas').upsert(chunk, { onConflict: 'nro_guia_pap' })
-          if (error) { if (!errorLucero) errorLucero = error.message } else guardados += chunk.length
+          let chunk = registros.slice(i, i + 100)
+          for (let intento = 0; intento < 5; intento++) {
+            const { error } = await supabase.from('entregas').upsert(chunk, { onConflict: 'nro_guia_pap' })
+            if (!error) { guardados += chunk.length; break }
+            const falta = /Could not find the '([^']+)' column/.exec(error.message || '')
+            if (falta) {
+              const col = falta[1]
+              if (!omitidas.includes(col)) omitidas.push(col)
+              chunk = chunk.map(r => { const o = { ...r }; delete o[col]; return o })
+              continue
+            }
+            if (!errorLucero) errorLucero = error.message
+            break
+          }
         }
         setResumenLucero(resumenes)
         if (errorLucero) {
           toast('Lucero: error al guardar — ' + errorLucero, 'error')
         } else if (noCuadra.length) {
           toast(`Lucero: ${guardados} envíos guardados, pero ${noCuadra.length} lote(s) NO cuadran con su propia cabecera`, 'error')
+        } else if (omitidas.length) {
+          toast(`Lucero: ${guardados} envíos guardados, pero falta(n) la(s) columna(s) ${omitidas.join(', ')} en la tabla entregas — corré la migración`, 'error')
         } else {
           toast(`Lucero: ${guardados} envíos del lote ${resumenes.map(r => r.lote).join(', ')} — todo cuadra`, 'success')
         }

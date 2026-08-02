@@ -29,6 +29,26 @@ export const esImporteCorrupto = (valor) => {
   return Number.isFinite(n) && n > IMPORTE_MAX_RAZONABLE
 }
 
+// ─── Columnas REALES de la tabla `entregas` ─────────────────
+// Supabase rechaza el insert entero si le mandás una clave que no es columna
+// ("Could not find the 'X' column of 'entregas' in the schema cache"), así que
+// todo registro se filtra por esta lista antes de guardar.
+// OJO: `nombre_cliente` y `telefono` NO son columnas de esta tabla — el nombre
+// del cliente vive en `ventas` y se cruza por n_referencia.
+export const COLS_ENTREGAS = [
+  'nro_guia_pap', 'n_referencia', 'estado_pap', 'categoria', 'motivo', 'importe',
+  'cobrado', 'costo_envio', 'fecha_ingreso', 'fecha_entrega', 'dias_entrega',
+  'rendido', 'fecha_rendido', 'dias_rendicion', 'mensajero', 'ciudad', 'producto',
+  'mes', 'transportadora',
+]
+
+// Deja solo las claves que son columnas de `entregas`.
+export function soloColumnasEntregas(reg) {
+  const o = {}
+  COLS_ENTREGAS.forEach(c => { if (reg?.[c] !== undefined) o[c] = reg[c] })
+  return o
+}
+
 // Motivos que implican devolución aunque el estado sea intermedio (Custodio, etc.)
 const MOTIVOS_DEVOLUCION = [
   'rechaz', 'inubicable', 'fuera de cobertura', 'fin de custodia',
