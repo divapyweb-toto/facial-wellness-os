@@ -8,7 +8,7 @@ import { supabase, formatGs } from '../../lib/supabase'
 import { categorizarPaP as categoriaPaP } from '../../lib/estadosPaP'
 import { costoFleteActual } from '../../lib/flete'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
-import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, TRANSPORTADORAS } from '../../lib/transportadoras'
+import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, transportadoraForzada, TRANSPORTADORAS } from '../../lib/transportadoras'
 import { placeholderEntregaLucero, guiaLucero } from '../../lib/rendicionLucero'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
@@ -124,26 +124,88 @@ function getDesc(nombre, cantidad) {
   return `${nombre} (${u} unidad${u > 1 ? 'es' : ''})`
 }
 
-// ─── Mapear una fila del CSV a un pedido limpio ──────────
-function mapearPedido(row) {
-  const notas = row['Note Attributes'] || ''
-  const estado = clasificarEstado(row['Tags'], row['Cancelled at'])
+// ─── Agrupar filas del CSV por número de pedido ──────────
+// Shopify exporta UNA FILA POR PRODUCTO: un pedido de 2 productos son 2 filas
+// que comparten el mismo 'Name' (#2063). Solo la PRIMERA fila de ese grupo
+// trae Nombre/Ciudad/Teléfono/Dirección/Total/Subtotal — las siguientes los
+// dejan en blanco. Sin agrupar, el segundo producto queda como un pedido
+// roto: sin ciudad, sin teléfono, sin total (ingreso $0), y su stock nunca
+// se descuenta.
+function agruparFilasPorReferencia(rows) {
+  const grupos = new Map()
+  const orden = []
+  for (const row of rows) {
+    const key = (row['Name'] || '').trim()
+    if (!key) continue
+    if (!grupos.has(key)) { grupos.set(key, []); orden.push(key) }
+    grupos.get(key).push(row)
+  }
+  return orden.map(key => grupos.get(key))
+}
+
+// ─── Mapear un GRUPO de filas (mismo pedido) a uno o varios pedidos ──
+// Devuelve UN PEDIDO POR PRODUCTO (mantiene el modelo "1 venta = 1 producto"
+// que ya usa todo el resto del sistema — stock, COGS, ganancia por familia),
+// pero con los datos de envío copiados a los dos, y el total repartido de
+// forma proporcional entre los productos (no 100% al primero y $0 al segundo).
+//
+// El flete es UNA sola vez por paquete físico: solo la primera línea lo lleva
+// en costo_envio; las demás van en 0 para no duplicar el costo al sumar.
+function mapearGrupoAPedidos(grupoRows) {
+  // Dato a nivel de PEDIDO (no de línea): el primer valor no vacío entre
+  // todas las filas del grupo — Shopify los deja en blanco en las filas de
+  // continuación de un pedido multi-producto.
+  const primero = (campo) => {
+    for (const row of grupoRows) {
+      const v = row[campo]
+      if (v != null && String(v).trim() !== '' && v !== '-') return v
+    }
+    return ''
+  }
+  const notas = primero('Note Attributes')
+  const estado = clasificarEstado(primero('Tags'), primero('Cancelled at'))
   const cfg = ESTADO_CONFIG[estado]
-  const fecha = (row['Created at'] || '').split(' ')[0] || new Date().toISOString().split('T')[0]
-  const ref = (row['Name'] || '').replace('#', '').trim()
-  const nombre = (extraerNota(notas, 'Nombre y apellido') || row['Billing Name'] || row['Shipping Name'] || '').replace(/\s*-\s*$/, '').trim()
-  const ciudad = extraerNota(notas, 'ciudad') || (row['Shipping City'] !== '-' ? row['Shipping City'] : '') || ''
+  const fecha = (primero('Created at') || '').split(' ')[0] || new Date().toISOString().split('T')[0]
+  const ref = (primero('Name') || '').replace('#', '').trim()
+  const nombre = (extraerNota(notas, 'Nombre y apellido') || primero('Billing Name') || primero('Shipping Name') || '').replace(/\s*-\s*$/, '').trim()
+  const ciudad = extraerNota(notas, 'ciudad') || primero('Shipping City') || ''
   const departamento = extraerNota(notas, 'departamento') || ''
-  const dir = extraerNota(notas, 'Dirección principal') || (row['Shipping Address1'] !== '-' ? row['Shipping Address1'] : '') || ''
+  const dir = extraerNota(notas, 'Dirección principal') || primero('Shipping Address1') || ''
   const refDir = extraerNota(notas, 'Referencia') || ''
   const direccion = dir ? (refDir ? `${dir} (${refDir})` : dir) : refDir
-  const telefono = limpiarTel(extraerNota(notas, 'Teléfono') || extraerNota(notas, 'whatsapp') || row['Phone'] || row['Billing Phone'] || '')
-  const producto_nombre = row['Lineitem name'] || ''
-  const cantidad = parseInt(row['Lineitem quantity']) || 1
-  const total = parseInt((row['Total'] || '0').replace(/[^0-9]/g, '')) || 0
-  // ¿Alguna transportadora hace cobranza en esta ciudad? Si ninguna cubre,
-  // no se puede despachar aunque el pedido esté confirmado.
-  const sugerencia = sugerirTransportadora(ciudad, producto_nombre)
+  const telefono = limpiarTel(extraerNota(notas, 'Teléfono') || extraerNota(notas, 'whatsapp') || primero('Phone') || primero('Billing Phone') || '')
+  const totalOrden = parseInt((primero('Total') || '0').replace(/[^0-9]/g, '')) || 0
+  const subtotalOrden = parseInt((primero('Subtotal') || '0').replace(/[^0-9]/g, '')) || 0
+
+  // Ítems del pedido: Lineitem SIEMPRE está presente en cada fila, aunque el
+  // resto de los datos de esa fila estén en blanco.
+  const items = grupoRows
+    .map(row => ({
+      producto_nombre: row['Lineitem name'] || '',
+      cantidad: parseInt(row['Lineitem quantity']) || 1,
+      precio: parseInt((row['Lineitem price'] || '0').replace(/[^0-9]/g, '')) || 0,
+    }))
+    .filter(it => it.producto_nombre)
+  if (!items.length) return []
+
+  // Reparto proporcional del total (ya incluye envío/descuentos) según el
+  // peso de cada línea sobre el subtotal — así cada producto se lleva SU
+  // parte real del ingreso (importa para ganancia por familia y ROAS). El
+  // último ítem absorbe el redondeo para que la suma sea EXACTA al total.
+  const pesoItem = (it) => subtotalOrden > 0 ? (it.precio * it.cantidad) / subtotalOrden : 1 / items.length
+  let acumulado = 0
+  const totales = items.map((it, i) => {
+    if (i === items.length - 1) return totalOrden - acumulado
+    const t = Math.round(pesoItem(it) * totalOrden)
+    acumulado += t
+    return t
+  })
+
+  // Si CUALQUIER línea tiene transportadora forzada (ej. JawFlex → Lucero),
+  // rige para TODO el paquete: es una sola caja física, no se reparte.
+  const conRegla = items.find(it => transportadoraForzada(it.producto_nombre))
+  const productoParaRuteo = conRegla ? conRegla.producto_nombre : items[0].producto_nombre
+  const sugerencia = sugerirTransportadora(ciudad, productoParaRuteo)
   const transportadora = sugerencia.transportadora
   const cobranzaOk = transportadora != null
   const faltantes = []
@@ -152,18 +214,36 @@ function mapearPedido(row) {
     if (!telefono) faltantes.push('teléfono')
     if (!direccion) faltantes.push('dirección')
   }
-  // despachable = estado ok (confirmado/ayuda) Y alguna transportadora cubre la ciudad
   const despachar = cfg.despachar && cobranzaOk
-  return {
+  const multiProducto = items.length > 1
+  // Descripción combinada, para cuando se imprime UNA guía/cabecera por
+  // paquete: "Tiras nasales (30 unidades) x1 + Limpiador de Lengua x1".
+  const descripcionCombinada = multiProducto
+    ? items.map((it, i) => `${getDesc(it.producto_nombre, it.cantidad)} x${it.cantidad}`).join(' + ')
+    : null
+  const tipoCombinado = multiProducto
+    ? [...new Set(items.map(it => getTipo(it.producto_nombre)))].join(' + ')
+    : null
+
+  return items.map((it, i) => ({
     n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion,
     referencia_dir: refDir,          // separada: Lucero la pide en su propia columna
-    telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado,
+    telefono, producto_nombre: it.producto_nombre, cantidad: it.cantidad,
+    total: totales[i], fecha, estado_releasit: estado,
     cfg, cobranzaOk, despachar, faltantes,
     transportadora,                  // 'pap' | 'lucero' | 'otra' — editable después en la UI
     motivoTransportadora: sugerencia.motivo,
     bloqueadoPorProducto: !!sugerencia.bloqueadoPorProducto,
-    costo_envio: sugerencia.tarifa,  // tarifa real de ESA transportadora en ESA ciudad
-  }
+    // Tarifa real de ESA transportadora en ESA ciudad — solo en la primera
+    // línea del pedido (una sola caja, un solo flete; el resto va en 0).
+    costo_envio: i === 0 ? sugerencia.tarifa : 0,
+    esMultiProducto: multiProducto,
+    numLineas: items.length,
+    lineaIndice: i,
+    totalOrden,
+    descripcionCombinada,
+    tipoCombinado,
+  }))
 }
 
 // ─── Match de producto del catálogo (resuelve costo_prod) ───
@@ -213,6 +293,40 @@ function codigoLucero(ref) {
 // (CODIGO es la excepción: ahí el vacío es intencional.)
 const oNA = (v) => { const s = String(v ?? '').trim(); return s === '' ? 'N/A' : s }
 
+// ─── Colapsar líneas hermanas (mismo pedido) en UNA entrada por paquete ──
+// La guía y la cabecera son por PAQUETE FÍSICO, no por producto — si un
+// pedido de 2 productos llegó como 2 entradas (una por línea, para que stock
+// y ganancia por familia funcionen bien), acá se combinan de nuevo en una
+// sola fila antes de imprimir. Si ya viene una sola línea, se devuelve tal cual.
+function colapsarPorReferencia(pedidos) {
+  const grupos = new Map()
+  const orden = []
+  for (const p of pedidos) {
+    const key = p.n_referencia || `_sin_ref_${orden.length}`
+    if (!grupos.has(key)) { grupos.set(key, []); orden.push(key) }
+    grupos.get(key).push(p)
+  }
+  return orden.map(key => {
+    const items = grupos.get(key)
+    if (items.length === 1) return items[0]
+    const base = items[0]
+    const descripcionCombinada = base.descripcionCombinada
+      || items.map(it => `${getDesc(it.producto_nombre, it.cantidad)} x${it.cantidad}`).join(' + ')
+    const tipoCombinado = base.tipoCombinado
+      || [...new Set(items.map(it => getTipo(it.producto_nombre)))].join(' + ')
+    const totalCombinado = base.totalOrden ?? items.reduce((s, it) => s + (it.total || 0), 0)
+    return {
+      ...base,
+      esMultiProducto: true,
+      numLineas: items.length,
+      descripcionCombinada,
+      tipoCombinado,
+      cantidad: 1,           // el paquete es 1 bulto — cada producto ya lleva su "xN" en la descripción
+      total: totalCombinado,
+    }
+  })
+}
+
 function descargarCabeceraLuceroXLSX(pedidos) {
   const aoa = [HEADERS_LUCERO]
   pedidos.forEach(p => {
@@ -234,7 +348,7 @@ function descargarCabeceraLuceroXLSX(pedidos) {
       'N/A',                                           // BARRIO (Shopify no lo pide)
       oNA(p.referencia_dir),                           // REFERENCIA (punto de referencia)
       1,                                               // CANTIDAD (siempre 1: es bultos, no unidades)
-      oNA(getDesc(p.producto_nombre, p.cantidad)),     // PRODUCTO
+      oNA(p.esMultiProducto ? p.descripcionCombinada : getDesc(p.producto_nombre, p.cantidad)),     // PRODUCTO
       p.prepago ? 0 : (p.total || 0),                  // IMPORTE a cobrar
       oNA(p.fecha),                                    // FECHA
       'N/A',                                           // UBICACIÓN (no hay link de maps en Shopify)
@@ -262,13 +376,13 @@ function descargarCabeceraXLSX(pedidos) {
     const refNum = parseInt(p.n_referencia)
     aoa.push([
       p.cliente_nombre, p.ciudad, p.direccion, p.telefono,
-      getTipo(p.producto_nombre),
+      p.esMultiProducto ? p.tipoCombinado : getTipo(p.producto_nombre),
       1,
       p.prepago ? 'urgente' : null,                          // prepago = prioridad urgente
       p.prepago ? 'ya esta pagado' : 'efectivo a cobrar',    // forma de pago
       p.prepago ? 0 : p.total,                               // importe a cobrar (0 si ya pagó)
       isNaN(refNum) ? p.n_referencia : refNum,
-      getDesc(p.producto_nombre, p.cantidad),
+      p.esMultiProducto ? p.descripcionCombinada : getDesc(p.producto_nombre, p.cantidad),
     ])
   })
   const ws = XLSX.utils.aoa_to_sheet(aoa)
@@ -400,8 +514,10 @@ async function descargarGuiasDOCX(pedidos) {
     children.push(
       seccion('PEDIDO'),
       tabla([
-        fila('PRODUCTO', getTipo(p.producto_nombre), { destacado: true }),
-        fila('CANTIDAD', `${p.cantidad || 1} unidad${(p.cantidad || 1) === 1 ? '' : 'es'}`),
+        fila('PRODUCTO', p.esMultiProducto ? p.tipoCombinado : getTipo(p.producto_nombre), { destacado: true }),
+        p.esMultiProducto
+          ? fila('DETALLE', p.descripcionCombinada)
+          : fila('CANTIDAD', `${p.cantidad || 1} unidad${(p.cantidad || 1) === 1 ? '' : 'es'}`),
         fila('REFERENCIA', codigo || p.n_referencia || '—'),
       ]),
     )
@@ -688,7 +804,7 @@ export default function DespachoPagina() {
     const reader = new FileReader()
     reader.onload = (e) => {
       const rows = parseCSVRobust(e.target.result)
-      const mapped = rows.map(mapearPedido).filter(p => p.producto_nombre)
+      const mapped = agruparFilasPorReferencia(rows).flatMap(mapearGrupoAPedidos).filter(p => p.producto_nombre)
       if (!mapped.length) { toast('No se encontraron pedidos válidos en el CSV', 'error'); return }
       setTodos(mapped)
       setStep('preview')
@@ -784,19 +900,35 @@ export default function DespachoPagina() {
     }
 
     const refs = paraDespacho.map(p => p.n_referencia).filter(Boolean)
-    let refsExistentes = new Set()
+    // Se cuenta CUÁNTAS líneas de cada referencia ya existen en la base — no
+    // un simple sí/no. Un pedido de 2 productos son 2 filas con la MISMA
+    // referencia: con un Set booleano, la segunda línea se marcaría como
+    // "duplicada" de la primera y se perdería. Contando, además, un CSV viejo
+    // (de antes de este fix) que solo cargó la primera línea se puede volver
+    // a subir para recuperar la línea que faltaba, sin duplicar la que ya está.
+    let countExistentePorRef = new Map()
     try {
       const { data } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs)
-      refsExistentes = new Set((data || []).map(d => String(d.n_referencia)))
+      ;(data || []).forEach(d => {
+        const r = String(d.n_referencia)
+        countExistentePorRef.set(r, (countExistentePorRef.get(r) || 0) + 1)
+      })
     } catch (e) { /* continuar sin filtro */ }
 
-    const vistos = new Set()
+    // Set simple derivado del conteo — para el chequeo de "esta ref ya existe"
+    // (marcar prepago en ventas ya cargadas), que no necesita el conteo fino.
+    const refsExistentes = new Set(countExistentePorRef.keys())
+
+    const vistosPorRef = new Map()   // cuántas líneas de esta ref ya se procesaron EN ESTE lote
     const nuevas = []
     const duplicados = []
     for (const p of paraDespacho) {
       const ref = String(p.n_referencia)
-      if (refsExistentes.has(ref) || vistos.has(ref)) { duplicados.push(ref) }
-      else { vistos.add(ref); nuevas.push(p) }
+      const yaExistentes = countExistentePorRef.get(ref) || 0
+      const vistasEnLote = vistosPorRef.get(ref) || 0
+      if (vistasEnLote < yaExistentes) { duplicados.push(ref) }
+      else { nuevas.push(p) }
+      vistosPorRef.set(ref, vistasEnLote + 1)
     }
 
     // Ventas que YA estaban cargadas pero ahora marcaste como prepago:
@@ -887,9 +1019,10 @@ export default function DespachoPagina() {
   // y su propio panel. Si todos los pedidos van por la misma, baja un solo archivo.
   const descargarExcel = () => {
     if (!paraDespacho.length) return
-    const dePaP = paraDespacho.filter(p => (p.transportadora || 'pap') === 'pap')
-    const deLucero = paraDespacho.filter(p => p.transportadora === 'lucero')
-    const deOtra = paraDespacho.filter(p => p.transportadora === 'otra')
+    const colapsados = colapsarPorReferencia(paraDespacho)
+    const dePaP = colapsados.filter(p => (p.transportadora || 'pap') === 'pap')
+    const deLucero = colapsados.filter(p => p.transportadora === 'lucero')
+    const deOtra = colapsados.filter(p => p.transportadora === 'otra')
     if (dePaP.length) descargarCabeceraXLSX(dePaP)
     if (deLucero.length) descargarCabeceraLuceroXLSX(deLucero)
     const partes = []
@@ -904,8 +1037,9 @@ export default function DespachoPagina() {
   const descargarGuiasDoc = async () => {
     if (!paraDespacho.length) return
     try {
+      const colapsados = colapsarPorReferencia(paraDespacho)
       const orden = { pap: 0, lucero: 1, otra: 2 }
-      const ordenadas = [...paraDespacho].sort(
+      const ordenadas = [...colapsados].sort(
         (a, b) => (orden[a.transportadora] ?? 0) - (orden[b.transportadora] ?? 0)
       )
       await descargarGuiasDOCX(ordenadas)
@@ -957,8 +1091,9 @@ export default function DespachoPagina() {
 
   const descargarExcelVentas = async () => {
     if (!pedidosSeleccionados.length) { toast('Seleccioná al menos una venta', 'error'); return }
-    const dePaP = pedidosSeleccionados.filter(p => (p.transportadora || 'pap') === 'pap')
-    const deLucero = pedidosSeleccionados.filter(p => p.transportadora === 'lucero')
+    const colapsados = colapsarPorReferencia(pedidosSeleccionados)
+    const dePaP = colapsados.filter(p => (p.transportadora || 'pap') === 'pap')
+    const deLucero = colapsados.filter(p => p.transportadora === 'lucero')
     if (dePaP.length) descargarCabeceraXLSX(dePaP)
     if (deLucero.length) descargarCabeceraLuceroXLSX(deLucero)
     // Backfill: si esta venta de Lucero es de antes de que existiera el
@@ -984,7 +1119,7 @@ export default function DespachoPagina() {
     const partes = []
     if (dePaP.length) partes.push(`${dePaP.length} PAP`)
     if (deLucero.length) partes.push(`${deLucero.length} Lucero`)
-    const deOtraV = pedidosSeleccionados.filter(p => p.transportadora === 'otra')
+    const deOtraV = colapsados.filter(p => p.transportadora === 'otra')
     if (deOtraV.length) partes.push(`${deOtraV.length} Otra (sin cabecera, solo guía)`)
     toast(`Cabecera descargada — ${partes.join(' · ')}`, 'success')
   }
@@ -992,8 +1127,9 @@ export default function DespachoPagina() {
   const descargarGuiasVentas = async () => {
     if (!pedidosSeleccionados.length) { toast('Seleccioná al menos una venta', 'error'); return }
     try {
+      const colapsados = colapsarPorReferencia(pedidosSeleccionados)
       const orden = { pap: 0, lucero: 1, otra: 2 }
-      const ordenadas = [...pedidosSeleccionados].sort(
+      const ordenadas = [...colapsados].sort(
         (a, b) => (orden[a.transportadora] ?? 0) - (orden[b.transportadora] ?? 0)
       )
       await descargarGuiasDOCX(ordenadas)
