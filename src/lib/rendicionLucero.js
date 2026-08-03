@@ -27,6 +27,47 @@ const normHeader = (s) => String(s ?? '')
   .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().replace(/\s+/g, ' ').trim()
 
+// Clave de guía DETERMINÍSTICA a partir de la referencia propia (no del EnvioID
+// de Lucero, que no se conoce hasta que ellos procesan el envío). Usar la MISMA
+// función tanto al crear el placeholder en Despacho como al conciliar la
+// rendición es lo que hace que las dos escrituras caigan en la MISMA fila de
+// `entregas` (mismo nro_guia_pap = mismo onConflict), en vez de crear una
+// fila fantasma en el despacho y otra distinta al rendir.
+export function guiaLucero(ref) {
+  return `L-${refDesdeCodigoLucero(ref)}`
+}
+
+// Registro que se crea EN EL MOMENTO DEL DESPACHO, antes de saber nada de
+// Lucero. Dispatch-time record, "Amazon style": el envío existe para el
+// sistema desde que sale, no recién cuando alguien te paga por él.
+//   venta: { n_referencia, total, ciudad, producto_nombre, cantidad, fecha, costo_envio }
+export function placeholderEntregaLucero(venta) {
+  const ref = refDesdeCodigoLucero(venta.n_referencia)
+  return {
+    nro_guia_pap: guiaLucero(ref),
+    n_referencia: ref,
+    estado_pap: '',
+    categoria: 'en_proceso',
+    motivo: '',
+    importe: venta.total || 0,
+    cobrado: 0,
+    // Tarifa ESTIMADA (la misma que se congeló en la venta al despachar). Se
+    // sobreescribe con la real en cuanto llega la rendición.
+    costo_envio: venta.costo_envio || 0,
+    fecha_ingreso: venta.fecha || null,
+    fecha_entrega: null,
+    dias_entrega: null,
+    rendido: false,
+    fecha_rendido: null,
+    dias_rendicion: null,
+    mensajero: '',
+    ciudad: venta.ciudad || '',
+    producto: venta.producto_nombre || '',
+    mes: (venta.fecha || '').slice(0, 7),
+    transportadora: 'lucero',
+  }
+}
+
 // Referencia normalizada: saca el prefijo FW- que le mandamos a Lucero, para
 // poder cruzar con la venta, que guarda el número pelado.
 export function refDesdeCodigoLucero(codigo) {
@@ -158,32 +199,44 @@ export function categoriaLucero(estadoFinal) {
 // Usa el MISMO esquema que el importador de PaP para que todo el resto del
 // sistema (reportes, ganancia, tasa de entrega) los lea sin cambios.
 //
-// La guía se prefija con 'L-' para no chocar con las de PaP, que son numéricas.
+// CLAVE: se usa `guiaLucero(referencia)`, la MISMA función que arma el
+// placeholder en Despacho. Así el upsert (onConflict: nro_guia_pap) actualiza
+// la fila que ya existía desde el despacho, en vez de crear una duplicada.
+//
+// rendido = true SIEMPRE: confirmado que la plata cae al banco ~30 min después
+// de que aparece este archivo. Es un lag irrelevante frente a los 7-20 días de
+// PaP, así que no se modela un estado "pendiente" intermedio — el archivo ES
+// el evento de cobro.
+//
+// OJO campos que se OMITEN a propósito (fecha_ingreso, mensajero...): si el
+// placeholder del despacho ya los tenía, un upsert de Supabase con esos campos
+// ausentes del objeto los deja como estaban. Si se incluyeran en null, los
+// borrarían.
 export function rendicionLuceroAEntregas(parsed) {
-  const { items, fecha, pagado } = parsed
+  const { items, fecha } = parsed
   return (items || []).map(it => {
     const cat = categoriaLucero(it.estadoFinal)
     return {
-      nro_guia_pap: `L-${it.envioId || it.codigo}`,
+      nro_guia_pap: guiaLucero(it.referencia),
       n_referencia: it.referencia,
       estado_pap: it.estadoFinal,
       categoria: cat,
       motivo: '',
+      // Bruto REAL cobrado al cliente (dato de Lucero, pisa la estimación del despacho).
       importe: it.totalCobrar,
       cobrado: cat === 'entregado' ? it.totalCobrar : 0,
-      // Tarifa REAL de Lucero para esa ciudad — mejor dato que cualquier estimación.
+      // Tarifa REAL de Lucero para esa ciudad — pisa la estimación del despacho.
       costo_envio: it.tarifa,
-      fecha_ingreso: null,
-      // El archivo no trae fecha de entrega. No se inventa: si el lote está
-      // pagado, la fecha del lote es lo más cercano que hay al cierre.
-      fecha_entrega: pagado ? fecha : null,
-      dias_entrega: null,
-      rendido: pagado,
-      fecha_rendido: pagado ? fecha : null,
-      dias_rendicion: null,
-      mensajero: '',
-      telefono: '',
-      nombre_cliente: it.cliente,
+      // NETO que efectivamente cae al banco (bruto − tarifa − multa de ESE item).
+      // Es el número que hay que mirar para saber cuánta plata real tenés, no
+      // el bruto — eso es justo lo que pediste.
+      neto_depositado: it.pagoCliente,
+      // ID interno de Lucero, guardado solo para referencia/auditoría — NO se
+      // usa como clave de cruce (eso lo hace guiaLucero con la referencia).
+      guia_transportadora: it.envioId || null,
+      fecha_entrega: fecha,       // mejor proxy disponible: Lucero no manda fecha de entrega separada
+      rendido: true,              // ver nota arriba: el archivo mismo es el evento de cobro
+      fecha_rendido: fecha,
       ciudad: it.ciudad,
       producto: it.producto,
       transportadora: 'lucero',

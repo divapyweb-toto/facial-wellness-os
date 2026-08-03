@@ -40,6 +40,11 @@ export const COLS_ENTREGAS = [
   'cobrado', 'costo_envio', 'fecha_ingreso', 'fecha_entrega', 'dias_entrega',
   'rendido', 'fecha_rendido', 'dias_rendicion', 'mensajero', 'ciudad', 'producto',
   'mes', 'transportadora',
+  // Lucero neta el flete al momento de rendir (a diferencia de PaP, que deposita
+  // el bruto). `neto_depositado` guarda lo que REALMENTE cae al banco por ese
+  // ítem; `guia_transportadora` guarda el ID interno de Lucero (solo referencia,
+  // no se usa para cruzar — eso lo hace `nro_guia_pap` vía guiaLucero()).
+  'neto_depositado', 'guia_transportadora',
 ]
 
 // Deja solo las claves que son columnas de `entregas`.
@@ -79,10 +84,18 @@ export function categorizarPaP(estado, motivo) {
 export function sanearEntrega(e) {
   const categoria = categorizarPaP(e?.estado_pap, e?.motivo)
   const importe = importeSano(e?.importe)
+  // PaP deposita el BRUTO (el flete se factura aparte, nunca se descuenta del
+  // depósito). Lucero neta el flete/multa ANTES de depositar, así que
+  // `neto_depositado` puede ser menor que `importe`. `depositoReal` es "lo que
+  // efectivamente cae al banco por este ítem" para cualquiera de las dos: si
+  // no hay neto guardado (PaP, o Lucero viejo sin este campo), cae al bruto.
+  const netoRaw = e?.neto_depositado
+  const depositoReal = (netoRaw != null && netoRaw !== '') ? importeSano(netoRaw) : importe
   return {
     ...e,
     categoria,
     importe,
+    depositoReal,
     // Solo lo entregado se considera cobrado.
     cobrado: categoria === 'entregado' ? importe : 0,
   }

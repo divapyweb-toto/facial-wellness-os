@@ -9,6 +9,7 @@ import { categorizarPaP as categoriaPaP } from '../../lib/estadosPaP'
 import { costoFleteActual } from '../../lib/flete'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
 import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, TRANSPORTADORAS } from '../../lib/transportadoras'
+import { placeholderEntregaLucero, guiaLucero } from '../../lib/rendicionLucero'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
 import { construirHistorialCiudades, evaluarCiudad } from '../../lib/riesgoCiudad'
@@ -850,6 +851,25 @@ export default function DespachoPagina() {
       if (error) fail += Math.min(50, ventasArr.length - i)
       else ok += Math.min(50, ventasArr.length - i)
     }
+
+    // ── Placeholder en `entregas` para cada venta de Lucero ──
+    // "Estilo Amazon": el envío existe para el sistema desde el momento en que
+    // sale, no recién cuando Lucero te rinde. Sin esto, un paquete de Lucero es
+    // invisible (no aparece en Entregas, tasa de entrega, nada) hasta que por
+    // fin aparece en un archivo de rendición semanas después.
+    // Best-effort: si falla, no bloquea el despacho — ventas ya se guardó bien.
+    const deLuceroNuevas = ventasArr.filter(v => v.transportadora === 'lucero')
+    if (deLuceroNuevas.length) {
+      try {
+        const placeholders = deLuceroNuevas.map(placeholderEntregaLucero)
+        for (let i = 0; i < placeholders.length; i += 50) {
+          await supabase.from('entregas')
+            .upsert(placeholders.slice(i, i + 50), { onConflict: 'nro_guia_pap' })
+        }
+      } catch (e) {
+        console.warn('No se pudo crear el placeholder de Lucero en entregas:', e?.message)
+      }
+    }
     setResultado({ ok, fail, duplicados })
     setCargando(false)
     if (ok > 0) toast(`${ok} ventas cargadas${duplicados.length ? ` · ${duplicados.length} duplicados omitidos` : ''}`, 'success')
@@ -926,12 +946,32 @@ export default function DespachoPagina() {
     else setSelVentas(new Set(ventasFiltradas.map(v => v.id)))
   }
 
-  const descargarExcelVentas = () => {
+  const descargarExcelVentas = async () => {
     if (!pedidosSeleccionados.length) { toast('Seleccioná al menos una venta', 'error'); return }
     const dePaP = pedidosSeleccionados.filter(p => (p.transportadora || 'pap') === 'pap')
     const deLucero = pedidosSeleccionados.filter(p => p.transportadora === 'lucero')
     if (dePaP.length) descargarCabeceraXLSX(dePaP)
     if (deLucero.length) descargarCabeceraLuceroXLSX(deLucero)
+    // Backfill: si esta venta de Lucero es de antes de que existiera el
+    // placeholder automático, se crea recién ahora. SOLO para las que todavía
+    // no tienen fila en `entregas` — si ya se rindió, un upsert acá la
+    // regresaría a "en camino" y le borraría que ya estaba cobrada.
+    if (deLucero.length) {
+      try {
+        const claves = deLucero.map(p => guiaLucero(p.n_referencia))
+        const { data: existentes } = await supabase.from('entregas')
+          .select('nro_guia_pap').in('nro_guia_pap', claves)
+        const yaExisten = new Set((existentes || []).map(e => e.nro_guia_pap))
+        const faltantes = deLucero.filter(p => !yaExisten.has(guiaLucero(p.n_referencia)))
+        if (faltantes.length) {
+          const placeholders = faltantes.map(placeholderEntregaLucero)
+          for (let i = 0; i < placeholders.length; i += 50) {
+            await supabase.from('entregas')
+              .upsert(placeholders.slice(i, i + 50), { onConflict: 'nro_guia_pap' })
+          }
+        }
+      } catch (e) { console.warn('No se pudo backfillear placeholder de Lucero:', e?.message) }
+    }
     const partes = []
     if (dePaP.length) partes.push(`${dePaP.length} PAP`)
     if (deLucero.length) partes.push(`${deLucero.length} Lucero`)

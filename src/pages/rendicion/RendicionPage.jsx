@@ -77,9 +77,14 @@ export default function RendicionPage() {
     const rendidos = entregados.filter(m => m.rendido)
     const sinRendir = entregados.filter(m => !m.rendido && !m._prepago)
 
-    const yaRendido = rendidos.reduce((s, m) => s + (m.importe || 0), 0)
-    const porCobrar = sinRendir.reduce((s, m) => s + (m.importe || 0), 0)
+    const yaRendido = rendidos.reduce((s, m) => s + (m.depositoReal ?? m.importe ?? 0), 0)
+    const porCobrar = sinRendir.reduce((s, m) => s + (m.depositoReal ?? m.importe ?? 0), 0)
     const enTransito = proceso.reduce((s, m) => s + (m.importe || 0), 0)
+    // Bruto (lo que pagó el cliente) sigue disponible aparte, para no perder
+    // de vista la diferencia entre "cobrado" y "depositado" cuando la
+    // transportadora neta el flete antes de pagar (Lucero).
+    const yaRendidoBruto = rendidos.reduce((s, m) => s + (m.importe || 0), 0)
+    const porCobrarBruto = sinRendir.reduce((s, m) => s + (m.importe || 0), 0)
 
     const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null && d >= 0)
     const diasProm = diasRend.length ? diasRend.reduce((a, b) => a + b, 0) / diasRend.length : null
@@ -128,6 +133,7 @@ export default function RendicionPage() {
 
     return {
       yaRendido, porCobrar, enTransito, diasProm, diasMediana, trancados, umbralDemora,
+      yaRendidoBruto, porCobrarBruto,
       listaSinRendir, historicoRend, datosGrafico, fleteTotal,
       nEntregados: entregados.length, nRendidos: rendidos.length, nSinRendir: sinRendir.length, nProceso: proceso.length,
       demoradas, montoDemorado, cobroEstimadoHasta, hayDatos, tasaCobrado,
@@ -136,23 +142,67 @@ export default function RendicionPage() {
 
   const [vista, setVista] = useState('todas')  // 'todas' | 'pap' | 'lucero'
 
-  const { statsPaP, statsLucero, statsTotal, hayLucero } = useMemo(() => {
+  const { statsPaP, statsLucero, statsTotal, hayLucero, luceroEnProceso } = useMemo(() => {
     const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
     const esPrepago = (m) => refsPrepago.has(norm(m.n_referencia)) || refsPrepago.has(norm(m.nro_guia_ref))
     const items = historico.map(h => ({ ...sanearEntrega(h), _prepago: esPrepago(h) }))
     const itemsPaP = items.filter(m => (m.transportadora || 'pap') === 'pap')
     const itemsLucero = items.filter(m => m.transportadora === 'lucero')
+    // Paquetes de Lucero DESPACHADOS pero sin resultado todavía (categoria
+    // 'en_proceso' — el placeholder que se crea al despachar). Hoy Lucero no
+    // tiene export de estados, así que estos solo se resuelven a mano.
+    const luceroEnProceso = itemsLucero
+      .filter(m => m.categoria === 'en_proceso')
+      .sort((a, b) => new Date(a.fecha_ingreso || 0) - new Date(b.fecha_ingreso || 0))
     return {
       statsPaP: calcularStatsCobranza(itemsPaP),
       statsLucero: calcularStatsCobranza(itemsLucero),
       statsTotal: calcularStatsCobranza(items),
       hayLucero: itemsLucero.length > 0,
+      luceroEnProceso,
     }
   }, [historico, refsPrepago])
 
   // La pestaña activa decide qué alimenta los KPIs y la tabla de pendientes.
   const stats = vista === 'pap' ? statsPaP : vista === 'lucero' ? statsLucero : statsTotal
   const NOMBRE_TRANSP = { pap: 'PaP', lucero: 'Lucero', todas: 'todas las transportadoras' }
+
+  // ── Marcado manual de paquetes de Lucero "en camino" ──────
+  // Hoy Lucero no tiene export de estados (solo la rendición, que llega
+  // cuando ya está resuelto y cobrado). Para lo que se ve a ojo en su panel
+  // ("Mis envíos") mientras tanto, se marca acá — y en cuanto Lucero saque su
+  // botón de exportar, el importador automático se suma sin sacar esto.
+  const [marcandoLucero, setMarcandoLucero] = useState(null)
+  const marcarLucero = async (row, resultado) => {
+    // resultado: 'entregado' | 'rechazado' (sin cargo, el cliente rechazó al
+    // reconfirmar) | 'fallido' (con cargo, confirmó y no recibió)
+    setMarcandoLucero(row.nro_guia_pap)
+    try {
+      const patch = { estado_pap: resultado }
+      if (resultado === 'entregado') {
+        patch.categoria = 'entregado'
+        // Todavía no rendido: recién se sabe con certeza cuando aparezca en
+        // el próximo archivo de rendición (que trae la tarifa y el neto reales).
+      } else if (resultado === 'rechazado') {
+        patch.categoria = 'devuelto'
+        patch.motivo = 'Rechazado en reconfirmación — sin cargo'
+        patch.costo_envio = 0   // política confirmada: rechazo en reconfirmación no se cobra
+      } else if (resultado === 'fallido') {
+        patch.categoria = 'devuelto'
+        patch.motivo = 'Confirmó y no recibió — con cargo'
+        // costo_envio queda con la tarifa estimada del despacho hasta que la
+        // rendición confirme el monto real (puede venir como Multa, no Tarifa).
+      }
+      const { error } = await supabase.from('entregas').update(patch).eq('nro_guia_pap', row.nro_guia_pap)
+      if (error) throw error
+      toast('Marcado', 'success')
+      await cargarHistorico()
+    } catch (e) {
+      toast('No se pudo marcar: ' + e.message, 'error')
+    } finally {
+      setMarcandoLucero(null)
+    }
+  }
 
   // ── Selección ─────────────────────────────────────────
   const toggleSel = (guia) => {
@@ -240,8 +290,29 @@ export default function RendicionPage() {
       // ── LUCERO: el archivo crea los registros de entrega (no existen todavía) ──
       if (deLucero.length) {
         const lotes = deLucero.map(a => parsearRendicionLucero(a.crudo))
+        let registrosCrudos = lotes.flatMap(rendicionLuceroAEntregas)
+
+        // Buscar la fecha de despacho que el placeholder ya tenía guardada
+        // (creada en Despacho al momento de generar la cabecera), para calcular
+        // cuántos días pasaron de despacho a cobro. Si el placeholder no existe
+        // (pedido de antes de este cambio), dias_rendicion queda sin dato — no
+        // se inventa una fecha.
+        try {
+          const claves = registrosCrudos.map(r => r.nro_guia_pap)
+          const { data: previos } = await supabase.from('entregas')
+            .select('nro_guia_pap, fecha_ingreso').in('nro_guia_pap', claves)
+          const fechaIngresoPorGuia = {}
+          ;(previos || []).forEach(p => { if (p.fecha_ingreso) fechaIngresoPorGuia[p.nro_guia_pap] = p.fecha_ingreso })
+          registrosCrudos = registrosCrudos.map(r => {
+            const fIng = fechaIngresoPorGuia[r.nro_guia_pap]
+            if (!fIng || !r.fecha_rendido) return r
+            const dias = Math.round((new Date(r.fecha_rendido) - new Date(fIng)) / 86400000)
+            return { ...r, dias_rendicion: dias >= 0 ? dias : null }
+          })
+        } catch (e) { /* si falla, se guarda sin dias_rendicion — no bloquea la importación */ }
+
         // Solo columnas reales de la tabla: una clave de más rechaza el insert entero.
-        const registros = lotes.flatMap(rendicionLuceroAEntregas).map(soloColumnasEntregas)
+        const registros = registrosCrudos.map(soloColumnasEntregas)
         const resumenes = lotes.map(l => ({ ...resumenRendicionLucero(l), lote: l.lote, fecha: l.fecha, estadoLote: l.estadoLote, pagado: l.pagado, totalPago: l.totalPago, tarifas: l.tarifas, bruto: l.bruto }))
         const noCuadra = resumenes.filter(r => !r.todoCuadra)
         // Guardado tolerante: si la base todavía no tiene alguna columna (ej.
@@ -422,7 +493,7 @@ export default function RendicionPage() {
                 <div style={{ fontSize: 12, marginBottom: 6 }}>
                   <b>Lote {r.lote}</b> · {r.fecha} · {r.cantidad} envío{r.cantidad !== 1 ? 's' : ''} ·{' '}
                   <span style={{ color: r.pagado ? 'var(--green)' : 'var(--orange, #f59e0b)', fontWeight: 700 }}>
-                    {r.pagado ? 'ya depositado' : `${r.estadoLote} — todavía no te depositaron`}
+                    {`depositado (llega a tu cuenta ~30 min después de este archivo)`}
                   </span>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
@@ -437,6 +508,37 @@ export default function RendicionPage() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Lucero: paquetes despachados sin resultado todavía — Lucero no
+            tiene export de estados, así que se marcan a mano. */}
+        {vista !== 'pap' && luceroEnProceso.length > 0 && (
+          <div className="card" style={{ padding: '14px 18px', marginTop: 12, borderLeft: '3px solid var(--yellow)' }}>
+            <h3 style={{ margin: '0 0 4px', fontSize: 14 }}>Lucero en camino — {luceroEnProceso.length} sin resultado</h3>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 10px' }}>
+              Se despacharon por Lucero pero todavía no aparecen en ninguna rendición. Marcá lo que veas en su panel — cuando Lucero tenga export automático, esto se completa solo.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {luceroEnProceso.map(row => (
+                <div key={row.nro_guia_pap} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, minWidth: 60 }}>{row.n_referencia ? '#' + row.n_referencia : '—'}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 100 }}>{row.ciudad || '—'}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatGs(row.importe)}</span>
+                  <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                    <button className="btn btn-sm" disabled={marcandoLucero === row.nro_guia_pap}
+                      style={{ background: 'var(--green)', color: '#000', border: 'none', fontWeight: 700 }}
+                      onClick={() => marcarLucero(row, 'entregado')}>Entregado</button>
+                    <button className="btn btn-sm" disabled={marcandoLucero === row.nro_guia_pap}
+                      style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                      onClick={() => marcarLucero(row, 'rechazado')} title="Rechazó en la reconfirmación — no se cobra flete">Rechazó (sin cargo)</button>
+                    <button className="btn btn-sm" disabled={marcandoLucero === row.nro_guia_pap}
+                      style={{ background: 'transparent', color: 'var(--red)', border: '1px solid var(--red)' }}
+                      onClick={() => marcarLucero(row, 'fallido')} title="Confirmó y no recibió — se cobra flete">Falló (con cargo)</button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -509,14 +611,20 @@ export default function RendicionPage() {
             <Clock size={13} /> TE DEBE ({NOMBRE_TRANSP[vista].toUpperCase()})
           </div>
           <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--yellow)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.porCobrar)}</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nSinRendir} entregas sin rendir</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+            {stats.nSinRendir} entregas sin rendir
+            {stats.porCobrarBruto !== stats.porCobrar ? ` · cliente pagó ${formatGs(stats.porCobrarBruto)}` : ''}
+          </div>
         </div>
         <div className="card" style={{ borderLeft: '3px solid var(--green)' }}>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
             <CheckCircle size={13} /> YA TE DEPOSITARON
           </div>
           <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--green)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.yaRendido)}</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nRendidos} rendidas · {stats.tasaCobrado}% del total</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+            {stats.nRendidos} rendidas · {stats.tasaCobrado}% del total
+            {stats.yaRendidoBruto !== stats.yaRendido ? ` · cliente pagó ${formatGs(stats.yaRendidoBruto)} (neto, ya sin flete)` : ''}
+          </div>
         </div>
         <div className="card">
           <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
