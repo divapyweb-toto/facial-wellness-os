@@ -7,9 +7,11 @@ import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
 import { categorizarPaP as categoriaPaP } from '../../lib/estadosPaP'
 import { costoFleteActual } from '../../lib/flete'
+import { getEnvioCliente } from '../../lib/config'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
 import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, transportadoraForzada, TRANSPORTADORAS } from '../../lib/transportadoras'
 import { placeholderEntregaLucero, guiaLucero } from '../../lib/rendicionLucero'
+import { familiaProducto } from '../../lib/recompra'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
 import { construirHistorialCiudades, evaluarCiudad } from '../../lib/riesgoCiudad'
@@ -24,7 +26,7 @@ const normRefRiesgo = (ref) => {
 }
 import {
   Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X,
-  Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp, RefreshCw, Info, ScanLine,
+  Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp, RefreshCw, Info, ScanLine, MessageSquare,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════
@@ -258,6 +260,126 @@ function matchProducto(nombreVenta, productos) {
   return cand[0] || null
 }
 
+// ═══════════════════════════════════════════════════════════
+// CARGA MANUAL (pedidos cerrados por WhatsApp, fuera de Shopify)
+//
+// Enrique pega el bloque de texto que el cliente le manda por WhatsApp
+// ("Nombre completo: ... Ciudad: ... Producto y cantidad: ...") y el sistema
+// lo convierte en pedidos que entran por la MISMA tubería que un CSV de
+// Shopify: mismo chequeo de riesgo, misma sugerencia de transportadora,
+// misma generación de guía y cabecera. No hay una ruta paralela.
+//
+// LA REFERENCIA — el problema real que resuelve esto: estos pedidos no
+// tienen número de Shopify (nunca pasaron por el checkout), y Shopify sigue
+// numerando de a 1 en 1 (2060, 2061, 2062...). Ponerles un número cualquiera
+// chocaría tarde o temprano con un pedido real de Shopify que llegue a ese
+// mismo número. La referencia lleva el prefijo 'WA-' (whatsapp): un pedido
+// de Shopify JAMÁS va a tener letras en su número, así que 'WA-0007' nunca
+// puede confundirse con un '#0007' de Shopify. Mismo truco que ya usamos
+// para los códigos de Lucero (FW-2025).
+// ═══════════════════════════════════════════════════════════
+
+// Divide el texto pegado en un bloque por pedido. Un pedido nuevo arranca
+// donde aparece "Nombre completo" — tolera mayúsculas/minúsculas y con o sin
+// los dos puntos.
+function dividirBloquesManual(texto) {
+  const marcador = /(?=nombre\s+completo\s*:?)/gi
+  return (texto || '')
+    .split(marcador)
+    .map(b => b.trim())
+    .filter(b => b && /nombre\s+completo/i.test(b))
+}
+
+// Extrae el valor de una etiqueta dentro de un bloque de texto, tolerando
+// variantes de redacción ("Número de contacto" / "Contacto" / "Teléfono").
+function extraerCampoManual(bloque, patrones) {
+  for (const patron of patrones) {
+    const re = new RegExp(patron + '\\s*:?\\s*(.+)', 'i')
+    const m = bloque.match(re)
+    if (m) {
+      // Corta en el salto de línea (el valor no cruza a la siguiente etiqueta)
+      return m[1].split('\n')[0].trim()
+    }
+  }
+  return ''
+}
+
+// "limpiador de Lengua 1" → 1 | "jawflex pro uno solo" → 1 | sin número → 1
+const NUMEROS_TEXTO = { uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5 }
+function extraerCantidadManual(textoProducto) {
+  const n = (textoProducto || '').toLowerCase()
+  const digito = n.match(/(\d+)\s*(unidad|u\.?|x)?$/) || n.match(/\bx\s*(\d+)\b/)
+  if (digito) { const v = parseInt(digito[1]); if (v > 0 && v < 100) return v }
+  for (const [palabra, val] of Object.entries(NUMEROS_TEXTO)) {
+    if (new RegExp(`\\b${palabra}\\b`).test(n)) return val
+  }
+  return 1
+}
+
+// Parsea UN bloque de texto a un pedido — mismo formato que produce el
+// importador de CSV, para reusar toda la tubería de Despacho sin cambios.
+function parsearPedidoManual(bloque, catalogo, nRef) {
+  const cliente_nombre = extraerCampoManual(bloque, ['nombre\\s+completo'])
+  const ciudad = extraerCampoManual(bloque, ['ciudad'])
+  const direccion = extraerCampoManual(bloque, ['direcci[oó]n\\s+exacta', 'direcci[oó]n'])
+  const telefono = limpiarTel(extraerCampoManual(bloque, ['n[uú]mero\\s+de\\s+contacto', 'contacto', 'tel[eé]fono', 'whatsapp']))
+  const ci = extraerCampoManual(bloque, ['c[ée]dula.*?ruc', 'ci\\s*:.*?ruc', 'c[ée]dula', '\\bci\\b', '\\bruc\\b'])
+  let productoTexto = extraerCampoManual(bloque, ['producto\\s+y\\s+cantidad', 'producto'])
+  // A veces el cliente pega su CI/RUC de nuevo, pegado en la misma línea del
+  // producto ("limpiador de Lengua 1. CI:6919774"). Se corta todo lo que
+  // venga después de un separador (".", "-") seguido de CI/RUC o de un
+  // número largo (5+ dígitos, que no es una cantidad real de producto).
+  productoTexto = productoTexto.replace(/[.\-–]\s*(c[ée]dula|ruc|ci)\b.*$/i, '').trim()
+  productoTexto = productoTexto.replace(/\b\d{5,}\b.*$/, '').trim()
+  const cantidad = extraerCantidadManual(productoTexto)
+
+  // Match literal contra el catálogo primero (rápido cuando el texto es casi
+  // igual al nombre real); si no encuentra nada, se cae a reconocimiento por
+  // FAMILIA — la misma lógica que ya usa el resto del sistema y que sí sabe
+  // que "limpiador de lengua" es sinónimo de "raspador de lengua" en el
+  // catálogo, cosa que una comparación de texto literal no puede saber.
+  let prod = matchProducto(productoTexto, catalogo)
+  if (!prod) {
+    const familia = familiaProducto(productoTexto)
+    if (familia) prod = catalogo.find(c => familiaProducto(c.nombre) === familia) || null
+  }
+  const precioBase = prod
+    ? (cantidad >= 3 ? (prod.precio_3u || prod.precio_1u) : cantidad === 2 ? (prod.precio_2u || prod.precio_1u) : prod.precio_1u) || 0
+    : 0
+  const envioCliente = prod?.grupo_envio === 'A' ? getEnvioCliente() : 0
+  const total = precioBase + envioCliente
+
+  const sugerencia = sugerirTransportadora(ciudad, productoTexto)
+  const transportadora = sugerencia.transportadora
+  const faltantes = []
+  if (!cliente_nombre) faltantes.push('nombre')
+  if (!telefono) faltantes.push('teléfono')
+  if (!direccion) faltantes.push('dirección')
+  if (!prod) faltantes.push('producto (no matcheó con el catálogo)')
+
+  return {
+    n_referencia: nRef, cliente_nombre, ciudad, departamento: '', direccion,
+    referencia_dir: '', telefono,
+    producto_nombre: prod ? prod.nombre : productoTexto, cantidad,
+    total, fecha: new Date().toISOString().split('T')[0],
+    // Ya está confirmado: lo tipeó el propio Enrique después de cerrar la
+    // venta — no pasa por el estado de Shopify/Tags.
+    estado_releasit: 'confirmado', cfg: ESTADO_CONFIG['confirmado'],
+    cobranzaOk: transportadora != null,
+    despachar: transportadora != null && faltantes.length === 0,
+    faltantes,
+    transportadora,
+    motivoTransportadora: sugerencia.motivo,
+    bloqueadoPorProducto: !!sugerencia.bloqueadoPorProducto,
+    costo_envio: sugerencia.tarifa,
+    // 100% de estos pedidos vienen pagados por transferencia — se marca de
+    // entrada (queda editable como cualquier otro prepago en la tabla).
+    prepago: true,
+    notas: ci ? `CI/RUC: ${ci}` : '',
+    origenManual: true,
+  }
+}
+
 // ─── Cabecera XLSX — formato Lucero del Este ────────────────
 // La estructura tiene que ser EXACTA: su importador detecta las columnas por
 // nombre. Ojo con las tildes, son inconsistentes en la plantilla original:
@@ -315,6 +437,11 @@ function colapsarPorReferencia(pedidos) {
     const tipoCombinado = base.tipoCombinado
       || [...new Set(items.map(it => getTipo(it.producto_nombre)))].join(' + ')
     const totalCombinado = base.totalOrden ?? items.reduce((s, it) => s + (it.total || 0), 0)
+    // El flete real está en UNA sola línea (las demás quedan en 0 para no
+    // duplicar el costo); el máximo entre las líneas del grupo es ese valor,
+    // sin depender de que items[0] sea justo esa línea (el orden de fetch de
+    // la base no lo garantiza).
+    const costoEnvioCombinado = Math.max(...items.map(it => it.costo_envio || 0))
     return {
       ...base,
       esMultiProducto: true,
@@ -323,6 +450,7 @@ function colapsarPorReferencia(pedidos) {
       tipoCombinado,
       cantidad: 1,           // el paquete es 1 bulto — cada producto ya lleva su "xN" en la descripción
       total: totalCombinado,
+      costo_envio: costoEnvioCombinado,
     }
   })
 }
@@ -630,6 +758,8 @@ export default function DespachoPagina() {
 
   // ── Modo (CSV / Ventas) ────────────────────────────────
   const [modo, setModo] = useState('csv')
+  const [textoManual, setTextoManual] = useState('')
+  const [procesandoManual, setProcesandoManual] = useState(false)
   const [modalSalida, setModalSalida] = useState(false)
 
   // ── Estado Desde Ventas ────────────────────────────────
@@ -777,6 +907,46 @@ export default function DespachoPagina() {
       getTipo(p.producto_nombre).toLowerCase().includes(q)
     )
   }, [todosConOverride, busqueda])
+
+  // ── Procesar el texto pegado de WhatsApp → pedidos ──────
+  const procesarPedidosManual = async () => {
+    const bloques = dividirBloquesManual(textoManual)
+    if (!bloques.length) {
+      toast('No se encontró ningún pedido — cada uno necesita "Nombre completo:"', 'error')
+      return
+    }
+    setProcesandoManual(true)
+    try {
+      const { data: catalogo } = await supabase
+        .from('productos').select('id, nombre, costo_unit, grupo_envio, precio_1u, precio_2u, precio_3u')
+        .eq('activo', true)
+
+      // Próximo número de la serie WA-: se toma el mayor ya usado en toda la
+      // base (no solo lo que está en pantalla) para no repetir nunca, ni
+      // siquiera entre sesiones distintas.
+      const { data: existentes } = await supabase
+        .from('ventas').select('n_referencia').ilike('n_referencia', 'WA-%')
+      let siguiente = 1
+      for (const v of (existentes || [])) {
+        const n = parseInt(String(v.n_referencia).replace(/^WA-/i, ''), 10)
+        if (!isNaN(n) && n >= siguiente) siguiente = n + 1
+      }
+
+      const pedidos = bloques.map(bloque => {
+        const nRef = `WA-${String(siguiente).padStart(4, '0')}`
+        siguiente++
+        return parsearPedidoManual(bloque, catalogo || [], nRef)
+      })
+
+      setTodos(pedidos)
+      setStep('preview')
+      toast(`${pedidos.length} pedido${pedidos.length > 1 ? 's' : ''} procesado${pedidos.length > 1 ? 's' : ''}`, 'success')
+    } catch (e) {
+      toast('Error procesando el texto: ' + e.message, 'error')
+    } finally {
+      setProcesandoManual(false)
+    }
+  }
 
   // ── Memos Ventas ───────────────────────────────────────
   const ventasFiltradas = useMemo(() => {
@@ -967,7 +1137,9 @@ export default function DespachoPagina() {
         total: p.total,
         n_referencia: p.n_referencia,
         estado: 'pendiente',
-        canal_origen: 'Shopify Orgánico',
+        // Los pedidos cargados a mano NO vinieron de Shopify — dejarlos como
+        // "Shopify Orgánico" ensuciaría cualquier reporte por canal de origen.
+        canal_origen: p.origenManual ? 'WhatsApp' : 'Shopify Orgánico',
         ciudad: p.ciudad,
         cliente_nombre: p.cliente_nombre,
         cliente_telefono: p.telefono,
@@ -983,12 +1155,23 @@ export default function DespachoPagina() {
         metodo_pago_nombre: p.prepago ? 'Transferencia (anticipado)' : 'Efectivo COD',
         pago_anticipado: !!p.prepago,  // pagó por adelantado (transferencia verificada)
         estado_releasit: p.estado_releasit,
+        // CI/RUC del pedido manual (columna opcional — ver nota de guardado tolerante abajo).
+        notas: p.notas || null,
       }
     })
     for (let i = 0; i < ventasArr.length; i += 50) {
-      const { error } = await supabase.from('ventas').insert(ventasArr.slice(i, i + 50))
-      if (error) fail += Math.min(50, ventasArr.length - i)
-      else ok += Math.min(50, ventasArr.length - i)
+      let chunk = ventasArr.slice(i, i + 50)
+      let { error } = await supabase.from('ventas').insert(chunk)
+      // Guardado tolerante: si la tabla todavía no tiene la columna `notas`
+      // (falta correr la migración), se reintenta sin ese campo en vez de
+      // perder el lote entero — igual patrón que ya usamos para Lucero.
+      if (error && /Could not find the '(\w+)' column/.test(error.message || '')) {
+        const col = error.message.match(/Could not find the '(\w+)' column/)[1]
+        chunk = chunk.map(r => { const o = { ...r }; delete o[col]; return o })
+        ;({ error } = await supabase.from('ventas').insert(chunk))
+      }
+      if (error) fail += chunk.length
+      else ok += chunk.length
     }
 
     // ── Placeholder en `entregas` para cada venta de Lucero ──
@@ -1000,7 +1183,26 @@ export default function DespachoPagina() {
     const deLuceroNuevas = ventasArr.filter(v => v.transportadora === 'lucero')
     if (deLuceroNuevas.length) {
       try {
-        const placeholders = deLuceroNuevas.map(placeholderEntregaLucero)
+        // Un pedido de varios productos genera varias filas de venta con la
+        // MISMA referencia (ver fix de multi-producto). El placeholder es UNO
+        // por paquete físico — si no se combinan acá antes del upsert,
+        // Postgres rechaza el batch ENTERO por clave repetida ("ON CONFLICT
+        // DO UPDATE command cannot affect row a second time"), y se pierde el
+        // placeholder de ese pedido y de cualquier otro que compartiera el
+        // mismo lote de 50.
+        const porRef = new Map()
+        for (const v of deLuceroNuevas) {
+          const key = String(v.n_referencia)
+          if (!porRef.has(key)) porRef.set(key, { ...v })
+          else {
+            const acc = porRef.get(key)
+            acc.total = (acc.total || 0) + (v.total || 0)
+            // Solo una línea lleva el flete real (las demás van en 0); el
+            // máximo entre las líneas del pedido es ese valor real.
+            acc.costo_envio = Math.max(acc.costo_envio || 0, v.costo_envio || 0)
+          }
+        }
+        const placeholders = [...porRef.values()].map(placeholderEntregaLucero)
         for (let i = 0; i < placeholders.length; i += 50) {
           await supabase.from('entregas')
             .upsert(placeholders.slice(i, i + 50), { onConflict: 'nro_guia_pap' })
@@ -1143,8 +1345,10 @@ export default function DespachoPagina() {
   const subtitle = modo === 'ventas'
     ? `${ventasPend.length} ventas pendientes en DB`
     : step === 'preview'
-      ? `${nombreArchivo} · ${todos.length} pedidos procesados`
-      : 'CSV de Shopify o selección manual desde Ventas'
+      ? `${modo === 'manual' ? 'Cargados por WhatsApp' : nombreArchivo} · ${todos.length} pedido${todos.length === 1 ? '' : 's'} procesado${todos.length === 1 ? '' : 's'}`
+      : modo === 'manual'
+        ? 'Pegá el pedido tal como te lo manda el cliente'
+        : 'CSV de Shopify o selección manual desde Ventas'
 
   // ═══════════════════════════════════════════════════════
   // RENDER
@@ -1187,9 +1391,24 @@ export default function DespachoPagina() {
             >
               <ShoppingBag size={12} /> Desde Ventas
             </button>
+            <button
+              onClick={() => { setModo('manual'); setStep('upload') }}
+              style={{
+                padding: '6px 14px', fontSize: 12, fontWeight: 600, border: 'none',
+                borderLeft: '1px solid var(--border)', cursor: 'pointer',
+                background: modo === 'manual' ? 'var(--accent)' : 'var(--bg-card)',
+                color: modo === 'manual' ? '#fff' : 'var(--text-secondary)',
+                display: 'flex', alignItems: 'center', gap: 5,
+              }}
+            >
+              <MessageSquare size={12} /> WhatsApp
+            </button>
           </div>
           {modo === 'csv' && step === 'preview' && (
             <button className="btn btn-ghost btn-sm" onClick={reset}><X size={13} /> Cargar otro CSV</button>
+          )}
+          {modo === 'manual' && step === 'preview' && (
+            <button className="btn btn-ghost btn-sm" onClick={() => { reset(); setTextoManual('') }}><X size={13} /> Cargar otro pedido</button>
           )}
         </div>
       </div>
@@ -1389,9 +1608,45 @@ export default function DespachoPagina() {
       )}
 
       {/* ═══════════════════════════════════════════════════
-          MODO: CSV — PREVIEW
+          MODO: MANUAL (WhatsApp) — PEGAR TEXTO
       ═══════════════════════════════════════════════════ */}
-      {modo === 'csv' && step === 'preview' && (
+      {modo === 'manual' && step === 'upload' && (
+        <>
+          <div className="card" style={{ padding: 20 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 10 }}>
+              Pegá el pedido tal cual te lo pasa el cliente. Podés pegar varios seguidos, uno abajo del otro —
+              cada uno arranca donde dice <b>"Nombre completo"</b>.
+            </div>
+            <textarea
+              className="form-input"
+              value={textoManual}
+              onChange={e => setTextoManual(e.target.value)}
+              placeholder={'Nombre completo: Natalia Vanessa Enciso Torres\nCI: 3698580\nCiudad: San Ignacio Misiones\nDirección exacta: Calle Tuyuti 845 entre Fulgencio Yegros e Iturbe\nNúmero de contacto: 0974320155\nProducto y cantidad: Limpiador de Lengua 1'}
+              style={{ width: '100%', minHeight: 220, fontFamily: 'monospace', fontSize: 13, resize: 'vertical' }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+              <button
+                className="btn btn-primary"
+                disabled={procesandoManual || !textoManual.trim()}
+                onClick={procesarPedidosManual}
+              >
+                {procesandoManual ? 'Procesando…' : 'Procesar pedido(s)'}
+              </button>
+            </div>
+          </div>
+          <div className="card card-sm" style={{ padding: 14, fontSize: 12, color: 'var(--text-muted)' }}>
+            <Info size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
+            Se asigna automáticamente una referencia <b>WA-0001, WA-0002...</b> — nunca choca con la numeración
+            de Shopify (que es solo números). Se marca como <b>pago anticipado</b> por defecto: destildalo en la
+            tabla si algún caso no lo es.
+          </div>
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════
+          MODO: CSV / MANUAL — PREVIEW (comparten toda la tabla y el despacho)
+      ═══════════════════════════════════════════════════ */}
+      {(modo === 'csv' || modo === 'manual') && step === 'preview' && (
         <>
           {/* Alerta de datos faltantes */}
           {conFaltantes.length > 0 && (
