@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { construirAlertasNegocio } from '../../lib/alertasNegocio'
+import { rangoMesAnteriorEquivalente } from '../../lib/fechas'
 import { fetchAll } from '../../lib/fetchAll'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
@@ -133,6 +134,7 @@ export default function DashboardPage() {
   const cargarDatos = useCallback(async () => {
     setLoading(true)
     const ahora = new Date()
+    const hoyStr = ahora.toISOString().slice(0, 10)
     const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().split('T')[0]
     const finMes = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0).toISOString().split('T')[0]
 
@@ -325,13 +327,14 @@ export default function DashboardPage() {
     //    las demás alertas igual salen) ──
     const datosAlertas = {}
     try {
-      // Ventas mes actual vs mes anterior
-      const inicioMesAnt = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1).toISOString().slice(0, 10)
-      const finMesAnt = new Date(ahora.getFullYear(), ahora.getMonth(), 0).toISOString().slice(0, 10)
-      const { data: vAct } = await supabase.from('ventas').select('total').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
+      // Ventas mes actual vs mes anterior — mismo tramo de días en los dos,
+      // no mes parcial contra mes completo (ver rangoMesAnteriorEquivalente).
+      const { inicio: inicioMesAnt, fin: finMesAnt, dias: diasComparados } = rangoMesAnteriorEquivalente(ahora)
+      const { data: vAct } = await supabase.from('ventas').select('total').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', hoyStr)
       const { data: vAnt } = await supabase.from('ventas').select('total').is('deleted_at', null).gte('fecha', inicioMesAnt).lte('fecha', finMesAnt)
       datosAlertas.ventasMesActual = (vAct || []).reduce((s, v) => s + (v.total || 0), 0)
       datosAlertas.ventasMesAnterior = (vAnt || []).reduce((s, v) => s + (v.total || 0), 0)
+      datosAlertas.diasComparados = diasComparados
     } catch (e) { /* sin comparación de ventas */ }
 
     try {
@@ -360,15 +363,14 @@ export default function DashboardPage() {
     } catch (e) { /* sin alerta de rendición */ }
 
     try {
-      // Tasa de entrega este mes vs mes anterior (independiente, para la alerta)
-      const inicioMesAnt2 = new Date(ahora.getFullYear(), ahora.getMonth() - 1, 1).toISOString().slice(0, 10)
-      const finMesAnt2 = new Date(ahora.getFullYear(), ahora.getMonth(), 0).toISOString().slice(0, 10)
+      // Tasa de entrega este mes vs mes anterior (mismo tramo de días)
+      const { inicio: inicioMesAnt2, fin: finMesAnt2 } = rangoMesAnteriorEquivalente(ahora)
       const tasa = (arr) => {
         const ent = (arr || []).filter(v => v.estado === 'entregado').length
         const dev = (arr || []).filter(v => v.estado === 'devuelto').length
         return { tasa: (ent + dev) ? ent / (ent + dev) : 0, resueltos: ent + dev }
       }
-      const { data: vMesTasa } = await supabase.from('ventas').select('estado').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
+      const { data: vMesTasa } = await supabase.from('ventas').select('estado').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', hoyStr)
       const { data: vAntTasa } = await supabase.from('ventas').select('estado').is('deleted_at', null).gte('fecha', inicioMesAnt2).lte('fecha', finMesAnt2)
       const tAct = tasa(vMesTasa), tAnt = tasa(vAntTasa)
       datosAlertas.tasaEntregaActual = tAct.tasa

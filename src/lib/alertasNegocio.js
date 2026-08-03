@@ -10,21 +10,29 @@
 
 const fmt = (n) => 'Gs. ' + Number(Math.round(n || 0)).toLocaleString('es-PY')
 
-// Caída de ventas: compara el total facturado de este mes vs el mes pasado.
-// mesActual, mesAnterior: números (total facturado).
-export function alertaCaidaVentas(mesActual, mesAnterior) {
+// Caída de ventas: compara lo que va del mes contra el MISMO tramo de días
+// del mes anterior (no el mes anterior completo — comparar 3 días contra 31
+// es un artefacto del calendario, no una señal real). Se recalcula solo cada
+// mes: el día 3 de agosto se compara con el día 3 de julio automáticamente.
+// mesActual, mesAnterior: números (total facturado). dias: cuántos días
+// entraron en la comparación (para que el mensaje lo diga explícito).
+export function alertaCaidaVentas(mesActual, mesAnterior, dias) {
   if (!mesAnterior || mesAnterior <= 0) return null
+  // Con 1-2 días el ruido es demasiado grande (una sola venta de más o de
+  // menos mueve el % 50 puntos) — se espera a tener al menos 3 días de dato.
+  if (dias != null && dias < 3) return null
   const delta = (mesActual - mesAnterior) / mesAnterior
+  const tramo = dias ? ` (primeros ${dias} días de cada mes)` : ''
   if (delta <= -0.15) {
     return {
       tipo: 'ventas', color: 'red', ruta: '/reportes', accion: 'Ver reportes',
-      msg: `Ventas cayeron ${Math.round(Math.abs(delta) * 100)}% vs el mes pasado (${fmt(mesActual)} vs ${fmt(mesAnterior)}). Revisá creativos y ofertas.`,
+      msg: `Ventas cayeron ${Math.round(Math.abs(delta) * 100)}% vs el mes pasado${tramo} (${fmt(mesActual)} vs ${fmt(mesAnterior)}). Revisá creativos y ofertas.`,
     }
   }
   if (delta >= 0.15) {
     return {
       tipo: 'ventas', color: 'green', ruta: '/reportes', accion: 'Ver',
-      msg: `Ventas subieron ${Math.round(delta * 100)}% vs el mes pasado. Buen momento para escalar.`,
+      msg: `Ventas subieron ${Math.round(delta * 100)}% vs el mes pasado${tramo}. Buen momento para escalar.`,
     }
   }
   return null
@@ -84,7 +92,7 @@ export function alertaSinRendir(monto, cantidad) {
 // Junta todas las alertas nuevas (las que no son null), ordenadas: rojas primero.
 export function construirAlertasNegocio(datos) {
   const lista = [
-    alertaCaidaVentas(datos.ventasMesActual, datos.ventasMesAnterior),
+    alertaCaidaVentas(datos.ventasMesActual, datos.ventasMesAnterior, datos.diasComparados),
     alertaTasaEntrega(datos.tasaEntregaActual, datos.tasaEntregaAnterior, datos.entregasResueltas),
     alertaCampanaPierde(datos.campanas),
     alertaRecompra(datos.recompraPendientes),
