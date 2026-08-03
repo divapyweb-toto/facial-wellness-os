@@ -143,7 +143,7 @@ function mapearPedido(row) {
   const total = parseInt((row['Total'] || '0').replace(/[^0-9]/g, '')) || 0
   // ¿Alguna transportadora hace cobranza en esta ciudad? Si ninguna cubre,
   // no se puede despachar aunque el pedido esté confirmado.
-  const sugerencia = sugerirTransportadora(ciudad)
+  const sugerencia = sugerirTransportadora(ciudad, producto_nombre)
   const transportadora = sugerencia.transportadora
   const cobranzaOk = transportadora != null
   const faltantes = []
@@ -159,8 +159,9 @@ function mapearPedido(row) {
     referencia_dir: refDir,          // separada: Lucero la pide en su propia columna
     telefono, producto_nombre, cantidad, total, fecha, estado_releasit: estado,
     cfg, cobranzaOk, despachar, faltantes,
-    transportadora,                  // 'pap' | 'lucero' — editable después en la UI
+    transportadora,                  // 'pap' | 'lucero' | 'otra' — editable después en la UI
     motivoTransportadora: sugerencia.motivo,
+    bloqueadoPorProducto: !!sugerencia.bloqueadoPorProducto,
     costo_envio: sugerencia.tarifa,  // tarifa real de ESA transportadora en ESA ciudad
   }
 }
@@ -471,7 +472,7 @@ async function descargarGuiasDOCX(pedidos) {
 function ventaAPedido(v) {
   // Si la venta ya tiene transportadora guardada (despachada antes), se respeta.
   // Si no, se sugiere por ciudad — así las ventas viejas también salen ruteadas.
-  const sug = sugerirTransportadora(v.ciudad || '')
+  const sug = sugerirTransportadora(v.ciudad || '', v.producto_nombre || '')
   const transportadora = v.transportadora || sug.transportadora
   return {
     n_referencia: v.n_referencia || '',
@@ -487,10 +488,11 @@ function ventaAPedido(v) {
     fecha: v.fecha || '',
     estado_releasit: v.estado_releasit || '',
     cfg: ESTADO_CONFIG[v.estado_releasit] || ESTADO_CONFIG['pending'],
-    despachar: true,
+    despachar: transportadora != null,
     faltantes: [],
     transportadora,
     motivoTransportadora: sug.motivo,
+    bloqueadoPorProducto: !!sug.bloqueadoPorProducto,
     costo_envio: v.costo_envio ?? sug.tarifa,
   }
 }
@@ -537,6 +539,9 @@ export default function DespachoPagina() {
   const [riesgoHabilitado, setRiesgoHabilitado] = useState(new Set())
   // Transportadora elegida a mano por pedido (pisa la sugerencia automática).
   const [transpOverride, setTranspOverride] = useState({})
+  // Costo de flete tipeado a mano cuando la transportadora es 'otra' (no hay
+  // tarifario para un courier arbitrario).
+  const [costoOtraManual, setCostoOtraManual] = useState({})
   // Historial de entrega por ciudad + ciudades forzadas a mano por el admin.
   const [historialCiudad, setHistorialCiudad] = useState(new Map())
   const [ciudadHabilitada, setCiudadHabilitada] = useState(new Set())
@@ -552,7 +557,9 @@ export default function DespachoPagina() {
       const despacharBase = (p.despachar || forzados.has(p.n_referencia))
       // Transportadora: la elegida a mano, o la sugerida por ciudad.
       const transportadora = transpOverride[p.n_referencia] || p.transportadora
-      const tarifa = transportadora ? tarifaDe(transportadora, p.ciudad) : null
+      const tarifa = transportadora === 'otra'
+        ? (parseInt(costoOtraManual[p.n_referencia]) || 0)
+        : (transportadora ? tarifaDe(transportadora, p.ciudad) : null)
       // Riesgo de la CIUDAD con esa transportadora (0% de entrega = plata quemada).
       const evCiudad = evaluarCiudad(historialCiudad, p.ciudad, transportadora)
       const ciudadOk = ciudadHabilitada.has(p.n_referencia)
@@ -575,7 +582,7 @@ export default function DespachoPagina() {
         costo_envio: tarifa,
       }
     }),
-    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada]
+    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual]
   )
 
   const paraDespacho = useMemo(() => todosConOverride.filter(p => p.despachar), [todosConOverride])
@@ -882,11 +889,13 @@ export default function DespachoPagina() {
     if (!paraDespacho.length) return
     const dePaP = paraDespacho.filter(p => (p.transportadora || 'pap') === 'pap')
     const deLucero = paraDespacho.filter(p => p.transportadora === 'lucero')
+    const deOtra = paraDespacho.filter(p => p.transportadora === 'otra')
     if (dePaP.length) descargarCabeceraXLSX(dePaP)
     if (deLucero.length) descargarCabeceraLuceroXLSX(deLucero)
     const partes = []
     if (dePaP.length) partes.push(`${dePaP.length} PAP`)
     if (deLucero.length) partes.push(`${deLucero.length} Lucero`)
+    if (deOtra.length) partes.push(`${deOtra.length} Otra (sin cabecera, solo guía)`)
     toast(`Cabecera descargada — ${partes.join(' · ')}`, 'success')
   }
 
@@ -895,7 +904,7 @@ export default function DespachoPagina() {
   const descargarGuiasDoc = async () => {
     if (!paraDespacho.length) return
     try {
-      const orden = { pap: 0, lucero: 1 }
+      const orden = { pap: 0, lucero: 1, otra: 2 }
       const ordenadas = [...paraDespacho].sort(
         (a, b) => (orden[a.transportadora] ?? 0) - (orden[b.transportadora] ?? 0)
       )
@@ -975,13 +984,15 @@ export default function DespachoPagina() {
     const partes = []
     if (dePaP.length) partes.push(`${dePaP.length} PAP`)
     if (deLucero.length) partes.push(`${deLucero.length} Lucero`)
+    const deOtraV = pedidosSeleccionados.filter(p => p.transportadora === 'otra')
+    if (deOtraV.length) partes.push(`${deOtraV.length} Otra (sin cabecera, solo guía)`)
     toast(`Cabecera descargada — ${partes.join(' · ')}`, 'success')
   }
 
   const descargarGuiasVentas = async () => {
     if (!pedidosSeleccionados.length) { toast('Seleccioná al menos una venta', 'error'); return }
     try {
-      const orden = { pap: 0, lucero: 1 }
+      const orden = { pap: 0, lucero: 1, otra: 2 }
       const ordenadas = [...pedidosSeleccionados].sort(
         (a, b) => (orden[a.transportadora] ?? 0) - (orden[b.transportadora] ?? 0)
       )
@@ -1489,7 +1500,17 @@ export default function DespachoPagina() {
                               <select
                                 className="form-input"
                                 value={p.transportadora || ''}
-                                onChange={e => setTranspOverride(prev => ({ ...prev, [p.n_referencia]: e.target.value }))}
+                                onChange={e => {
+                                  const val = e.target.value
+                                  setTranspOverride(prev => ({ ...prev, [p.n_referencia]: val }))
+                                  // Nudge: si se está pisando un bloqueo de producto a mano,
+                                  // se sugiere pago anticipado (la razón de fondo del bloqueo
+                                  // era justamente evitar mandar este producto en COD). Queda
+                                  // togglear normal después si el admin decide lo contrario.
+                                  if (!p.transportadora && p.bloqueadoPorProducto && !prepagos.has(p.n_referencia)) {
+                                    togglePrepago(p.n_referencia)
+                                  }
+                                }}
                                 style={{ fontSize: 11, padding: '3px 6px', height: 'auto', minWidth: 96 }}
                               >
                                 {Object.values(TRANSPORTADORAS).map(t => (
@@ -1499,10 +1520,29 @@ export default function DespachoPagina() {
                                 ))}
                               </select>
                               <span style={{ fontSize: 9, color: cubre ? 'var(--text-dim)' : 'var(--red)', whiteSpace: 'nowrap' }}>
-                                {!cubre
-                                  ? 'No cubre esta ciudad'
-                                  : `${formatGs(p.costo_envio || 0)}${p.transpManual ? ' · manual' : ''}`}
+                                {!p.transportadora && p.bloqueadoPorProducto
+                                  ? 'Solo Lucero — no cubre acá'
+                                  : !cubre
+                                    ? 'No cubre esta ciudad'
+                                    : p.transportadora === 'otra'
+                                      ? null
+                                      : `${formatGs(p.costo_envio || 0)}${p.transpManual ? ' · manual' : ''}`}
                               </span>
+                              {p.transportadora === 'otra' && (
+                                <input
+                                  type="number"
+                                  className="form-input"
+                                  placeholder="Costo flete"
+                                  value={costoOtraManual[p.n_referencia] ?? ''}
+                                  onChange={e => setCostoOtraManual(prev => ({ ...prev, [p.n_referencia]: e.target.value }))}
+                                  style={{ fontSize: 10, padding: '2px 6px', height: 'auto', width: 90 }}
+                                />
+                              )}
+                              {!p.transportadora && p.bloqueadoPorProducto && (
+                                <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                                  Elegí transportadora a mano + marcá pago anticipado
+                                </span>
+                              )}
                               {p.riesgoCiudad?.nivel === 'bloqueado' && (
                                 <button
                                   onClick={() => toggleCiudad(p.n_referencia)}

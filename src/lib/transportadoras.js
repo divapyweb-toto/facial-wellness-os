@@ -19,6 +19,7 @@
 // ═══════════════════════════════════════════════════════════
 import { getFlete } from './config'
 import { tieneCobranzaPaP, emparejarCiudad, normalizarCiudadPaP } from './cobranzaPaP'
+import { familiaProducto } from './recompra'
 
 export const TRANSPORTADORAS = {
   pap: {
@@ -34,6 +35,13 @@ export const TRANSPORTADORAS = {
     nombre: 'Lucero del Este',
     tarifaPlana: false,
     diasRendicion: 1,
+  },
+  otra: {
+    id: 'otra',
+    label: 'Otra',                    // lo que se imprime en la guía
+    nombre: 'Otra transportadora',
+    tarifaPlana: false,
+    diasRendicion: null,              // desconocido: no hay conciliación automática para esta
   },
 }
 
@@ -246,15 +254,21 @@ export function ciudadLucero(ciudad) {
 }
 
 // ¿La transportadora hace COD en esta ciudad?
+// 'otra' no tiene lista de cobertura propia: es el catch-all manual, así que
+// siempre "cubre" — la decisión de si sirve para esa ciudad la hace el admin,
+// no el sistema.
 export function cubre(transportadora, ciudad) {
+  if (transportadora === 'otra') return true
   if (transportadora === 'lucero') return ciudadLucero(ciudad) != null
   return tieneCobranzaPaP(ciudad)
 }
 
 // Tarifa de esa transportadora para esa ciudad.
-// PaP: tarifa plana editable en Config. Lucero: por ciudad.
-// Devuelve null si la transportadora no cubre la ciudad.
+// PaP: tarifa plana editable en Config. Lucero: por ciudad. 'otra': no hay
+// tarifa conocida — el admin la carga a mano en Despacho.
+// Devuelve null si la transportadora no cubre la ciudad, o si es 'otra'.
 export function tarifaDe(transportadora, ciudad) {
+  if (transportadora === 'otra') return null
   if (transportadora === 'lucero') {
     const c = ciudadLucero(ciudad)
     return c ? TARIFAS_LUCERO[c] : null
@@ -267,13 +281,56 @@ export function transportadorasDisponibles(ciudad) {
   return IDS_TRANSPORTADORA.filter(id => cubre(id, ciudad))
 }
 
+// ─── Transportadora forzada por producto ────────────────────
+// Decisión de negocio, no logística: JawFlex Pro tiene ~36% de no-entrega
+// estable desde abril, muy por encima de cualquier otro producto (Parches
+// 7-17%). El diagnóstico: confirmar por WhatsApp no cuesta nada, el
+// arrepentimiento pasa recién frente al repartidor con la plata en mano —
+// forzar Lucero (entrega más rápida, menos tiempo para que el cliente dude)
+// reduce esa ventana. Si Lucero no cubre la ciudad, el pedido queda SIN
+// transportadora asignada — no cae solo a PaP — para que sea una decisión
+// consciente del admin, no automática del sistema.
+//
+// Extensible: agregar otro producto acá es una línea, no un rewrite.
+export const REGLA_TRANSPORTADORA_PRODUCTO = {
+  jaw: 'lucero',   // familia 'jaw' = JawFlex Pro (ver familiaProducto en recompra.js)
+}
+
+// Transportadora forzada para ESE producto, o null si no tiene regla.
+export function transportadoraForzada(productoNombre) {
+  const fam = familiaProducto(productoNombre)
+  return fam ? (REGLA_TRANSPORTADORA_PRODUCTO[fam] || null) : null
+}
+
 // ─── Sugerencia automática ──────────────────────────────────
 // Regla vigente: Lucero si cubre la ciudad Y su tarifa es ≤ 30.000
 // (más barato o +1.000 compensado por cobrar 6 días antes).
 // En las de 35.000 y en todo lo que Lucero no cubre, va PaP.
 // Devuelve { transportadora, motivo } — el motivo se muestra en Despacho
 // para que la decisión sea auditable y no una caja negra.
-export function sugerirTransportadora(ciudad) {
+export function sugerirTransportadora(ciudad, productoNombre = '') {
+  // Regla de producto: pisa la comparación de tarifa/velocidad por completo.
+  // Si la transportadora forzada no cubre la ciudad, NO se cae a otra
+  // automáticamente — queda sin asignar, bloqueado, para que el admin decida.
+  const forzada = transportadoraForzada(productoNombre)
+  if (forzada) {
+    if (cubre(forzada, ciudad)) {
+      return {
+        transportadora: forzada,
+        motivo: `Regla de producto: solo despacha por ${labelTransportadora(forzada)}`,
+        tarifa: tarifaDe(forzada, ciudad),
+        velocidad: forzada === 'lucero' ? velocidadLucero(ciudadLucero(ciudad)) : null,
+        bloqueadoPorProducto: false,
+      }
+    }
+    return {
+      transportadora: null,
+      motivo: `Este producto solo despacha por ${labelTransportadora(forzada)} y no cubre esta ciudad — requiere decisión manual`,
+      tarifa: null, velocidad: null,
+      bloqueadoPorProducto: true,
+    }
+  }
+
   const cL = ciudadLucero(ciudad)
   const hayPaP = tieneCobranzaPaP(ciudad)
   const flete = getFlete()
