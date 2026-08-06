@@ -148,6 +148,14 @@ export default function Layout() {
 
         {/* Footer */}
         <div className="sidebar-footer">
+          {/* Sello de build: permite saber de un vistazo QUÉ versión está
+              corriendo el navegador. Sin esto, cuando algo no aparece no hay
+              forma de distinguir "no se desplegó" de "el navegador tiene una
+              versión vieja en memoria". __BUILD_ID__ lo reemplaza Vite en cada
+              compilación con la fecha y hora reales. */}
+          <div style={{ fontSize: 9, color: 'var(--text-muted)', textAlign: 'center', padding: '2px 0 6px', opacity: 0.7 }}>
+            build {__BUILD_ID__}
+          </div>
           <div className="user-card">
             <div className="user-avatar">{initials}</div>
             <div className="user-info">

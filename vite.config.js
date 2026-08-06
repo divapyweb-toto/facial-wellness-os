@@ -1,8 +1,18 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Sello de compilación: se inyecta la fecha/hora real de cada build para que
+// la app pueda mostrarla. Sirve para saber, mirando la pantalla, si el
+// navegador está corriendo la última versión desplegada o una vieja en caché.
+const BUILD_ID = new Date().toLocaleString('es-PY', {
+  day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+})
+
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __BUILD_ID__: JSON.stringify(BUILD_ID),
+  },
   base: '/facial-wellness-os/',
   build: {
     outDir: 'dist',
