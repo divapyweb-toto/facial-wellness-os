@@ -6,7 +6,7 @@ import { useAuth } from '../../lib/AuthContext'
 import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
-  Users, Calculator, BarChart3, PackageCheck, MapPin, X,
+  Users, Calculator, BarChart3, PackageCheck, MapPin, X, MessageCircle,
   Grid3X3, Search as SearchIcon, Repeat, PackageOpen,
 } from 'lucide-react'
 
@@ -24,6 +24,7 @@ const navLogistica = [
   { to: '/despacho',  icon: PackageCheck,    label: 'Despacho'  },
   { to: '/entregas',  icon: MapPin,          label: 'Entregas'  },
   { to: '/inteligencia', icon: BarChart3,    label: 'Inteligencia' },
+  { to: '/seguimiento', icon: MessageCircle, label: 'Seguimiento' },
   { to: '/recepcion', icon: PackageOpen,     label: 'Recepción' },
   { to: '/rendicion', icon: Truck,           label: 'Rendición' },
 ]
