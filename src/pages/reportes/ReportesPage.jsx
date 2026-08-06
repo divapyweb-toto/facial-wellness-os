@@ -53,9 +53,18 @@ export default function ReportesPage() {
     const [year, month] = mes.split('-').map(Number)
     const inicio = `${mes}-01`
     const fin = new Date(year, month, 0).toISOString().slice(0, 10)
+    // ── Comparativa justa contra el mes anterior ──
+    // Si el mes elegido es el que está EN CURSO, solo tiene datos hasta hoy.
+    // Compararlo contra el mes anterior COMPLETO da caídas falsas (el día 5
+    // serían 5 días contra 31). Se recorta el mes anterior al mismo día.
+    const hoy = new Date()
+    const esMesEnCurso = year === hoy.getFullYear() && month === hoy.getMonth() + 1
     const dPrev = new Date(year, month - 2, 1)
+    const ultimoDiaPrev = new Date(dPrev.getFullYear(), dPrev.getMonth() + 1, 0).getDate()
+    const diaCorte = esMesEnCurso ? Math.min(hoy.getDate(), ultimoDiaPrev) : ultimoDiaPrev
     const inicioPrev = `${dPrev.getFullYear()}-${String(dPrev.getMonth() + 1).padStart(2, '0')}-01`
-    const finPrev = new Date(dPrev.getFullYear(), dPrev.getMonth() + 1, 0).toISOString().slice(0, 10)
+    const finPrev = new Date(dPrev.getFullYear(), dPrev.getMonth(), diaCorte).toISOString().slice(0, 10)
+    const diasComparados = esMesEnCurso ? diaCorte : null
     // Objeto de período mensual (para etiquetas y la serie por día)
     const P = { tipo: 'mensual', granularidad: 'dia', inicio, fin, inicioPrev, finPrev,
       etiqueta: new Date(year, month - 1, 1).toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }) }
@@ -63,7 +72,7 @@ export default function ReportesPage() {
     // Paginado: un mes a 100 pedidos/día son ~3.000 filas y Supabase corta en 1.000.
     // El cierre financiero no puede calcularse con datos recortados.
     const [ventas, ventasPrev, gastos, campanas, productos, entregas] = await Promise.all([
-      fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono').gte('fecha', inicio).lte('fecha', fin).order('fecha')),
+      fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono, transportadora, pago_anticipado').gte('fecha', inicio).lte('fecha', fin).order('fecha')),
       fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta').gte('fecha', inicioPrev).lte('fecha', finPrev)),
       fetchAll(() => supabase.from('gastos').select('fecha, monto, categoria, concepto').gte('fecha', inicio).lte('fecha', fin)),
       fetchAll(() => supabase.from('campanas_ads').select('*').gte('mes', inicio.slice(0, 7)).lte('mes', fin.slice(0, 7))),
@@ -111,7 +120,14 @@ export default function ReportesPage() {
       paquetes: (ventasPrev || []).length,
       entregados: entregadasPrev.length,
       devueltos: (ventasPrev || []).filter(v => v.estado === 'devuelto').length,
-      tasaEntrega: (ventasPrev || []).length ? (entregadasPrev.length / (ventasPrev || []).length) * 100 : 0,
+      // Tasa sobre RESUELTOS (entregados + devueltos), no sobre el total: los
+      // paquetes en tránsito todavía no fallaron, contarlos como fracaso
+      // subestima la tasa sistemáticamente.
+      tasaEntrega: (() => {
+        const dev = (ventasPrev || []).filter(v => v.estado === 'devuelto').length
+        const res = entregadasPrev.length + dev
+        return res ? (entregadasPrev.length / res) * 100 : 0
+      })(),
     }
 
     // ── Cobranza (de entregas del mes) ──
@@ -189,7 +205,7 @@ export default function ReportesPage() {
       .forEach(p => alertas.push({ tipo: 'producto', texto: `"${p.nombre}" tiene ${p.tasaDevolucion}% de devolución. Revisá la confirmación antes de despachar o filtrá ciudades.` }))
     ciudades.filter(c => c.pedidos >= 3 && c.tasaDevolucion >= 50)
       .slice(0, 4).forEach(c => alertas.push({ tipo: 'ciudad', texto: `${c.ciudad}: ${c.tasaDevolucion}% de devolución (${c.pedidos} pedidos). Considerá confirmar por WhatsApp o pausar esa zona.` }))
-    if (cobranza.porCobrar > 0) alertas.push({ tipo: 'cobranza', texto: `PaP te debe ${formatGs(cobranza.porCobrar)} de ${cobranza.nSinRendir} entregas. Reclamá las más viejas en Rendición.` })
+    if (cobranza.porCobrar > 0) alertas.push({ tipo: 'cobranza', texto: `Las transportadoras te deben ${formatGs(cobranza.porCobrar)} de ${cobranza.nSinRendir} entregas. Mirá el detalle por courier en Rendición.` })
     const peorDia = [...porDiaSemana].filter(d => d.total >= 3).sort((a, b) => b.devolucion - a.devolucion)[0]
     if (peorDia && peorDia.devolucion >= 45) alertas.push({ tipo: 'patron', texto: `Los pedidos del ${peorDia.dia} se devuelven ${peorDia.devolucion}%. Evaluá no despachar ese día o reforzar la confirmación.` })
 
@@ -200,7 +216,8 @@ export default function ReportesPage() {
     const ventasBrutasCalc = sumE(v => v.total)                 // lo cobrado (entregadas) — ya incluye el envío
     const cogsEntregadas = sumE(v => v.costo_prod)              // costo mercadería entregada
     const cogsPendientes = sumP(v => v.costo_prod)              // costo mercadería pendiente (info, no se resta)
-    // Flete a Punto a Punto: 27.000 por paquete.
+    // Flete: ya NO es un valor fijo — sale de `costo_envio`, congelado por
+    // venta al despachar con la tarifa real de esa transportadora en esa ciudad.
     // GANANCIA FIRME usa solo lo RESUELTO (entregadas + devueltas), igual que Entregas:
     // no contamos flete de pendientes porque puede que aún no se despacharon.
     const fleteEntregadas = sumE(v => v.costo_envio)
@@ -236,6 +253,38 @@ export default function ReportesPage() {
     const ventasConFamilia = (ventas || []).filter(v => familiaProducto(v.producto_nombre))
     const adsTotal = { label: 'TOTAL', ...calcularMetricasAds(totalGastoAds, ventasConFamilia, estadoPaPRep) }
 
+    // ── Desglose por transportadora ──
+    // Hasta ahora todo el reporte asumía PaP: los fletes de Lucero y de "Otra"
+    // se sumaban en la línea "Flete a Punto a Punto" sin distinguirse. Con dos
+    // (o tres) couriers activos eso vuelve ilegible dónde se va la plata.
+    const LABEL_TRANSP = { pap: 'Punto a Punto', lucero: 'Lucero del Este', otra: 'Otra transportadora' }
+    const transpMap = {}
+    ;(ventas || []).forEach(v => {
+      const t = v.transportadora || 'pap'
+      if (!transpMap[t]) transpMap[t] = {
+        id: t, label: LABEL_TRANSP[t] || t,
+        enviados: 0, entregados: 0, devueltos: 0, pendientes: 0,
+        cobrado: 0, flete: 0, fleteFirme: 0, prepagos: 0,
+      }
+      const r = transpMap[t]
+      r.enviados++
+      if (v.pago_anticipado) r.prepagos++
+      r.flete += (v.costo_envio || 0)
+      if (v.estado === 'entregado') {
+        r.entregados++; r.cobrado += (v.total || 0); r.fleteFirme += (v.costo_envio || 0)
+      } else if (v.estado === 'devuelto') {
+        r.devueltos++; r.fleteFirme += (v.costo_envio || 0)   // el flete se paga igual
+      } else r.pendientes++
+    })
+    const porTransportadora = Object.values(transpMap).map(r => ({
+      ...r,
+      // Tasa sobre resueltos, igual criterio que el KPI general.
+      tasaEntrega: (r.entregados + r.devueltos) ? (r.entregados / (r.entregados + r.devueltos)) * 100 : null,
+      // Costo por entrega EXITOSA: el número que compara couriers de verdad,
+      // porque incorpora las devoluciones (que pagan flete sin generar ingreso).
+      costoPorEntrega: r.entregados ? r.fleteFirme / r.entregados : null,
+    })).sort((a, b) => b.enviados - a.enviados)
+
     setDatos({
       mes, periodo: P,
       serie: agruparSerie(ventas || [], P),
@@ -247,8 +296,10 @@ export default function ReportesPage() {
       // Margen = ingreso neto de entregadas / ventas brutas
       margenPct: ventasBrutasCalc ? (ingresosNetosCalc / ventasBrutasCalc) * 100 : 0,
       paquetesEnviados: (ventas || []).length,
+      porTransportadora, diasComparados,
       entregados: entregadas.length, devueltos: devueltas.length, pendientesCount: pendientes.length,
-      tasaEntrega: (ventas || []).length ? (entregadas.length / (ventas || []).length) * 100 : 0,
+      // Misma corrección que arriba: denominador = resueltos, no total enviado.
+      tasaEntrega: (entregadas.length + devueltas.length) ? (entregadas.length / (entregadas.length + devueltas.length)) * 100 : 0,
       utilidadNeta: utilidadNetaCalc,
       posibleDobleAds: posibleDobleAdsRep,
       porProducto: porProductoArr,
@@ -479,6 +530,14 @@ export default function ReportesPage() {
       esc((g.fecha || '').slice(0, 10)), esc(g.categoria || '—'), esc(g.concepto || '—'), gs(g.monto || 0),
     ]))
 
+    // Filas de la tabla por transportadora (sección 10 del PDF)
+    const pctT = (x) => x == null ? '—' : Math.round(x) + '%'
+    const transpFilas = (d.porTransportadora || []).map(t => filaTabla([
+      esc(t.label), t.enviados, t.entregados, t.devueltos, t.pendientes,
+      pctT(t.tasaEntrega), gs(t.cobrado), gs(t.fleteFirme),
+      t.costoPorEntrega != null ? gs(Math.round(t.costoPorEntrega)) : '—',
+    ]))
+
     const win = window.open('', '_blank')
     if (!win) { toast('Permití las ventanas emergentes para descargar el PDF', 'error'); return }
     win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
@@ -553,7 +612,7 @@ ${gastoCatFilas.length ? tabla(['Categoría', 'Monto', '% del total'], gastoCatF
 ${gastoItemFilas.length ? `<div class="formula">Desglose por ítem (${gastoItemFilas.length} gasto${gastoItemFilas.length > 1 ? 's' : ''}, de mayor a menor):</div>${tabla(['Fecha', 'Categoría', 'Concepto', 'Monto'], gastoItemFilas)}` : ''}
 <div class="formula">Total gastos operativos: ${gs(totalGastosOp)}. No incluye Meta Ads (sección 7) ni costo de mercadería vendida (sección 1).</div>
 
-<h2>9. Cobranza (PaP)</h2>
+<h2>9. Cobranza</h2>
 ${tabla(['Métrica', 'Valor'], [
   filaTabla(['Cobrado (rendido)', gs(d.cobranza?.cobrado || 0)]),
   filaTabla(['Por cobrar (sin rendir)', gs(d.cobranza?.porCobrar || 0)]),
@@ -563,16 +622,20 @@ ${tabla(['Métrica', 'Valor'], [
   filaTabla(['Cobro más lento', d.cobranza?.cobroMax != null ? d.cobranza.cobroMax + ' días' : '—']),
   filaTabla(['Cobros trancados (+14 días)', d.cobranza?.cobroTrancados ?? 0]),
 ])}
-<div class="formula">Se reporta la MEDIANA (cobro típico) por robustez: pocos cobros trancados inflan el promedio. Si "cobros trancados" es alto, reclamá esas guías en Rendición.</div>
+<div class="formula">Se reporta la MEDIANA (cobro típico) por robustez: pocos cobros trancados inflan el promedio. Si "cobros trancados" es alto, reclamá esas guías en Rendición. Los tiempos combinan todas las transportadoras — el detalle separado está en Rendición.</div>
 
-<h2>10. Clientes</h2>
+<h2>10. Desempeño por transportadora</h2>
+${transpFilas.length ? tabla(['Transportadora', 'Enviados', 'Entreg.', 'Devueltos', 'En tránsito', 'Tasa entrega', 'Cobrado', 'Flete resuelto', 'Costo/entrega'], transpFilas) : '<p>Sin envíos en el período.</p>'}
+<div class="formula">Costo por entrega = flete de lo resuelto ÷ entregados. Es el número que compara transportadoras de verdad: incorpora las devoluciones, que pagan flete sin generar ingreso, cosa que la tarifa nominal no muestra.</div>
+
+<h2>11. Clientes</h2>
 ${tabla(['Métrica', 'Valor'], [
   filaTabla(['Clientes únicos', d.clientesUnicos ?? '—']),
   filaTabla(['Recompradores', d.recompradores ?? '—']),
   filaTabla(['Ticket promedio (entregado)', entregados ? gs(Math.round((d.ventasBrutas || 0) / entregados)) : '—']),
 ])}
 
-${(d.alertas && d.alertas.length) ? `<h2>11. Alertas</h2><ul>${d.alertas.map(a => `<li>${esc(typeof a === 'string' ? a : (a.texto || a.mensaje || JSON.stringify(a)))}</li>`).join('')}</ul>` : ''}
+${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a => `<li>${esc(typeof a === 'string' ? a : (a.texto || a.mensaje || JSON.stringify(a)))}</li>`).join('')}</ul>` : ''}
 
 <div class="foot">Facial Wellness OS · reporte generado automáticamente · ${new Date().toISOString().slice(0, 10)}</div>
 </body></html>`)
@@ -705,7 +768,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>11. Alertas</h2><ul>${d.alertas.map(a =
               {[
                 { l: 'Ingresos cobrados (entregadas, con envío)', v: datos.ventasBrutas, signo: '+' },
                 { l: 'Costo de mercadería vendida (entregadas)', v: datos.costoMercaderiaVendida, signo: '−' },
-                { l: `Flete a Punto a Punto (${datos.entregados + datos.devueltos} resueltos)`, v: datos.fleteFirme, signo: '−' },
+                { l: `Flete de envíos (${datos.entregados + datos.devueltos} resueltos)`, v: datos.fleteFirme, signo: '−' },
                 { l: 'Gasto en Meta Ads', v: datos.totalGastoAds, signo: '−' },
                 { l: 'Otros gastos del mes', v: datos.totalGastos, signo: '−' },
               ].filter(r => r.v !== undefined && r.v !== 0).map((r, i) => (
@@ -728,6 +791,11 @@ ${(d.alertas && d.alertas.length) ? `<h2>11. Alertas</h2><ul>${d.alertas.map(a =
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
               Comparativa vs mes anterior
+              {datos.diasComparados ? (
+                <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
+                  · primeros {datos.diasComparados} días de cada mes (el mes en curso todavía no terminó)
+                </span>
+              ) : null}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 0 }}>
               {[
@@ -746,16 +814,65 @@ ${(d.alertas && d.alertas.length) ? `<h2>11. Alertas</h2><ul>${d.alertas.map(a =
             </div>
           </div>
 
-          {/* Cobranza con PaP */}
+          {/* Desempeño por transportadora */}
+          {(datos.porTransportadora || []).length > 0 && (
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
+                Por transportadora
+                <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
+                  · costo por entrega = flete de lo resuelto ÷ entregados (incluye el flete de las devoluciones)
+                </span>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg-hover)', color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
+                      <th style={{ padding: '8px 12px', textAlign: 'left' }}>Transportadora</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Enviados</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Entreg.</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Devueltos</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>En tránsito</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Tasa entrega</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Cobrado</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Flete resuelto</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Costo/entrega</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {datos.porTransportadora.map(t => (
+                      <tr key={t.id} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '8px 12px', fontWeight: 600 }}>{t.label}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{t.enviados}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{t.entregados}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', color: t.devueltos ? 'var(--red)' : undefined }}>{t.devueltos}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text-muted)' }}>{t.pendientes}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700,
+                          color: t.tasaEntrega == null ? 'var(--text-muted)' : t.tasaEntrega >= 85 ? 'var(--green)' : t.tasaEntrega >= 70 ? 'var(--accent)' : 'var(--red)' }}>
+                          {t.tasaEntrega == null ? '—' : `${Math.round(t.tasaEntrega)}%`}
+                        </td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{formatGs(t.cobrado)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--red)' }}>{formatGs(t.fleteFirme)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>
+                          {t.costoPorEntrega == null ? '—' : formatGs(Math.round(t.costoPorEntrega))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Cobranza */}
           {datos.cobranza.hayCobranza && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
               <div className="kpi-card" style={{ borderLeft: '3px solid var(--green)' }}>
-                <div className="kpi-label"><Truck size={11} /> Cobrado de PaP</div>
+                <div className="kpi-label"><Truck size={11} /> Ya te depositaron</div>
                 <div className="kpi-value green" style={{ fontSize: 15 }}>{formatGs(datos.cobranza.cobrado)}</div>
                 <div className="kpi-sub">{datos.cobranza.nRendidas} entregas rendidas</div>
               </div>
               <div className="kpi-card" style={{ borderLeft: '3px solid var(--yellow)' }}>
-                <div className="kpi-label">PaP te debe</div>
+                <div className="kpi-label">Te deben</div>
                 <div className="kpi-value" style={{ fontSize: 15, color: 'var(--yellow)' }}>{formatGs(datos.cobranza.porCobrar)}</div>
                 <div className="kpi-sub">{datos.cobranza.nSinRendir} sin rendir</div>
               </div>
