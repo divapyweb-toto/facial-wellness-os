@@ -1129,6 +1129,16 @@ export default function DespachoPagina() {
 
     const ventasArr = nuevas.map(p => {
       const prod = matchProducto(p.producto_nombre, catalogo)
+      // ── Cierre automático: prepago + transportadora sin reporte ──
+      // TSI, Multienvíos y cualquier courier convencional NO entregan reporte
+      // de estados, así que estas ventas nunca podrían salir de 'pendiente':
+      // no hay archivo que importar ni rendición que las cierre. Quedarían
+      // restando flete sin sumar nunca el ingreso, hundiendo la ganancia.
+      // Como además están 100% pagadas por adelantado (la plata YA entró y no
+      // depende de que el cliente reciba), se marcan entregadas al despachar.
+      // OJO: solo aplica a 'otra'. PaP y Lucero SÍ tienen reporte — esas se
+      // cierran con el dato real, no por suposición.
+      const cierreAutomatico = p.prepago && p.transportadora === 'otra'
       return {
         fecha: p.fecha,
         producto_nombre: prod ? prod.nombre : p.producto_nombre,
@@ -1136,7 +1146,7 @@ export default function DespachoPagina() {
         precio_unit: p.total,
         total: p.total,
         n_referencia: p.n_referencia,
-        estado: 'pendiente',
+        estado: cierreAutomatico ? 'entregado' : 'pendiente',
         // Los pedidos cargados a mano NO vinieron de Shopify — dejarlos como
         // "Shopify Orgánico" ensuciaría cualquier reporte por canal de origen.
         canal_origen: p.origenManual ? 'WhatsApp' : 'Shopify Orgánico',
