@@ -507,6 +507,7 @@ export default function VentasPage() {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [filtroEstado, setFiltroEstado] = useState('todos')
+  const [filtroTransp, setFiltroTransp] = useState('todas')
   const [busqueda, setBusqueda] = useState('')
   const [filtroMes, setFiltroMes] = useState('')
   const [seleccionadas, setSeleccionadas] = useState(new Set())
@@ -516,6 +517,9 @@ export default function VentasPage() {
     setLoading(true)
     let query = supabase.from('ventas').select('*').is('deleted_at', null).order('fecha', { ascending: false }).order('created_at', { ascending: false })
     if (filtroEstado !== 'todos') query = query.eq('estado', filtroEstado)
+    // Filtro por transportadora: permite aislar (por ejemplo) las de 'Otra'
+    // para marcarlas en lote, ya que esos couriers no dan reporte de estados.
+    if (filtroTransp !== 'todas') query = query.eq('transportadora', filtroTransp)
     if (filtroMes) {
       const [year, month] = filtroMes.split('-')
       const inicio = `${year}-${month}-01`
@@ -535,7 +539,7 @@ export default function VentasPage() {
     setVentas(resultado)
     setSeleccionadas(new Set())
     setLoading(false)
-  }, [filtroEstado, busqueda, filtroMes])
+  }, [filtroEstado, filtroTransp, busqueda, filtroMes])
 
   useEffect(() => { cargarVentas() }, [cargarVentas])
 
@@ -635,6 +639,12 @@ export default function VentasPage() {
             </button>
           ))}
         </div>
+        <select className="form-select" style={{ width: 'auto' }} value={filtroTransp} onChange={e => setFiltroTransp(e.target.value)}>
+          <option value="todas">Todas las transportadoras</option>
+          <option value="pap">PAP</option>
+          <option value="lucero">Lucero</option>
+          <option value="otra">Otra</option>
+        </select>
         <select className="form-select" style={{ width: 'auto' }} value={filtroMes} onChange={e => setFiltroMes(e.target.value)}>
           <option value="">Todos los meses</option>
           {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
