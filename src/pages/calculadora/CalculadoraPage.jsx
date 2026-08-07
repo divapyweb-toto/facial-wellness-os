@@ -166,10 +166,10 @@ export default function CalculadoraPage() {
                   ...(form.grupo_envio === 'A'
                     ? [
                         { label: '+ Envío cobrado al cliente', value: `+${formatGs(envioCliente)}`, color: 'var(--green)' },
-                        { label: '— Flete a Punto a Punto', value: `−${formatGs(costoEnvio)}`, color: 'var(--red)' },
+                        { label: '— Flete de envío', value: `−${formatGs(costoEnvio)}`, color: 'var(--red)' },
                       ]
                     : [
-                        { label: '— Flete a Punto a Punto (envío gratis al cliente)', value: `−${formatGs(costoEnvio)}`, color: 'var(--red)' },
+                        { label: '— Flete de envío (envío gratis al cliente)', value: `−${formatGs(costoEnvio)}`, color: 'var(--red)' },
                       ]),
                   { label: '= Ganancia neta', value: formatGs(gananciaNeta), color: gananciaNeta > 0 ? 'var(--green)' : 'var(--red)', bold: true },
                   ...(cpaAds > 0 ? [

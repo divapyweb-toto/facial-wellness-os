@@ -375,7 +375,7 @@ export default function StockPage() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {necesitanReposicion.map(({ producto, analisis }, i) => {
-              const cfg = URGENCIA_CFG[analisis.urgencia]
+              const cfg = URGENCIA_CFG[analisis.urgencia] || URGENCIA_CFG.ok  // fallback: una urgencia nueva no debe tumbar la página
               const sugerido = sugerirReposicion(producto, velocidades, productosById, 30)
               return (
                 <div key={producto.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderTop: i === 0 ? 'none' : '1px solid var(--border-subtle)' }}>

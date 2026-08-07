@@ -103,7 +103,7 @@ export default function RecepcionPage() {
 
     if (!venta) {
       beep(false)
-      setUltimo({ tipo: 'error', titulo: 'No encontrado', detalle: `"${bruto}" no coincide con ninguna venta ni guía de PaP.` })
+      setUltimo({ tipo: 'error', titulo: 'No encontrado', detalle: `"${bruto}" no coincide con ninguna venta ni guía de transportadora.` })
       return
     }
     if (venta.reingresado_at) {
@@ -173,7 +173,7 @@ export default function RecepcionPage() {
       {/* Explicación breve */}
       <div className="card" style={{ padding: '12px 16px' }}>
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
-          Escaneá el código de barras de cada caja que trajo el recolector. También sirve el número de guía de Punto a Punto, o tipear la referencia a mano. El stock <strong>solo vuelve a subir</strong> cuando confirmás la tanda.
+          Escaneá el código de barras de cada caja que trajo el recolector. También sirve el número de guía de la transportadora, o tipear la referencia a mano. El stock <strong>solo vuelve a subir</strong> cuando confirmás la tanda.
         </p>
       </div>
 
@@ -326,7 +326,7 @@ export default function RecepcionPage() {
           <div className="empty-state-icon"><PackageOpen size={22} /></div>
           <p>No hay devoluciones esperando reingreso.</p>
           <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            Cuando Punto a Punto reporte devoluciones, van a aparecer acá para que las escanees al recibirlas.
+            Cuando la transportadora reporte devoluciones, van a aparecer acá para que las escanees al recibirlas.
           </p>
         </div>
       )}

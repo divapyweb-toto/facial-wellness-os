@@ -334,7 +334,7 @@ export default function ModalSalida({ onClose, onConfirmado }) {
               border: '1px solid var(--border)', textAlign: 'right',
             }}>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                El recibo de PaP debe decir
+                El recibo de la transportadora debe decir
               </div>
               <div style={{ fontSize: 17, fontWeight: 800, fontFamily: 'var(--font-display)' }}>
                 {tanda.length} paquete{tanda.length === 1 ? '' : 's'}

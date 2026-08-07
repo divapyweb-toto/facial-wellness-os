@@ -80,7 +80,7 @@ export default function InteligenciaEntregaPage() {
         <div className="empty-state" style={{ padding: 60 }}>
           <div className="empty-state-icon"><Truck size={28} /></div>
           <p style={{ fontWeight: 600 }}>Sin datos de entrega en el período</p>
-          <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Importá el reporte de PaP en Entregas para ver el análisis.</p>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Importá el reporte de tu transportadora en Entregas para ver el análisis.</p>
         </div>
       ) : (
         <>
