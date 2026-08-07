@@ -7,6 +7,7 @@ import { categorizarPaP as categorizar, importeSano, esImporteCorrupto, sanearEn
 import { tasaPorTransportadora } from '../../lib/riesgoCiudad'
 import { labelTransportadora } from '../../lib/transportadoras'
 import { etiquetaMes } from '../../lib/fechas'
+import { esExportLucero, parsearExportLucero, exportLuceroAEntregas, resumenExportLucero } from '../../lib/exportLucero'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
@@ -191,6 +192,10 @@ export default function EntregasPage() {
   const [filtroCat, setFiltroCat] = useState('todos')
   const [filtroMes, setFiltroMes] = useState('actual')  // 'actual' | 'todos' | 'YYYY-MM'
   const [guardando, setGuardando] = useState(false)
+  // Resumen del último import de Lucero (se muestra arriba de la tabla).
+  const [resumenLucero, setResumenLucero] = useState(null)
+  // Contador para forzar la recarga del histórico después de guardar.
+  const [recargar, setRecargar] = useState(0)
   const [guardado, setGuardado] = useState(false)
   const [resultadoGuardado, setResultadoGuardado] = useState(null)
   const [verSinRendir, setVerSinRendir] = useState(false)
@@ -214,7 +219,7 @@ export default function EntregasPage() {
       if (activo) setCargandoHist(false)
     })()
     return () => { activo = false }
-  }, [])
+  }, [recargar])
 
   // Cargar costos reales de producto (por referencia) y gastos por mes — para la pirámide
   useEffect(() => {
@@ -511,18 +516,82 @@ export default function EntregasPage() {
   const procesarFile = (file) => {
     if (!file?.name.match(/\.xlsx?$/i)) { toast('Solo archivos Excel (.xlsx)', 'error'); return }
     const reader = new FileReader()
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
+        // ── Exportación de seguimiento de Lucero ──
+        // Se detecta ANTES que los de PaP porque es un formato propio, con sus
+        // 23 columnas. Trae todos los envíos con su estado actual, así que es
+        // el equivalente al reporte de Gestión de PaP — pero como ya viene
+        // completo y cruzado por código, no necesita el paso de conciliación
+        // de dos archivos: se guarda directo.
+        const wbL = XLSX.read(e.target.result, { cellDates: true })
+        const filasL = XLSX.utils.sheet_to_json(wbL.Sheets[wbL.SheetNames[0]], { header: 1, defval: '' })
+        if (esExportLucero(filasL)) {
+          await procesarExportLucero(filasL)
+          return
+        }
         const parsed = parseXLSX(e.target.result)
         if (parsed.tipo === 'gestion') { setGesData(parsed); toast('Reporte de Gestión cargado ✓', 'success') }
         else if (parsed.tipo === 'paquete') { setPaqData(parsed); toast('Reporte de Paquetes cargado ✓', 'success') }
-        else toast('No reconozco este reporte. ¿Es de Punto a Punto?', 'error')
+        else toast('No reconozco este reporte. ¿Es de Punto a Punto o de Lucero?', 'error')
         setGuardado(false)
       } catch (err) {
         toast('Error leyendo el archivo: ' + err.message, 'error')
       }
     }
     reader.readAsArrayBuffer(file)
+  }
+
+  // ── Guardado del export de Lucero ──
+  // Dos escrituras: la tabla `entregas` (tracking) y el estado de `ventas`
+  // (que es de donde salen ganancia y reportes). Sin la segunda, el paquete
+  // figura entregado en Entregas pero la venta sigue en pendiente y no suma.
+  const procesarExportLucero = async (filas) => {
+    setGuardando(true)
+    try {
+      const items = parsearExportLucero(filas)
+      if (!items.length) { toast('El archivo de Lucero no tiene filas', 'error'); return }
+      const resumen = resumenExportLucero(items)
+
+      // 1) Tracking
+      const regs = exportLuceroAEntregas(items).map(soloColumnasEntregas)
+      let guardados = 0, errorMsg = null
+      for (let i = 0; i < regs.length; i += 100) {
+        let chunk = regs.slice(i, i + 100)
+        for (let intento = 0; intento < 5; intento++) {
+          const { error } = await supabase.from('entregas').upsert(chunk, { onConflict: 'nro_guia_pap' })
+          if (!error) { guardados += chunk.length; break }
+          const falta = /Could not find the '([^']+)' column/.exec(error.message || '')
+          if (falta) { const c = falta[1]; chunk = chunk.map(r => { const o = { ...r }; delete o[c]; return o }); continue }
+          if (!errorMsg) errorMsg = error.message
+          break
+        }
+      }
+
+      // 2) Estado de las ventas. Solo lo RESUELTO: 'fallido' sigue en tránsito
+      //    y puede terminar entregado (Lucero reintenta), así que no se toca.
+      const refsEntregadas = items.filter(i => i.categoria === 'entregado').map(i => i.referencia)
+      const refsDevueltas = items.filter(i => i.categoria === 'devuelto').map(i => i.referencia)
+      let ventasAct = 0
+      for (const [refs, estado] of [[refsEntregadas, 'entregado'], [refsDevueltas, 'devuelto']]) {
+        for (let i = 0; i < refs.length; i += 100) {
+          const chunk = refs.slice(i, i + 100)
+          if (!chunk.length) continue
+          const { data, error } = await supabase.from('ventas')
+            .update({ estado }).in('n_referencia', chunk).is('deleted_at', null).select('id')
+          if (!error) ventasAct += (data || []).length
+        }
+      }
+
+      setResumenLucero({ ...resumen, guardados, ventasAct })
+      if (errorMsg) toast('Lucero: error al guardar — ' + errorMsg, 'error')
+      else toast(`Lucero: ${guardados} envíos · ${ventasAct} ventas actualizadas`, 'success')
+      setRecargar(n => n + 1)
+    } catch (err) {
+      toast('Error procesando el archivo de Lucero: ' + err.message, 'error')
+    } finally {
+      setGuardando(false)
+    }
   }
 
   const handleFiles = (files) => { Array.from(files).forEach(procesarFile) }
@@ -881,6 +950,28 @@ export default function EntregasPage() {
                 )}
               </div>
             </div>
+
+            {/* Resultado del último import de Lucero */}
+            {resumenLucero && (
+              <div className="card" style={{ padding: '14px 18px', borderLeft: '3px solid var(--accent)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <h3 style={{ margin: 0, fontSize: 14 }}>Exportación de Lucero cargada</h3>
+                  <button className="btn btn-sm" onClick={() => setResumenLucero(null)}>Cerrar</button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
+                  <div className="kpi-card"><div className="kpi-label">Envíos</div><div className="kpi-value" style={{ fontSize: 18 }}>{resumenLucero.guardados}</div><div className="kpi-sub">{resumenLucero.ventasAct} ventas actualizadas</div></div>
+                  <div className="kpi-card"><div className="kpi-label">Entregados</div><div className="kpi-value" style={{ fontSize: 18, color: 'var(--green)' }}>{resumenLucero.entregados}</div><div className="kpi-sub">{resumenLucero.devueltos} cerrados en contra</div></div>
+                  <div className="kpi-card"><div className="kpi-label">Tasa de entrega</div><div className="kpi-value" style={{ fontSize: 18 }}>{resumenLucero.tasaEntrega != null ? Math.round(resumenLucero.tasaEntrega) + '%' : '—'}</div><div className="kpi-sub">sobre resueltos</div></div>
+                  <div className="kpi-card"><div className="kpi-label">En proceso</div><div className="kpi-value" style={{ fontSize: 18, color: 'var(--accent)' }}>{resumenLucero.enProceso}</div><div className="kpi-sub">{resumenLucero.reintentables} fallidos reintentables</div></div>
+                  <div className="kpi-card"><div className="kpi-label">Costo por entrega</div><div className="kpi-value" style={{ fontSize: 18 }}>{resumenLucero.costoPorEntrega != null ? formatGs(Math.round(resumenLucero.costoPorEntrega)) : '—'}</div><div className="kpi-sub">incluye flete de devoluciones</div></div>
+                </div>
+                {resumenLucero.reintentables > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+                    Los {resumenLucero.reintentables} fallidos siguen contando como en tránsito: Lucero reintenta y pueden terminar entregados.
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* TASA DE ENTREGA POR TRANSPORTADORA */}
             {(() => {
