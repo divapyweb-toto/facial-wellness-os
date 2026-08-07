@@ -285,6 +285,28 @@ export default function ReportesPage() {
       costoPorEntrega: r.entregados ? r.fleteFirme / r.entregados : null,
     })).sort((a, b) => b.enviados - a.enviados)
 
+    // ── Comparación cabeza a cabeza ──
+    // La tabla de arriba muestra los números; esto los convierte en decisión.
+    // Se comparan las DOS transportadoras con más envíos que tengan muestra
+    // suficiente: con 2 o 3 paquetes resueltos cualquier diferencia es ruido,
+    // y una recomendación basada en eso haría más daño que no decir nada.
+    const MUESTRA_MINIMA = 5
+    const comparables = porTransportadora
+      .filter(t => (t.entregados + t.devueltos) >= MUESTRA_MINIMA && t.costoPorEntrega != null)
+      .sort((a, b) => a.costoPorEntrega - b.costoPorEntrega)   // el más barato por entrega primero
+    let duelo = null
+    if (comparables.length >= 2) {
+      const [gana, pierde] = comparables
+      const difCosto = pierde.costoPorEntrega - gana.costoPorEntrega
+      const difTasa = (gana.tasaEntrega ?? 0) - (pierde.tasaEntrega ?? 0)
+      // Cuánto costaría el volumen del perdedor si se despachara por el ganador.
+      const ahorroSiMigra = Math.round(difCosto * pierde.entregados)
+      duelo = {
+        gana, pierde, difCosto: Math.round(difCosto), difTasa, ahorroSiMigra,
+        muestraChica: (gana.entregados + gana.devueltos) < 15 || (pierde.entregados + pierde.devueltos) < 15,
+      }
+    }
+
     setDatos({
       mes, periodo: P,
       serie: agruparSerie(ventas || [], P),
@@ -296,7 +318,7 @@ export default function ReportesPage() {
       // Margen = ingreso neto de entregadas / ventas brutas
       margenPct: ventasBrutasCalc ? (ingresosNetosCalc / ventasBrutasCalc) * 100 : 0,
       paquetesEnviados: (ventas || []).length,
-      porTransportadora, diasComparados,
+      porTransportadora, duelo, diasComparados,
       entregados: entregadas.length, devueltos: devueltas.length, pendientesCount: pendientes.length,
       // Misma corrección que arriba: denominador = resueltos, no total enviado.
       tasaEntrega: (entregadas.length + devueltas.length) ? (entregadas.length / (entregadas.length + devueltas.length)) * 100 : 0,
@@ -627,6 +649,14 @@ ${tabla(['Métrica', 'Valor'], [
 <h2>10. Desempeño por transportadora</h2>
 ${transpFilas.length ? tabla(['Transportadora', 'Enviados', 'Entreg.', 'Devueltos', 'En tránsito', 'Tasa entrega', 'Cobrado', 'Flete resuelto', 'Costo/entrega'], transpFilas) : '<p>Sin envíos en el período.</p>'}
 <div class="formula">Costo por entrega = flete de lo resuelto ÷ entregados. Es el número que compara transportadoras de verdad: incorpora las devoluciones, que pagan flete sin generar ingreso, cosa que la tarifa nominal no muestra.</div>
+${d.duelo ? `<div class="formula" style="border-left:3px solid #5a8a00;padding-left:10px">
+<b>${esc(d.duelo.gana.label)} sale ${gs(d.duelo.difCosto)} más barato por entrega</b> que ${esc(d.duelo.pierde.label)}
+(${gs(Math.round(d.duelo.gana.costoPorEntrega))} vs ${gs(Math.round(d.duelo.pierde.costoPorEntrega))}),
+con ${Math.round(d.duelo.gana.tasaEntrega)}% de entrega contra ${Math.round(d.duelo.pierde.tasaEntrega)}%
+(${d.duelo.difTasa > 0 ? '+' : ''}${Math.round(d.duelo.difTasa)} puntos).
+Migrar las ${d.duelo.pierde.entregados} entregas de ${esc(d.duelo.pierde.label)} habría costado ${gs(d.duelo.ahorroSiMigra)} menos.
+${d.duelo.muestraChica ? ' <b>Atención:</b> alguna de las dos tiene menos de 15 paquetes resueltos — la diferencia todavía puede ser suerte y no desempeño real.' : ''}
+</div>` : ''}
 
 <h2>11. Clientes</h2>
 ${tabla(['Métrica', 'Valor'], [
@@ -813,6 +843,47 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               ))}
             </div>
           </div>
+
+          {/* Veredicto: cuál transportadora conviene */}
+          {datos.duelo && (
+            <div className="card" style={{ padding: '16px 20px', borderLeft: '3px solid var(--accent)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+                {datos.duelo.gana.label} vs {datos.duelo.pierde.label}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
+                <div className="kpi-card" style={{ borderLeft: '3px solid var(--green)' }}>
+                  <div className="kpi-label">Más barato por entrega</div>
+                  <div className="kpi-value" style={{ fontSize: 18, color: 'var(--green)' }}>{datos.duelo.gana.label}</div>
+                  <div className="kpi-sub">{formatGs(Math.round(datos.duelo.gana.costoPorEntrega))} vs {formatGs(Math.round(datos.duelo.pierde.costoPorEntrega))}</div>
+                </div>
+                <div className="kpi-card">
+                  <div className="kpi-label">Diferencia por entrega</div>
+                  <div className="kpi-value" style={{ fontSize: 18 }}>{formatGs(datos.duelo.difCosto)}</div>
+                  <div className="kpi-sub">A favor de {datos.duelo.gana.label}</div>
+                </div>
+                <div className="kpi-card">
+                  <div className="kpi-label">Diferencia de tasa</div>
+                  <div className="kpi-value" style={{ fontSize: 18, color: datos.duelo.difTasa > 0 ? 'var(--green)' : 'var(--red)' }}>
+                    {datos.duelo.difTasa > 0 ? '+' : ''}{Math.round(datos.duelo.difTasa)} pts
+                  </div>
+                  <div className="kpi-sub">{Math.round(datos.duelo.gana.tasaEntrega)}% vs {Math.round(datos.duelo.pierde.tasaEntrega)}%</div>
+                </div>
+                <div className="kpi-card" style={{ borderLeft: '3px solid var(--accent)' }}>
+                  <div className="kpi-label">Si migrabas todo</div>
+                  <div className="kpi-value" style={{ fontSize: 18, color: 'var(--accent)' }}>{formatGs(datos.duelo.ahorroSiMigra)}</div>
+                  <div className="kpi-sub">Sobre las {datos.duelo.pierde.entregados} entregas de {datos.duelo.pierde.label}</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                El costo por entrega incluye el flete de las devoluciones, que se paga aunque no generen ingreso — por eso es mayor que la tarifa de lista y es el número que compara transportadoras de verdad.
+                {datos.duelo.muestraChica && (
+                  <span style={{ color: 'var(--yellow)' }}>
+                    {' '}Ojo: alguna de las dos tiene menos de 15 paquetes resueltos — la diferencia todavía puede ser suerte, no desempeño.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Desempeño por transportadora */}
           {(datos.porTransportadora || []).length > 0 && (
