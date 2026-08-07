@@ -19,10 +19,13 @@
 //    revertirse, y además restaría flete que quizás nunca se cobre.
 //    Solo 'Devuelto' y 'Cancelado' cierran en contra.
 //
-// 2. La TARIFA solo viene en los ENTREGADOS. En los 8 no entregados del
-//    archivo real (aceptado/fallido/cancelado) la tarifa viene vacía. O sea:
-//    Lucero factura el flete cuando entrega, no por despachar. No se inventa
-//    un costo para los que no están entregados.
+// 2. La TARIFA viene vacía en los NO ENTREGADOS, pero eso NO significa que no
+//    se cobre: Lucero factura el flete recién cuando la mercadería vuelve al
+//    depósito, y cobra UNA sola tarifa (la ida; el viaje de vuelta no se
+//    cobra). O sea que el costo existe, todavía no está facturado.
+//    Por eso, cuando la tarifa viene vacía, NO se pisa el `costo_envio` que ya
+//    tiene la fila: se conserva la tarifa estimada que se congeló al despachar.
+//    Ponerlo en 0 subestimaría el costo e inflaría la ganancia.
 //
 // 3. El campo "Motivo" trae el log de auditoría completo ("Usuario admin X
 //    realizó cambio de estado..."), inservible para mostrar. El motivo real
@@ -176,7 +179,10 @@ export function exportLuceroAEntregas(items) {
     motivo: it.motivo || '',
     importe: it.total,
     cobrado: it.categoria === 'entregado' ? it.total : 0,
-    // Solo se registra flete cuando Lucero efectivamente lo facturó.
+    // Solo se pisa el flete cuando Lucero YA lo facturó. Si viene vacío, se
+    // omite la clave a propósito: el upsert deja intacta la tarifa estimada
+    // que se congeló al despachar (el cobro llega después, cuando la
+    // mercadería vuelve — ver nota 2 arriba).
     ...(it.tarifa != null ? { costo_envio: it.tarifa + (it.multa || 0) } : {}),
     fecha_ingreso: it.fechaCreado,
     fecha_entrega: it.categoria === 'entregado' ? it.fechaUltimoEstado : null,
@@ -210,6 +216,16 @@ export function resumenExportLucero(items) {
   })
   const resueltos = r.entregados + r.devueltos
   r.tasaEntrega = resueltos ? (r.entregados / resueltos) * 100 : null
-  r.costoPorEntrega = r.entregados ? r.fleteFacturado / r.entregados : null
+  // Tarifa promedio de lo entregado (lo que Lucero factura por una entrega ok).
+  r.tarifaPromedio = r.entregados ? r.fleteFacturado / r.entregados : null
+  // Costo REAL por entrega exitosa: incluye el flete de lo que se devolvió,
+  // que también se paga (una tarifa, la ida) aunque no genere ingreso. Como
+  // Lucero factura recién cuando la mercadería vuelve, ese flete todavía no
+  // aparece en el archivo — se estima con la tarifa promedio para no
+  // subestimar el costo. Es el número que compara transportadoras de verdad.
+  r.fletePendienteEstimado = r.tarifaPromedio != null ? Math.round(r.tarifaPromedio * r.devueltos) : 0
+  r.costoPorEntrega = r.entregados
+    ? (r.fleteFacturado + r.fletePendienteEstimado) / r.entregados
+    : null
   return r
 }
