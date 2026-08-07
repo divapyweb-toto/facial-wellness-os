@@ -744,13 +744,13 @@ export default function EntregasPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Entregas · Tracking Punto a Punto</h1>
-          <p className="page-subtitle">Subí los 2 reportes de PaP y mirá tu tasa de entrega y rentabilidad real</p>
+          <h1 className="page-title">Entregas · Tracking de envíos</h1>
+          <p className="page-subtitle">Subí los reportes de Punto a Punto o la exportación de Lucero — el formato se detecta solo</p>
         </div>
       </div>
 
       <div className="card">
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>¿Cómo exportar de Punto a Punto?</div>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>¿Cómo exportar los reportes?</div>
         {['Entrá a rastreo.puntoapunto.com.py → Reportes','Descargá el "Reporte de Gestión" (elegí el rango de fechas)','Descargá también el "Reporte de Paquetes" (mismo rango)','Subí los 2 archivos acá abajo'].map((p, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
             <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{i + 1}</div>
@@ -800,13 +800,13 @@ export default function EntregasPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Entregas · Tracking Punto a Punto</h1>
+          <h1 className="page-title">Entregas · Tracking de envíos</h1>
           <p className="page-subtitle">
             {filtroMes === 'todos'
               ? <>{merged.length} paquetes en total · histórico completo</>
               : stats
                 ? <>{stats.total} paquetes en {etiquetaMes(mesEfectivo)} · {stats.conRef} con referencia</>
-                : <>{piramide?.total || 0} ventas en {etiquetaMes(mesEfectivo)} · sin reporte PaP cargado</>}
+                : <>{piramide?.total || 0} ventas en {etiquetaMes(mesEfectivo)} · sin reporte de transportadora cargado</>}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1020,7 +1020,7 @@ export default function EntregasPage() {
               </div>
               {[
                 { label: 'Ingreso cobrado', sub: `${p.entregados} entregados`, val: p.ingreso, sign: '+', color: 'var(--green)' },
-                { label: 'Flete de envíos', sub: `${p.resueltos} resueltos × 27k`, val: -p.fleteResueltos, sign: '−', color: 'var(--red)' },
+                { label: 'Flete de envíos', sub: `${p.resueltos} resueltos · prom. ${formatGs(Math.round(p.fleteResueltos / (p.resueltos || 1)))} c/u`, val: -p.fleteResueltos, sign: '−', color: 'var(--red)' },
                 { label: 'Costo del producto', sub: `solo los ${p.entregados} entregados`, val: -p.cogs, sign: '−', color: 'var(--red)' },
                 { label: 'Contribución firme', sub: `${p.resueltos} envíos × ${formatGs(p.contribPorEnvio)}`, val: p.contribucionFirme, sign: '=', color: p.contribucionFirme >= 0 ? 'var(--green)' : 'var(--red)', bold: true, destacado: true },
               ].map((nivel, i) => (
@@ -1083,7 +1083,7 @@ export default function EntregasPage() {
                   <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Flete ya comprometido</div>
                     <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--red)', fontFamily: 'var(--font-display)' }}>−{formatGs(p.fleteEnTransito)}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{p.enProceso} × 27k (ya despachados)</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{p.enProceso} ya despachados</div>
                   </div>
                   <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Proyección de cierre</div>
@@ -1122,7 +1122,7 @@ export default function EntregasPage() {
               <div className="kpi-card">
                 <div className="kpi-label"><TrendingDown size={13} style={{ verticalAlign: -2 }} /> Sangrado por fletes</div>
                 <div className="kpi-value" style={{ color: 'var(--red)' }}>{formatGs(p.sangradoFlete)}</div>
-                <div className="kpi-sub">{p.devueltos} devoluciones × 27k (el producto vuelve)</div>
+                <div className="kpi-sub">{p.devueltos} devoluciones · el flete se paga igual</div>
               </div>
             </div>
           </>
@@ -1261,7 +1261,7 @@ export default function EntregasPage() {
         </>
       )}
 
-      {/* ════ SECCIONES LOGÍSTICAS (solo con reporte PaP cargado) ════ */}
+      {/* ════ SECCIONES LOGÍSTICAS (solo con reporte de transportadora cargado) ════ */}
       {stats && (<>
 
       {/* Aviso si el conteo de ventas y el de PaP difieren (fuentes distintas) */}
@@ -1269,7 +1269,7 @@ export default function EntregasPage() {
         <div className="alert" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
           <AlertTriangle size={15} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: 2 }} />
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            La <strong>ganancia de arriba</strong> sale de tus {piramide.total} ventas del mes (tu fuente de plata). Lo de <strong>acá abajo</strong> es el detalle logístico de los {stats.total} paquetes que Punto a Punto movió y reportó. Si no coinciden, es porque {stats.total < piramide.total ? `${piramide.total - stats.total} pedidos los despachaste por otro medio o aún no están en el reporte PaP` : 'el reporte PaP incluye paquetes de otros meses'}.
+            La <strong>ganancia de arriba</strong> sale de tus {piramide.total} ventas del mes (tu fuente de plata). Lo de <strong>acá abajo</strong> es el detalle logístico de los {stats.total} paquetes que las transportadoras movieron y reportaron. Si no coinciden, es porque {stats.total < piramide.total ? `${piramide.total - stats.total} pedidos los despachaste por otro medio o aún no están en ningún reporte` : 'los reportes incluyen paquetes de otros meses'}.
           </div>
         </div>
       )}
@@ -1278,7 +1278,7 @@ export default function EntregasPage() {
       {stats.hayTesoreria && (
         <div className="card">
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Truck size={15} color="var(--accent)" /> Flujo de caja con Punto a Punto
+            <Truck size={15} color="var(--accent)" /> Flujo de caja con las transportadoras
           </div>
           <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
             PaP cobra al cliente y la plata pasa por mensajero → supervisor → tesorero antes de llegarte.

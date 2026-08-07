@@ -1,3 +1,4 @@
+import { getFlete } from './config'
 // src/lib/inteligenciaEntrega.js
 // ═══════════════════════════════════════════════════════════
 // INTELIGENCIA DE ENTREGA
@@ -58,7 +59,9 @@ function agrupar(entregas, claveFn, flete) {
 
 // Análisis completo. entregas ya normalizadas: [{ categoria, ciudad, producto, mensajero, motivo, flete }]
 // flete = costo de flete por defecto (de config) para estimar plata perdida.
-export function analizarEntregas(entregas, flete = 29000) {
+// `flete` por defecto sale de la configuración: era un valor fijo que quedó
+// desactualizado cuando el flete pasó a variar por transportadora y ciudad.
+export function analizarEntregas(entregas, flete = getFlete()) {
   const lista = entregas || []
 
   // Totales

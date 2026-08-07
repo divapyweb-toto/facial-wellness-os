@@ -5,7 +5,7 @@ import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2, SlidersHorizontal } from 'lucide-react'
-import { getConfig, guardarConfigLote, cargarConfig, DEFAULTS } from '../../lib/config'
+import { getConfig, guardarConfigLote, cargarConfig, getEnvioCliente, getFlete, DEFAULTS } from '../../lib/config'
 
 // ─── Modal producto ───────────────────────────────────────
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -122,7 +122,9 @@ function MetodoModal({ tipo, item, onClose, onSaved }) {
   const tabla = tipo === 'pago' ? 'metodos_pago' : 'metodos_envio'
   const [form, setForm] = useState(item || {
     nombre: '',
-    ...(tipo === 'envio' ? { costo_cliente: 29000, costo_propio: 29000 } : {}),
+    // Valores por defecto tomados de la configuración real, no cableados:
+    // el envío al cliente y el flete cambiaron y quedaban desactualizados acá.
+    ...(tipo === 'envio' ? { costo_cliente: getEnvioCliente(), costo_propio: getFlete() } : {}),
     activo: true,
   })
 

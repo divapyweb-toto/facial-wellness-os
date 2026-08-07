@@ -1,3 +1,4 @@
+import { getFlete } from './config'
 // src/lib/metricasAds.js
 // ═══════════════════════════════════════════════════════════
 // MÉTRICAS DE META ADS conectadas a las ventas REALES.
@@ -45,7 +46,9 @@ export function calcularMetricasAds(gasto, ventas, estadoPaP = {}, cogsPromedio 
     const cat = estadoDe(v, estadoPaP)
     const total = Number(v.total) || 0
     const costoProd = Number(v.costo_prod) || cogsPromedio
-    const costoEnvio = Number(v.costo_envio) || 29000
+    // Respaldo solo si la venta no tiene el flete congelado. Sale de config,
+    // no de un número fijo: con dos transportadoras el flete ya no es único.
+    const costoEnvio = Number(v.costo_envio) || getFlete()
     despachados++
     facturado += total
     if (cat === 'entregado') {
