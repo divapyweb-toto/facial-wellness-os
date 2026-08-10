@@ -9,7 +9,7 @@ import { categorizarPaP as categoriaPaP } from '../../lib/estadosPaP'
 import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
-import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, transportadoraForzada, TRANSPORTADORAS } from '../../lib/transportadoras'
+import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, transportadoraForzada, ciudadesConocidas, coberturaCiudad, TRANSPORTADORAS } from '../../lib/transportadoras'
 import { placeholderEntregaLucero, guiaLucero } from '../../lib/rendicionLucero'
 import { familiaProducto } from '../../lib/recompra'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
@@ -26,7 +26,7 @@ const normRefRiesgo = (ref) => {
 }
 import {
   Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X,
-  Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp, RefreshCw, Info, ScanLine, MessageSquare,
+  Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp, RefreshCw, Info, ScanLine, MessageSquare, Edit2,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════
@@ -744,6 +744,126 @@ function ventaAPedido(v) {
 // ═══════════════════════════════════════════════════════════
 // COMPONENTE
 // ═══════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════
+// MODAL DE CORRECCIÓN DE PEDIDO
+//
+// Los datos vienen del checkout de Shopify o de un texto de WhatsApp, así que
+// los escribe el cliente: ciudades mal escritas, teléfonos incompletos,
+// direcciones a medias. Corregirlos ANTES de cargar la venta evita despachar
+// a la ciudad equivocada (y pagar la tarifa equivocada).
+//
+// La ciudad se elige de una lista de ciudades conocidas en vez de tipear
+// libre: si se corrige un typo con otro typo, el pedido queda sin cobertura y
+// el problema se traslada en vez de resolverse.
+// ═══════════════════════════════════════════════════════════
+function ModalEditarPedido({ pedido, onGuardar, onCerrar }) {
+  const [f, setF] = useState({
+    cliente_nombre: pedido.cliente_nombre || '',
+    telefono: pedido.telefono || '',
+    ciudad: pedido.ciudad || '',
+    direccion: pedido.direccion || '',
+    referencia_dir: pedido.referencia_dir || '',
+    cantidad: pedido.cantidad || 1,
+    total: pedido.total || 0,
+  })
+  const ciudades = useMemo(() => ciudadesConocidas(), [])
+  const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
+
+  // Efecto de la ciudad elegida: se muestra ANTES de guardar, para que la
+  // corrección sea una decisión informada y no a ciegas.
+  const cobertura = useMemo(() => coberturaCiudad(f.ciudad), [f.ciudad])
+  const sug = useMemo(
+    () => sugerirTransportadora(f.ciudad, pedido.producto_nombre),
+    [f.ciudad, pedido.producto_nombre]
+  )
+  const cambioCiudad = f.ciudad !== (pedido.ciudad || '')
+
+  return (
+    <div className="modal-overlay" onClick={onCerrar}>
+      <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3 style={{ margin: 0, fontSize: 15 }}>
+            Corregir pedido {pedido.n_referencia ? `#${pedido.n_referencia}` : ''}
+          </h3>
+          <button className="btn btn-ghost btn-sm" onClick={onCerrar}><X size={15} /></button>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label className="form-label">Nombre y apellido</label>
+            <input className="form-input" value={f.cliente_nombre} onChange={e => set('cliente_nombre', e.target.value)} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div>
+              <label className="form-label">Teléfono</label>
+              <input className="form-input" value={f.telefono} onChange={e => set('telefono', e.target.value)} placeholder="0981234567" />
+            </div>
+            <div>
+              <label className="form-label">Ciudad</label>
+              <input
+                className="form-input" list="ciudades-conocidas"
+                value={f.ciudad} onChange={e => set('ciudad', e.target.value)}
+                placeholder="Empezá a escribir…"
+              />
+              <datalist id="ciudades-conocidas">
+                {ciudades.map(c => <option key={c} value={c} />)}
+              </datalist>
+            </div>
+          </div>
+          <div>
+            <label className="form-label">Dirección</label>
+            <input className="form-input" value={f.direccion} onChange={e => set('direccion', e.target.value)} />
+          </div>
+          <div>
+            <label className="form-label">Referencia de la dirección <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(opcional)</span></label>
+            <input className="form-input" value={f.referencia_dir} onChange={e => set('referencia_dir', e.target.value)} placeholder="frente a la farmacia…" />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div>
+              <label className="form-label">Cantidad</label>
+              <input className="form-input" type="number" min="1" value={f.cantidad} onChange={e => set('cantidad', parseInt(e.target.value) || 1)} />
+            </div>
+            <div>
+              <label className="form-label">Total a cobrar</label>
+              <input className="form-input" type="number" value={f.total} onChange={e => set('total', parseInt(e.target.value) || 0)} />
+            </div>
+          </div>
+
+          {/* Efecto de la corrección de ciudad */}
+          {cambioCiudad && (
+            <div style={{
+              padding: '10px 12px', borderRadius: 8, fontSize: 12,
+              border: `1px solid ${sug.transportadora ? 'var(--border)' : 'var(--red)'}`,
+              background: 'var(--bg-hover)',
+            }}>
+              {sug.transportadora ? (
+                <>
+                  <div style={{ fontWeight: 700, marginBottom: 2 }}>
+                    Pasa a {labelTransportadora(sug.transportadora)}
+                    {sug.tarifa != null ? ` · ${formatGs(sug.tarifa)}` : ''}
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>{sug.motivo}</div>
+                </>
+              ) : (
+                <div style={{ color: 'var(--red)', fontWeight: 600 }}>
+                  Ninguna transportadora cubre esa ciudad — el pedido no se va a poder despachar.
+                </div>
+              )}
+              <div style={{ color: 'var(--text-muted)', marginTop: 4, fontSize: 11 }}>
+                Cobertura: {cobertura.pap ? 'PaP ✓' : 'PaP ✗'} · {cobertura.lucero ? `Lucero ✓ (${formatGs(cobertura.tarifaLucero)})` : 'Lucero ✗'}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="modal-footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn btn-ghost" onClick={onCerrar}>Cancelar</button>
+          <button className="btn btn-primary" onClick={() => onGuardar(f)}>Guardar corrección</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function DespachoPagina() {
   const { toast } = useToast()
   const fileRef = useRef()
@@ -788,13 +908,43 @@ export default function DespachoPagina() {
   // Costo de flete tipeado a mano cuando la transportadora es 'otra' (no hay
   // tarifario para un courier arbitrario).
   const [costoOtraManual, setCostoOtraManual] = useState({})
+  // Correcciones hechas a mano sobre un pedido del CSV/WhatsApp antes de
+  // cargarlo (típico: el cliente escribió mal su ciudad). Se guardan por
+  // referencia y se aplican en el memo, así el ruteo se RECALCULA con el dato
+  // corregido en vez de quedar con la transportadora de la ciudad equivocada.
+  const [ediciones, setEdiciones] = useState({})
+  const [editando, setEditando] = useState(null)   // pedido abierto en el modal
   // Historial de entrega por ciudad + ciudades forzadas a mano por el admin.
   const [historialCiudad, setHistorialCiudad] = useState(new Map())
   const [ciudadHabilitada, setCiudadHabilitada] = useState(new Set())
 
   // Aplica los overrides: despacho forzado + marca de prepago + riesgo cliente.
   const todosConOverride = useMemo(
-    () => todos.map(p => {
+    () => todos.map(pOriginal => {
+      // 1) Se aplican las correcciones manuales ANTES de cualquier cálculo.
+      const edit = ediciones[pOriginal.n_referencia]
+      let p = edit ? { ...pOriginal, ...edit } : pOriginal
+      // 2) Si se corrigió la ciudad, el ruteo se recalcula por completo: la
+      //    ciudad decide cobertura, transportadora y tarifa. Sin esto, el
+      //    pedido quedaría con los datos de la ciudad equivocada.
+      if (edit && edit.ciudad && edit.ciudad !== pOriginal.ciudad) {
+        const sug = sugerirTransportadora(p.ciudad, p.producto_nombre)
+        const faltantes = []
+        if (!p.cliente_nombre) faltantes.push('nombre')
+        if (!p.telefono) faltantes.push('teléfono')
+        if (!p.direccion) faltantes.push('dirección')
+        p = {
+          ...p,
+          transportadora: sug.transportadora,
+          motivoTransportadora: sug.motivo,
+          bloqueadoPorProducto: !!sug.bloqueadoPorProducto,
+          costo_envio: sug.tarifa,
+          cobranzaOk: sug.transportadora != null,
+          faltantes,
+          despachar: p.cfg?.despachar !== false && sug.transportadora != null && faltantes.length === 0,
+        }
+      }
+      p = { ...p, editado: !!edit }
       const tel = normalizarTel(p.telefono)
       const ev = evaluarRiesgo(historialRiesgo.get(tel))
       const habilitado = riesgoHabilitado.has(p.n_referencia)
@@ -828,7 +978,7 @@ export default function DespachoPagina() {
         costo_envio: tarifa,
       }
     }),
-    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual]
+    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual, ediciones]
   )
 
   const paraDespacho = useMemo(() => todosConOverride.filter(p => p.despachar), [todosConOverride])
@@ -1868,6 +2018,7 @@ export default function DespachoPagina() {
                     <th>Cliente</th>
                     <th>Despacho</th>
                     <th>Pago</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2018,6 +2169,16 @@ export default function DespachoPagina() {
                           <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>
                         )}
                       </td>
+                      <td data-label="" onClick={e => e.stopPropagation()} style={{ textAlign: 'right' }}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setEditando(p)}
+                          title="Corregir datos del pedido (ciudad, teléfono, dirección…)"
+                          style={{ padding: '3px 7px' }}
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                      </td>
                       <td data-label="Pago">
                         {p.despachar ? (
                           <button
@@ -2044,6 +2205,18 @@ export default function DespachoPagina() {
             </div>
           </div>
         </>
+      )}
+
+      {editando && (
+        <ModalEditarPedido
+          pedido={editando}
+          onCerrar={() => setEditando(null)}
+          onGuardar={(campos) => {
+            setEdiciones(prev => ({ ...prev, [editando.n_referencia]: campos }))
+            setEditando(null)
+            toast('Pedido corregido — se recalculó la transportadora', 'success')
+          }}
+        />
       )}
 
       {modalSalida && (

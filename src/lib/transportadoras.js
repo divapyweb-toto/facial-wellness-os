@@ -18,7 +18,7 @@
 // tarifa es ≤ 30.000; PaP se queda con las de 35.000 y con las otras 49.
 // ═══════════════════════════════════════════════════════════
 import { getFlete } from './config'
-import { tieneCobranzaPaP, emparejarCiudad, normalizarCiudadPaP } from './cobranzaPaP'
+import { tieneCobranzaPaP, emparejarCiudad, normalizarCiudadPaP, CIUDADES_PAP_LISTA } from './cobranzaPaP'
 import { familiaProducto } from './recompra'
 
 export const TRANSPORTADORAS = {
@@ -376,6 +376,32 @@ export function ciudadParaPlanillaLucero(ciudad) {
   const c = ciudadLucero(ciudad)
   if (c && NOMBRE_OFICIAL_LUCERO[c]) return NOMBRE_OFICIAL_LUCERO[c]
   return String(ciudad || '').toUpperCase().trim()
+}
+
+// ─── Ciudades conocidas (para autocompletar al corregir un pedido) ───
+// Une la cobertura de las dos transportadoras. Se usa en Despacho: cuando el
+// cliente escribió mal su ciudad, se corrige eligiendo de esta lista en vez de
+// tipear libre — así una corrección no introduce un typo nuevo que después
+// deje el pedido sin cobertura.
+export function ciudadesConocidas() {
+  const set = new Set()
+  Object.keys(TARIFAS_LUCERO).forEach(c => set.add(c))
+  CIUDADES_PAP_LISTA.forEach(c => set.add(c))
+  return [...set]
+    .map(c => c.replace(/\b\w/g, m => m.toUpperCase()))
+    .sort((a, b) => a.localeCompare(b, 'es'))
+}
+
+// Info de cobertura de una ciudad, para mostrar el efecto de la corrección
+// antes de guardarla.
+export function coberturaCiudad(ciudad) {
+  const cL = ciudadLucero(ciudad)
+  return {
+    pap: tieneCobranzaPaP(ciudad),
+    lucero: cL != null,
+    tarifaLucero: cL ? TARIFAS_LUCERO[cL] : null,
+    velocidadLucero: cL ? velocidadLucero(cL) : null,
+  }
 }
 
 export { normalizarCiudadPaP }

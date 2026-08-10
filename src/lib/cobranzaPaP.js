@@ -210,6 +210,9 @@ function buscarCiudad(raw) {
 }
 
 // ¿PaP hace cobranza en esta ciudad?
+// Lista de ciudades con cobranza PaP (para autocompletado en Despacho).
+export const CIUDADES_PAP_LISTA = Object.keys(CIUDADES_COBRANZA)
+
 export function tieneCobranzaPaP(ciudad) {
   return buscarCiudad(ciudad) != null
 }
