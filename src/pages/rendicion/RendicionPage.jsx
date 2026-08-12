@@ -6,7 +6,7 @@ import { sanearEntrega } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { parsearFilasRendicion, conciliarRendicion, combinarArchivosRendicion } from '../../lib/conciliacionRendicion'
-import { esRendicionLucero, parsearRendicionLucero, rendicionLuceroAEntregas, resumenRendicionLucero } from '../../lib/rendicionLucero'
+import { esRendicionLucero, parsearRendicionLucero, rendicionLuceroAEntregas, resumenRendicionLucero, categoriaLucero } from '../../lib/rendicionLucero'
 import { soloColumnasEntregas } from '../../lib/estadosPaP'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
@@ -336,15 +336,40 @@ export default function RendicionPage() {
             break
           }
         }
+        // ── Actualizar el estado de las VENTAS ──
+        // La rendición trae el EstadoFinal de cada envío, así que cierra la
+        // venta igual que lo hace el reporte de PaP. Sin esto la venta quedaba
+        // en 'pendiente' aunque la plata ya estuviera cobrada y depositada.
+        let ventasAct = 0
+        try {
+          const todosItems = lotes.flatMap(l => l.items || [])
+          const refsEnt = todosItems.filter(i => categoriaLucero(i.estadoFinal) === 'entregado').map(i => i.referencia)
+          const refsDev = todosItems.filter(i => categoriaLucero(i.estadoFinal) === 'devuelto').map(i => i.referencia)
+          for (const [refs, estado] of [[refsEnt, 'entregado'], [refsDev, 'devuelto']]) {
+            for (let i = 0; i < refs.length; i += 100) {
+              const chunk = refs.slice(i, i + 100)
+              if (!chunk.length) continue
+              const { data } = await supabase.from('ventas')
+                .update({ estado }).in('n_referencia', chunk).is('deleted_at', null).select('id')
+              ventasAct += (data || []).length
+            }
+          }
+        } catch (e) { console.warn('No se pudieron actualizar las ventas:', e?.message) }
+
         setResumenLucero(resumenes)
         if (errorLucero) {
           toast('Lucero: error al guardar — ' + errorLucero, 'error')
         } else if (noCuadra.length) {
-          toast(`Lucero: ${guardados} envíos guardados, pero ${noCuadra.length} lote(s) NO cuadran con su propia cabecera`, 'error')
+          // Se dice EXACTAMENTE qué no cuadra y por cuánto, para poder
+          // reclamárselo a Lucero con el número en la mano.
+          const det = noCuadra.flatMap(r => (r.diferencias || []).map(d =>
+            `lote ${r.lote}: ${d.etiqueta} dice ${d.cabecera.toLocaleString('es-PY')} pero la suma da ${d.calculado.toLocaleString('es-PY')} (${d.diferencia > 0 ? 'faltan' : 'sobran'} ${Math.abs(d.diferencia).toLocaleString('es-PY')})`
+          )).join(' · ')
+          toast(`Lucero: ${guardados} envíos guardados · ${ventasAct} ventas actualizadas. NO CUADRA — ${det}`, 'error')
         } else if (omitidas.length) {
           toast(`Lucero: ${guardados} envíos guardados, pero falta(n) la(s) columna(s) ${omitidas.join(', ')} en la tabla entregas — corré la migración`, 'error')
         } else {
-          toast(`Lucero: ${guardados} envíos del lote ${resumenes.map(r => r.lote).join(', ')} — todo cuadra`, 'success')
+          toast(`Lucero: ${guardados} envíos del lote ${resumenes.map(r => r.lote).join(', ')} · ${ventasAct} ventas actualizadas — todo cuadra`, 'success')
         }
         await cargarHistorico()
       }
@@ -502,9 +527,22 @@ export default function RendicionPage() {
                   <div className="kpi-card"><div className="kpi-label">Te depositan</div><div className="kpi-value" style={{ fontSize: 16, color: 'var(--green)' }}>{formatGs(r.totalPago)}</div></div>
                 </div>
                 <div style={{ fontSize: 11, marginTop: 6, color: r.todoCuadra ? 'var(--text-muted)' : 'var(--red)' }}>
-                  {r.todoCuadra
-                    ? 'Las sumas del detalle cuadran con la cabecera del archivo.'
-                    : '⚠ El detalle NO cuadra con la cabecera del archivo — revisalo con Lucero antes de darlo por bueno.'}
+                  {r.todoCuadra ? (
+                    'Las sumas del detalle cuadran con la cabecera del archivo.'
+                  ) : (
+                    <>
+                      <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠ El detalle NO cuadra con la cabecera del archivo:</div>
+                      {(r.diferencias || []).map((d, k) => (
+                        <div key={k} style={{ marginLeft: 8 }}>
+                          · <b>{d.etiqueta}</b>: la cabecera dice {formatGs(d.cabecera)} pero la suma de los ítems da {formatGs(d.calculado)}
+                          {' '}→ {d.diferencia > 0 ? 'faltan' : 'sobran'} <b>{formatGs(Math.abs(d.diferencia))}</b>
+                        </div>
+                      ))}
+                      <div style={{ marginTop: 4, color: 'var(--text-muted)' }}>
+                        Reclamáselo a Lucero con estos números antes de dar el lote por bueno.
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
