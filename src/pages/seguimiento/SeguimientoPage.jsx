@@ -21,7 +21,7 @@ import { useToast } from '../../lib/toast'
 import { labelTransportadora } from '../../lib/transportadoras'
 import {
   construirBandeja, resumenBandeja, linkWhatsApp, pedidosParaReclamar, mensajeReclamo,
-  efectividad, PLANTILLAS, ESTADOS_SEG, RESPUESTAS, DIAS_SEGUIMIENTO_DEFAULT, hoyISO,
+  efectividad, mensajeReclamoIndividual, codigoCourier, PLANTILLAS, ESTADOS_SEG, RESPUESTAS, DIAS_SEGUIMIENTO_DEFAULT, hoyISO,
 } from '../../lib/seguimiento'
 import {
   MessageCircle, CheckCircle, AlertTriangle, Wallet, RefreshCw, Send, Clock, TrendingUp,
@@ -46,7 +46,20 @@ export default function SeguimientoPage() {
       const abiertas = await fetchAll(() => supabase.from('ventas').select(cols)
         .is('deleted_at', null).in('estado', ['pendiente', 'en_tramite', 'en_camino'])
         .order('fecha', { ascending: true }))
-      setVentas(abiertas || [])
+      // Guías reales desde `entregas`: el courier busca por SU número, no por
+      // nuestra referencia interna. Sin esto el reclamo llega incompleto.
+      let guiaPorRef = {}
+      try {
+        const ents = await fetchAll(() => supabase.from('entregas')
+          .select('n_referencia, nro_guia_pap, guia_transportadora'), { columnaOrden: 'nro_guia_pap' })
+        ;(ents || []).forEach(e => {
+          const k = String(e.n_referencia || '').replace(/\D/g, '')
+          if (k) guiaPorRef[k] = { nro_guia: e.nro_guia_pap, guia_transportadora: e.guia_transportadora }
+        })
+      } catch { /* sin guías: el mensaje sale con referencia igual */ }
+      setVentas((abiertas || []).map(v => ({
+        ...v, ...(guiaPorRef[String(v.n_referencia || '').replace(/\D/g, '')] || {}),
+      })))
       // Histórico solo para medir efectividad (ya cerradas y contactadas).
       try {
         const cerradas = await fetchAll(() => supabase.from('ventas')
@@ -118,6 +131,15 @@ export default function SeguimientoPage() {
       ...(fechaPrometida ? { seguimiento_fecha_prometida: fechaPrometida } : {}),
     }, cfg?.cierra || null)
     toast(cfg?.cierra ? `Venta cerrada como ${cfg.cierra}` : `Marcado: ${resp.label}`, 'success')
+  }
+
+  // Aviso por UN pedido puntual (sin esperar a agrupar).
+  const avisarUno = async (v) => {
+    const texto = mensajeReclamoIndividual(v)
+    await navigator.clipboard.writeText(texto).catch(() => {})
+    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank', 'noopener')
+    await guardar(v, { seguimiento_estado: 'escalado', seguimiento_at: hoyISO() }, null)
+    toast('Mensaje copiado — avisado al courier', 'success')
   }
 
   // Reclamo agrupado: un mensaje con TODOS los códigos de ese courier.
@@ -259,6 +281,11 @@ export default function SeguimientoPage() {
                         background: 'var(--bg-hover)', color: v.cfg.color,
                       }}>{v.cfg.label}</span>
                       {v.n_referencia && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>#{v.n_referencia}</span>}
+                      {codigoCourier(v) && (
+                        <span style={{ fontSize: 10, color: 'var(--text-dim)' }} title="Código que reconoce el courier">
+                          guía {codigoCourier(v)}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
                       {v.producto_nombre} · {v.ciudad || 'sin ciudad'} · {formatGs(v.total)} · {labelTransportadora(v.transportadora || 'pap')}
@@ -293,6 +320,19 @@ export default function SeguimientoPage() {
                         <MessageCircle size={13} /> {v.intentos > 0 ? 'Escribir de nuevo' : 'WhatsApp'}
                       </button>
                     </div>
+                    {/* Aviso al courier: aparece solo cuando hay algo concreto
+                        que reclamar (fecha pedida o cliente sin contactar). */}
+                    {(v.estado === 'sin_contacto' || (v.estado === 'reprogramado' && v.seguimiento_fecha_prometida)) && (
+                      <button
+                        className="btn btn-sm" disabled={ocupado}
+                        style={{ background: 'var(--red)', color: '#fff', border: 'none', fontWeight: 700, fontSize: 11 }}
+                        onClick={() => avisarUno(v)}
+                        title="Copia el texto con ref, guía, nombre y celular para mandarle al courier"
+                      >
+                        <Send size={12} /> Avisar al courier
+                      </button>
+                    )}
+
                     {/* Botones de respuesta SIEMPRE visibles: volver de WhatsApp
                         y registrar qué contestó tiene que ser un clic. */}
                     <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>

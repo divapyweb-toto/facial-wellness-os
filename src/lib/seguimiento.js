@@ -203,6 +203,32 @@ export function linkWhatsApp(venta, plantillaId) {
   return `https://wa.me/${tel}?text=${encodeURIComponent(mensajeCliente(venta, plantillaId))}`
 }
 
+// ─── Código que el courier reconoce ─────────────────────────
+// Cada transportadora identifica el envío con un código distinto, y mandar el
+// equivocado hace que el reclamo no sirva para nada:
+//
+//   PaP    → su número de guía (ej. 26280786), el que ellos generan.
+//   Lucero → el código FW-XXXX que les mandamos en la cabecera. OJO: en la
+//            tabla `entregas` guardamos 'L-2025' como clave INTERNA nuestra —
+//            Lucero no conoce ese formato, buscarlo en su sistema no da nada.
+//            Si además tenemos su EnvioID (del export), se agrega porque es
+//            con lo que ellos filtran más rápido.
+//   Otra   → no hay guía en el sistema (courier sin integración).
+export function codigoCourier(venta) {
+  const t = venta?.transportadora || 'pap'
+  const ref = venta?.n_referencia
+  if (t === 'lucero') {
+    const envioId = venta?.guia_transportadora
+    return ref ? `FW-${ref}${envioId ? ` (ID ${envioId})` : ''}` : null
+  }
+  if (t === 'pap') {
+    const g = venta?.nro_guia
+    // Nunca devolver una clave interna 'L-xxx' como si fuera guía de PaP.
+    return g && !String(g).startsWith('L-') ? String(g) : null
+  }
+  return null
+}
+
 // ─── Reclamo AGRUPADO al courier ────────────────────────────
 // La mayor reducción de fricción: en vez de escribirle a la transportadora una
 // vez por pedido, se junta todo lo reclamable en UN mensaje con todos los
@@ -221,20 +247,47 @@ export function pedidosParaReclamar(bandeja) {
   return porCourier
 }
 
+// Fecha legible para el courier: '2026-08-15' → '15/08'
+const fechaCorta = (iso) => {
+  const m = String(iso ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/)
+  return m ? `${m[3]}/${m[2]}` : String(iso ?? '')
+}
+
+// Una línea por pedido con TODO lo que el courier necesita para ubicarlo sin
+// volver a preguntar: referencia, guía, nombre y celular del cliente.
+function lineaPedido(p) {
+  const partes = [`Ref ${p.n_referencia || 's/ref'}`]
+  const cod = codigoCourier(p)
+  if (cod) partes.push(`Guia ${cod}`)
+  if (p.cliente_nombre) partes.push(p.cliente_nombre)
+  if (p.cliente_telefono) partes.push(p.cliente_telefono)
+  if (p.ciudad) partes.push(p.ciudad)
+  return '- ' + partes.join(' · ')
+}
+
 export function mensajeReclamo(pedidos) {
   const sinContacto = pedidos.filter(p => p.estado === 'sin_contacto')
   const reprogramados = pedidos.filter(p => p.estado === 'reprogramado')
   const l = ['Hola! Necesito ayuda con estos envios de Facial Wellness:']
   if (sinContacto.length) {
     l.push('', 'NO LOS CONTACTARON todavia (el cliente confirma que nadie lo llamo):')
-    sinContacto.forEach(p => l.push(
-      `- ${p.n_referencia || 's/ref'} · ${p.cliente_nombre || ''} · ${p.ciudad || ''} · ${p.cliente_telefono || ''}`))
+    sinContacto.forEach(p => l.push(lineaPedido(p)))
   }
   if (reprogramados.length) {
     l.push('', 'REPROGRAMAR entrega (el cliente pidio otra fecha):')
-    reprogramados.forEach(p => l.push(
-      `- ${p.n_referencia || 's/ref'} · ${p.cliente_nombre || ''} · ${p.ciudad || ''} · para el ${p.seguimiento_fecha_prometida}`))
+    reprogramados.forEach(p => l.push(`${lineaPedido(p)} · ENTREGAR EL ${fechaCorta(p.seguimiento_fecha_prometida)}`))
   }
+  l.push('', 'Me confirman por favor? Gracias!')
+  return l.join('\n')
+}
+
+// Mensaje para UN pedido puntual (cuando no se quiere esperar a agrupar).
+export function mensajeReclamoIndividual(p) {
+  const l = ['Hola! Consulta por este envio de Facial Wellness:', '', lineaPedido(p)]
+  if (p.estado === 'reprogramado' && p.seguimiento_fecha_prometida)
+    l.push('', `El cliente pidio que se lo entreguen el ${fechaCorta(p.seguimiento_fecha_prometida)}.`)
+  else if (p.estado === 'sin_contacto')
+    l.push('', 'El cliente me confirma que todavia nadie lo contacto.')
   l.push('', 'Me confirman por favor? Gracias!')
   return l.join('\n')
 }
