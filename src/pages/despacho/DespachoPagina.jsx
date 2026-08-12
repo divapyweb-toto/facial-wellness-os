@@ -333,16 +333,21 @@ function parsearPedidoManual(bloque, catalogo, nRef) {
   productoTexto = productoTexto.replace(/\b\d{5,}\b.*$/, '').trim()
   const cantidad = extraerCantidadManual(productoTexto)
 
-  // Match literal contra el catálogo primero (rápido cuando el texto es casi
-  // igual al nombre real); si no encuentra nada, se cae a reconocimiento por
-  // FAMILIA — la misma lógica que ya usa el resto del sistema y que sí sabe
-  // que "limpiador de lengua" es sinónimo de "raspador de lengua" en el
-  // catálogo, cosa que una comparación de texto literal no puede saber.
-  let prod = matchProducto(productoTexto, catalogo)
+  // Orden de matcheo, del más confiable al más frágil:
+  //   1. Nombre exacto del catálogo.
+  //   2. FAMILIA — entiende sinónimos ("limpiador de lengua" = raspador) y
+  //      packs. Va ANTES del match parcial porque un pack MENCIONA a sus
+  //      componentes: "pack gudair (tiras nasales + parches bucales)" contiene
+  //      el nombre de tres productos, y el match parcial elegía el más largo
+  //      ("Parches bucales", 79.000) en vez del pack real (150.000).
+  //   3. Coincidencia parcial de texto, como último recurso.
+  const nTexto = productoTexto.toLowerCase().trim()
+  let prod = catalogo.find(c => (c.nombre || '').toLowerCase().trim() === nTexto) || null
   if (!prod) {
     const familia = familiaProducto(productoTexto)
     if (familia) prod = catalogo.find(c => familiaProducto(c.nombre) === familia) || null
   }
+  if (!prod) prod = matchProducto(productoTexto, catalogo)
   const precioBase = prod
     ? (cantidad >= 3 ? (prod.precio_3u || prod.precio_1u) : cantidad === 2 ? (prod.precio_2u || prod.precio_1u) : prod.precio_1u) || 0
     : 0
