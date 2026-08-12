@@ -257,16 +257,28 @@ export function resumenRendicionLucero(parsed) {
   const sumaCobrar = items.reduce((s, i) => s + i.totalCobrar, 0)
   const sumaPago = items.reduce((s, i) => s + i.pagoCliente, 0)
   // Chequeo de integridad contra el encabezado del propio archivo.
+  // Se guarda el DETALLE de cada diferencia, no solo un sí/no: cuando un lote
+  // no cuadra hay que poder decir exactamente qué campo y por cuánto, para
+  // reclamárselo a Lucero con el número en la mano.
+  const comparar = (etiqueta, cabecera, calculado) => ({
+    etiqueta, cabecera, calculado,
+    diferencia: (cabecera || 0) - (calculado || 0),
+    ok: (cabecera || 0) === (calculado || 0),
+  })
+  const detalle = [
+    comparar('Bruto cobrado', parsed.bruto, sumaCobrar),
+    comparar('Tarifas', parsed.tarifas, sumaTarifas),
+    comparar('Total a depositar', parsed.totalPago, sumaPago),
+  ]
   const cuadra = {
-    bruto: parsed.bruto === sumaCobrar,
-    tarifas: parsed.tarifas === sumaTarifas,
-    totalPago: parsed.totalPago === sumaPago,
+    bruto: detalle[0].ok, tarifas: detalle[1].ok, totalPago: detalle[2].ok,
   }
+  const diferencias = detalle.filter(d => !d.ok)
   return {
     cantidad: items.length,
     porCat,
     sumaTarifas, sumaCobrar, sumaPago,
-    cuadra,
-    todoCuadra: cuadra.bruto && cuadra.tarifas && cuadra.totalPago,
+    cuadra, detalle, diferencias,
+    todoCuadra: diferencias.length === 0,
   }
 }
