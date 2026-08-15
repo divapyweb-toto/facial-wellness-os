@@ -85,17 +85,54 @@ export default function ReportesPage() {
     const devueltas = (ventas || []).filter(v => v.estado === 'devuelto')
 
     // Por producto (con tasa de devolución)
+    // ── Margen REAL por producto ──
+    // Antes esto solo contaba ventas y devoluciones. El número que falta para
+    // decidir qué escalar y qué discontinuar es la CONTRIBUCIÓN: lo que deja
+    // cada producto después de su costo y su flete.
+    //
+    // La clave está en el flete: se paga por TODO lo despachado, entregado o
+    // devuelto. Un producto con 36% de devolución paga flete por 100 paquetes
+    // y cobra por 64. Mirar solo el margen de lo entregado esconde esa pérdida.
     const porProducto = {}
     ;(ventas || []).forEach(v => {
-      if (!porProducto[v.producto_nombre]) porProducto[v.producto_nombre] = { nombre: v.producto_nombre, ventas: 0, entregados: 0, devueltos: 0, ingresos: 0 }
-      porProducto[v.producto_nombre].ventas++
-      if (v.estado === 'entregado') { porProducto[v.producto_nombre].entregados++; porProducto[v.producto_nombre].ingresos += (v.ganancia_neta || 0) }
-      if (v.estado === 'devuelto') porProducto[v.producto_nombre].devueltos++
+      const k = v.producto_nombre || '(sin producto)'
+      if (!porProducto[k]) porProducto[k] = {
+        nombre: k, ventas: 0, entregados: 0, devueltos: 0, enTransito: 0,
+        ingresos: 0, cobrado: 0, cogs: 0, flete: 0, unidades: 0,
+      }
+      const p = porProducto[k]
+      p.ventas++
+      // El flete se paga por todo lo RESUELTO (entregado o devuelto).
+      if (v.estado === 'entregado' || v.estado === 'devuelto') p.flete += (v.costo_envio || 0)
+      if (v.estado === 'entregado') {
+        p.entregados++
+        p.cobrado += (v.total || 0)
+        p.cogs += (v.costo_prod || 0)
+        p.unidades += (v.cantidad || 1)
+        p.ingresos += (v.ganancia_neta || 0)
+      } else if (v.estado === 'devuelto') {
+        p.devueltos++
+        // La mercadería devuelta vuelve al stock: su COGS no se pierde.
+      } else p.enTransito++
     })
     const porProductoArr = Object.values(porProducto).map(p => {
       const res = p.entregados + p.devueltos
-      return { ...p, tasaDevolucion: res ? Math.round(p.devueltos / res * 100) : 0 }
-    }).sort((a, b) => b.ingresos - a.ingresos)
+      // Contribución = lo cobrado − costo de lo vendido − flete de TODO lo resuelto.
+      const contribucion = p.cobrado - p.cogs - p.flete
+      return {
+        ...p,
+        tasaDevolucion: res ? Math.round(p.devueltos / res * 100) : 0,
+        tasaEntrega: res ? (p.entregados / res) * 100 : null,
+        contribucion,
+        // Margen sobre lo cobrado: cuánto de cada guaraní queda.
+        margenPct: p.cobrado ? (contribucion / p.cobrado) * 100 : null,
+        // LA métrica de decisión: lo que deja cada paquete DESPACHADO, no cada
+        // venta cerrada. Incorpora el costo de las devoluciones, así que un
+        // producto que se devuelve mucho cae acá aunque su ticket sea alto.
+        contribPorDespacho: res ? contribucion / res : null,
+        ticketPromedio: p.entregados ? p.cobrado / p.entregados : null,
+      }
+    }).sort((a, b) => b.contribucion - a.contribucion)
 
     // Por día del mes (para el gráfico)
     const diasDelMes = new Date(year, month, 0).getDate()
@@ -514,7 +551,12 @@ export default function ReportesPage() {
     ]))
     // Por producto
     const prodFilas = (d.porProducto || []).map(p => filaTabla([
-      esc(p.nombre), p.ventas, p.entregados, p.devueltos, pct(p.tasaDevolucion), gs(p.ingresos),
+      esc(p.nombre), p.ventas, p.entregados, p.devueltos,
+      p.tasaEntrega != null ? pct(p.tasaEntrega) : '—',
+      gs(p.cobrado), gs(p.cogs), gs(p.flete),
+      gs(p.contribucion),
+      p.margenPct != null ? pct(p.margenPct) : '—',
+      p.contribPorDespacho != null ? gs(Math.round(p.contribPorDespacho)) : '—',
     ]))
     // Por ciudad
     const ciudadFilas = (d.ciudades || []).slice(0, 30).map(c => filaTabla([
@@ -616,8 +658,9 @@ ${tabla(['Etapa', 'Cantidad', '% del total'], [
   filaTabla(['Cobrados (entregados)', cobrados, totalPedidos ? pct(cobrados / totalPedidos * 100) : '—']),
 ])}
 
-<h2>4. Por producto</h2>
-${prodFilas.length ? tabla(['Producto', 'Ventas', 'Entregados', 'Devueltos', 'Tasa dev.', 'Contribución'], prodFilas) : '<p>Sin datos.</p>'}
+<h2>4. Margen por producto</h2>
+${prodFilas.length ? tabla(['Producto', 'Ventas', 'Entreg.', 'Devuel.', 'Tasa entrega', 'Cobrado', 'Costo prod.', 'Flete', 'Contribución', 'Margen %', 'Por despacho'], prodFilas) : '<p>Sin datos.</p>'}
+<div class="formula">Contribución = cobrado − costo del producto entregado − flete de TODO lo resuelto (entregado y devuelto: el flete se paga igual). <b>Por despacho</b> = contribución ÷ paquetes resueltos: es lo que deja cada paquete que sale, ya con el costo de las devoluciones adentro. Es el número para decidir qué escalar y qué discontinuar — un producto con ticket alto pero mucha devolución cae acá aunque su margen por venta se vea bien.</div>
 
 <h2>5. Por ciudad (top 30)</h2>
 ${ciudadFilas.length ? tabla(['Ciudad', 'Pedidos', 'Entregados', 'Devueltos', 'Tasa entrega'], ciudadFilas) : '<p>Sin datos.</p>'}
@@ -881,6 +924,57 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
                     {' '}Ojo: alguna de las dos tiene menos de 15 paquetes resueltos — la diferencia todavía puede ser suerte, no desempeño.
                   </span>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Margen por producto — la tabla de decisión */}
+          {(datos.porProducto || []).length > 0 && (
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
+                Margen por producto
+                <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>
+                  · "por despacho" = lo que deja cada paquete que sale, con el costo de las devoluciones incluido
+                </span>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg-hover)', color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
+                      <th style={{ padding: '8px 12px', textAlign: 'left' }}>Producto</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Entreg.</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Devuel.</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Tasa</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Cobrado</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Flete</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Contribución</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Margen</th>
+                      <th style={{ padding: '8px 12px', textAlign: 'right' }}>Por despacho</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {datos.porProducto.map(p => (
+                      <tr key={p.nombre} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '8px 12px', fontWeight: 600 }}>{p.nombre}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{p.entregados}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', color: p.devueltos ? 'var(--red)' : undefined }}>{p.devueltos}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right',
+                          color: p.tasaEntrega == null ? 'var(--text-muted)' : p.tasaEntrega >= 85 ? 'var(--green)' : p.tasaEntrega >= 70 ? 'var(--accent)' : 'var(--red)' }}>
+                          {p.tasaEntrega == null ? '—' : `${Math.round(p.tasaEntrega)}%`}
+                        </td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{formatGs(p.cobrado)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--red)' }}>{formatGs(p.flete)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700,
+                          color: p.contribucion >= 0 ? 'var(--green)' : 'var(--red)' }}>{formatGs(p.contribucion)}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right' }}>{p.margenPct == null ? '—' : `${Math.round(p.margenPct)}%`}</td>
+                        <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700,
+                          color: (p.contribPorDespacho ?? 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                          {p.contribPorDespacho == null ? '—' : formatGs(Math.round(p.contribPorDespacho))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
