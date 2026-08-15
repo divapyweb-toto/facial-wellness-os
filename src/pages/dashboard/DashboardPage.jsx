@@ -5,6 +5,7 @@ import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { construirAlertasNegocio } from '../../lib/alertasNegocio'
 import { rangoMesAnteriorEquivalente } from '../../lib/fechas'
+import { construirAcciones, COLOR_URGENCIA } from '../../lib/centroAcciones'
 import { fetchAll } from '../../lib/fetchAll'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
@@ -123,6 +124,7 @@ export default function DashboardPage() {
   const navigate = useNavigate()
   const [kpis, setKpis] = useState(null)
   const [alertas, setAlertas] = useState([])
+  const [acciones, setAcciones] = useState([])
   const [chartData, setChartData] = useState([])
   const [historico6m, setHistorico6m] = useState([])
   const [topProductos, setTopProductos] = useState([])
@@ -381,6 +383,41 @@ export default function DashboardPage() {
     const alertasInteligentes = construirAlertasNegocio(datosAlertas)
     setAlertas([...alertasActivas, ...alertasInteligentes])
 
+    // ── Centro de acciones: qué falta hacer, priorizado por plata en juego ──
+    try {
+      const [abiertas, ultEnt, prodsBajos, sinTransp, trancadas] = await Promise.all([
+        supabase.from('ventas')
+          .select('fecha, total, estado, pago_anticipado, cliente_telefono, seguimiento_at')
+          .is('deleted_at', null).in('estado', ['pendiente', 'en_tramite', 'en_camino']),
+        supabase.from('entregas').select('fecha_entrega')
+          .not('fecha_entrega', 'is', null).order('fecha_entrega', { ascending: false }).limit(1),
+        supabase.from('productos').select('nombre, stock_actual, alerta_stock').eq('activo', true),
+        supabase.from('ventas').select('id', { count: 'exact', head: true })
+          .is('deleted_at', null).is('transportadora', null),
+        // Entregas cobradas al cliente que la transportadora todavía no depositó.
+        supabase.from('entregas').select('importe, fecha_entrega')
+          .eq('categoria', 'entregado').eq('rendido', false).not('fecha_entrega', 'is', null),
+      ])
+      // Trancadas = entregadas hace más de 14 días y todavía sin depositar.
+      const hace14 = new Date(); hace14.setDate(hace14.getDate() - 14)
+      const limite = hace14.toISOString().slice(0, 10)
+      const trancadasList = (trancadas.data || []).filter(e => e.fecha_entrega < limite)
+      const bajos = (prodsBajos.data || []).filter(p =>
+        (p.stock_actual ?? 0) <= (p.alerta_stock ?? 0))
+      setAcciones(construirAcciones({
+        ventasAbiertas: abiertas.data || [],
+        ultimaEntregaImportada: ultEnt.data?.[0]?.fecha_entrega || null,
+        gastoAdsMes: totalAdsMes,
+        productosBajos: bajos,
+        sinRendir: {
+          monto: trancadasList.reduce((s2, e) => s2 + (e.importe || 0), 0),
+          cantidad: (trancadas.data || []).length,
+          trancados: trancadasList.length,
+        },
+        ventasSinTransportadora: sinTransp.count || 0,
+      }))
+    } catch (e) { /* el centro de acciones es complementario: si falla, no rompe el dashboard */ }
+
     // Ventas recientes
     const { data: recientes } = await supabase.from('ventas').select('*').order('created_at', { ascending: false }).limit(8)
     setVentasRecientes(recientes || [])
@@ -428,6 +465,44 @@ export default function DashboardPage() {
       </div>
 
       {/* Alertas */}
+      {/* CENTRO DE ACCIONES — qué falta hacer, ordenado por plata en juego.
+          Va ARRIBA de las alertas a propósito: las alertas dicen qué pasó, esto
+          dice qué hacer. Lo accionable primero. */}
+      {acciones.length > 0 && (
+        <div className="card" style={{ padding: '16px 20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>Qué falta hacer</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              {acciones.length} pendiente{acciones.length > 1 ? 's' : ''} · ordenado por plata en juego
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {acciones.map(a => (
+              <div key={a.id} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+                flexWrap: 'wrap', padding: '10px 12px', borderRadius: 8,
+                background: 'var(--bg-hover)', borderLeft: `3px solid ${COLOR_URGENCIA[a.urgencia]}`,
+              }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{a.titulo}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{a.detalle}</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {a.monto > 0 && (
+                    <span style={{ fontSize: 13, fontWeight: 700, color: COLOR_URGENCIA[a.urgencia], whiteSpace: 'nowrap' }}>
+                      {formatGs(a.monto)}
+                    </span>
+                  )}
+                  <button className="btn btn-sm btn-secondary" onClick={() => navigate(a.ruta)} style={{ whiteSpace: 'nowrap' }}>
+                    {a.cta}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {alertas.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {alertas.map((a, i) => (
