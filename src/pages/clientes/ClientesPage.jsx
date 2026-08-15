@@ -1,17 +1,10 @@
 // src/pages/clientes/ClientesPage.jsx
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { normalizarTel } from '../../lib/referencias'
 import { supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { Users, Search, TrendingUp, Star, ShoppingBag, X, Phone, MapPin } from 'lucide-react'
 
-// Normaliza teléfono para agrupar al mismo cliente
-function normalizarTel(t) {
-  if (!t) return ''
-  let s = String(t).replace(/\D/g, '')
-  if (s.startsWith('595')) s = '0' + s.slice(3)
-  if (s && !s.startsWith('0')) s = '0' + s
-  return s
-}
 
 const fmtFecha = (f) => f ? new Date(f + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
 

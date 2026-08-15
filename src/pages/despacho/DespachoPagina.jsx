@@ -1,5 +1,6 @@
 // src/pages/despacho/DespachoPagina.jsx
 import { useState, useRef, useMemo } from 'react'
+import { limpiarTel } from '../../lib/referencias'
 import * as XLSX from 'xlsx'
 import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRun, BorderStyle, Table, TableRow, TableCell, WidthType, convertMillimetersToTwip } from 'docx'
 import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
@@ -73,16 +74,6 @@ function extraerNota(notas, clave) {
   return ''
 }
 
-function limpiarTel(tel) {
-  if (!tel) return ''
-  let t = String(tel).replace(/[\s\-()]/g, '')
-  if (t.startsWith('+5950')) t = '0' + t.slice(5)
-  else if (t.startsWith('+595')) t = '0' + t.slice(4)
-  else if (t.startsWith('5950')) t = '0' + t.slice(4)
-  else if (t.startsWith('595')) t = '0' + t.slice(3)
-  if (t && !t.startsWith('0')) t = '0' + t
-  return t
-}
 
 // ─── Clasificar estado Releasit ──────────────────────────
 function clasificarEstado(tags, cancelledAt) {

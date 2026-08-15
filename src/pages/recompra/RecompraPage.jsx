@@ -1,5 +1,6 @@
 // src/pages/recompra/RecompraPage.jsx
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { normalizarRef } from '../../lib/referencias'
 import { supabase } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
@@ -8,13 +9,6 @@ import { segmentarRecompra, familiaProducto } from '../../lib/recompra'
 import { getVentanasRecompra, getDatosPago } from '../../lib/config'
 import { generarExcelRecompra } from '../../lib/recompraExcel'
 
-// Normaliza referencia para cruzar ventas ↔ entregas (mismo criterio que el matcher)
-function normalizarRef(ref) {
-  if (!ref) return ''
-  let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
-  if (/^\d+$/.test(r)) r = String(parseInt(r, 10))
-  return r
-}
 
 export default function RecompraPage() {
   const { toast } = useToast()
