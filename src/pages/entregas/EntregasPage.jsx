@@ -1,5 +1,7 @@
 // src/pages/entregas/EntregasPage.jsx
 import { useState, useRef, useMemo, useEffect, Fragment } from 'react'
+import { limpiarTel } from '../../lib/referencias'
+import { normalizarRef } from '../../lib/referencias'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
@@ -36,33 +38,7 @@ function parseXLSX(arrayBuffer) {
   return { rows, headers, tipo: detectarTipo(headers) }
 }
 
-function normalizarRef(ref) {
-  if (!ref) return ''
-  // Quitar #, espacios y cualquier separador
-  let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
-  // Prefijo de transportadora (ej. Lucero: 'FW-2025' → '2025'). Los códigos que
-  // mandamos a Lucero van prefijados para no chocar con los de otros clientes;
-  // al volver hay que sacarlo para poder cruzar con la venta, que guarda '2025'.
-  const conPrefijo = r.match(/^[A-Za-z]{1,4}0*(\d+)$/)
-  if (conPrefijo) return String(parseInt(conPrefijo[1], 10))
-  // Si es puramente numérico, quitar ceros a la izquierda (PaP '00123' = venta '123')
-  if (/^\d+$/.test(r)) {
-    r = String(parseInt(r, 10))
-  }
-  return r
-}
 
-// Normaliza teléfono igual que Despacho, para poder cruzar con las ventas
-function limpiarTel(tel) {
-  if (!tel) return ''
-  let t = String(tel).replace(/[\s\-()]/g, '')
-  if (t.startsWith('+5950')) t = '0' + t.slice(5)
-  else if (t.startsWith('+595')) t = '0' + t.slice(4)
-  else if (t.startsWith('5950')) t = '0' + t.slice(4)
-  else if (t.startsWith('595')) t = '0' + t.slice(3)
-  if (t && !t.startsWith('0')) t = '0' + t
-  return t
-}
 
 // Categoriza mirando ESTADO y MOTIVO juntos. El motivo manda cuando el estado
 // es intermedio: un "Custodio" con motivo "Inubicable" es una devolución, no un proceso.

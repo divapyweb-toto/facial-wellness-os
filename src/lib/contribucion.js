@@ -23,24 +23,18 @@
 // ═══════════════════════════════════════════════════════════
 
 import { sumarFlete, costoFleteActual } from './flete'
+import { normalizarRef } from './referencias'
 
 // Tarifa vigente hoy (para compatibilidad con quien importe COSTO_PAP)
 const COSTO_PAP = costoFleteActual()
 
-// Normalización de referencia (alineada con el matcher de Entregas)
-function normalizarRefSimple(ref) {
-  if (!ref) return ''
-  let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
-  if (/^\d+$/.test(r)) r = String(parseInt(r, 10))
-  return r
-}
 
 // Calcula COGS de una lista de paquetes usando costo real por referencia
 // (con fallback a promedio cuando no hay match).
 function calcularCOGS(paquetes, refCosto, cogsPromedio) {
   let cogs = 0, conReal = 0
   for (const p of paquetes) {
-    const ref = normalizarRefSimple(p.n_referencia)
+    const ref = normalizarRef(p.n_referencia)
     if (ref && refCosto[ref] != null) { cogs += refCosto[ref]; conReal++ }
     else cogs += cogsPromedio
   }
@@ -132,7 +126,7 @@ export function calcularPiramide(paquetes, refCosto = {}, cogsPromedio = 12000, 
 export function indexarCostos(ventas) {
   const idx = {}
   for (const v of (ventas || [])) {
-    const ref = normalizarRefSimple(v.n_referencia)
+    const ref = normalizarRef(v.n_referencia)
     if (ref && v.costo_prod != null) idx[ref] = v.costo_prod
   }
   return idx

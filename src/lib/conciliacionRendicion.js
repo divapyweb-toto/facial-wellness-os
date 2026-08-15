@@ -11,14 +11,11 @@
 //   • Efectivo → PaP cobró y te rinde esa plata.
 //   • Transferencia → el cliente pagó directo (prepago), PaP no cobró nada.
 // ═══════════════════════════════════════════════════════════
+import { normalizarRef } from './referencias'
+// Se re-exporta por compatibilidad: antes esta función vivía acá.
+export { normalizarRef }
 
-// Normaliza una referencia/guía para cruzar (igual que el resto del sistema).
-export function normalizarRef(ref) {
-  if (!ref) return ''
-  let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
-  if (/^\d+$/.test(r)) r = String(parseInt(r, 10))
-  return r
-}
+
 
 // ¿La forma de pago es efectivo (PaP rinde) o transferencia (cobró el cliente)?
 function esEfectivo(forma) {

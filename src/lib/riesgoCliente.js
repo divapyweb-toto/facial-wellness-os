@@ -19,15 +19,10 @@ const BLOQUEO_TASA = 0.5      // + tasa de fallo ≥ 50%
 const RIESGO_TASA = 0.34      // riesgo: al menos 1 fallo y tasa ≥ 34%
 
 import { getUmbralesRiesgo } from './config'
+import { normalizarTel } from './referencias'
+// Se re-exporta por compatibilidad: antes vivía acá.
+export { normalizarTel }
 
-// Normaliza un teléfono paraguayo para cruzar clientes entre pedidos.
-export function normalizarTel(t) {
-  if (!t) return ''
-  let s = String(t).replace(/\D/g, '')
-  if (s.startsWith('595')) s = '0' + s.slice(3)
-  if (s && !s.startsWith('0')) s = '0' + s
-  return s
-}
 
 // Normaliza una referencia (para cruzar ventas ⋈ entregas).
 function normRef(ref) {
