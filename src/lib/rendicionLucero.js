@@ -253,9 +253,26 @@ export function resumenRendicionLucero(parsed) {
     const c = categoriaLucero(it.estadoFinal)
     porCat[c] = (porCat[c] || 0) + 1
   })
+  // OJO con qué se compara contra qué — cada total de la cabecera tiene un
+  // alcance distinto, y confundirlos genera falsos "no cuadra":
+  //
+  //   Bruto     = solo lo COBRADO, o sea los ENTREGADOS. Un devuelto trae su
+  //               TotalCobrar (el valor del pedido) pero nunca se cobró, así
+  //               que no entra. Sumar todo daba una diferencia igual al monto
+  //               de las devoluciones.
+  //   Tarifas   = TODOS los ítems, incluidos los devueltos: Lucero cobra el
+  //               flete de ida aunque el paquete vuelva.
+  //   TotalPago = TODOS los ítems. Los prepagos y devueltos suman NEGATIVO
+  //               (te descuentan el flete de lo que te depositan).
   const sumaTarifas = items.reduce((s, i) => s + i.tarifa, 0)
-  const sumaCobrar = items.reduce((s, i) => s + i.totalCobrar, 0)
+  const sumaCobrar = items
+    .filter(i => categoriaLucero(i.estadoFinal) === 'entregado')
+    .reduce((s, i) => s + i.totalCobrar, 0)
   const sumaPago = items.reduce((s, i) => s + i.pagoCliente, 0)
+  // Valor de lo devuelto: no entra en el bruto, pero sirve para mostrarlo.
+  const montoDevuelto = items
+    .filter(i => categoriaLucero(i.estadoFinal) === 'devuelto')
+    .reduce((s, i) => s + i.totalCobrar, 0)
   // Chequeo de integridad contra el encabezado del propio archivo.
   // Se guarda el DETALLE de cada diferencia, no solo un sí/no: cuando un lote
   // no cuadra hay que poder decir exactamente qué campo y por cuánto, para
@@ -278,7 +295,7 @@ export function resumenRendicionLucero(parsed) {
     cantidad: items.length,
     porCat,
     sumaTarifas, sumaCobrar, sumaPago,
-    cuadra, detalle, diferencias,
+    cuadra, detalle, diferencias, montoDevuelto,
     todoCuadra: diferencias.length === 0,
   }
 }
