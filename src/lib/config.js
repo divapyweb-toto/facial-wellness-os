@@ -28,6 +28,9 @@ const DEFAULTS = {
   pago_alias: '6103233',
   pago_alias_titular: 'CI José Ramírez',
   pago_tigo: '0981 948 800',
+  // Tarifario de Lucero como JSON: { 'ciudad': [precio, velocidad] }.
+  // Vacío = usar el de fábrica de transportadoras.js. Lo edita ConfigPage.
+  tarifas_lucero: '',
 }
 
 // Caché en memoria. Arranca con los defaults.
@@ -102,6 +105,7 @@ export async function guardarConfigLote(pares) {
 
 // ── Getters específicos (los que usan los módulos) ──
 export const getFlete = () => getConfig('flete_pap')
+export const getTarifasLuceroJSON = () => getConfig('tarifas_lucero')
 export const getEnvioCliente = () => getConfig('envio_cliente')
 export const getUmbralesRiesgo = () => ({
   bloqueoFallos: getConfig('riesgo_bloqueo_fallos'),
