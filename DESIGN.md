@@ -40,8 +40,11 @@ está calibrada para leerse al sol en el celular.
 
 ## Reglas de producto
 
-1. **Móvil primero.** Botones ≥46px de alto en móvil, inputs a 16px (evita el
-   zoom de iOS). Toda tabla nueva lleva `.table-wrapper` y `data-label`.
+1. **Escritorio es el caso principal (80% del uso); el móvil, el momento
+   crítico.** En pantalla grande: densidad, tablas completas, ⌘K. En el
+   celular: impecable para las urgencias (buscar pedido, reclamar) — botones
+   ≥46px, inputs a 16px (evita el zoom de iOS), toda tabla con
+   `.table-wrapper` y `data-label`.
 2. **Estados vacíos guían**: `.empty-state` siempre con título + qué hacer.
 3. **Errores en español y con acción**: qué pasó + qué hacer, nunca el código pelado.
 4. **La plata en `tabular-nums`** — columnas de montos que no bailan.
