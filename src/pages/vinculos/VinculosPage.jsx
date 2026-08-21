@@ -100,16 +100,11 @@ function FilaPendiente({ item, ventas, onConfirmar, onSinVenta, guardando }) {
       {/* Los candidatos que el sistema encontró pero no se animó a elegir solo */}
       {item.candidatos?.length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 }}>
-            ¿Cuál de estas es?
-          </div>
+          <div className="section-label" style={{ marginBottom: 5 }}>¿Cuál de estas es?</div>
           {item.candidatos.map(c => (
             <button key={c.venta_id} disabled={ocupado}
               onClick={() => onConfirmar(e, c.venta_id, `#${c.n_referencia} ${c.cliente_nombre}`)}
-              className="card" style={{
-                display: 'block', width: '100%', textAlign: 'left', padding: 10, marginBottom: 6,
-                cursor: ocupado ? 'wait' : 'pointer', background: 'var(--bg-hover)', border: '1px solid var(--border)',
-              }}>
+              className="list-card" style={{ padding: 10, marginBottom: 6, cursor: ocupado ? 'wait' : 'pointer' }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>#{c.n_referencia} · {c.cliente_nombre}</div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
                 {c.ciudad} · {formatGs(c.total)} · {fechaCorta(c.fecha)} · {c.producto_nombre}
