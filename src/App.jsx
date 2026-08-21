@@ -28,10 +28,16 @@ const ReclamosPage = lazy(() => import('./pages/reclamos/ReclamosPage'))
 const VinculosPage = lazy(() => import('./pages/vinculos/VinculosPage'))
 
 // Spinner mientras carga una página diferida
+// Esqueleto con la forma de una página (título + tarjetas), no un spinner
+// suelto: la pantalla "aparece" en su lugar y el cambio de sección no salta.
 function PageLoader() {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-      <div style={{ width: 32, height: 32, border: '3px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%' }} className="spinning" />
+    <div className="page-content skeleton-page">
+      <div className="skeleton skeleton-title" />
+      <div className="skeleton-row">
+        <div className="skeleton skeleton-kpi" /><div className="skeleton skeleton-kpi" /><div className="skeleton skeleton-kpi" />
+      </div>
+      <div className="skeleton" style={{ height: 180, borderRadius: 'var(--radius)' }} />
     </div>
   )
 }
