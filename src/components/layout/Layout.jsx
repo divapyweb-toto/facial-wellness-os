@@ -39,11 +39,15 @@ const navDinero = [
 const navHerramientas = [
   { to: '/calculadora', icon: Calculator,    label: 'Calculadora' },
 ]
+// Barra fija del celular: las 3 tareas de TODOS los días + inicio.
+// Cargar venta, despachar y buscar un pedido para un reclamo son el 90% del
+// uso móvil; Entregas y Reportes (consulta, no operación) viven en «Más».
+// Antes Reclamos estaba enterrado ahí: 3 taps con un cliente esperando.
 const navMovilFijo = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Inicio'   },
   { to: '/ventas',    icon: ShoppingCart,    label: 'Ventas'   },
-  { to: '/entregas',  icon: MapPin,          label: 'Entregas' },
-  { to: '/reportes',  icon: FileBarChart2,   label: 'Reportes' },
+  { to: '/despacho',  icon: PackageCheck,    label: 'Despacho' },
+  { to: '/reclamos',  icon: SearchIcon,      label: 'Reclamos' },
 ]
 
 export default function Layout() {
