@@ -797,17 +797,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .filter-scroll::-webkit-scrollbar { display: none; }
 
-/* ─── Tablet collapse ─────────────────────────────────── */
+/* ─── Tablet (iPad) ───────────────────────────────────────
+   El sidebar CON NOMBRES se queda también en iPad — pedido explícito:
+   «las secciones al costado izquierdo, así navego más fácil». Antes acá
+   se colapsaba a un riel de íconos; ahora solo se angosta un poco
+   (208px) para dejarle aire al contenido. La barra inferior queda
+   exclusiva del iPhone (≤768px). */
 @media (max-width: 1024px) {
-  .sidebar { width: var(--sidebar-collapsed); }
-  /* Hide text elements */
-  .nav-item span, .nav-section-label, .user-info { display: none; }
-  /* Hide full logo, show FW mark */
-  .sidebar-logo-full { display: none; }
-  .sidebar-logo-mark { display: flex; }
-  .sidebar-logo { justify-content: center; padding: 0; }
-  .sidebar-logo::after { display: none; }
-  .main-content { margin-left: var(--sidebar-collapsed); }
+  :root { --sidebar-width: 208px; }
   .page-content { padding: 20px; }
   .form-grid   { grid-template-columns: 1fr; }
   .form-grid-3 { grid-template-columns: 1fr 1fr; }
@@ -1107,7 +1104,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   padding: 1px 5px;
 }
 /* En sidebar colapsado (tablet) ocultar texto y kbd */
-@media (max-width: 1100px) {
+@media (max-width: 768px) {
   .sidebar-search-text, .sidebar-search-kbd { display: none; }
   .sidebar-search-btn { justify-content: center; padding: 8px; }
 }
