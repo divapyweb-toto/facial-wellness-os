@@ -189,6 +189,10 @@ export function exportLuceroAEntregas(items) {
     rendido: it.rendido,
     fecha_rendido: it.rendido ? it.fechaRendicion : null,
     mensajero: it.transportador || '',
+    // Igual que en PaP: lo que dice Lucero, para poder cruzar y auditar.
+    telefono_courier: it.telefono || '',
+    nombre_courier: it.destinatario || '',
+    direccion_courier: it.direccion || '',
     ciudad: it.ciudad,
     producto: it.producto,
     transportadora: 'lucero',

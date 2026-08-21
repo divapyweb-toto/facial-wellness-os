@@ -7,7 +7,7 @@ import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
   Users, Calculator, BarChart3, PackageCheck, MapPin, X, MessageCircle,
-  Grid3X3, Search as SearchIcon, Repeat, PackageOpen, ClipboardCheck,
+  Grid3X3, Search as SearchIcon, Repeat, PackageOpen, ClipboardCheck, Link2,
 } from 'lucide-react'
 
 // ── Logo embebido (PNG transparente, negro → invertir con CSS) ──
@@ -26,6 +26,7 @@ const navLogistica = [
   { to: '/inteligencia', icon: BarChart3,    label: 'Inteligencia' },
   { to: '/seguimiento', icon: MessageCircle, label: 'Seguimiento' },
   { to: '/reclamos',  icon: ClipboardCheck,   label: 'Reclamos'  },
+  { to: '/vinculos',  icon: Link2,           label: 'Vínculos'  },
   { to: '/recepcion', icon: PackageOpen,     label: 'Recepción' },
   { to: '/rendicion', icon: Truck,           label: 'Rendición' },
 ]
