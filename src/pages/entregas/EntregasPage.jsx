@@ -20,7 +20,11 @@ import { normalizarCiudad, ZONAS } from '../../lib/ciudades'
 import MapaCiudades from './MapaCiudades'
 
 import { costoFleteActual } from '../../lib/flete'
-const COSTO_PAP = costoFleteActual()  // tarifa vigente hoy (los cálculos por-fecha usan lib/flete)
+// OJO: costoFleteActual() se llama EN EL MOMENTO DE USO, nunca se guarda en
+// una constante de módulo. Este archivo se importa antes de que App corra
+// cargarConfig(), así que una constante acá congelaría el flete de fábrica
+// (29.000) para siempre y la tarifa editable de Config no haría nada — fue
+// el bug F-01 de la auditoría del 20/08.
 
 // ═══════════════════════════════════════════════════════════
 // LÓGICA — combina los 2 reportes de Punto a Punto
@@ -121,7 +125,7 @@ function combinar(paqData, gesData) {
       motivo,
       importe,
       cobrado: cat === 'entregado' ? importe : 0,
-      costo_envio: COSTO_PAP,
+      costo_envio: costoFleteActual(),
       fecha_ingreso: fIng,
       fecha_entrega: fEnt,
       dias_entrega: cat === 'entregado' ? diasEntre(fIng, fEnt) : null,
@@ -290,8 +294,9 @@ export default function EntregasPage() {
 
     const cobrado = entregados.reduce((s, m) => s + m.importe, 0)
     const perdidoProd = devueltos.reduce((s, m) => s + m.importe, 0)
-    const costoEnvios = COSTO_PAP * total
-    const costoEnviosDevueltos = COSTO_PAP * devueltos.length
+    const fletePaP = costoFleteActual()   // tarifa vigente al momento de calcular
+    const costoEnvios = fletePaP * total
+    const costoEnviosDevueltos = fletePaP * devueltos.length
     const resueltos = entregados.length + devueltos.length
 
     const dias = entregados.map(m => m.dias_entrega).filter(d => d != null)
