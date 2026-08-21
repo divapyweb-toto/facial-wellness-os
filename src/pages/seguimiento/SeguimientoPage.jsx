@@ -37,7 +37,10 @@ export default function SeguimientoPage() {
   const [guardando, setGuardando] = useState(null)
   const [pidiendoFecha, setPidiendoFecha] = useState(null)   // venta esperando fecha
   const [faltanColumnas, setFaltanColumnas] = useState(false)
-  const toast = useToast()
+  // { toast } — el contexto expone un objeto. Consumirlo sin destructurar
+  // (como estaba) hacía que CADA aviso de esta pantalla tirara TypeError:
+  // guardabas la respuesta del cliente y reventaba sin confirmación.
+  const { toast } = useToast()
 
   const cargar = useCallback(async () => {
     setCargando(true)
