@@ -5,7 +5,8 @@ import { normalizarRef } from '../../lib/referencias'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { supabase, formatGs } from '../../lib/supabase'
-import { categorizarPaP as categorizar, importeSano, esImporteCorrupto, sanearEntrega, soloColumnasEntregas, IMPORTE_MAX_RAZONABLE } from '../../lib/estadosPaP'
+import { categorizarPaP as categorizar, importeSano, esImporteCorrupto, sanearEntrega, soloColumnasEntregas, IMPORTE_MAX_RAZONABLE, COLS_VINCULO } from '../../lib/estadosPaP'
+import { calcularVinculos } from '../../lib/vinculacion'
 import { tasaPorTransportadora } from '../../lib/riesgoCiudad'
 import { labelTransportadora } from '../../lib/transportadoras'
 import { etiquetaMes } from '../../lib/fechas'
@@ -128,8 +129,12 @@ function combinar(paqData, gesData) {
       fecha_rendido: fRendido,
       dias_rendicion: diasRendicion,
       mensajero,
-      telefono,
-      nombre_cliente: nombreCliente,
+      // Se guardan con el sufijo _courier para que quede claro que es lo que
+      // dice PaP, no lo que cargaste vos. Antes se llamaban `telefono` y
+      // `nombre_cliente` y se descartaban antes del insert.
+      telefono_courier: telefono,
+      nombre_courier: nombreCliente,
+      direccion_courier: (g ? g['Direccion'] : '') || '',
       ciudad,
       producto,
       mes: (fIng || fEnt || '').slice(0, 7),  // mes por FECHA DE INGRESO (cuándo salió a despacho)
@@ -607,96 +612,111 @@ export default function EntregasPage() {
         }
       }
 
-      let ok = 0, errEntregas = null
+      // ── 1) Guardar las entregas ──
+      // Tolerante a columnas que todavía no existan: si la migración 001 aún
+      // no se corrió, `venta_id` y compañía no están en la base y Postgres
+      // rechazaría el lote ENTERO. En vez de fallar, se saca la columna que
+      // falta y se reintenta — la carga funciona igual, solo sin vincular.
+      let ok = 0, errEntregas = null, faltanColsVinculo = false
       for (let i = 0; i < limpio.length; i += 100) {
-        const lote = limpio.slice(i, i + 100)
-        const { error } = await supabase.from('entregas').upsert(lote, { onConflict: 'nro_guia_pap' })
-        if (error) { if (!errEntregas) errEntregas = error.message } else ok += lote.length
+        let lote = limpio.slice(i, i + 100)
+        for (let intento = 0; intento < 8; intento++) {
+          const { error } = await supabase.from('entregas').upsert(lote, { onConflict: 'nro_guia_pap' })
+          if (!error) { ok += lote.length; break }
+          const falta = /Could not find the '([^']+)' column/.exec(error.message || '')
+          if (falta) {
+            if (COLS_VINCULO.includes(falta[1])) faltanColsVinculo = true
+            const c = falta[1]
+            lote = lote.map(r => { const o = { ...r }; delete o[c]; return o })
+            continue
+          }
+          if (!errEntregas) errEntregas = error.message
+          break
+        }
       }
 
-      // 2) Actualizar estado de ventas — MATCH EN CASCADA multi-criterio.
-      //    Procesa TODO lo visible (histórico recategorizado + recién subido).
-      //    a) por referencia #XXXX  b) por teléfono (+monto)  c) por nombre+monto
+      // ── 2) Vincular cada guía con su venta ──
+      // Antes esto era una cascada que, ante un empate, agarraba el primer
+      // candidato de la lista sin criterio. Con 51 clientes que repitieron
+      // compra, eso marcaba la venta equivocada como entregada y no quedaba
+      // rastro. Ahora lo dudoso NO se vincula: va a la cola de pendientes.
       let porRef = 0, porTel = 0, porNombre = 0, sinMatch = 0
-      let updOk = 0, updVacio = 0, updFail = 0
+      let updOk = 0, updVacio = 0, updFail = 0, vincOk = 0, vincFail = 0
+      let resumenVinculo = null
       let diagnostico = errEntregas ? `Las entregas no se guardaron: ${errEntregas}` : null
+      if (faltanColsVinculo && !diagnostico) {
+        diagnostico = 'Las entregas se guardaron, pero falta correr la migración 001 en Supabase: sin las columnas de vínculo no se puede pegar cada guía con su venta.'
+      }
       try {
-        const { data: ventas, error: errSel } = await fetchAllSafe(() => supabase.from('ventas').select('*'))
+        const { data: ventas, error: errSel } = await fetchAllSafe(() => supabase.from('ventas').select('*').is('deleted_at', null))
         if (errSel) { diagnostico = diagnostico || ('No pude leer las ventas: ' + errSel.message) }
         else if (!ventas || !ventas.length) { diagnostico = diagnostico || 'La consulta de ventas vino vacía (¿permisos de la tabla ventas?)' }
         else {
-          // Detectar la columna identificadora (normalmente 'id')
-          const pk = ('id' in ventas[0]) ? 'id' : (Object.keys(ventas[0]).find(k => k === 'uuid' || k.toLowerCase().endsWith('id')) || 'id')
+          // `merged` trae las entregas ya parseadas; se les pega el vínculo que
+          // ya tuvieran guardado para respetar lo confirmado a mano y para que
+          // volver a subir el mismo Excel no genere una sola escritura.
+          const previo = new Map((historico || []).map(h => [String(h.nro_guia_pap), h]))
+          const paraVincular = merged.map(m => {
+            const p = previo.get(String(m.nro_guia_pap))
+            return { ...m, venta_id: p?.venta_id ?? null, vinculo_metodo: p?.vinculo_metodo ?? null }
+          })
+          const { vinculos, resumen } = calcularVinculos(paraVincular, ventas)
+          resumenVinculo = resumen
+          porRef = resumen.referencia; porTel = resumen.telefono
+          porNombre = resumen.nombre; sinMatch = resumen.pendientes
 
-          const idxRef = new Map()
-          ventas.forEach(v => { const rr = normalizarRef(v.n_referencia); if (rr) idxRef.set(rr, v) })
+          // Persistir los vínculos nuevos (solo si la migración ya corrió).
+          if (!faltanColsVinculo && vinculos.length) {
+            for (let i = 0; i < vinculos.length; i += 100) {
+              const lote = vinculos.slice(i, i + 100)
+              const { error } = await supabase.from('entregas').upsert(lote, { onConflict: 'nro_guia_pap' })
+              if (error) { vincFail += lote.length; if (!diagnostico) diagnostico = 'No se pudieron guardar los vínculos: ' + error.message }
+              else vincOk += lote.length
+            }
+          }
 
-          const usadas = new Set()
-          const updates = []
-
+          // ── 3) Estado de las ventas, a partir del vínculo ──
+          // Se actualiza por REFERENCIA, no por id: un pedido de 2 productos
+          // son 2 filas de venta y el paquete es uno solo. Actualizar solo la
+          // fila ancla dejaría la otra mitad del pedido en pendiente.
+          const ventaPorId = new Map(ventas.map(v => [v.id, v]))
+          const vincPorGuia = new Map(vinculos.map(v => [String(v.nro_guia_pap), v]))
+          const nuevoEstadoPorRef = new Map()
+          const sueltasPorId = new Map()
           for (const m of merged) {
-            if (m.categoria === 'en_proceso') continue
-            const nuevoEstado = m.categoria === 'entregado' ? 'entregado' : 'devuelto'
-            let venta = null, metodo = null
-
-            if (m.n_referencia && idxRef.has(m.n_referencia)) {
-              const v = idxRef.get(m.n_referencia)
-              if (!usadas.has(v[pk])) { venta = v; metodo = 'ref' }
-            }
-            if (!venta && m.telefono) {
-              const mismoTel = ventas.filter(v => limpiarTel(v.cliente_telefono) === m.telefono && !usadas.has(v[pk]))
-              if (mismoTel.length === 1) { venta = mismoTel[0]; metodo = 'tel' }
-              else if (mismoTel.length > 1) {
-                const mismoMonto = mismoTel.filter(v => Number(v.total) === Number(m.importe))
-                venta = (mismoMonto.length ? mismoMonto[0] : mismoTel[0]); metodo = 'tel'
-              }
-            }
-            if (!venta && m.nombre_cliente && m.importe) {
-              const nom = m.nombre_cliente.toLowerCase().trim()
-              const cand = ventas.filter(v => (v.cliente_nombre || '').toLowerCase().trim() === nom && Number(v.total) === Number(m.importe) && !usadas.has(v[pk]))
-              if (cand.length) { venta = cand[0]; metodo = 'nombre' }
-            }
-
-            if (venta) {
-              // Solo actualizar si el estado cambia (evita writes inútiles)
-              if (venta.estado !== nuevoEstado) updates.push({ id: venta[pk], estado: nuevoEstado })
-              usadas.add(venta[pk])
-              if (metodo === 'ref') porRef++; else if (metodo === 'tel') porTel++; else porNombre++
-            } else { sinMatch++ }
+            if (m.categoria !== 'entregado' && m.categoria !== 'devuelto') continue
+            const estado = m.categoria === 'entregado' ? 'entregado' : 'devuelto'
+            const vinc = vincPorGuia.get(String(m.nro_guia_pap)) || previo.get(String(m.nro_guia_pap))
+            const venta = vinc?.venta_id ? ventaPorId.get(vinc.venta_id) : null
+            if (!venta) continue
+            const r = normalizarRef(venta.n_referencia)
+            if (r) nuevoEstadoPorRef.set(r, estado)
+            else sueltasPorId.set(venta.id, estado)
+          }
+          for (const [ref, estado] of nuevoEstadoPorRef) {
+            const hermanas = ventas.filter(v => normalizarRef(v.n_referencia) === ref && v.estado !== estado)
+            if (!hermanas.length) continue
+            const { data: upd, error: errUpd } = await supabase.from('ventas')
+              .update({ estado }).in('id', hermanas.map(v => v.id)).select('id')
+            if (errUpd) { updFail += hermanas.length; if (!diagnostico) diagnostico = `Error actualizando ventas: ${errUpd.message}` }
+            else if (!upd || !upd.length) updVacio += hermanas.length
+            else updOk += upd.length
+          }
+          for (const [id, estado] of sueltasPorId) {
+            const v = ventaPorId.get(id)
+            if (!v || v.estado === estado) continue
+            const { data: upd, error: errUpd } = await supabase.from('ventas').update({ estado }).eq('id', id).select('id')
+            if (errUpd) updFail++; else if (!upd?.length) updVacio++; else updOk++
           }
 
-          updFail = 0; updVacio = 0; updOk = 0
-          let primerError = null
-          for (const u of updates) {
-            const { data: upd, error: errUpd } = await supabase.from('ventas').update({ estado: u.estado }).eq(pk, u.id).select()
-            if (errUpd) { updFail++; if (!primerError) primerError = errUpd.message }
-            else if (!upd || !upd.length) { updVacio++ }
-            else { updOk++ }
-          }
-          const totalMatch = porRef + porTel + porNombre
-          if (updFail > 0 && !diagnostico) {
-            diagnostico = `${updFail} UPDATEs dieron error (columna id="${pk}"): ${primerError}`
-          } else if (updVacio > 0 && updOk === 0 && !diagnostico) {
-            diagnostico = `Encontré ${totalMatch} ventas para actualizar (${porRef} por ref, ${porTel} por tel), pero NINGÚN UPDATE modificó la fila. Esto es RLS: la tabla "ventas" permite leer pero NO actualizar. Hay que agregar una policy de UPDATE en Supabase (te paso el SQL).`
-          } else if (totalMatch === 0 && merged.some(m => m.categoria !== 'en_proceso') && !diagnostico) {
-            const conTel = ventas.filter(v => v.cliente_telefono).length
-            const conRefBD = ventas.filter(v => normalizarRef(v.n_referencia)).length
-            diagnostico = `0 coincidencias. En BD: ${ventas.length} ventas, ${conRefBD} con n_referencia, ${conTel} con teléfono (col id="${pk}"). Reportes traen ${merged.filter(m=>m.categoria!=='en_proceso').length} entregas con estado. Si las ventas tienen ref pero no cruzan, el formato de n_referencia no coincide.`
+          if (updVacio > 0 && updOk === 0 && !diagnostico) {
+            diagnostico = 'Encontré las ventas para actualizar pero NINGÚN UPDATE modificó la fila. Esto es RLS: la tabla "ventas" permite leer pero NO actualizar. Hay que agregar una policy de UPDATE en Supabase.'
           }
         }
       } catch (e) { diagnostico = diagnostico || ('Error inesperado: ' + (e?.message || e)) }
 
-      // 3) Recargar el histórico para refrescar la vista con lo recién guardado
-      try {
-        const data = await fetchAll(
-          () => supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
-          { columnaOrden: 'nro_guia_pap' }
-        )
-        setHistorico(data || [])
-      } catch (e) { /* nada */ }
-
-      setGuardado(true)
-      setResultadoGuardado({ ok, porRef, porTel, porNombre, sinMatch, updOk, updVacio, updFail, diagnostico })
+      setResultadoGuardado({ ok, porRef, porTel, porNombre, sinMatch, updOk, updVacio, updFail,
+        vincOk, vincFail, faltanColsVinculo, resumenVinculo, diagnostico })
       toast(diagnostico ? `Guardado con avisos — mirá el detalle` : `${ok} entregas · ${updOk} ventas actualizadas`, diagnostico ? 'error' : 'success')
     } catch (err) {
       toast('Error guardando: ' + err.message, 'error')
@@ -844,19 +864,41 @@ export default function EntregasPage() {
       {resultadoGuardado && (
         <div className={`alert alert-${resultadoGuardado.diagnostico ? 'warning' : 'success'}`}>
           {resultadoGuardado.diagnostico ? <AlertTriangle size={15} /> : <CheckCircle size={15} />}
-          <div>
-            <div style={{ fontWeight: 600 }}>{resultadoGuardado.ok} entregas guardadas · {resultadoGuardado.updOk ?? 0} ventas actualizadas</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600 }}>
+              {resultadoGuardado.ok} entregas guardadas · {resultadoGuardado.updOk ?? 0} ventas actualizadas
+            </div>
+
+            {/* Resumen de la vinculación: cuántas guías quedaron pegadas a su
+                venta y por qué vía. Las que salieron por nombre son las menos
+                seguras — se marcan aparte para que se puedan revisar. */}
             <div style={{ fontSize: 12, marginTop: 4 }}>
-              <span>Coincidencias: </span>
-              {resultadoGuardado.porRef > 0 && <span>{resultadoGuardado.porRef} por referencia</span>}
+              <span>Vinculadas: </span>
+              {resultadoGuardado.porRef > 0 && <span style={{ color: 'var(--green)' }}>{resultadoGuardado.porRef} por referencia</span>}
               {resultadoGuardado.porRef > 0 && (resultadoGuardado.porTel > 0 || resultadoGuardado.porNombre > 0) && <span> · </span>}
               {resultadoGuardado.porTel > 0 && <span>{resultadoGuardado.porTel} por teléfono</span>}
               {resultadoGuardado.porTel > 0 && resultadoGuardado.porNombre > 0 && <span> · </span>}
-              {resultadoGuardado.porNombre > 0 && <span>{resultadoGuardado.porNombre} por nombre+monto</span>}
-              {(resultadoGuardado.porRef + resultadoGuardado.porTel + resultadoGuardado.porNombre) === 0 && <span>ninguna</span>}
-              {resultadoGuardado.sinMatch > 0 && <span style={{ color: 'var(--yellow)' }}> · {resultadoGuardado.sinMatch} sin coincidencia</span>}
+              {resultadoGuardado.porNombre > 0 && <span style={{ color: 'var(--yellow)' }}>{resultadoGuardado.porNombre} por nombre</span>}
+              {(resultadoGuardado.porRef + resultadoGuardado.porTel + resultadoGuardado.porNombre) === 0 && <span>ninguna nueva</span>}
+              {resultadoGuardado.resumenVinculo?.sinCambio > 0 && (
+                <span style={{ color: 'var(--text-muted)' }}> · {resultadoGuardado.resumenVinculo.sinCambio} ya estaban</span>
+              )}
+              {resultadoGuardado.resumenVinculo?.protegidas > 0 && (
+                <span style={{ color: 'var(--purple)' }}> · {resultadoGuardado.resumenVinculo.protegidas} confirmadas a mano</span>
+              )}
               {resultadoGuardado.updVacio > 0 && <span style={{ color: 'var(--yellow)' }}> · {resultadoGuardado.updVacio} bloqueadas por permisos</span>}
             </div>
+
+            {/* Lo que quedó sin resolver no se esconde: es trabajo pendiente y
+                tiene que estar a un clic, no enterrado en un contador. */}
+            {resultadoGuardado.sinMatch > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <button className="btn btn-sm btn-secondary" onClick={() => navigate('/vinculos')}>
+                  <AlertTriangle size={13} /> {resultadoGuardado.sinMatch} sin vincular — revisar ahora
+                </button>
+              </div>
+            )}
+
             {resultadoGuardado.diagnostico && (
               <div style={{ fontSize: 12, marginTop: 6, color: 'var(--yellow)', background: 'var(--bg-hover)', padding: 8, borderRadius: 6 }}>
                 ⚠ {resultadoGuardado.diagnostico}

@@ -45,6 +45,23 @@ export const COLS_ENTREGAS = [
   // ítem; `guia_transportadora` guarda el ID interno de Lucero (solo referencia,
   // no se usa para cruzar — eso lo hace `nro_guia_pap` vía guiaLucero()).
   'neto_depositado', 'guia_transportadora',
+  // Vínculo con la venta. Antes no existía: cada parte del sistema recalculaba
+  // el cruce normalizando `n_referencia` por su cuenta, en 8 archivos distintos.
+  'venta_id', 'vinculo_metodo', 'vinculo_at',
+  // Datos del cliente SEGÚN EL COURIER. Los reportes los traen (Gestión de PaP
+  // y el export de Lucero) y hasta ahora se descartaban al guardar, que es por
+  // lo que los 199 paquetes viejos sin referencia ya no se pueden recuperar.
+  // OJO: son lo que dice el courier, NO la fuente de verdad — el dato bueno
+  // del cliente sigue viviendo en `ventas`. Sirven para cruzar y para auditar.
+  'telefono_courier', 'nombre_courier', 'direccion_courier',
+]
+
+// Las que llegaron con la migración 001. Se listan aparte para poder detectar
+// si la migración todavía no se corrió: si Postgres rechaza una de éstas, la
+// carga sigue funcionando sin vincular en vez de fallar entera.
+export const COLS_VINCULO = [
+  'venta_id', 'vinculo_metodo', 'vinculo_at',
+  'telefono_courier', 'nombre_courier', 'direccion_courier',
 ]
 
 // Deja solo las claves que son columnas de `entregas`.
