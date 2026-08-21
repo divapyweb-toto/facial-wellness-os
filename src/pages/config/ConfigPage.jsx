@@ -5,7 +5,7 @@ import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2, SlidersHorizontal } from 'lucide-react'
-import { getConfig, guardarConfigLote, cargarConfig, getEnvioCliente, getFlete, DEFAULTS } from '../../lib/config'
+import { getConfig, guardarConfigLote, cargarConfig, getEnvioCliente, getFlete, DEFAULTS, getEstadoConfig } from '../../lib/config'
 
 // ─── Modal producto ───────────────────────────────────────
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -255,6 +255,25 @@ function ReglasNegocio() {
     return f
   })
   const [guardando, setGuardando] = useState(false)
+  const [estadoCfg, setEstadoCfg] = useState(getEstadoConfig())
+
+  // Recargar la config al entrar y RECIÉN AHÍ armar el formulario. Sin esto
+  // hay una carrera: si la base contesta después de montar la página, el form
+  // muestra los valores de fábrica — y "Guardar" en ese estado PISA los que
+  // tenías guardados, sin ningún aviso.
+  useEffect(() => {
+    let vivo = true
+    cargarConfig().then(() => {
+      if (!vivo) return
+      setEstadoCfg(getEstadoConfig())
+      setForm(() => {
+        const f = {}
+        for (const k of Object.keys(DEFAULTS)) f[k] = String(getConfig(k))
+        return f
+      })
+    })
+    return () => { vivo = false }
+  }, [])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const setNum = (k, v) => setForm(f => ({ ...f, [k]: v.replace(/[^\d.]/g, '') }))
@@ -264,6 +283,7 @@ function ReglasNegocio() {
     try {
       await guardarConfigLote(form)
       await cargarConfig()
+      setEstadoCfg(getEstadoConfig())
       toast('Reglas guardadas — ya se aplican en todo el sistema', 'success')
     } catch (e) {
       toast('Error al guardar: ' + e.message, 'error')
@@ -292,6 +312,24 @@ function ReglasNegocio() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 640 }}>
+      {/* De dónde vienen los valores que estás viendo. El fallo de lectura era
+          invisible: corrías con los de fábrica creyendo que regía lo guardado. */}
+      {estadoCfg.error ? (
+        <div className="alert alert-warning">
+          ⚠ No se pudieron leer los valores guardados ({estadoCfg.error}). Estás viendo los de fábrica —
+          si guardás ahora, los pisás. Resolvé la lectura primero.
+        </div>
+      ) : estadoCfg.hecho && estadoCfg.desdeDB === 0 ? (
+        <div className="alert alert-info">
+          Todavía no hay ningún valor guardado en la base: el sistema corre con los de fábrica.
+          Revisá y tocá «Guardar reglas» para fijarlos.
+        </div>
+      ) : estadoCfg.hecho ? (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          ✓ {estadoCfg.desdeDB} de {Object.keys(DEFAULTS).length} valores leídos de la base.
+        </div>
+      ) : null}
+
       <div className="card" style={{ padding: '16px 20px' }}>
         <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>🚚 Envío</h3>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
