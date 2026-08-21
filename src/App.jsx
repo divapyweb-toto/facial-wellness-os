@@ -24,6 +24,7 @@ const RecepcionPage = lazy(() => import('./pages/recepcion/RecepcionPage'))
 const EntregasPage = lazy(() => import('./pages/entregas/EntregasPage'))
 const SistemaPage = lazy(() => import('./pages/sistema/SistemaPage'))
 const SeguimientoPage = lazy(() => import('./pages/seguimiento/SeguimientoPage'))
+const ReclamosPage = lazy(() => import('./pages/reclamos/ReclamosPage'))
 
 // Spinner mientras carga una página diferida
 function PageLoader() {
@@ -68,6 +69,7 @@ export default function App() {
           <Route path="despacho" element={<Suspense fallback={<PageLoader />}><DespachoPagina /></Suspense>} />
           <Route path="entregas" element={<Suspense fallback={<PageLoader />}><EntregasPage /></Suspense>} />
           <Route path="seguimiento" element={<Suspense fallback={<PageLoader />}><SeguimientoPage /></Suspense>} />
+          <Route path="reclamos" element={<Suspense fallback={<PageLoader />}><ReclamosPage /></Suspense>} />
           <Route path="inteligencia" element={<Suspense fallback={<PageLoader />}><InteligenciaEntregaPage /></Suspense>} />
           <Route path="recepcion" element={<Suspense fallback={<PageLoader />}><RecepcionPage /></Suspense>} />
           <Route path="calculadora" element={<Suspense fallback={<PageLoader />}><CalculadoraPage /></Suspense>} />

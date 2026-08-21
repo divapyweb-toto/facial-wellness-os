@@ -21,6 +21,7 @@ const SECCIONES = [
   { to: '/despacho', label: 'Despacho', icon: Package, keys: 'envios preparar paquetes' },
   { to: '/entregas', label: 'Entregas', icon: MapPin, keys: 'mapa zonas reparto' },
   { to: '/inteligencia', label: 'Inteligencia', icon: BarChart3, keys: 'entrega tasa prepago analisis devoluciones' },
+  { to: '/reclamos', label: 'Reclamos', icon: Search, keys: 'guia buscar pedido cliente courier reclamo' },
   { to: '/calculadora', label: 'Calculadora', icon: Calculator, keys: 'roas margen breakeven' },
   { to: '/reportes', label: 'Reportes', icon: FileBarChart2, keys: 'informes pdf exportar' },
   { to: '/config', label: 'Configuración', icon: Settings, keys: 'ajustes productos precios usuarios admin' },
