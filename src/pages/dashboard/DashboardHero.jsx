@@ -35,7 +35,7 @@ export default function DashboardHero({ nombre, hoyCount, hoyMonto, tasa7d, resu
         </div>
         <div className="hero-stats">
           <div className="hero-stat">
-            <span>Entrega · 7 días</span>
+            <span>Entrega 7d</span>
             <b style={{ color: colorTasa }}>
               {tasa7d == null ? '—' : `${Math.round(tasa7d * 100)}%`}
             </b>
