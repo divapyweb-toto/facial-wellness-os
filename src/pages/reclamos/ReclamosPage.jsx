@@ -41,11 +41,11 @@ const COL_ENTREGAS = 'nro_guia_pap, n_referencia, guia_transportadora, estado_pa
 function Dato({ icono: Icono, label, children, color }) {
   if (children == null || children === '') return null
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '7px 0' }}>
-      {Icono && <Icono size={15} color="var(--text-muted)" style={{ marginTop: 2, flexShrink: 0 }} />}
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
-        <div style={{ fontSize: 14, color: color || 'var(--text-primary)', wordBreak: 'break-word' }}>{children}</div>
+    <div className="data-row">
+      {Icono && <Icono size={15} />}
+      <div className="data-col">
+        <div className="data-label">{label}</div>
+        <div className="data-value" style={color ? { color } : undefined}>{children}</div>
       </div>
     </div>
   )
@@ -54,7 +54,7 @@ function Dato({ icono: Icono, label, children, color }) {
 function Seccion({ titulo, children }) {
   return (
     <div className="card" style={{ padding: 14, marginBottom: 12 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>{titulo}</div>
+      <div className="section-label" style={{ marginBottom: 6 }}>{titulo}</div>
       {children}
     </div>
   )
@@ -123,23 +123,21 @@ function Ficha({ pedido, onVolver }) {
         </div>
       )}
 
-      {/* ── LA GUÍA ── lo que venís a buscar */}
-      <div className="card" style={{ padding: 16, marginBottom: 12, borderColor: guia.numero ? 'var(--accent)' : 'var(--border)' }}>
+      {/* ── LA GUÍA ── lo que venís a buscar. Pieza central de la pantalla. */}
+      <div className={guia.numero ? 'guia-card' : 'card'} style={{ marginBottom: 12, ...(guia.numero ? {} : { padding: 16 }) }}>
         {guia.numero ? (
           <>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
+            <div className="section-label" style={{ color: 'var(--accent)', marginBottom: 6 }}>
               {guia.etiqueta}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 30, fontWeight: 700, letterSpacing: 1, color: 'var(--text-primary)', lineHeight: 1.1, wordBreak: 'break-all' }}>
-                {guia.numero}
-              </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', position: 'relative' }}>
+              <span className="guia-num">{guia.numero}</span>
               <button className="btn btn-primary" onClick={() => copiar(guia.numero, 'guia')} style={{ marginLeft: 'auto' }}>
                 {copiado === 'guia' ? <><CheckCircle size={15} /> Copiado</> : <><Copy size={15} /> Copiar</>}
               </button>
             </div>
             {guia.extra && (
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>{guia.extra}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8, position: 'relative' }}>{guia.extra}</div>
             )}
           </>
         ) : (
@@ -235,13 +233,7 @@ function Ficha({ pedido, onVolver }) {
             <button
               key={m.id}
               onClick={() => setMotivo(m.texto)}
-              className="btn btn-sm"
-              style={{
-                background: motivo === m.texto ? 'var(--accent-dim)' : 'var(--bg-hover)',
-                border: `1px solid ${motivo === m.texto ? 'var(--accent)' : 'var(--border)'}`,
-                color: motivo === m.texto ? 'var(--accent)' : 'var(--text-primary)',
-                textAlign: 'left', whiteSpace: 'normal', lineHeight: 1.3,
-              }}
+              className={`chip-choice${motivo === m.texto ? ' active' : ''}`}
             >
               {m.texto}
             </button>
@@ -264,11 +256,7 @@ function Ficha({ pedido, onVolver }) {
             ? <><CheckCircle size={17} /> Reclamo copiado — pegalo en el chat</>
             : <><Copy size={17} /> Copiar reclamo</>}
         </button>
-        <pre style={{
-          marginTop: 10, padding: 10, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)',
-          fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', border: '1px solid var(--border-subtle)',
-        }}>{mensajeReclamo(pedido, motivo)}</pre>
+        <pre className="copy-block" style={{ marginTop: 10 }}>{mensajeReclamo(pedido, motivo)}</pre>
       </Seccion>
     </div>
   )
@@ -282,14 +270,7 @@ function FilaResultado({ pedido, onClick }) {
   const desp = despachoPedido(pedido)
   const guia = guiaCourier(pedido)
   return (
-    <button
-      onClick={onClick}
-      className="card"
-      style={{
-        display: 'block', width: '100%', textAlign: 'left', padding: 12, marginBottom: 8,
-        cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-card)',
-      }}
-    >
+    <button onClick={onClick} className="list-card" style={{ marginBottom: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -383,8 +364,8 @@ export default function ReclamosPage() {
 
       {/* ── Buscador ── */}
       <div style={{ position: 'sticky', top: 0, zIndex: 5, background: 'var(--bg-base)', paddingBottom: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
-          <Search size={19} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+        <div className="search-field">
+          <Search size={19} />
           <input
             ref={inputRef}
             value={q}
@@ -394,7 +375,6 @@ export default function ReclamosPage() {
             /* inputMode text a propósito: el campo acepta números Y letras, y
                forzar el teclado numérico en el celular obligaría a cambiarlo
                a mano cada vez que se busca por nombre. */
-            style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 17 }}
           />
           {q && (
             <button onClick={limpiar} className="btn-icon" style={{ flexShrink: 0 }} aria-label="Limpiar">
