@@ -464,7 +464,7 @@ export default function ConfigPage() {
                   <th>1u</th>
                   <th>2u</th>
                   <th>3u</th>
-                  <th>Margen 1u</th>
+                  <th>Contribución 1u</th>
                   <th>Grupo</th>
                   <th>Stock</th>
                   <th>Estado</th>
@@ -473,7 +473,15 @@ export default function ConfigPage() {
               </thead>
               <tbody>
                 {productos.map(p => {
-                  const margen = p.precio_1u > 0 ? ((p.precio_1u - p.costo_unit) / p.precio_1u * 100).toFixed(1) : 0
+                  // Contribución REAL por entrega, no el margen de vidriera.
+                  // La fórmula vieja ((precio − costo) / precio) ignoraba el
+                  // flete, que en COD es el costo dominante: JawFlex mostraba
+                  // 81% cuando la contribución verdadera por paquete entregado
+                  // es mucho menor. Ingreso = precio + envío que paga el
+                  // cliente (solo grupo A); costo = producto + flete propio.
+                  const ingreso1u = (p.precio_1u || 0) + (p.grupo_envio === 'A' ? getEnvioCliente() : 0)
+                  const contrib1u = ingreso1u - (p.costo_unit || 0) - getFlete()
+                  const margen = ingreso1u > 0 ? (contrib1u / ingreso1u * 100).toFixed(1) : 0
                   return (
                     <tr key={p.id}>
                       <td data-label="Producto" style={{ fontWeight: 600 }}>{p.nombre}</td>
@@ -481,7 +489,9 @@ export default function ConfigPage() {
                       <td data-label="1u" style={{ fontWeight: 500 }}>{formatGs(p.precio_1u)}</td>
                       <td data-label="2u" className="muted">{p.precio_2u ? formatGs(p.precio_2u) : '—'}</td>
                       <td data-label="3u" className="muted">{p.precio_3u ? formatGs(p.precio_3u) : '—'}</td>
-                      <td data-label="Margen 1u" style={{ color: margen > 50 ? 'var(--green)' : 'var(--yellow)', fontWeight: 600 }}>{margen}%</td>
+                      <td data-label="Contribución 1u" style={{ color: contrib1u <= 0 ? 'var(--red)' : margen > 40 ? 'var(--green)' : 'var(--yellow)', fontWeight: 600 }}>
+                        {formatGs(contrib1u)} <span style={{ fontWeight: 400, opacity: 0.75 }}>({margen}%)</span>
+                      </td>
                       <td data-label="Grupo"><span className={`badge ${p.grupo_envio === 'A' ? 'badge-blue' : 'badge-accent'}`}>Grupo {p.grupo_envio}</span></td>
                       <td data-label="Stock" style={{ color: p.stock_actual <= p.stock_alerta ? 'var(--red)' : 'var(--green)', fontWeight: 700 }}>{p.stock_actual}</td>
                       <td data-label="Estado">
