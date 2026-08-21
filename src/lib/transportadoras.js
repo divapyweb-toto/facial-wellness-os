@@ -17,7 +17,7 @@
 // Decisión vigente (julio 2026): Lucero se lleva las 11 ciudades donde su
 // tarifa es ≤ 30.000; PaP se queda con las de 35.000 y con las otras 49.
 // ═══════════════════════════════════════════════════════════
-import { getFlete } from './config'
+import { getFlete, getTarifasLuceroJSON } from './config'
 import { tieneCobranzaPaP, emparejarCiudad, normalizarCiudadPaP, CIUDADES_PAP_LISTA } from './cobranzaPaP'
 import { familiaProducto } from './recompra'
 
@@ -54,7 +54,10 @@ export function labelTransportadora(id) {
   return (TRANSPORTADORAS[id] || TRANSPORTADORAS.pap).label
 }
 
-// ─── Tarifario oficial Lucero del Este 2026 ─────────────────
+// ─── Tarifario Lucero del Este — VALORES DE FÁBRICA ─────────
+// Desde F-04 este objeto es el RESPALDO: el tarifario vigente es el que se
+// edita en Config (clave 'tarifas_lucero'); si está vacío o roto, rige esto.
+// Todo el módulo lee vía infoLucero() — no usar este objeto directo.
 // [precio, velocidad]  ·  velocidad: 'diaria' (24hs) | 'frecuente' (24-48hs) | 'programada' (48-72hs, 1-2 veces por semana)
 // Claves normalizadas (minúscula, sin tildes) para cruzar con lo que escribe el cliente.
 // OJO: esta lista REEMPLAZA el tarifario anterior — todas las ciudades subieron
@@ -135,15 +138,39 @@ export const TARIFAS_LUCERO_INFO = {
   'villa hayes': [50000, 'programada'],             // Villa Hayes
 }
 
-// Solo el precio (compatibilidad con el resto del código)
-export const TARIFAS_LUCERO = Object.fromEntries(
-  Object.entries(TARIFAS_LUCERO_INFO).map(([c, [p]]) => [c, p])
-)
+export const VELOCIDADES_LUCERO = ['diaria', 'frecuente', 'programada']
 
-// Velocidad de entrega por ciudad
-export const velocidadLucero = (ciudadNorm) => TARIFAS_LUCERO_INFO[ciudadNorm]?.[1] || null
+// Clave normalizada del tarifario: minúscula, sin tildes, espacios simples.
+// La MISMA normalización con la que están escritas las claves de fábrica.
+export const claveCiudadLucero = (s) => String(s ?? '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().replace(/\s+/g, ' ').trim()
 
-const CIUDADES_LUCERO = Object.keys(TARIFAS_LUCERO)
+// ── Tarifario VIGENTE ──
+// Se parsea el JSON de Config en cada acceso: es barato (~20 ciudades) y
+// evita otro caché congelado al importar — exactamente el bug F-01 del flete.
+// JSON vacío/roto/sin filas válidas → fábrica: mejor la tarifa vieja que un
+// despacho frenado por un error de tipeo en Config.
+export function infoLucero() {
+  try {
+    const raw = getTarifasLuceroJSON()
+    if (raw && String(raw).trim()) {
+      const obj = JSON.parse(raw)
+      const limpio = {}
+      for (const [c, v] of Object.entries(obj || {})) {
+        const precio = Number(Array.isArray(v) ? v[0] : v)
+        const vel = (Array.isArray(v) && VELOCIDADES_LUCERO.includes(v[1])) ? v[1] : 'programada'
+        const k = claveCiudadLucero(c)
+        if (k && Number.isFinite(precio) && precio > 0) limpio[k] = [precio, vel]
+      }
+      if (Object.keys(limpio).length) return limpio
+    }
+  } catch { /* JSON roto → fábrica */ }
+  return TARIFAS_LUCERO_INFO
+}
+
+// Velocidad de entrega por ciudad (del tarifario vigente)
+export const velocidadLucero = (ciudadNorm) => infoLucero()[ciudadNorm]?.[1] || null
 
 // Nombre canónico en MAYÚSCULAS, como lo espera la planilla de Lucero.
 // Si mandás la ciudad con otra grafía, su sistema la marca como no reconocida.
@@ -250,7 +277,7 @@ export const TASA_EQUILIBRIO = {
 // Resuelve la ciudad del texto libre contra el tarifario de Lucero.
 // Devuelve la clave normalizada o null.
 export function ciudadLucero(ciudad) {
-  return emparejarCiudad(ciudad, CIUDADES_LUCERO)
+  return emparejarCiudad(ciudad, Object.keys(infoLucero()))
 }
 
 // ¿La transportadora hace COD en esta ciudad?
@@ -271,7 +298,7 @@ export function tarifaDe(transportadora, ciudad) {
   if (transportadora === 'otra') return null
   if (transportadora === 'lucero') {
     const c = ciudadLucero(ciudad)
-    return c ? TARIFAS_LUCERO[c] : null
+    return c ? (infoLucero()[c]?.[0] ?? null) : null
   }
   return tieneCobranzaPaP(ciudad) ? getFlete() : null
 }
@@ -336,7 +363,7 @@ export function sugerirTransportadora(ciudad, productoNombre = '') {
   const flete = getFlete()
 
   if (cL) {
-    const tarifa = TARIFAS_LUCERO[cL]
+    const tarifa = infoLucero()[cL]?.[0]
     const vel = velocidadLucero(cL)
     const dif = tarifa - flete
     const rapida = vel === 'diaria' || vel === 'frecuente'
@@ -385,7 +412,7 @@ export function ciudadParaPlanillaLucero(ciudad) {
 // deje el pedido sin cobertura.
 export function ciudadesConocidas() {
   const set = new Set()
-  Object.keys(TARIFAS_LUCERO).forEach(c => set.add(c))
+  Object.keys(infoLucero()).forEach(c => set.add(c))
   CIUDADES_PAP_LISTA.forEach(c => set.add(c))
   return [...set]
     .map(c => c.replace(/\b\w/g, m => m.toUpperCase()))
@@ -399,7 +426,7 @@ export function coberturaCiudad(ciudad) {
   return {
     pap: tieneCobranzaPaP(ciudad),
     lucero: cL != null,
-    tarifaLucero: cL ? TARIFAS_LUCERO[cL] : null,
+    tarifaLucero: cL ? (infoLucero()[cL]?.[0] ?? null) : null,
     velocidadLucero: cL ? velocidadLucero(cL) : null,
   }
 }

@@ -1,11 +1,12 @@
 // src/pages/config/ConfigPage.jsx
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2, SlidersHorizontal } from 'lucide-react'
 import { getConfig, guardarConfigLote, cargarConfig, getEnvioCliente, getFlete, DEFAULTS, getEstadoConfig } from '../../lib/config'
+import { TARIFAS_LUCERO_INFO, VELOCIDADES_LUCERO, claveCiudadLucero } from '../../lib/transportadoras'
 
 // ─── Modal producto ───────────────────────────────────────
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -292,6 +293,39 @@ function ReglasNegocio() {
 
   const restaurar = (k) => set(k, String(DEFAULTS[k]))
 
+  // ── Tarifario Lucero ──
+  // Vive en form.tarifas_lucero como JSON; el editor es una vista estructurada
+  // sobre ese string, sin estado duplicado. Mientras no personalizaste nada se
+  // muestran los valores de fábrica; el primer cambio materializa la tabla.
+  const tarifas = useMemo(() => {
+    let obj = null
+    try { obj = form.tarifas_lucero?.trim() ? JSON.parse(form.tarifas_lucero) : null } catch { obj = null }
+    const personalizado = !!(obj && Object.keys(obj).length)
+    const fuente = personalizado ? obj : TARIFAS_LUCERO_INFO
+    const rows = Object.entries(fuente).map(([ciudad, v]) => ({
+      ciudad,
+      precio: Array.isArray(v) ? v[0] : v,
+      vel: (Array.isArray(v) && v[1]) || 'programada',
+    })).sort((a, b) => a.ciudad.localeCompare(b.ciudad))
+    return { personalizado, rows }
+  }, [form.tarifas_lucero])
+  const [nuevaCiudad, setNuevaCiudad] = useState({ ciudad: '', precio: '', vel: 'programada' })
+
+  const escribirTarifas = (rows) => set('tarifas_lucero',
+    JSON.stringify(Object.fromEntries(rows.map(r => [r.ciudad, [Number(r.precio) || 0, r.vel]]))))
+  const cambiarTarifa = (ciudad, campo, valor) =>
+    escribirTarifas(tarifas.rows.map(r => r.ciudad === ciudad ? { ...r, [campo]: valor } : r))
+  const quitarCiudad = (ciudad) => escribirTarifas(tarifas.rows.filter(r => r.ciudad !== ciudad))
+  const agregarCiudad = () => {
+    const k = claveCiudadLucero(nuevaCiudad.ciudad)
+    const precio = parseInt(nuevaCiudad.precio, 10)
+    if (!k) { toast('Escribí el nombre de la ciudad', 'error'); return }
+    if (tarifas.rows.some(r => r.ciudad === k)) { toast('Esa ciudad ya está en el tarifario', 'error'); return }
+    if (!precio || precio <= 0) { toast('Poné la tarifa en guaraníes', 'error'); return }
+    escribirTarifas([...tarifas.rows, { ciudad: k, precio, vel: nuevaCiudad.vel }])
+    setNuevaCiudad({ ciudad: '', precio: '', vel: 'programada' })
+  }
+
   const Campo = ({ clave, label, sufijo, ayuda }) => (
     <div className="form-group">
       <label className="form-label">{label}</label>
@@ -337,6 +371,72 @@ function ReglasNegocio() {
         </p>
         <Campo clave="flete_pap" label="Flete PaP" sufijo="Gs. por paquete"
           ayuda="El día que PaP cambie la tarifa, la cambiás acá y listo — sin tocar código." />
+      </div>
+
+      <div className="card" style={{ padding: '16px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0, fontSize: 15 }}>🛵 Tarifario Lucero del Este</h3>
+          {tarifas.personalizado ? (
+            <span className="badge badge-accent">Personalizado · {tarifas.rows.length} ciudades</span>
+          ) : (
+            <span className="badge badge-gray">De fábrica · {tarifas.rows.length} ciudades</span>
+          )}
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '6px 0 12px' }}>
+          Precio por ciudad que usa Despacho para elegir courier y cargar el costo del envío.
+          Cuando Lucero cambie precios, se corrige acá — sin tocar código. Se aplica al tocar «Guardar reglas».
+        </p>
+        <div className="table-wrapper" style={{ maxHeight: 340, overflowY: 'auto' }}>
+          <table>
+            <thead>
+              <tr><th>Ciudad</th><th>Tarifa</th><th>Velocidad</th><th></th></tr>
+            </thead>
+            <tbody>
+              {tarifas.rows.map(r => (
+                <tr key={r.ciudad}>
+                  <td style={{ textTransform: 'capitalize' }}>{r.ciudad}</td>
+                  <td>
+                    <input className="form-input" inputMode="numeric" value={r.precio}
+                      onChange={e => cambiarTarifa(r.ciudad, 'precio', e.target.value.replace(/\D/g, ''))}
+                      style={{ width: 96, padding: '4px 8px', color: (Number(r.precio) || 0) <= 0 ? 'var(--red)' : undefined }} />
+                  </td>
+                  <td>
+                    <select className="form-select" value={r.vel}
+                      onChange={e => cambiarTarifa(r.ciudad, 'vel', e.target.value)}
+                      style={{ padding: '4px 8px' }}>
+                      {VELOCIDADES_LUCERO.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  </td>
+                  <td>
+                    <button type="button" className="btn-icon" title="Quitar ciudad"
+                      onClick={() => quitarCiudad(r.ciudad)}>
+                      <X size={14} color="var(--text-muted)" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input className="form-input" placeholder="Ciudad nueva" value={nuevaCiudad.ciudad}
+            onChange={e => setNuevaCiudad(n => ({ ...n, ciudad: e.target.value }))} style={{ width: 160 }} />
+          <input className="form-input" placeholder="Gs." inputMode="numeric" value={nuevaCiudad.precio}
+            onChange={e => setNuevaCiudad(n => ({ ...n, precio: e.target.value.replace(/\D/g, '') }))} style={{ width: 90 }} />
+          <select className="form-select" value={nuevaCiudad.vel}
+            onChange={e => setNuevaCiudad(n => ({ ...n, vel: e.target.value }))}>
+            {VELOCIDADES_LUCERO.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={agregarCiudad}>
+            <Plus size={13} /> Agregar
+          </button>
+          {tarifas.personalizado && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('tarifas_lucero', '')}
+              title="Descarta lo personalizado y vuelve al tarifario del código">
+              ↺ Volver al de fábrica
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="card" style={{ padding: '16px 20px' }}>
