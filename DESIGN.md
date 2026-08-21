@@ -38,6 +38,12 @@ está calibrada para leerse al sol en el celular.
 | KPI con label | `.kpi-card` (`.kpi-value.green/.yellow/.red`) | — |
 | Tabla en móvil | `<table class="tabla-responsive">` + `data-label` en cada td | tabla pelada |
 
+## Atajos de teclado (MacBook)
+
+`N` nueva venta (abre el modal desde cualquier pantalla) · `B` buscar pedido ·
+`D` despacho · `⌘K` búsqueda global. Los hints aparecen al pasar el mouse por
+el menú. Nunca se disparan mientras escribís en un campo.
+
 ## Reglas de producto
 
 1. **Escritorio es el caso principal (80% del uso); el móvil, el momento

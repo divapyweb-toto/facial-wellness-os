@@ -1311,3 +1311,19 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .quick-action { padding: 13px 6px; font-size: 11px; }
   .guia-card { padding: 14px; }
 }
+
+/* Hint de atajo de teclado en el sidebar (N/B/D). Solo escritorio: en
+   pantallas táctiles no hay teclado que valga. */
+.nav-kbd {
+  margin-left: auto;
+  font-family: 'Space Grotesk', var(--font-body);
+  font-size: 9.5px; font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  opacity: 0; transition: opacity var(--t-base) ease;
+}
+.nav-item:hover .nav-kbd, .nav-item.active .nav-kbd { opacity: 1; }
+@media (max-width: 1024px) { .nav-kbd { display: none; } }
