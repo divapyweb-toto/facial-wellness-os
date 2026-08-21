@@ -64,7 +64,7 @@ export default function DashboardHero({ nombre, hoyCount, hoyMonto, tasa7d, resu
 
       {/* Las 3 tareas de todos los días. Navegan a la pantalla ya existente. */}
       <div className="quick-actions">
-        <button className="quick-action" onClick={() => navigate('/ventas')}>
+        <button className="quick-action" onClick={() => navigate('/ventas?nueva=1')}>
           <Plus size={20} /> Cargar venta
         </button>
         <button className="quick-action" onClick={() => navigate('/despacho')}>

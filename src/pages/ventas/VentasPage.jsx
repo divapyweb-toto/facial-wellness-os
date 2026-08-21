@@ -1,5 +1,6 @@
 // src/pages/ventas/VentasPage.jsx
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase, formatGs, estadoConfig, getEstadoConfig } from '../../lib/supabase'
 import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
@@ -506,6 +507,20 @@ export default function VentasPage() {
   const [ventas, setVentas] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+
+  // Deep-link: #/ventas?nueva=1 abre directo el modal de nueva venta.
+  // Lo usan el atajo N y el acceso rápido del hero — cargar una venta pasa a
+  // ser UNA acción desde cualquier pantalla, incluso si ya estás parado acá
+  // (por eso escucha location, no solo el montaje). El parámetro se limpia
+  // para que recargar o volver atrás no reabra el modal.
+  const location = useLocation()
+  const navigate = useNavigate()
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('nueva')) {
+      setShowModal(true)
+      navigate('/ventas', { replace: true })
+    }
+  }, [location.search, navigate])
   const [filtroEstado, setFiltroEstado] = useState('todos')
   const [filtroTransp, setFiltroTransp] = useState('todas')
   const [busqueda, setBusqueda] = useState('')

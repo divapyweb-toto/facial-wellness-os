@@ -1,6 +1,6 @@
 // src/components/layout/Layout.jsx
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import BusquedaGlobal from './BusquedaGlobal'
 import { useAuth } from '../../lib/AuthContext'
 import {
@@ -61,6 +61,24 @@ export default function Layout() {
     await signOut()
     navigate('/login')
   }
+
+  // ── Atajos de teclado (MacBook = 80% del uso) ──
+  // N = nueva venta · B = buscar pedido · D = despacho. Solo con el foco
+  // fuera de un campo de texto y sin modificadores (⌘K ya vive en la
+  // búsqueda global). Los hints aparecen al lado de cada ítem del menú.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      const k = e.key.toLowerCase()
+      if (k === 'n') { e.preventDefault(); navigate('/ventas?nueva=1') }
+      else if (k === 'b') { e.preventDefault(); navigate('/reclamos') }
+      else if (k === 'd') { e.preventDefault(); navigate('/despacho') }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navigate])
 
   const initials = profile?.nombre
     ? profile.nombre.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
@@ -128,6 +146,10 @@ export default function Layout() {
                   className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
                 >
                   <Icon size={16} /><span>{label}</span>
+                  {/* Hint del atajo de teclado (V/B/D navegan; N abre venta nueva) */}
+                  {to === '/ventas' && <kbd className="nav-kbd">N</kbd>}
+                  {to === '/reclamos' && <kbd className="nav-kbd">B</kbd>}
+                  {to === '/despacho' && <kbd className="nav-kbd">D</kbd>}
                 </NavLink>
               ))}
             </div>
@@ -272,7 +294,7 @@ export default function Layout() {
       ════════════════════════════════════════════ */}
       <main className="main-content">
         <div key={location.pathname} className="page-content page-enter">
-          <Outlet />
+          <div className="page-enter" key={location.pathname}><Outlet /></div>
         </div>
       </main>
 
