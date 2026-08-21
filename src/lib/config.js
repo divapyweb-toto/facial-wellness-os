@@ -34,6 +34,13 @@ const DEFAULTS = {
 let cache = { ...DEFAULTS }
 let cargado = false
 
+// Resultado de la última carga. cargarConfig() traga los errores a propósito
+// (el sistema tiene que andar aunque Supabase falle), pero eso vuelve el fallo
+// INVISIBLE: podés creer que rige tu tarifa editada y estar corriendo con la
+// de fábrica. Config usa esto para decir de dónde vienen los valores.
+let estadoCarga = { hecho: false, desdeDB: 0, error: null }
+export const getEstadoConfig = () => ({ ...estadoCarga })
+
 // Convierte el texto guardado al tipo del default (número o string).
 function coerce(clave, valor) {
   if (valor == null) return DEFAULTS[clave]
@@ -52,14 +59,18 @@ export async function cargarConfig() {
     const { data, error } = await supabase.from('config').select('clave, valor')
     if (error) throw error
     const nuevo = { ...DEFAULTS }
+    let desdeDB = 0
     for (const row of (data || [])) {
-      if (row.clave in DEFAULTS) nuevo[row.clave] = coerce(row.clave, row.valor)
+      if (row.clave in DEFAULTS) { nuevo[row.clave] = coerce(row.clave, row.valor); desdeDB++ }
     }
     cache = nuevo
     cargado = true
+    estadoCarga = { hecho: true, desdeDB, error: null }
   } catch (e) {
-    // Sin config guardada: se usan los defaults. El sistema anda igual.
+    // Sin config guardada: se usan los defaults. El sistema anda igual…
+    // pero queda registrado, para que Config pueda avisarlo.
     cargado = true
+    estadoCarga = { hecho: true, desdeDB: 0, error: e?.message || String(e) }
   }
   return cache
 }
