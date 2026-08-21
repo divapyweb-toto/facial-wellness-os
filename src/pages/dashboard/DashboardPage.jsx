@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { construirAlertasNegocio } from '../../lib/alertasNegocio'
+import DashboardHero from './DashboardHero'
 import { rangoMesAnteriorEquivalente } from '../../lib/fechas'
 import { construirAcciones, COLOR_URGENCIA } from '../../lib/centroAcciones'
 import { fetchAll } from '../../lib/fetchAll'
@@ -132,6 +133,7 @@ export default function DashboardPage() {
   const [showSaldoModal, setShowSaldoModal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [ventasRecientes, setVentasRecientes] = useState([])
+  const [hero, setHero] = useState(null)
 
   const cargarDatos = useCallback(async () => {
     setLoading(true)
@@ -183,6 +185,16 @@ export default function DashboardPage() {
     setHistorico6m(mesesData)
 
     if (ventasMes) {
+      // ── Datos del HERO: derivados de lo YA traído, sin consultas nuevas ──
+      const deHoy = ventasMes.filter(v => v.fecha === hoyStr)
+      const enCalle = ventasMes.filter(v => v.estado === 'pendiente')
+      setHero(h => ({
+        ...(h || {}),
+        hoyCount: deHoy.length,
+        hoyMonto: deHoy.reduce((s, v) => s + (v.total || 0), 0),
+        enCalleCount: enCalle.length,
+        enCalleMonto: enCalle.reduce((s, v) => s + (v.total || 0), 0),
+      }))
       const entregadas = ventasMes.filter(v => v.estado === 'entregado')
       const pendientes = ventasMes.filter(v => v.estado === 'pendiente')
       const devueltas = ventasMes.filter(v => v.estado === 'devuelto')
@@ -255,6 +267,14 @@ export default function DashboardPage() {
       .gte('fecha', hace7.toISOString().split('T')[0]).order('fecha')
 
     if (ventasChart) {
+      // Tasa de entrega de los últimos 7 días, sobre lo RESUELTO.
+      const ent7 = ventasChart.filter(v => v.estado === 'entregado').length
+      const dev7 = ventasChart.filter(v => v.estado === 'devuelto').length
+      setHero(h => ({
+        ...(h || {}),
+        tasa7d: (ent7 + dev7) ? ent7 / (ent7 + dev7) : null,
+        resueltos7d: ent7 + dev7,
+      }))
       const porDia = {}
       for (let i = 0; i < 7; i++) {
         const d = new Date(); d.setDate(d.getDate() - (6 - i))
@@ -441,8 +461,14 @@ export default function DashboardPage() {
   }
 
   if (loading) return (
-    <div style={{ display: 'flex', gap: 10, flexDirection: 'column' }}>
-      {[...Array(3)].map((_, i) => <div key={i} className="skeleton" style={{ height: 80, borderRadius: 10 }} />)}
+    <div className="skeleton-page">
+      <div className="skeleton skeleton-hero" />
+      <div className="skeleton-row">
+        {[...Array(3)].map((_, i) => <div key={i} className="skeleton skeleton-kpi" />)}
+      </div>
+      <div className="skeleton-row">
+        {[...Array(3)].map((_, i) => <div key={i} className="skeleton skeleton-kpi" />)}
+      </div>
     </div>
   )
 
@@ -450,18 +476,24 @@ export default function DashboardPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Header */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Hola, {profile?.nombre?.split(' ')[0] || 'Enrique'} 👋</h1>
-          <p className="page-subtitle">{mesActual.charAt(0).toUpperCase() + mesActual.slice(1)}</p>
+      {/* ── HERO: cómo va el negocio HOY, en 3 segundos ── */}
+      <div className="page-header" style={{ marginBottom: 0 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <DashboardHero
+            nombre={profile?.nombre?.split(' ')[0] || 'Enrique'}
+            hoyCount={hero?.hoyCount ?? 0}
+            hoyMonto={hero?.hoyMonto ?? 0}
+            tasa7d={hero?.tasa7d ?? null}
+            resueltos7d={hero?.resueltos7d ?? 0}
+            enCalleCount={hero?.enCalleCount ?? 0}
+            enCalleMonto={hero?.enCalleMonto ?? 0}
+            alertasCount={alertas.length}
+          />
         </div>
-        <div className="page-actions">
-          <button className="btn btn-ghost btn-sm" onClick={cargarDatos}><RefreshCw size={13} /></button>
-          <button className="btn btn-primary btn-sm" onClick={() => navigate('/ventas')}>
-            <Plus size={14} /> Nueva venta
-          </button>
-        </div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        <span className="section-label">{mesActual.charAt(0).toUpperCase() + mesActual.slice(1)}</span>
+        <button className="btn btn-ghost btn-sm" onClick={cargarDatos} title="Actualizar"><RefreshCw size={13} /></button>
       </div>
 
       {/* Alertas */}
