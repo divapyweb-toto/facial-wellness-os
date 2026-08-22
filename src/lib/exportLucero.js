@@ -32,6 +32,8 @@
 //    útil está en "Notas" ("No contesta", "No responde") o al final del
 //    Motivo después de "Nota:". Se extrae de ahí.
 // ═══════════════════════════════════════════════════════════
+import { esImporteCorrupto } from './estadosPaP'
+
 
 const norm = (s) => String(s ?? '')
   .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -69,6 +71,24 @@ export function fechaLucero(v) {
 export function loteDesdeRendicion(v) {
   const m = String(v ?? '').match(/lote\s*#?\s*(\d+)/i)
   return m ? m[1] : null
+}
+
+// ─── Sanidad de montos ──────────────────────────────────────
+// Lucero manda valores basura igual que PaP: se vio una Multa con
+// 2.147.483.647 — el máximo de un entero de 32 bits, o sea un dato sin
+// inicializar de su sistema, no una multa. Sumado a la tarifa daba
+// 2.147.523.647 y Postgres rechazaba EL LOTE ENTERO con "out of range for
+// type integer": no entraba ni un solo envío del archivo.
+//
+// Se reusa el tope de `estadosPaP` (2.000.000) para que la regla sea UNA sola
+// en todo el sistema. `montoSano` distingue dos cosas a propósito:
+//   · basura → null, para que quien la reciba decida (la tarifa corrupta se
+//     omite y conserva la estimada; la multa corrupta cuenta como 0).
+//   · vacío  → null también, que ya era el significado de "no vino el dato".
+const montoSano = (v) => {
+  const n = num(v)
+  if (n == null) return null
+  return esImporteCorrupto(n) ? null : n
 }
 
 const num = (v) => {
@@ -151,10 +171,16 @@ export function parsearExportLucero(filas) {
       direccion: String(get(f, idx.direccion) ?? '').trim(),
       producto: String(get(f, idx.item) ?? '').trim(),
       cantidad: num(get(f, idx.cantidad)) || 1,
-      total: num(get(f, idx.total)) || 0,
+      total: montoSano(get(f, idx.total)) || 0,
       // null (no 0) cuando no vino: distingue "no me cobraron" de "me cobraron 0".
-      tarifa: num(get(f, idx.tarifa)),
-      multa: num(get(f, idx.multa)) || 0,
+      // Una tarifa corrupta también cae en null: así el upsert omite la clave
+      // y conserva la tarifa estimada que se congeló al despachar.
+      tarifa: montoSano(get(f, idx.tarifa)),
+      multa: montoSano(get(f, idx.multa)) || 0,
+      // Se marca la fila para poder avisarlo en pantalla en vez de que el
+      // monto desaparezca en silencio.
+      montoCorrupto: [get(f, idx.total), get(f, idx.tarifa), get(f, idx.multa)]
+        .some(v => num(v) != null && esImporteCorrupto(num(v))),
       transportador: String(get(f, idx.transportador) ?? '').trim(),
       rendido: rendidoRaw === 'si' || rendidoRaw === 'sí' || rendidoRaw === 'true',
       fechaRendicion: fechaLucero(get(f, idx.fRendicion)),
@@ -206,6 +232,7 @@ export function resumenExportLucero(items) {
     total: items.length, entregados: 0, devueltos: 0, enProceso: 0,
     reintentables: 0, rendidos: 0, sinRendir: 0,
     montoEntregado: 0, montoEnJuego: 0, fleteFacturado: 0, multas: 0,
+    montosCorruptos: 0, codigosCorruptos: [],
     porMotivo: {},
   }
   items.forEach(it => {
@@ -216,6 +243,7 @@ export function resumenExportLucero(items) {
     if (it.rendido) r.rendidos++; else if (it.categoria === 'entregado') r.sinRendir++
     if (it.tarifa != null) r.fleteFacturado += it.tarifa
     r.multas += (it.multa || 0)
+    if (it.montoCorrupto) { r.montosCorruptos++; if (r.codigosCorruptos.length < 6) r.codigosCorruptos.push(it.codigo) }
     if (it.motivo) r.porMotivo[it.motivo] = (r.porMotivo[it.motivo] || 0) + 1
   })
   const resueltos = r.entregados + r.devueltos
