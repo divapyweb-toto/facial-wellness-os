@@ -993,6 +993,20 @@ export default function EntregasPage() {
                     Los {resumenLucero.reintentables} fallidos siguen contando como en tránsito: Lucero reintenta y pueden terminar entregados.
                   </div>
                 )}
+                {/* Montos basura del archivo de Lucero. Se descartan para que
+                    el envío entre igual, pero NUNCA en silencio: si una tarifa
+                    o multa real se perdió, tenés que poder verla y corregirla. */}
+                {resumenLucero.montosCorruptos > 0 && (
+                  <div className="alert alert-warning" style={{ marginTop: 10 }}>
+                    <AlertTriangle size={15} />
+                    <span>
+                      {resumenLucero.montosCorruptos === 1
+                        ? `El envío ${resumenLucero.codigosCorruptos[0]} vino con un monto imposible en el archivo de Lucero y se descartó ese valor `
+                        : `${resumenLucero.montosCorruptos} envíos vinieron con montos imposibles y se descartaron esos valores (${resumenLucero.codigosCorruptos.join(', ')}) `}
+                      — el resto del envío se guardó normalmente. Si esa tarifa o multa era real, cargala a mano.
+                    </span>
+                  </div>
+                )}
               </div>
             )}
 
