@@ -36,6 +36,16 @@ ok(VENENO.every(v => esImporteCorrupto(v) && esCantidadCorrupta(v)), 'los detect
 ok(importeSano(400000) === 400000 && !esImporteCorrupto(400000), 'el importe máximo real (400.000) pasa intacto')
 ok(cantidadSana(4) === 4 && !esCantidadCorrupta(4), 'la cantidad máxima real (4) pasa intacta')
 
+console.log('\n── negativos LEGÍTIMOS: no se pueden perder ──')
+// `neto_depositado` es lo que realmente cae al banco. En un prepago o una
+// devolución es NEGATIVO: cobraste 0 y el flete se paga igual, así que le
+// debés esa plata a Lucero. Casos reales: FW-2031 (−25.000), FW-2152 (−30.000).
+// El chequeo por magnitud los conserva; uno que solo mirara el signo los borraría.
+ok([-25000, -30000, -40000, -1, -1999999].every(v => !esImporteCorrupto(v)),
+   'los netos negativos reales NO se marcan como corruptos')
+ok([-2147483648, -9999999999].every(v => esImporteCorrupto(v)),
+   'los negativos IMPOSIBLES sí se marcan')
+
 console.log('\n── export de seguimiento de Lucero ──')
 const H = ['Codigo','EnvioID','Empresa','Estado','FechaCreado','FechaUltimoEstado','Ciudad','Zona','Barrio','Destinatario','Telefono','Direccion','Item','Cantidad','Total','Tarifa','Multa','FormaPago','Motivo','Transportador','FechaAsignacionRuta','Rendido','FechaRendicion','Notas']
 const BASE = { Codigo:'FW-9001', EnvioID:'1', Empresa:'FW', Estado:'Entregado', FechaCreado:'01/08/2026',
