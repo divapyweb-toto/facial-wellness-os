@@ -17,6 +17,20 @@
 // solo registro basura envenena todas las sumas del sistema.
 export const IMPORTE_MAX_RAZONABLE = 2000000
 
+// ─── DOS POLÍTICAS DISTINTAS, NO CONFUNDIRLAS ──────────────
+// `importeSano`  → para montos que NUNCA pueden ser negativos (lo que paga
+//                  el cliente, lo que cobra el courier). Un negativo ahí es
+//                  un dato roto y se lleva a 0.
+// `esImporteCorrupto` → solo mide MAGNITUD (valor absoluto). Es el que usan
+//                  los parsers de Lucero, porque ahí SÍ hay negativos
+//                  legítimos: `neto_depositado` es lo que realmente cae al
+//                  banco, y en un prepago o una devolución vos le DEBÉS el
+//                  flete a Lucero. Casos reales medidos: FW-2031 devuelto
+//                  con −25.000 y FW-2152 prepago con −30.000.
+//
+// Si alguna vez aplicás `importeSano` a `neto_depositado`, borrás esos
+// negativos legítimos en silencio. No lo hagas: usá el chequeo de magnitud.
+
 // Devuelve el importe usable: 0 si el valor es evidentemente basura.
 export function importeSano(valor) {
   const n = typeof valor === 'number' ? valor : (parseInt(valor, 10) || 0)
