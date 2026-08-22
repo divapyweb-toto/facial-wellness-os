@@ -12,6 +12,7 @@
 //   • Transferencia → el cliente pagó directo (prepago), PaP no cobró nada.
 // ═══════════════════════════════════════════════════════════
 import { normalizarRef } from './referencias'
+import { importeSano } from './estadosPaP'
 // Se re-exporta por compatibilidad: antes esta función vivía acá.
 export { normalizarRef }
 
@@ -38,16 +39,26 @@ export function parsearFilasRendicion(rows) {
     const nroGuia = r.NroGuia ?? r.nroGuia ?? r['Nro Guia'] ?? ''
     if (!nroGuia) continue
     const cobradoRaw = r.Cobrado
-    const cobrado = (typeof cobradoRaw === 'number') ? cobradoRaw
-      : (cobradoRaw == null || String(cobradoRaw).trim() === '-' || String(cobradoRaw).trim() === '') ? null
-      : Number(String(cobradoRaw).replace(/[^\d.-]/g, '')) || 0
+    // `null` (no cobró efectivo, fue transferencia) se distingue del 0.
+    // El tope de sanidad se aplica DESPUÉS de decidir el caso: la versión
+    // anterior lo salteaba cuando el Excel traía el valor ya como número,
+    // que es justo el caso más común.
+    const cobrado = (cobradoRaw == null || String(cobradoRaw).trim() === '-' || String(cobradoRaw).trim() === '')
+      ? null
+      : importeSano(
+          typeof cobradoRaw === 'number'
+            ? cobradoRaw
+            : Number(String(cobradoRaw).replace(/[^\d.-]/g, '')) || 0
+        )
     out.push({
       nroGuia: String(nroGuia).trim(),
       nroGuiaRef: r.NroGuiaRef != null ? String(r.NroGuiaRef).trim() : '',
       fecha: r.FechaIng || r.Fecha || null,
       nombre: r.Nombre || '',
       estado: r.Estado || '',
-      importe: Number(r.Importe) || 0,
+      // Mismo tope que el resto: un importe imposible del archivo de PaP
+      // envenenaba los totales del reporte de conciliación.
+      importe: importeSano(Number(r.Importe) || 0),
       cobrado,                         // null = no cobró efectivo (transferencia)
       formaPago: r.FormaPago || r['Forma Pago'] || '',
       efectivo: esEfectivo(r.FormaPago),

@@ -24,9 +24,32 @@ export function importeSano(valor) {
   return n > IMPORTE_MAX_RAZONABLE ? 0 : n
 }
 
+// Tope de sanidad para CANTIDADES. El pedido más grande de la historia del
+// negocio son 4 unidades; 100 deja aire de sobra y a la vez ataja el dato
+// basura. Misma lógica que el importe: sin esto, una cantidad imposible
+// desborda el integer de Postgres y tumba el lote entero.
+export const CANTIDAD_MAX_RAZONABLE = 100
+
+export function cantidadSana(valor) {
+  const n = typeof valor === 'number' ? Math.round(valor) : (parseInt(valor, 10) || 0)
+  if (!Number.isFinite(n) || n < 1) return 1
+  return n > CANTIDAD_MAX_RAZONABLE ? 1 : n
+}
+
+export const esCantidadCorrupta = (valor) => {
+  const n = typeof valor === 'number' ? Math.round(valor) : (parseInt(valor, 10) || 0)
+  // Simétrico a propósito: una cantidad negativa es tan imposible como una
+  // de mil millones, y colarse por abajo es igual de dañino.
+  return !Number.isFinite(n) || Math.abs(n) > CANTIDAD_MAX_RAZONABLE
+}
+
+// OJO — el chequeo es por VALOR ABSOLUTO. La versión que solo miraba el tope
+// superior dejaba pasar los negativos extremos: un -2.147.483.648 del archivo
+// se colaba intacto y envenenaba los totales. Lo encontró el test de valores
+// venenosos, no una lectura del código.
 export const esImporteCorrupto = (valor) => {
   const n = typeof valor === 'number' ? valor : (parseInt(valor, 10) || 0)
-  return Number.isFinite(n) && n > IMPORTE_MAX_RAZONABLE
+  return !Number.isFinite(n) || Math.abs(n) > IMPORTE_MAX_RAZONABLE
 }
 
 // ─── Columnas REALES de la tabla `entregas` ─────────────────

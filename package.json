@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --import ./tests/registrar.mjs tests/montos.test.mjs && node --import ./tests/registrar.mjs tests/archivos-reales.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
