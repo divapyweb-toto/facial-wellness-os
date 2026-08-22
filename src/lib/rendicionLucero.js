@@ -22,6 +22,8 @@
 // CREA los registros de entrega que faltan.
 // ═══════════════════════════════════════════════════════════
 
+import { esImporteCorrupto } from './estadosPaP'
+
 // Normaliza texto de encabezado: sin tildes, minúscula, sin espacios extra.
 const normHeader = (s) => String(s ?? '')
   .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -83,6 +85,17 @@ const num = (v) => {
   if (typeof v === 'number') return Math.round(v)
   const n = parseInt(String(v ?? '').replace(/[^\d-]/g, ''), 10)
   return Number.isFinite(n) ? n : 0
+}
+
+// Monto de plata, con el mismo tope de sanidad que el resto del sistema.
+// Lucero manda valores basura: se vio una multa con 2.147.483.647 (el máximo
+// de un entero de 32 bits, o sea un dato sin inicializar de su sistema). Si
+// eso llega a Postgres, rechaza el lote ENTERO y no entra ni una rendición.
+// Basura → 0: acá no hay estimación previa que preservar, y un 0 visible se
+// corrige a mano; un lote que no entra no se ve.
+const montoSano = (v) => {
+  const n = num(v)
+  return esImporteCorrupto(n) ? 0 : n
 }
 
 // Fecha de Lucero: "31/07/2026 08:37" o "31/07/2026" → ISO 'YYYY-MM-DD'
@@ -165,9 +178,9 @@ export function parsearRendicionLucero(rowsRaw) {
       ciudad: iCiudad >= 0 ? String(f[iCiudad] ?? '').trim() : '',
       producto: iItem >= 0 ? String(f[iItem] ?? '').trim() : '',
       cantidad: iCant >= 0 ? (num(f[iCant]) || 1) : 1,
-      tarifa: iTarifa >= 0 ? num(f[iTarifa]) : 0,          // flete REAL que cobró Lucero
-      totalCobrar: iCobrar >= 0 ? num(f[iCobrar]) : 0,      // lo que pagó el cliente
-      pagoCliente: iPago >= 0 ? num(f[iPago]) : 0,          // lo que te deposita Lucero
+      tarifa: iTarifa >= 0 ? montoSano(f[iTarifa]) : 0,          // flete REAL que cobró Lucero
+      totalCobrar: iCobrar >= 0 ? montoSano(f[iCobrar]) : 0,      // lo que pagó el cliente
+      pagoCliente: iPago >= 0 ? montoSano(f[iPago]) : 0,          // lo que te deposita Lucero
     })
   }
 
