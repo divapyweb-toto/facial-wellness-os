@@ -6,7 +6,7 @@ import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRu
 import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
 import ModalSalida from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
-import { categorizarPaP as categoriaPaP } from '../../lib/estadosPaP'
+import { categorizarPaP as categoriaPaP, importeSano, esImporteCorrupto, cantidadSana, esCantidadCorrupta } from '../../lib/estadosPaP'
 import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
@@ -167,16 +167,26 @@ function mapearGrupoAPedidos(grupoRows) {
   const refDir = extraerNota(notas, 'Referencia') || ''
   const direccion = dir ? (refDir ? `${dir} (${refDir})` : dir) : refDir
   const telefono = limpiarTel(extraerNota(notas, 'Teléfono') || extraerNota(notas, 'whatsapp') || primero('Phone') || primero('Billing Phone') || '')
-  const totalOrden = parseInt((primero('Total') || '0').replace(/[^0-9]/g, '')) || 0
-  const subtotalOrden = parseInt((primero('Subtotal') || '0').replace(/[^0-9]/g, '')) || 0
+  // Montos del CSV con tope de sanidad. Un valor imposible (archivo editado,
+  // export corrupto) desbordaba el integer de Postgres y tumbaba el insert
+  // ENTERO de las ventas — el mismo bug que trajo Lucero con una multa de
+  // 2.147.483.647. Se guarda el crudo para poder avisarlo en pantalla.
+  const totalCrudo = parseInt((primero('Total') || '0').replace(/[^0-9]/g, '')) || 0
+  const subtotalCrudo = parseInt((primero('Subtotal') || '0').replace(/[^0-9]/g, '')) || 0
+  const totalOrden = importeSano(totalCrudo)
+  const subtotalOrden = importeSano(subtotalCrudo)
+  const montosRaros = esImporteCorrupto(totalCrudo) || esImporteCorrupto(subtotalCrudo)
 
   // Ítems del pedido: Lineitem SIEMPRE está presente en cada fila, aunque el
   // resto de los datos de esa fila estén en blanco.
   const items = grupoRows
     .map(row => ({
       producto_nombre: row['Lineitem name'] || '',
-      cantidad: parseInt(row['Lineitem quantity']) || 1,
-      precio: parseInt((row['Lineitem price'] || '0').replace(/[^0-9]/g, '')) || 0,
+      cantidad: cantidadSana(row['Lineitem quantity']),
+      precio: importeSano(parseInt((row['Lineitem price'] || '0').replace(/[^0-9]/g, '')) || 0),
+      // Se recuerda si esta línea venía con un dato imposible, para avisarlo.
+      lineaRara: esCantidadCorrupta(row['Lineitem quantity'])
+        || esImporteCorrupto(parseInt((row['Lineitem price'] || '0').replace(/[^0-9]/g, '')) || 0),
     }))
     .filter(it => it.producto_nombre)
   if (!items.length) return []
@@ -206,6 +216,12 @@ function mapearGrupoAPedidos(grupoRows) {
     if (!nombre) faltantes.push('nombre')
     if (!telefono) faltantes.push('teléfono')
     if (!direccion) faltantes.push('dirección')
+  }
+  // Un monto o cantidad imposible NO se guarda en silencio: se descarta el
+  // valor (para que el resto del pedido entre) y el pedido queda marcado en
+  // la pantalla de revisión, que es justo donde mirás antes de despachar.
+  if (montosRaros || items.some(it => it.lineaRara)) {
+    faltantes.push('importe o cantidad imposible en el archivo — revisá el monto')
   }
   const despachar = cfg.despachar && cobranzaOk
   const multiProducto = items.length > 1
