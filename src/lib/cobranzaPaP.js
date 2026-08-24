@@ -93,6 +93,22 @@ const CIUDADES_COBRANZA = {
   'independencia': 'interior2',
   'juan leon mallorquin': 'interior2',
   'loma plata': 'interior2',
+  // ── Agregadas 21/08/2026 desde la lista oficial de ruteo ──
+  // Todas del interior profundo (incluido el Chaco), por eso interior2.
+  // Si alguna resulta más rápida en la práctica, se baja a interior1.
+  'ayolas': 'interior2',
+  'chore': 'interior2',
+  'curuguaty': 'interior2',
+  'filadelfia': 'interior2',
+  'itacurubi de la cordillera': 'interior1',
+  'mariscal estigarribia': 'interior2',
+  'natalio': 'interior2',
+  'neuland': 'interior2',
+  'puente kyjha': 'interior2',
+  'san cristobal': 'interior2',
+  'san jose de los arroyos': 'interior1',
+  'san juan nepomuceno': 'interior2',
+  'santa rosa del mbutuy': 'interior2',
 }
 
 // Normaliza un nombre de ciudad para comparar (sin tildes, minúscula, sin acentos)

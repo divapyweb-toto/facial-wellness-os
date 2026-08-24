@@ -78,7 +78,7 @@ export const TARIFAS_LUCERO_INFO = {
   'thompson': [35000, 'frecuente'],                 // Thompson
   'villa elisa': [35000, 'frecuente'],              // Villa Elisa
   'villeta': [35000, 'frecuente'],                  // Villeta
-  'altos (cordillera)': [40000, 'programada'],      // Altos (Cordillera)
+  'altos': [40000, 'programada'],                   // Altos (Cordillera)
   'aregua': [40000, 'programada'],                  // Areguá
   'atyra': [40000, 'programada'],                   // Atyrá
   'barrero': [40000, 'programada'],                 // Barrero
@@ -109,7 +109,7 @@ export const TARIFAS_LUCERO_INFO = {
   'limpio': [40000, 'programada'],                  // Limpio
   'los cedrales': [40000, 'programada'],            // Los Cedrales
   'mauricio jose troche': [40000, 'programada'],    // Mauricio Jose Troche
-  'mbocajaty (departamento del guaira)': [40000, 'programada'],// Mbocajaty (departamento del Guaira)
+  'mbocajaty': [40000, 'programada'],               // Mbocajaty del Guairá
   'minga guazu': [40000, 'frecuente'],              // Minga Guazú
   'naranjal': [40000, 'programada'],                // Naranjal
   'natalicio talavera': [40000, 'programada'],      // Natalicio Talavera
@@ -126,7 +126,7 @@ export const TARIFAS_LUCERO_INFO = {
   'tavapy': [40000, 'programada'],                  // Tavapy
   'tobati': [40000, 'programada'],                  // Tobatí
   'yaguaron': [40000, 'programada'],                // Yaguarón
-  'yataity (departamento del guaira)': [40000, 'programada'],// Yataity  (departamento del Guaira)
+  'yataity': [40000, 'programada'],                 // Yataity del Guairá
   'yguazu': [40000, 'programada'],                  // Yguazú
   'ypacarai': [40000, 'programada'],                // Ypacaraí
   'ypane': [40000, 'programada'],                   // Ypané
@@ -308,6 +308,88 @@ export function transportadorasDisponibles(ciudad) {
   return IDS_TRANSPORTADORA.filter(id => cubre(id, ciudad))
 }
 
+
+// ═══════════════════════════════════════════════════════════
+// RUTEO OFICIAL POR CIUDAD  ·  actualizado 21/08/2026
+// ═══════════════════════════════════════════════════════════
+// ESTA es la lista que se actualiza cuando cambian los acuerdos con los
+// couriers. Manda sobre la comparación automática de costo/velocidad: si una
+// ciudad está acá, va por esa transportadora y punto.
+//
+// Por qué explícito y no calculado: 37 de las ciudades de Lucero también las
+// cubre PaP, así que antes decidía una comparación de precio y velocidad. Eso
+// está bien cuando no hay acuerdo previo, pero vos ya tenés definido quién
+// lleva cada ciudad — y esa decisión tiene que ser la que gana.
+//
+// Las ciudades que NO estén en ninguna de las dos listas caen al criterio
+// automático de siempre (sugerirTransportadora compara costo y velocidad).
+// Los nombres se comparan con el emparejador difuso, así que aguantan tildes,
+// abreviaturas y variantes de escritura ('cde', 'cnel oviedo').
+const RUTEO_OFICIAL = {
+  lucero: [
+    'Altos',                       'Areguá',                      'Asunción',
+    'Atyrá',                       'Barrero',                     'Blas Garay',
+    'Caacupé',                     'Caaguazú',                    'Cambyretá',
+    'Campo 9',                     'Capiatá',                     'Capitán Miranda',
+    'Carmen del Paraná',           'Ciudad del Este',             'Colonia Torín',
+    'Coronel Oviedo',              'Dr. J. Eulogio Estigarribia', 'Encarnación',
+    'Eusebio Ayala',               'Fram',                        'Guarambaré',
+    'Hernandarias',                'Itá',                         'Itacurubí',
+    'Itauguá',                     'J. Augusto Saldívar',         'José Domingo Ocampos',
+    "Juan E. O'Leary",             'Juan León Mallorquín',        'Juan Manuel Frutos',
+    'La Paz',                      'Lambaré',                     'Limpio',
+    'Loma Pytã',                   'Los Cedrales',                'Luque',
+    'Mariano Roque Alonso',        'Mauricio José Troche',        'Mbocajaty',
+    'Minga Guazú',                 'Naranjal',                    'Natalicio Talavera',
+    'Nueva Italia',                'Ñemby',                       'Paraguarí',
+    'Pastoreo',                    'Piribebuy',                   'Presidente Franco',
+    'San Bernardino',              'San Juan del Paraná',         'San Lorenzo',
+    'Santa Rita',                  'Santa Rosa del Monday',       'Tavapy',
+    'Thompson',                    'Tobatí',                      'Villa Elisa',
+    'Villeta',                     'Yaguarón',                    'Yataity',
+    'Yguazú',                      'Ypacaraí',                    'Ypané',
+  ],
+  pap: [
+    'Ayolas',                      'Bella Vista Sur',             'Caazapá',
+    'Carapeguá',                   'Choré',                       'Concepción',
+    'Curuguaty',                   'Fernando de la Mora',         'Filadelfia',
+    'Hohenau',                     'Independencia',               'Itacurubí de la Cordillera',
+    'María Auxiliadora',           'Mariscal Estigarribia (Chaco)', 'Natalio',
+    'Neuland',                     'Pedro Juan Caballero',        'Pilar',
+    'Puente Kyjhá',                'Salto del Guairá',            'San Antonio',
+    'San Cristóbal',               'San Ignacio Misiones',        'San José de los Arroyos',
+    'San Juan Nepomuceno',         'Santa Rosa del Mbutuy',       'Trinidad',
+    'Villa Hayes',                 'Villarrica',
+  ],
+}
+
+// Transportadora asignada por la lista oficial, o null si esa ciudad no está.
+export function ruteoOficial(ciudad) {
+  if (!ciudad) return null
+  const k = claveCiudadLucero(ciudad)
+  const lu = RUTEO_OFICIAL.lucero.map(claveCiudadLucero)
+  const pa = RUTEO_OFICIAL.pap.map(claveCiudadLucero)
+
+  // 1) Coincidencia EXACTA, y gana sobre cualquier parecido. Hace falta
+  //    porque hay nombres que son prefijo de otros: 'Itacurubí' está en la
+  //    lista de Lucero e 'Itacurubí de la Cordillera' en la de PaP. Sin esta
+  //    pasada, el emparejador difuso mandaba la segunda a Lucero.
+  if (lu.includes(k)) return 'lucero'
+  if (pa.includes(k)) return 'pap'
+
+  // 2) Recién ahí, emparejamiento difuso: aguanta tildes, abreviaturas y
+  //    variantes de escritura ('cde', 'cnel oviedo', 'pjc').
+  if (emparejarCiudad(ciudad, lu)) return 'lucero'
+  if (emparejarCiudad(ciudad, pa)) return 'pap'
+  return null
+}
+
+// Para mostrar en Configuración y para los tests.
+export const ciudadesRuteo = () => ({
+  lucero: [...RUTEO_OFICIAL.lucero],
+  pap: [...RUTEO_OFICIAL.pap],
+})
+
 // ─── Transportadora forzada por producto ────────────────────
 // Decisión de negocio, no logística: JawFlex Pro tiene ~36% de no-entrega
 // estable desde abril, muy por encima de cualquier otro producto (Parches
@@ -361,6 +443,23 @@ export function sugerirTransportadora(ciudad, productoNombre = '') {
   const cL = ciudadLucero(ciudad)
   const hayPaP = tieneCobranzaPaP(ciudad)
   const flete = getFlete()
+
+  // ── La lista oficial manda ──
+  // Va DESPUÉS de la regla por producto (esa es de negocio y pesa más) pero
+  // ANTES de la comparación de costo: si vos ya definiste quién lleva esa
+  // ciudad, no hay nada que comparar.
+  const oficial = ruteoOficial(ciudad)
+  if (oficial === 'lucero' && cL) {
+    return {
+      transportadora: 'lucero',
+      motivo: 'Asignada a Lucero en la lista oficial de ciudades',
+      tarifa: infoLucero()[cL]?.[0] ?? null,
+      velocidad: velocidadLucero(cL),
+    }
+  }
+  if (oficial === 'pap' && hayPaP) {
+    return { transportadora: 'pap', motivo: 'Asignada a PaP en la lista oficial de ciudades', tarifa: flete, velocidad: null }
+  }
 
   if (cL) {
     const tarifa = infoLucero()[cL]?.[0]
