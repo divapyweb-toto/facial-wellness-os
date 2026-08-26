@@ -256,6 +256,16 @@ function mapearGrupoAPedidos(grupoRows) {
 }
 
 // ─── Match de producto del catálogo (resuelve costo_prod) ───
+// Shopify manda el nombre COMERCIAL y el catálogo guarda otro: "Limpiador de
+// Lengua Facial Wellness" contra "Raspador de Lengua", "Ejercitadores de
+// Mandíbula - Pack JawFlex Pro" contra "Ejercitador de mandibula JawFlex Pro".
+// Ninguno de los dos contiene al otro, así que la comparación por texto fallaba
+// y la venta quedaba con costo_prod = 0 — o sea, producto GRATIS en la cuenta.
+// En agosto eso escondió 1.241.774 Gs de costo (65% de las ventas entregadas).
+//
+// El tercer intento usa `familiaProducto`, que es el mapeo que el sistema ya
+// usa para recompra y para la regla de transportadora por producto. Si dos
+// nombres distintos son la misma familia, son el mismo producto.
 function matchProducto(nombreVenta, productos) {
   if (!nombreVenta || !productos.length) return null
   const n = nombreVenta.toLowerCase().trim()
@@ -264,7 +274,14 @@ function matchProducto(nombreVenta, productos) {
   const cand = productos
     .filter(x => { const c = (x.nombre || '').toLowerCase().trim(); return c && (n.includes(c) || c.includes(n)) })
     .sort((a, b) => (b.nombre || '').length - (a.nombre || '').length)
-  return cand[0] || null
+  if (cand[0]) return cand[0]
+
+  const fam = familiaProducto(nombreVenta)
+  if (!fam) return null
+  const mismaFamilia = productos.filter(x => familiaProducto(x.nombre) === fam)
+  // Con varios de la familia gana el de nombre más corto: es el canónico
+  // ("Raspador de Lengua" antes que un pack con nombre largo).
+  return mismaFamilia.sort((a, b) => (a.nombre || '').length - (b.nombre || '').length)[0] || null
 }
 
 // ═══════════════════════════════════════════════════════════
