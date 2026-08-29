@@ -13,6 +13,7 @@ import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
 import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, transportadoraForzada, ciudadesConocidas, coberturaCiudad, TRANSPORTADORAS } from '../../lib/transportadoras'
 import { placeholderEntregaLucero, guiaLucero } from '../../lib/rendicionLucero'
 import { familiaProducto } from '../../lib/recompra'
+import { precioSugerido } from '../../lib/pedidos'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
 import { construirHistorialCiudades, evaluarCiudad } from '../../lib/riesgoCiudad'
@@ -1335,6 +1336,11 @@ export default function DespachoPagina() {
         cliente_direccion: p.direccion,
         producto_id: prod ? prod.id : null,
         costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
+        // Lo que la lista sugería para esa cantidad, al momento de importar.
+        // Guardarlo es lo que permite ver después si el pedido llevó descuento
+        // o upsell: descuento = precio_lista − total. Sin esto, un precio
+        // rebajado es indistinguible de un error de carga.
+        precio_lista: prod ? precioSugerido(prod, p.cantidad || 1) : null,
         // Flete REAL de la transportadora elegida en ESA ciudad. Se congela acá:
         // si mañana cambia la tarifa, los reportes viejos no se mueven.
         costo_envio: p.costo_envio ?? tarifaDe(p.transportadora || 'pap', p.ciudad) ?? costoFleteActual(),
