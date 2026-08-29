@@ -42,6 +42,11 @@ function Delta({ actual, anterior, invertido = false }) {
 
 export default function ReportesPage() {
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
+  // Excluir mayoristas del reporte. Va en TRUE por defecto a propósito: los
+  // números con los que se deciden precios y campañas (ticket promedio, CPA,
+  // mix ×1/×2/×3) se distorsionan con un pedido de 20 unidades que no vino de
+  // ads. Para el cierre de caja se destilda y entran todos.
+  const [sinMayoristas, setSinMayoristas] = useState(true)
   const [datos, setDatos] = useState(null)
   const [loading, setLoading] = useState(false)
   const [generandoPdf, setGenerandoPdf] = useState(false)
@@ -71,14 +76,29 @@ export default function ReportesPage() {
 
     // Paginado: un mes a 100 pedidos/día son ~3.000 filas y Supabase corta en 1.000.
     // El cierre financiero no puede calcularse con datos recortados.
-    const [ventas, ventasPrev, gastos, campanas, productos, entregas] = await Promise.all([
-      fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono, transportadora, pago_anticipado').gte('fecha', inicio).lte('fecha', fin).order('fecha')),
-      fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta').gte('fecha', inicioPrev).lte('fecha', finPrev)),
+    const [ventasCrudas, ventasPrevCrudas, gastos, campanas, productos, entregas] = await Promise.all([
+      // `es_mayorista` puede no existir todavía (migración 005). fetchAllSafe
+      // evita que el reporte entero falle por eso: si la columna falta, se
+      // reintenta sin ella y el filtro simplemente no se aplica.
+      fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono, transportadora, pago_anticipado, es_mayorista').gte('fecha', inicio).lte('fecha', fin).order('fecha'))
+        .catch(() => fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono, transportadora, pago_anticipado').gte('fecha', inicio).lte('fecha', fin).order('fecha'))),
+      fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta, es_mayorista').gte('fecha', inicioPrev).lte('fecha', finPrev))
+        .catch(() => fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta').gte('fecha', inicioPrev).lte('fecha', finPrev))),
       fetchAll(() => supabase.from('gastos').select('fecha, monto, categoria, concepto').gte('fecha', inicio).lte('fecha', fin)),
       fetchAll(() => supabase.from('campanas_ads').select('*').gte('mes', inicio.slice(0, 7)).lte('mes', fin.slice(0, 7))),
       fetchAll(() => supabase.from('productos').select('id, nombre, costo_unit, activo').eq('activo', true)),
       fetchAll(() => supabase.from('entregas').select('n_referencia, categoria, estado_pap, motivo, importe, rendido, dias_rendicion, fecha_entrega').gte('fecha_entrega', inicio).lte('fecha_entrega', fin), { columnaOrden: 'nro_guia_pap' }),
     ])
+
+    // ── Filtro de mayoristas ──
+    // Se aplica ACÁ, una sola vez, sobre la lista cruda: así todo lo que se
+    // calcula abajo (contribución por producto, ticket, tasas, gráficos)
+    // trabaja sobre el mismo universo y no hay forma de que un cálculo quede
+    // filtrado y otro no.
+    const esMayorista = (v) => v.es_mayorista === true
+    const mayoristasExcluidos = sinMayoristas ? (ventasCrudas || []).filter(esMayorista).length : 0
+    const ventas = sinMayoristas ? (ventasCrudas || []).filter(v => !esMayorista(v)) : (ventasCrudas || [])
+    const ventasPrev = sinMayoristas ? (ventasPrevCrudas || []).filter(v => !esMayorista(v)) : (ventasPrevCrudas || [])
 
     const entregadas = (ventas || []).filter(v => v.estado === 'entregado')
     const pendientes = (ventas || []).filter(v => v.estado === 'pendiente')
@@ -346,6 +366,9 @@ export default function ReportesPage() {
 
     setDatos({
       mes, periodo: P,
+      // Cuántos mayoristas quedaron afuera: un reporte que esconde lo que
+      // excluyó es un reporte en el que no se puede confiar.
+      mayoristasExcluidos,
       serie: agruparSerie(ventas || [], P),
       ventasBrutas: ventasBrutasCalc,
       ingresosNetos: ingresosNetosCalc,
@@ -735,13 +758,27 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
       <div className="page-header">
         <div>
           <h1 className="page-title">Reportes</h1>
-          <p className="page-subtitle">Reporte mensual completo, con PDF ejecutivo y PDF para análisis</p>
+          <p className="page-subtitle">
+            Reporte mensual completo, con PDF ejecutivo y PDF para análisis
+            {datos?.mayoristasExcluidos > 0 && (
+              <span style={{ color: 'var(--yellow)' }}>
+                {' · '}{datos.mayoristasExcluidos} línea{datos.mayoristasExcluidos === 1 ? '' : 's'} mayorista excluida{datos.mayoristasExcluidos === 1 ? '' : 's'}
+              </span>
+            )}
+          </p>
         </div>
         <div className="page-actions">
           <select className="form-select" style={{ width: 'auto' }} value={mes}
             onChange={e => { setMes(e.target.value); setDatos(null) }}>
             {mesesDisponibles.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer',
+            color: sinMayoristas ? 'var(--accent)' : 'var(--text-secondary)', whiteSpace: 'nowrap' }}
+            title="Un pedido mayorista de 20 unidades sin costo de ads distorsiona el ticket promedio y el CPA">
+            <input type="checkbox" checked={sinMayoristas}
+              onChange={e => { setSinMayoristas(e.target.checked); setDatos(null) }} />
+            Sin mayoristas
+          </label>
           <button className="btn btn-secondary" onClick={cargarDatos} disabled={loading}>
             {loading ? <Loader2 size={14} className="spinning" /> : <FileBarChart2 size={14} />}
             Generar
