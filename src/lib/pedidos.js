@@ -30,6 +30,25 @@ export function precioSugerido(producto, cantidad) {
   return p3 > 0 ? Math.round((p3 / 3) * q) : p1 * q
 }
 
+// ─── Precio POR UNIDAD ──────────────────────────────────────
+// El catálogo guarda el precio del PACK (129.000 el de 1, 199.000 el de 2).
+// Para cargar un pedido es más natural pensar en cuánto vale cada unidad y
+// que el total salga solo — sobre todo en un mayorista de 20, donde hacer la
+// multiplicación a mano es una invitación a equivocarse.
+export function precioUnitarioSugerido(producto, cantidad) {
+  const q = Math.max(1, parseInt(cantidad, 10) || 1)
+  const pack = precioSugerido(producto, q)
+  return q > 0 ? Math.round(pack / q) : 0
+}
+
+// Total de una línea: precio unitario × cantidad. Es la fuente de verdad del
+// importe de la línea — el unitario es lo que se escribe, el total lo calcula
+// el sistema.
+export function totalLinea(precioUnitario, cantidad) {
+  const q = Math.max(1, parseInt(cantidad, 10) || 1)
+  return Math.round((Number(precioUnitario) || 0) * q)
+}
+
 // ─── Diferencia contra la lista ─────────────────────────────
 // Devuelve null si coincide. Si difiere, describe cuánto y en qué sentido,
 // para MOSTRARLO — nunca para impedir el guardado.
