@@ -90,6 +90,12 @@ export async function aplicarStockNuevaVenta(venta) {
   if (!estaFueraDelDeposito(venta)) return    // nació ya reingresada (imposible en la práctica)
 
   const items = await resolverItemsFisicos(venta)
+  // Si no se pudo resolver el producto NO se marca como descontada. Marcarla
+  // igual —como hacía antes— deja la venta "cerrada" sin haber movido una sola
+  // unidad, y el stock queda inflado en silencio para siempre: la venta ya no
+  // vuelve a entrar en ninguna sincronización posterior.
+  // Pasó con 148 ventas importadas cuyo nombre no cruzaba con el catálogo.
+  if (!items.length) return
   for (const it of items) {
     await moverStock(it.producto_id, it.producto_nombre, -it.cantidad, `Venta #${venta.n_referencia || venta.id}`)
   }
