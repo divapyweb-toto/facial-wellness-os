@@ -8,7 +8,7 @@
 //
 // Correr:  npm test
 // ═══════════════════════════════════════════════════════════
-import { precioSugerido, avisoPrecio, totalesPedido, filasDeVenta } from '../src/lib/pedidos.js'
+import { precioSugerido, precioUnitarioSugerido, totalLinea, avisoPrecio, totalesPedido, filasDeVenta } from '../src/lib/pedidos.js'
 
 let f = 0
 const ok = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) f++ }
@@ -66,6 +66,22 @@ console.log('\n── el envío se cuenta UNA vez, no por línea ──')
 const conEnvio = filasDeVenta({}, may, { envioCliente: 33000, costoEnvio: FLETE })
 ok(conEnvio[0].envio_cliente === 33000 && conEnvio[1].envio_cliente === 0, 'envío cobrado solo en la primera')
 ok(conEnvio.reduce((s, x) => s + x.costo_envio, 0) === FLETE, 'el flete NO se duplica entre líneas')
+
+console.log('\n── se carga PRECIO POR UNIDAD y el total lo saca el sistema ──')
+// Escribir el total a mano en un pedido de 20 unidades es justo donde se
+// cuela el error de cuentas.
+ok(precioUnitarioSugerido(TIRAS, 1) === 129000, 'x1 sugiere 129.000 c/u')
+ok(precioUnitarioSugerido(TIRAS, 3) === 83000, 'x3 sugiere 83.000 c/u (249.000 / 3)')
+ok(precioUnitarioSugerido(TIRAS, 10) === 83000, 'x10 mantiene el unitario del tramo de 3')
+ok(totalLinea(70000, 10) === 700000, '10 x 70.000 negociado = 700.000')
+ok(totalLinea(83000, 20) === 1660000, '20 x 83.000 = 1.660.000')
+ok(totalLinea(0, 10) === 0, 'precio 0 da total 0 (muestra o regalo)')
+
+console.log('\n── ENVÍO SIN COSTO (lo lleva un conocido) ──')
+const gratis = totalesPedido([linea(TIRAS, 1)], { envioCliente: 0, costoEnvio: 0 })
+ok(gratis.contribucion === 129000 - 16000, `sin flete la contribución sube a ${gratis.contribucion.toLocaleString('es-PY')}`)
+const fGratis = filasDeVenta({ n_referencia: 'WA-0010' }, [linea(TIRAS, 1)], { envioCliente: 0, costoEnvio: 0 })
+ok(fGratis[0].costo_envio === 0, 'el flete 0 se guarda como 0, no cae al valor por defecto')
 
 console.log(f ? `\n✗ ${f} FALLAS` : '\n✓ los 3 pedidos se registran y calculan bien')
 process.exit(f ? 1 : 0)

@@ -6,7 +6,7 @@ import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
-import { precioSugerido, avisoPrecio, proximaReferenciaWA, totalesPedido, filasDeVenta } from '../../lib/pedidos'
+import { precioSugerido, precioUnitarioSugerido, totalLinea, avisoPrecio, proximaReferenciaWA, totalesPedido, filasDeVenta } from '../../lib/pedidos'
 import { logError } from '../../lib/errorLog'
 import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
 import { validarVenta } from '../../lib/validation'
@@ -133,7 +133,13 @@ function NuevaVentaModal({ onClose, onSaved }) {
     es_mayorista: false,
   })
   // Una línea por producto. Arranca con una sola: el caso común es un producto.
-  const [lineas, setLineas] = useState([{ producto_id: '', producto_nombre: '', cantidad: 1, precio: 0, precio_lista: 0, costo_prod: 0, tocado: false }])
+  // Cada línea guarda el precio POR UNIDAD; el total de la línea lo calcula el
+  // sistema (unitario × cantidad). Escribir el total a mano en un pedido de 20
+  // unidades es una invitación a equivocarse.
+  const LINEA_VACIA = { producto_id: '', producto_nombre: '', cantidad: 1, precio_unitario: 0, precio: 0, precio_lista: 0, costo_prod: 0, tocado: false }
+  const [lineas, setLineas] = useState([{ ...LINEA_VACIA }])
+  // Flete gratis: a veces lo lleva un conocido y no hay costo de logística.
+  const [fleteGratis, setFleteGratis] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -156,20 +162,24 @@ function NuevaVentaModal({ onClose, onSaved }) {
   // negociado no se recalcula solo.
   const recalcular = (l, productosLista) => {
     const prod = productosLista.find(x => x.id === l.producto_id)
-    if (!prod) return { ...l, producto_nombre: '', precio_lista: 0, costo_prod: 0 }
+    if (!prod) return { ...l, producto_nombre: '', precio_unitario: 0, precio: 0, precio_lista: 0, costo_prod: 0 }
     const q = Math.max(1, parseInt(l.cantidad, 10) || 1)
-    const lista = precioSugerido(prod, q)
+    // El unitario es lo que se escribe; el total de la línea SIEMPRE se deriva.
+    // Si ya lo tocaste a mano, cambiar la cantidad no lo pisa: un precio
+    // negociado no se recalcula solo.
+    const unitario = l.tocado ? (Number(l.precio_unitario) || 0) : precioUnitarioSugerido(prod, q)
     return {
       ...l,
       producto_nombre: prod.nombre,
-      precio_lista: lista,
-      precio: l.tocado ? l.precio : lista,
+      precio_unitario: unitario,
+      precio: totalLinea(unitario, q),
+      precio_lista: precioSugerido(prod, q),
       costo_prod: (prod.costo_unit || 0) * q,
     }
   }
   const setLinea = (i, cambios) => setLineas(ls =>
     ls.map((l, j) => j === i ? recalcular({ ...l, ...cambios }, productos) : l))
-  const agregarLinea = () => setLineas(ls => [...ls, { producto_id: '', producto_nombre: '', cantidad: 1, precio: 0, precio_lista: 0, costo_prod: 0, tocado: false }])
+  const agregarLinea = () => setLineas(ls => [...ls, { ...LINEA_VACIA }])
   const quitarLinea = (i) => setLineas(ls => ls.length > 1 ? ls.filter((_, j) => j !== i) : ls)
 
   // El envío se cuenta UNA vez por pedido: es una sola caja. El grupo de
@@ -177,7 +187,10 @@ function NuevaVentaModal({ onClose, onSaved }) {
   const envSel = metodosEnvio.find(m => m.id === form.metodo_envio_id)
   const primerProd = productos.find(p => p.id === lineas[0]?.producto_id)
   const envioCliente = primerProd?.grupo_envio === 'A' ? (envSel?.costo_cliente ?? getEnvioCliente()) : 0
-  const costoEnvio = envSel?.costo_propio || costoFleteActual()
+  // ?? en vez de ||: un flete de 0 es válido (courier gratis, lo lleva un
+  // conocido). Con || un 0 caía al valor por defecto y era imposible
+  // registrar un envío sin costo.
+  const costoEnvio = fleteGratis ? 0 : (envSel?.costo_propio ?? costoFleteActual())
   const tot = totalesPedido(lineas, { envioCliente, costoEnvio })
 
   const handleSubmit = async (e) => {
@@ -268,15 +281,26 @@ function NuevaVentaModal({ onClose, onSaved }) {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
               <span className="section-label">Productos</span>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: form.es_mayorista ? 'var(--accent)' : 'var(--text-secondary)' }}>
-                <input type="checkbox" checked={form.es_mayorista}
-                  onChange={e => setForm(f => ({ ...f, es_mayorista: e.target.checked }))} />
-                Pedido mayorista
-              </label>
+              <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: form.es_mayorista ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                  <input type="checkbox" checked={form.es_mayorista}
+                    onChange={e => setForm(f => ({ ...f, es_mayorista: e.target.checked }))} />
+                  Pedido mayorista
+                </label>
+                {/* A veces lo lleva un conocido y no hay costo de logística.
+                    Sin esto el sistema forzaba el flete por defecto y la
+                    ganancia de ese pedido salía menor de lo real. */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: fleteGratis ? 'var(--accent)' : 'var(--text-secondary)' }}
+                  title="Lo lleva un conocido: sin costo de envío">
+                  <input type="checkbox" checked={fleteGratis} onChange={e => setFleteGratis(e.target.checked)} />
+                  Envío sin costo
+                </label>
+              </div>
             </div>
 
             {lineas.map((l, i) => {
               const aviso = l.producto_id ? avisoPrecio(l.precio, l.precio_lista) : null
+              const unitLista = l.producto_id && l.cantidad ? Math.round(l.precio_lista / Math.max(1, parseInt(l.cantidad, 10) || 1)) : 0
               return (
                 <div key={i} className="card" style={{ padding: 10, marginBottom: 8 }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -292,10 +316,21 @@ function NuevaVentaModal({ onClose, onSaved }) {
                       <input className="form-input" type="number" min="1" inputMode="numeric" value={l.cantidad}
                         onChange={e => setLinea(i, { cantidad: e.target.value })} />
                     </div>
-                    <div className="form-group" style={{ width: 130 }}>
-                      {i === 0 && <label className="form-label">Precio</label>}
-                      <input className="form-input" type="number" min="0" inputMode="numeric" value={l.precio}
-                        onChange={e => setLinea(i, { precio: e.target.value, tocado: true })} />
+                    <div className="form-group" style={{ width: 120 }}>
+                      {i === 0 && <label className="form-label">Precio c/u</label>}
+                      <input className="form-input" type="number" min="0" inputMode="numeric" value={l.precio_unitario}
+                        onChange={e => setLinea(i, { precio_unitario: e.target.value, tocado: true })} />
+                    </div>
+                    {/* El total de la línea lo calcula el sistema: unitario × cantidad.
+                        En un pedido de 20 unidades, hacer esa cuenta a mano es
+                        justo donde se cuela el error. */}
+                    <div className="form-group" style={{ width: 120 }}>
+                      {i === 0 && <label className="form-label">Total línea</label>}
+                      <div style={{ minHeight: 42, display: 'flex', alignItems: 'center', padding: '0 4px',
+                        fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15,
+                        color: l.producto_id ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                        {formatGs(l.precio || 0)}
+                      </div>
                     </div>
                     {lineas.length > 1 && (
                       <button type="button" className="btn-icon" title="Quitar" onClick={() => quitarLinea(i)}
@@ -306,7 +341,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
                   </div>
                   {aviso && (
                     <div style={{ fontSize: 11.5, marginTop: 5, color: aviso.esDescuento ? 'var(--yellow)' : 'var(--accent)' }}>
-                      {aviso.esDescuento ? '↓' : '↑'} {aviso.texto} · lista: {formatGs(l.precio_lista)}
+                      {aviso.esDescuento ? '↓' : '↑'} {aviso.texto} · lista: {formatGs(unitLista)} c/u ({formatGs(l.precio_lista)} en total)
                     </div>
                   )}
                 </div>
@@ -331,7 +366,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
                 {tot.lineas} {tot.lineas === 1 ? 'producto' : 'productos'} · {tot.unidades} unidades ·
-                Costo: {formatGs(tot.costoProd)} · Flete: {formatGs(costoEnvio)} ·
+                Costo: {formatGs(tot.costoProd)} · Flete: {fleteGratis ? 'sin costo' : formatGs(costoEnvio)} ·
                 Contribución est.: {formatGs(tot.contribucion)}
               </div>
               {tot.descuento > 0 && (

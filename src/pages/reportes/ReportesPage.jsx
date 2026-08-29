@@ -1,5 +1,5 @@
 // src/pages/reportes/ReportesPage.jsx
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { supabase, formatGs, formatPct } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { agruparSerie } from '../../lib/periodos'
@@ -393,7 +393,19 @@ export default function ReportesPage() {
       clientesUnicos, recompradores, alertas,
     })
     setLoading(false)
-  }, [mes])
+    // `sinMayoristas` TIENE que estar acá. Sin él, useCallback congela el
+    // valor de la primera vez (true) y el filtro no se puede apagar nunca,
+    // por más que destildes y vuelvas a generar.
+  }, [mes, sinMayoristas])
+
+  // Al cambiar el filtro se regenera solo, pero SOLO si ya había un reporte en
+  // pantalla: si no, abrir Reportes dispararía una carga pesada sin pedirla.
+  const primeraCarga = useRef(true)
+  useEffect(() => {
+    if (primeraCarga.current) { primeraCarga.current = false; return }
+    if (datos) cargarDatos()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sinMayoristas])
 
   const generarPDF = () => {
     if (!datos) return
@@ -776,7 +788,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
             color: sinMayoristas ? 'var(--accent)' : 'var(--text-secondary)', whiteSpace: 'nowrap' }}
             title="Un pedido mayorista de 20 unidades sin costo de ads distorsiona el ticket promedio y el CPA">
             <input type="checkbox" checked={sinMayoristas}
-              onChange={e => { setSinMayoristas(e.target.checked); setDatos(null) }} />
+              onChange={e => setSinMayoristas(e.target.checked)} />
             Sin mayoristas
           </label>
           <button className="btn btn-secondary" onClick={cargarDatos} disabled={loading}>
