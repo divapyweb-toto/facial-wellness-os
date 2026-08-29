@@ -6,11 +6,12 @@ import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
+import { precioSugerido, avisoPrecio, proximaReferenciaWA, totalesPedido, filasDeVenta } from '../../lib/pedidos'
 import { logError } from '../../lib/errorLog'
 import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
 import { validarVenta } from '../../lib/validation'
 import { logAccion, logAccionLote } from '../../lib/audit'
-import { Plus, Search, X, Clock, Trash2, Edit2, Save } from 'lucide-react'
+import { Plus, Search, X, Clock, Trash2, Edit2, Save, AlertTriangle } from 'lucide-react'
 
 const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro']
 const ESTADOS = ['todos', 'pendiente', 'entregado', 'devuelto', 'en_tramite']
@@ -93,6 +94,22 @@ function SearchSelect({ value, onChange, options, placeholder }) {
   )
 }
 
+// ═══════════════════════════════════════════════════════════
+// ALTA DE VENTA — PEDIDOS ABIERTOS
+//
+// Antes asumía: 1 producto, cantidad 1 a 3 (un desplegable), precio de lista
+// no editable. El negocio ya no funciona así — hay mayoristas de 10+10,
+// upsells y descuentos.
+//
+// La regla de diseño: RÁPIDO PARA LO COMÚN, POSIBLE PARA LO RARO.
+// Una venta de 1 unidad a precio de lista sigue siendo elegir producto y
+// guardar. Las líneas extra, el precio editable y el mayorista solo aparecen
+// si los usás.
+//
+// Y las validaciones AVISAN, no BLOQUEAN: si cargás un precio distinto al de
+// lista se muestra la diferencia y se guarda igual. El que decide el precio
+// es el dueño del negocio.
+// ═══════════════════════════════════════════════════════════
 function NuevaVentaModal({ onClose, onSaved }) {
   const { toast } = useToast()
   const [productos, setProductos] = useState([])
@@ -100,10 +117,9 @@ function NuevaVentaModal({ onClose, onSaved }) {
   const [metodosEnvio, setMetodosEnvio] = useState([])
   const [ciudades, setCiudades] = useState([])
   const [loading, setLoading] = useState(false)
+  const [faltaMigracion, setFaltaMigracion] = useState(false)
   const [form, setForm] = useState({
     fecha: new Date().toISOString().split('T')[0],
-    producto_id: '',
-    cantidad: 1,
     n_referencia: '',
     estado: 'pendiente',
     metodo_pago_id: '',
@@ -114,9 +130,10 @@ function NuevaVentaModal({ onClose, onSaved }) {
     cliente_telefono: '',
     cliente_direccion: '',
     descripcion: '',
+    es_mayorista: false,
   })
-  const [productoSel, setProductoSel] = useState(null)
-  const [total, setTotal] = useState(0)
+  // Una línea por producto. Arranca con una sola: el caso común es un producto.
+  const [lineas, setLineas] = useState([{ producto_id: '', producto_nombre: '', cantidad: 1, precio: 0, precio_lista: 0, costo_prod: 0, tocado: false }])
 
   useEffect(() => {
     Promise.all([
@@ -134,53 +151,86 @@ function NuevaVentaModal({ onClose, onSaved }) {
     })
   }, [])
 
-  useEffect(() => {
-    if (!productoSel) { setTotal(0); return }
-    let precio = productoSel.precio_1u
-    if (form.cantidad == 2) precio = productoSel.precio_2u || productoSel.precio_1u
-    if (form.cantidad >= 3) precio = productoSel.precio_3u || productoSel.precio_1u
-    setTotal(precio)
-  }, [productoSel, form.cantidad])
-
-  const handleProdChange = (id) => {
-    const p = productos.find(x => x.id === id)
-    setProductoSel(p || null)
-    setForm(f => ({ ...f, producto_id: id }))
+  // Recalcula una línea. `tocado` marca que editaste el precio a mano: a
+  // partir de ahí cambiar la cantidad ya no lo pisa, porque un precio
+  // negociado no se recalcula solo.
+  const recalcular = (l, productosLista) => {
+    const prod = productosLista.find(x => x.id === l.producto_id)
+    if (!prod) return { ...l, producto_nombre: '', precio_lista: 0, costo_prod: 0 }
+    const q = Math.max(1, parseInt(l.cantidad, 10) || 1)
+    const lista = precioSugerido(prod, q)
+    return {
+      ...l,
+      producto_nombre: prod.nombre,
+      precio_lista: lista,
+      precio: l.tocado ? l.precio : lista,
+      costo_prod: (prod.costo_unit || 0) * q,
+    }
   }
+  const setLinea = (i, cambios) => setLineas(ls =>
+    ls.map((l, j) => j === i ? recalcular({ ...l, ...cambios }, productos) : l))
+  const agregarLinea = () => setLineas(ls => [...ls, { producto_id: '', producto_nombre: '', cantidad: 1, precio: 0, precio_lista: 0, costo_prod: 0, tocado: false }])
+  const quitarLinea = (i) => setLineas(ls => ls.length > 1 ? ls.filter((_, j) => j !== i) : ls)
+
+  // El envío se cuenta UNA vez por pedido: es una sola caja. El grupo de
+  // envío sale del primer producto cargado.
+  const envSel = metodosEnvio.find(m => m.id === form.metodo_envio_id)
+  const primerProd = productos.find(p => p.id === lineas[0]?.producto_id)
+  const envioCliente = primerProd?.grupo_envio === 'A' ? (envSel?.costo_cliente ?? getEnvioCliente()) : 0
+  const costoEnvio = envSel?.costo_propio || costoFleteActual()
+  const tot = totalesPedido(lineas, { envioCliente, costoEnvio })
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    // Validación completa antes de tocar la base
-    const errorValidacion = validarVenta(form)
+    const conProducto = lineas.filter(l => l.producto_id)
+    if (!conProducto.length) { toast('Elegí al menos un producto', 'error'); return }
+    if (conProducto.some(l => (parseInt(l.cantidad, 10) || 0) < 1)) { toast('La cantidad tiene que ser 1 o más', 'error'); return }
+    const errorValidacion = validarVenta({ ...form, producto_id: conProducto[0].producto_id, cantidad: conProducto[0].cantidad })
     if (errorValidacion) { toast(errorValidacion, 'error'); return }
-    setLoading(true)
-    const envioSel = form.metodo_envio_id
-      ? (await supabase.from('metodos_envio').select('*').eq('id', form.metodo_envio_id).single()).data
-      : null
-    const metodoPagoNombre = metodosPago.find(m => m.id === form.metodo_pago_id)?.nombre || ''
-    const costoEnvio = envioSel?.costo_propio || costoFleteActual()
-    const envioCliente = productoSel?.grupo_envio === 'A' ? (envioSel?.costo_cliente || getEnvioCliente()) : 0
 
-    const { data: ventaCreada, error } = await supabase.from('ventas').insert({
-      ...form,
-      producto_nombre: productoSel.nombre,
-      precio_unit: total,
-      total: total + envioCliente, // lo que paga el cliente, incluye envío (grupo A) — igual que Shopify
-      costo_prod: productoSel.costo_unit * form.cantidad,
-      costo_envio: costoEnvio,
-      envio_cliente: envioCliente,
-      metodo_pago_nombre: metodoPagoNombre,
-      metodo_envio_nombre: envioSel?.nombre || '',
-      stock_descontado: false,
-    }).select().single()
-    if (error) { toast('Error: ' + error.message, 'error'); logError('crear_venta', error, { producto: productoSel.nombre }) }
-    else {
-      // Descontar stock automáticamente (si es combo, descuenta sus componentes)
-      try { await aplicarStockNuevaVenta(ventaCreada) } catch (e) { logError('crear_venta_stock', e, { id: ventaCreada.id }) }
-      await logAccion({ accion: 'crear', entidad: 'venta', entidadId: ventaCreada.id, detalle: `#${ventaCreada.n_referencia || ''} — ${productoSel.nombre}` })
-      toast('Venta registrada', 'success'); onSaved(); onClose()
-    }
-    setLoading(false)
+    setLoading(true)
+    try {
+      // Varias líneas necesitan una referencia común para que el sistema las
+      // reconozca como UN pedido. Sin ella quedarían sueltas y el despacho
+      // imprimiría una guía por producto.
+      let ref = (form.n_referencia || '').trim()
+      if (!ref && conProducto.length > 1) ref = await proximaReferenciaWA()
+
+      const base = {
+        ...form,
+        n_referencia: ref,
+        metodo_pago_nombre: metodosPago.find(m => m.id === form.metodo_pago_id)?.nombre || '',
+        metodo_envio_nombre: envSel?.nombre || '',
+      }
+      let filas = filasDeVenta(base, conProducto, { envioCliente, costoEnvio })
+
+      // Tolerante a que falte la migración 005: si la base todavía no tiene
+      // las columnas nuevas, se sacan y la venta se guarda igual.
+      let creadas = null, error = null
+      for (let intento = 0; intento < 4; intento++) {
+        const r = await supabase.from('ventas').insert(filas).select()
+        if (!r.error) { creadas = r.data; error = null; break }
+        const falta = /Could not find the '(\w+)' column/.exec(r.error.message || '')
+        if (falta && ['es_mayorista', 'precio_lista'].includes(falta[1])) {
+          setFaltaMigracion(true)
+          const col = falta[1]
+          filas = filas.map(f => { const o = { ...f }; delete o[col]; return o })
+          continue
+        }
+        error = r.error; break
+      }
+      if (error) { toast('Error: ' + error.message, 'error'); logError('crear_venta', error, { lineas: filas.length }); return }
+
+      for (const v of (creadas || [])) {
+        try { await aplicarStockNuevaVenta(v) } catch (e) { logError('crear_venta_stock', e, { id: v.id }) }
+      }
+      await logAccion({
+        accion: 'crear', entidad: 'venta', entidadId: creadas?.[0]?.id,
+        detalle: `#${ref || 's/ref'} — ${conProducto.map(l => `${l.producto_nombre} x${l.cantidad}`).join(' + ')}${form.es_mayorista ? ' [mayorista]' : ''}`,
+      })
+      toast(conProducto.length > 1 ? `Pedido de ${conProducto.length} productos registrado` : 'Venta registrada', 'success')
+      onSaved(); onClose()
+    } finally { setLoading(false) }
   }
 
   const productosOpts = productos.map(p => ({ value: p.id, label: p.nombre, sub: `Stock: ${p.stock_actual}` }))
@@ -194,6 +244,13 @@ function NuevaVentaModal({ onClose, onSaved }) {
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {faltaMigracion && (
+            <div className="alert alert-warning">
+              <AlertTriangle size={15} />
+              <span>Falta correr <code>005-ventas-abiertas.sql</code>. La venta se guarda igual, pero sin marcar mayorista ni el precio de lista.</span>
+            </div>
+          )}
+
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Fecha</label>
@@ -202,46 +259,88 @@ function NuevaVentaModal({ onClose, onSaved }) {
             </div>
             <div className="form-group">
               <label className="form-label">N° Referencia</label>
-              <input className="form-input" placeholder="Ej: 1520" value={form.n_referencia}
+              <input className="form-input" placeholder="Ej: 1520 — vacío genera WA-####" value={form.n_referencia}
                 onChange={e => setForm(f => ({ ...f, n_referencia: e.target.value }))} />
             </div>
           </div>
 
-          <div className="form-grid">
-            <div className="form-group">
-              <label className="form-label">Producto *</label>
-              <SearchSelect value={form.producto_id} onChange={handleProdChange} options={productosOpts} placeholder="Buscar producto..." />
+          {/* ── LÍNEAS DEL PEDIDO ── */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span className="section-label">Productos</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: form.es_mayorista ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                <input type="checkbox" checked={form.es_mayorista}
+                  onChange={e => setForm(f => ({ ...f, es_mayorista: e.target.checked }))} />
+                Pedido mayorista
+              </label>
             </div>
-            <div className="form-group">
-              <label className="form-label">Cantidad</label>
-              <select className="form-select" value={form.cantidad}
-                onChange={e => setForm(f => ({ ...f, cantidad: parseInt(e.target.value) }))}>
-                <option value={1}>1 unidad</option>
-                <option value={2}>2 unidades</option>
-                <option value={3}>3 unidades</option>
-              </select>
-            </div>
+
+            {lineas.map((l, i) => {
+              const aviso = l.producto_id ? avisoPrecio(l.precio, l.precio_lista) : null
+              return (
+                <div key={i} className="card" style={{ padding: 10, marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div className="form-group" style={{ flex: '1 1 200px', minWidth: 0 }}>
+                      {i === 0 && <label className="form-label">Producto *</label>}
+                      <SearchSelect value={l.producto_id} onChange={(v) => setLinea(i, { producto_id: v })}
+                        options={productosOpts} placeholder="Buscar producto..." />
+                    </div>
+                    <div className="form-group" style={{ width: 90 }}>
+                      {i === 0 && <label className="form-label">Cantidad</label>}
+                      {/* Input libre, no un desplegable de 1-2-3: un mayorista
+                          puede pedir 10, 20 o 50 y el sistema tiene que dejarlo. */}
+                      <input className="form-input" type="number" min="1" inputMode="numeric" value={l.cantidad}
+                        onChange={e => setLinea(i, { cantidad: e.target.value })} />
+                    </div>
+                    <div className="form-group" style={{ width: 130 }}>
+                      {i === 0 && <label className="form-label">Precio</label>}
+                      <input className="form-input" type="number" min="0" inputMode="numeric" value={l.precio}
+                        onChange={e => setLinea(i, { precio: e.target.value, tocado: true })} />
+                    </div>
+                    {lineas.length > 1 && (
+                      <button type="button" className="btn-icon" title="Quitar" onClick={() => quitarLinea(i)}
+                        style={{ marginBottom: 2 }}>
+                        <X size={15} color="var(--text-muted)" />
+                      </button>
+                    )}
+                  </div>
+                  {aviso && (
+                    <div style={{ fontSize: 11.5, marginTop: 5, color: aviso.esDescuento ? 'var(--yellow)' : 'var(--accent)' }}>
+                      {aviso.esDescuento ? '↓' : '↑'} {aviso.texto} · lista: {formatGs(l.precio_lista)}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            <button type="button" className="btn btn-ghost btn-sm" onClick={agregarLinea}>
+              <Plus size={13} /> Agregar producto
+            </button>
           </div>
 
-          {productoSel && (() => {
-            const envSel = metodosEnvio.find(m => m.id === form.metodo_envio_id)
-            const envioCli = productoSel.grupo_envio === 'A' ? (envSel?.costo_cliente || getEnvioCliente()) : 0
-            const costoEnv = envSel?.costo_propio || costoFleteActual()
-            const costoProd = productoSel.costo_unit * form.cantidad
-            const totalCliente = total + envioCli
-            const margenEst = totalCliente - costoProd - costoEnv
-            return (
-              <div style={{ background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.2)', borderRadius: 8, padding: '12px 16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>Total que paga el cliente{envioCli > 0 ? ' (con envío)' : ''}</span>
-                  <span style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{formatGs(totalCliente)}</span>
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
-                  Producto: {formatGs(total)}{envioCli > 0 ? ` + envío ${formatGs(envioCli)}` : ''} · Costo: {formatGs(costoProd)} · Grupo: {productoSel.grupo_envio} · Margen est.: {formatGs(margenEst)}
-                </div>
+          {/* ── RESUMEN ── */}
+          {tot.lineas > 0 && (
+            <div style={{ background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.2)', borderRadius: 8, padding: '12px 16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>
+                  Total que paga el cliente{envioCliente > 0 ? ' (con envío)' : ''}
+                </span>
+                <span style={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>
+                  {formatGs(tot.total)}
+                </span>
               </div>
-            )
-          })()}
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
+                {tot.lineas} {tot.lineas === 1 ? 'producto' : 'productos'} · {tot.unidades} unidades ·
+                Costo: {formatGs(tot.costoProd)} · Flete: {formatGs(costoEnvio)} ·
+                Contribución est.: {formatGs(tot.contribucion)}
+              </div>
+              {tot.descuento > 0 && (
+                <div style={{ fontSize: 11.5, color: 'var(--yellow)', marginTop: 3 }}>
+                  ↓ {formatGs(tot.descuento)} de descuento sobre la lista ({formatGs(tot.lista)})
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="form-grid">
             <div className="form-group">
@@ -310,7 +409,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
           <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancelar</button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Guardando...' : 'Registrar venta'}
+              {loading ? 'Guardando...' : tot.lineas > 1 ? `Registrar pedido (${tot.lineas} productos)` : 'Registrar venta'}
             </button>
           </div>
         </form>
