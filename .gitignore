@@ -3,3 +3,6 @@ node_modules/
 .env.local
 dist/
 logs/
+
+# Scripts temporales de inspección (los crean los agentes al explorar)
+_insp*.mjs
