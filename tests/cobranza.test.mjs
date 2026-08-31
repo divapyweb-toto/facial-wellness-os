@@ -16,7 +16,7 @@
 import { exportLuceroAEntregas, categoriaLucero as catExport } from '../src/lib/exportLucero.js'
 import { categoriaLucero as catRendicion } from '../src/lib/rendicionLucero.js'
 import { combinar } from '../src/lib/importarPaP.js'
-import { normalizarRef } from '../src/lib/referencias.js'
+import { normalizarRef, normalizarTel } from '../src/lib/referencias.js'
 
 let fallas = 0
 const ok = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) fallas++ }
@@ -85,6 +85,30 @@ console.log('\n── una sola normalización de referencias ──')
   ok(normalizarRef('00123') === '123', "'00123' normaliza a '123'")
   ok(normalizarRef('WA-0007') === normalizarRef('wa-7'),
     'el mismo pedido escrito de dos formas da la misma clave')
+}
+
+console.log('\n── el teléfono cruza al mismo cliente escriba como escriba ──')
+{
+  // Los números copiados de WhatsApp o del iPhone vienen envueltos en marcas
+  // de dirección de texto INVISIBLES. limpiarTel solo sacaba espacios, guiones
+  // y paréntesis, así que '\u202a+595 973 337800\u202c' quedaba como
+  // '0\u202a+595973337800\u202c' y ese cliente no cruzaba con ninguna otra venta
+  // suya: se rompían recompra, riesgo y la vinculación por teléfono.
+  const casos = [
+    ['\u202a+595 973 337800\u202c', '0973337800', 'con marcas invisibles de iOS/WhatsApp'],
+    ['+595 981 101281', '0981101281', 'con prefijo internacional y espacios'],
+    ['595981101281', '0981101281', 'sin el +'],
+    ['981101281', '0981101281', 'sin el 0 inicial'],
+    ['(0981) 101-281', '0981101281', 'con paréntesis y guion'],
+    ['0981101281', '0981101281', 'ya canónico'],
+  ]
+  for (const [entrada, esperado, desc] of casos) {
+    ok(normalizarTel(entrada) === esperado, `${desc} → ${esperado}`)
+  }
+  ok(normalizarTel('\u202a+595 981 101281\u202c') === normalizarTel('0981101281'),
+    'el mismo cliente pegado de WhatsApp y tipeado a mano dan la misma clave')
+  ok(normalizarTel('') === '' && normalizarTel(null) === '',
+    'vacío y null no revientan')
 }
 
 console.log(fallas ? `\n✗ ${fallas} falla(s)` : '\n✓ la plata cobrada está protegida')

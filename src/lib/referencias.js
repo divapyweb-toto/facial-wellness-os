@@ -56,7 +56,15 @@ export const soloDigitos = (ref) => String(ref ?? '').replace(/\D/g, '')
 // Se usa para cruzar clientes entre ventas (detectar recompra y riesgo).
 export function limpiarTel(tel) {
   if (!tel) return ''
-  let t = String(tel).replace(/[\s\-()]/g, '')
+  // Se quita TODO lo que no sea dígito o el '+' inicial. Antes solo se sacaban
+  // espacios, guiones y paréntesis, y los números copiados de WhatsApp o del
+  // iPhone vienen envueltos en marcas de dirección de texto invisibles
+  // (U+202A…U+202E, U+200E/F, U+2066…U+2069). Con eso, '\u202a+595 973 337800\u202c'
+  // daba '0\u202a+595973337800\u202c' y ese cliente no cruzaba con ninguna otra
+  // venta suya: se rompían recompra, riesgo y la vinculación por teléfono.
+  let t = String(tel).replace(/[^\d+]/g, '')
+  // Un '+' que no esté al principio tampoco sirve.
+  t = t.replace(/(?!^)\+/g, '')
   if (t.startsWith('+5950')) t = '0' + t.slice(5)
   else if (t.startsWith('+595')) t = '0' + t.slice(4)
   else if (t.startsWith('5950')) t = '0' + t.slice(4)
