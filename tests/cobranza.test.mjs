@@ -18,6 +18,7 @@ import { categoriaLucero as catRendicion } from '../src/lib/rendicionLucero.js'
 import { combinar } from '../src/lib/importarPaP.js'
 import { normalizarRef, normalizarTel } from '../src/lib/referencias.js'
 import { calcularMetricasAds } from '../src/lib/metricasAds.js'
+import { sanearEntrega } from '../src/lib/estadosPaP.js'
 
 let fallas = 0
 const ok = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) fallas++ }
@@ -145,6 +146,31 @@ console.log('\n── el CPA cuenta pedidos, no líneas ──')
   const m3 = calcularMetricasAds(100000, dosPedidos, {}, 12000)
   ok(m3.entregados === 2, 'dos referencias distintas siguen siendo dos pedidos')
   ok(m3.cpaReal === 50000, 'y el CPA se reparte entre los dos')
+}
+
+console.log('\n── sanearEntrega no le aplica las reglas de PaP a Lucero ──')
+{
+  // categorizarPaP conoce el vocabulario de Punto a Punto. Las filas de Lucero
+  // ya vienen categorizadas por su propio módulo. Aplicarles las de PaP hacía
+  // que 3 envíos 'Cancelado' guardados como devueltos pasaran a 'en_proceso',
+  // o sea a figurar como plata en tránsito para siempre.
+  const luceroCancelado = { transportadora: 'lucero', estado_pap: 'Cancelado', categoria: 'devuelto', importe: 98000, motivo: '' }
+  ok(sanearEntrega(luceroCancelado).categoria === 'devuelto',
+    "un 'Cancelado' de Lucero sigue siendo devuelto")
+
+  const luceroEntregado = { transportadora: 'lucero', estado_pap: 'Entregado', categoria: 'entregado', importe: 98000, motivo: '' }
+  const sl = sanearEntrega(luceroEntregado)
+  ok(sl.categoria === 'entregado' && sl.cobrado === 98000, 'y un entregado de Lucero se cobra')
+
+  // Las filas de PaP sí se siguen recategorizando: para eso existe la función.
+  const papViejo = { transportadora: 'pap', estado_pap: 'ENTREGADO', categoria: 'en_proceso', importe: 98000, motivo: '' }
+  ok(sanearEntrega(papViejo).categoria === 'entregado',
+    'una fila vieja de PaP mal guardada se corrige igual que antes')
+
+  // El tope de sanidad del importe es universal, no depende del courier.
+  const veneno = { transportadora: 'lucero', estado_pap: 'Entregado', categoria: 'entregado', importe: 2147483647, motivo: '' }
+  ok(Math.abs(sanearEntrega(veneno).importe) <= 2000000,
+    'el tope de importe se sigue aplicando a Lucero')
 }
 
 console.log(fallas ? `\n✗ ${fallas} falla(s)` : '\n✓ la plata cobrada está protegida')
