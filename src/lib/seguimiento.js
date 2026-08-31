@@ -22,6 +22,8 @@
 //
 // El pedido NUNCA desaparece: cambia de estado y sigue visible hasta cerrarse.
 // ═══════════════════════════════════════════════════════════
+import { normalizarCiudad } from './ciudades'
+import { linkTrackingLucero } from './transportadoras'
 
 // Días desde el despacho antes de escribir por primera vez.
 export const DIAS_SEGUIMIENTO_DEFAULT = 4
@@ -227,6 +229,98 @@ export function codigoCourier(venta) {
     return g && !String(g).startsWith('L-') ? String(g) : null
   }
   return null
+}
+
+// Emoji numerado 1️⃣..🔟 para listas cortas. Unicode solo define keycaps de un
+// dígito (0-9): pasado 10 se cae a "11.", "12." en vez de romper o repetirse.
+export function numeroEmoji(n) {
+  const KEYCAPS = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟']
+  return n >= 1 && n <= 10 ? KEYCAPS[n] : `${n}.`
+}
+
+// Fecha completa legible: '2026-07-31' → '31/07/2026'
+const fechaLarga = (iso) => {
+  const m = String(iso ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/)
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso ?? '')
+}
+
+// ─── PaP atascado ────────────────────────────────────────────
+// Guías de PaP que llevan más días de la cuenta sin resolverse (ni entregadas
+// ni devueltas). El umbral depende de la ZONA de la ciudad — ver ciudades.js:
+// una cercana estancada 1 día ya es rara; una del interior tolera más antes de
+// que sea señal de negligencia y no de logística normal.
+//
+// OJO: `fecha_ingreso` es una FECHA (no un timestamp): no se sabe la hora en
+// que PaP recibió el paquete. "días" acá son días calendario completos, no
+// horas exactas — es la precisión real del dato, no una que inventamos.
+//
+// Se agrupa por el estado CRUDO que dice PaP (`estado_pap`), tal cual viene —
+// no por una lista fija de dos textos. Si PaP usa una palabra nueva, igual
+// aparece agrupada bien; una lista fija se queda muda el día que cambian la
+// redacción de un estado.
+export function entregasPaPAtascadas(entregas, { diasCerca = 1, diasLejos = 2, hoy = new Date() } = {}) {
+  const hoyDate = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())
+  const items = (entregas || [])
+    .filter(e => (e.transportadora || 'pap') === 'pap' && e.categoria === 'en_proceso')
+    .map(e => {
+      const fi = e.fecha_ingreso ? new Date(String(e.fecha_ingreso).slice(0, 10) + 'T00:00:00') : null
+      const dias = fi && !isNaN(fi) ? Math.floor((hoyDate - fi) / 86400000) : null
+      const zona = normalizarCiudad(e.ciudad).zona
+      const umbral = (zona === 'interior' || zona === 'desconocida') ? diasLejos : diasCerca
+      return { ...e, dias, umbral, atascada: dias != null && dias >= umbral }
+    })
+    .filter(e => e.atascada)
+    .sort((a, b) => b.dias - a.dias)
+
+  const porEstado = new Map()
+  for (const it of items) {
+    const k = it.estado_pap || '(sin estado)'
+    if (!porEstado.has(k)) porEstado.set(k, [])
+    porEstado.get(k).push(it)
+  }
+  return {
+    items,
+    grupos: [...porEstado.entries()].map(([estado, items]) => ({ estado, items })),
+    total: items.length,
+    masViejoDias: items.length ? items[0].dias : 0,
+  }
+}
+
+// Mensaje agrupado, en el formato que ya armás a mano:
+//   📦 Asignados a ruta
+//   1️⃣ 26354272 – Joséma Caballero
+//   📅 31/07/2026
+export function mensajeSeguimientoPaP(grupos, intro) {
+  const l = [String(intro || '').trim() || 'Necesito seguimiento de estos envíos:']
+  for (const { estado, items } of (grupos || [])) {
+    l.push('', `📦 ${estado}`)
+    items.forEach((it, i) => {
+      l.push(`${numeroEmoji(i + 1)} ${it.nro_guia_pap || 's/guía'} – ${it.nombre_courier || 'Sin nombre'}`)
+      l.push(`📅 ${fechaLarga(it.fecha_ingreso)}`)
+    })
+  }
+  l.push('', '¿Me confirman por favor? Gracias!')
+  return l.join('\n')
+}
+
+// ─── Tracking de Lucero al cliente ───────────────────────────
+// Reemplaza {{nombre}} y {{link}} en la plantilla configurada. Nombre = solo
+// el primero (más cálido, menos formulario), igual criterio que mensajeCliente.
+export function mensajeTrackingLucero(entrega, plantilla) {
+  const nombre = String(entrega?.nombre_courier || '').trim().split(/\s+/)[0] || ''
+  const link = linkTrackingLucero(entrega?.guia_transportadora) || ''
+  return String(plantilla || '')
+    .replace(/\{\{\s*nombre\s*\}\}/g, nombre)
+    .replace(/\{\{\s*link\s*\}\}/g, link)
+}
+
+// null si falta el EnvioID o el teléfono no es un celular válido — la UI usa
+// eso para no mostrar un botón que abre un mensaje roto.
+export function linkWhatsAppTracking(entrega, plantilla) {
+  const link = linkTrackingLucero(entrega?.guia_transportadora)
+  const tel = telefonoWhatsApp(entrega?.telefono_courier)
+  if (!link || !tel) return null
+  return `https://wa.me/${tel}?text=${encodeURIComponent(mensajeTrackingLucero(entrega, plantilla))}`
 }
 
 // ─── Reclamo AGRUPADO al courier ────────────────────────────

@@ -33,6 +33,22 @@ const DEFAULTS = {
   // Tarifario de Lucero como JSON: { 'ciudad': [precio, velocidad] }.
   // Vacío = usar el de fábrica de transportadoras.js. Lo edita ConfigPage.
   tarifas_lucero: '',
+  // Días desde que PaP ingresó el paquete a su sistema (fecha_ingreso, dato
+  // diario, no horario — no se guarda la hora exacta) antes de considerarlo
+  // "atascado" y ofrecer reclamarlo. Dos umbrales porque una ciudad cercana
+  // que no se mueve en 1 día es sospechosa; una del interior puede tardar más
+  // por logística normal (ver zona en ciudades.js).
+  seguimiento_pap_dias_cerca: 1,
+  seguimiento_pap_dias_lejos: 2,
+  // Primera línea del mensaje agrupado a PaP. Lo demás (la lista de guías,
+  // agrupada por el estado que dice PaP) se arma solo — no hace falta
+  // tocarlo para eso.
+  plantilla_seguimiento_pap: 'Hola! Necesito que me ayuden con el seguimiento de estos envíos:',
+  // Mensaje al cliente con el link de seguimiento de Lucero. {{nombre}} y
+  // {{link}} se reemplazan solos.
+  plantilla_tracking_lucero:
+    'Hola {{nombre}}! Tu pedido de Facial Wellness ya está en camino con Lucero. ' +
+    'Podés seguirlo acá: {{link}}',
 }
 
 // Caché en memoria. Arranca con los defaults.
@@ -124,6 +140,12 @@ export const getDatosPago = () => ({
   titular: getConfig('pago_alias_titular'),
   tigo: getConfig('pago_tigo'),
 })
+export const getUmbralesSeguimientoPaP = () => ({
+  diasCerca: getConfig('seguimiento_pap_dias_cerca'),
+  diasLejos: getConfig('seguimiento_pap_dias_lejos'),
+})
+export const getPlantillaSeguimientoPaP = () => getConfig('plantilla_seguimiento_pap')
+export const getPlantillaTrackingLucero = () => getConfig('plantilla_tracking_lucero')
 
 export { DEFAULTS }
 export const configCargada = () => cargado

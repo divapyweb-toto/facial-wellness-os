@@ -219,6 +219,12 @@ export function exportLuceroAEntregas(items) {
     ...(it.tarifa != null ? { costo_envio: it.tarifa + (it.multa || 0) } : {}),
     fecha_ingreso: it.fechaCreado,
     fecha_entrega: it.categoria === 'entregado' ? it.fechaUltimoEstado : null,
+    // El export SÍ trae el EnvioID (columna 'EnvioID') pero antes se parseaba
+    // y se descartaba: nunca se escribía acá, solo lo hacía la rendición —
+    // que sube mucho menos seguido. Por eso ~31% de los envíos de Lucero
+    // nunca tenían este dato. Se omite la clave si viene vacío, mismo criterio
+    // que costo_envio: no pisar un ID bueno con uno vacío en una fila vieja.
+    ...(it.envioId ? { guia_transportadora: it.envioId } : {}),
     // El export es fuente de TRACKING, no contable. Si Lucero todavía no lo
     // marcó rendido, NO se pisa: ese paquete puede haberse conciliado desde la
     // planilla de rendición, que es la fuente contable. Escribir `false` acá
