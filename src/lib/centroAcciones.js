@@ -126,6 +126,19 @@ export function construirAcciones(datos = {}) {
     }))
   }
 
+  // ── 7. Guías de PaP atascadas en su propio sistema ──
+  // Eje distinto al de la acción 1: esto es lo que dice PaP (estado crudo),
+  // no lo que contestó el cliente — puede haber guías acá que el cliente ni
+  // sabe que están frenadas todavía.
+  if (datos.papAtascado?.total > 0) {
+    acciones.push(accion('pap_atascado', {
+      titulo: `${datos.papAtascado.total} guía${datos.papAtascado.total > 1 ? 's' : ''} de PaP sin moverse`,
+      detalle: `La más vieja lleva ${datos.papAtascado.masViejoDias} días en el mismo estado. Puede que ya se haya movido y falte re-importar el reporte.`,
+      monto: 0, ruta: '/seguimiento', cta: 'Ver y avisar a PaP',
+      urgencia: datos.papAtascado.masViejoDias >= 5 ? 'alta' : 'media',
+    }))
+  }
+
   // Orden: primero por urgencia, después por plata en juego.
   const peso = { alta: 0, media: 1, baja: 2 }
   return acciones.sort((a, b) => peso[a.urgencia] - peso[b.urgencia] || b.monto - a.monto)
