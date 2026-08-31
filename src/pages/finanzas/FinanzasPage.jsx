@@ -8,6 +8,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { logAccion, logAccionLote } from '../../lib/audit'
 import { logError } from '../../lib/errorLog'
 import { validarGasto } from '../../lib/validation'
+import { hoyLocal } from '../../lib/fechas'
 
 const CATEGORIAS = ['Publicidad', 'Logística', 'Operativo', 'Personal', 'Impuestos', 'Otro']
 
@@ -16,14 +17,14 @@ function GastoModal({ gasto, onClose, onSaved }) {
   const [loading, setLoading] = useState(false)
   const esEdicion = !!gasto
   const [form, setForm] = useState(gasto ? {
-    fecha: gasto.fecha || new Date().toISOString().split('T')[0],
+    fecha: gasto.fecha || hoyLocal(),
     categoria: gasto.categoria || 'Publicidad',
     concepto: gasto.concepto || '',
     monto: gasto.monto ?? '',
     mes: gasto.mes || (gasto.fecha ? gasto.fecha.substring(0, 7) : new Date().toISOString().substring(0, 7)),
     presupuestado: gasto.presupuestado ?? '',
   } : {
-    fecha: new Date().toISOString().split('T')[0],
+    fecha: hoyLocal(),
     categoria: 'Publicidad',
     concepto: '',
     monto: '',

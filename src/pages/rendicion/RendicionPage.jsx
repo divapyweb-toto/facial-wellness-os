@@ -10,6 +10,7 @@ import { esRendicionLucero, parsearRendicionLucero, rendicionLuceroAEntregas, re
 import { soloColumnasEntregas } from '../../lib/estadosPaP'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
+import { hoyLocal } from '../../lib/fechas'
 
 const formatGs = (n) => Math.round(n || 0).toLocaleString('es-PY') + ' Gs.'
 const fechaCorta = (d) => d ? new Date(d).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'
@@ -230,7 +231,7 @@ export default function RendicionPage() {
   const marcarRendidoManual = async () => {
     if (!seleccionados.size) return
     setMarcando(true)
-    const hoy = new Date().toISOString().split('T')[0]
+    const hoy = hoyLocal()
     const items = stats.listaSinRendir.filter(m => seleccionados.has(m.nro_guia_pap))
 
     const updates = items.map(m => {
@@ -398,7 +399,7 @@ export default function RendicionPage() {
   const confirmarRendicion = async () => {
     if (!conciliacion?.marcarRendido.length) return
     setImportando(true)
-    const hoy = new Date().toISOString().split('T')[0]
+    const hoy = hoyLocal()
     // Mapa guía → fecha_entrega para calcular días
     const fechaPorGuia = {}
     for (const h of historico) fechaPorGuia[String(h.nro_guia_pap)] = h.fecha_entrega

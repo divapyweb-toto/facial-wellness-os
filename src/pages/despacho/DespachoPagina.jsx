@@ -26,6 +26,7 @@ const normRefRiesgo = (ref) => {
   if (/^\d+$/.test(r)) r = String(parseInt(r, 10))
   return r
 }
+import { hoyLocal } from '../../lib/fechas'
 import {
   Upload, FileSpreadsheet, FileText, ShoppingBag, CheckCircle, X,
   Download, Eye, Search, AlertTriangle, Package, MapPin, TrendingUp, RefreshCw, Info, ScanLine, MessageSquare, Edit2,
@@ -159,7 +160,7 @@ function mapearGrupoAPedidos(grupoRows) {
   const notas = primero('Note Attributes')
   const estado = clasificarEstado(primero('Tags'), primero('Cancelled at'))
   const cfg = ESTADO_CONFIG[estado]
-  const fecha = (primero('Created at') || '').split(' ')[0] || new Date().toISOString().split('T')[0]
+  const fecha = (primero('Created at') || '').split(' ')[0] || hoyLocal()
   const ref = (primero('Name') || '').replace('#', '').trim()
   const nombre = (extraerNota(notas, 'Nombre y apellido') || primero('Billing Name') || primero('Shipping Name') || '').replace(/\s*-\s*$/, '').trim()
   const ciudad = extraerNota(notas, 'ciudad') || primero('Shipping City') || ''
@@ -391,7 +392,7 @@ function parsearPedidoManual(bloque, catalogo, nRef) {
     n_referencia: nRef, cliente_nombre, ciudad, departamento: '', direccion,
     referencia_dir: '', telefono,
     producto_nombre: prod ? prod.nombre : productoTexto, cantidad,
-    total, fecha: new Date().toISOString().split('T')[0],
+    total, fecha: hoyLocal(),
     // Ya está confirmado: lo tipeó el propio Enrique después de cerrar la
     // venta — no pasa por el estado de Shopify/Tags.
     estado_releasit: 'confirmado', cfg: ESTADO_CONFIG['confirmado'],
