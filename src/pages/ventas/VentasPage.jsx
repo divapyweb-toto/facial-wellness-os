@@ -7,7 +7,7 @@ import { getEnvioCliente } from '../../lib/config'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
 import { precioSugerido, precioUnitarioSugerido, totalLinea, avisoPrecio, proximaReferenciaWA, totalesPedido, filasDeVenta } from '../../lib/pedidos'
-import { normalizarRef } from '../../lib/referencias'
+import { normalizarRef, normalizarTel } from '../../lib/referencias'
 import { fetchAll } from '../../lib/fetchAll'
 import { logError } from '../../lib/errorLog'
 import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
@@ -209,12 +209,34 @@ function NuevaVentaModal({ onClose, onSaved }) {
       // Varias líneas necesitan una referencia común para que el sistema las
       // reconozca como UN pedido. Sin ella quedarían sueltas y el despacho
       // imprimiría una guía por producto.
+      // 8.1 · Se genera SIEMPRE que falte, no solo con 2+ productos. Una venta
+      // sin referencia no se puede cruzar con la guía del courier, no aparece
+      // en Reclamos y no se agrupa: quedaban 19 así en la base.
       let ref = (form.n_referencia || '').trim()
-      if (!ref && conProducto.length > 1) ref = await proximaReferenciaWA()
+      if (!ref) ref = await proximaReferenciaWA()
+
+      // 8.6 · Avisar si esa referencia ya está cargada, antes de duplicarla.
+      if (form.n_referencia?.trim()) {
+        const { data: yaExiste } = await supabase.from('ventas')
+          .select('id, producto_nombre, fecha').is('deleted_at', null)
+          .eq('n_referencia', ref).limit(1)
+        if (yaExiste?.length) {
+          const y = yaExiste[0]
+          const seguir = confirm(
+            `Ya hay una venta con la referencia ${ref} (${y.producto_nombre || 'sin producto'}, ${y.fecha}).\n\n` +
+            `Si es OTRO producto del MISMO pedido, está bien: dale Aceptar.\n` +
+            `Si es un pedido distinto, cancelá y cambiá la referencia.`
+          )
+          if (!seguir) { setLoading(false); return }
+        }
+      }
 
       const base = {
         ...form,
         n_referencia: ref,
+        // 8.5 · Único lugar del sistema que guardaba el teléfono crudo: el
+        // mismo cliente aparecía dos veces según cómo se hubiera tipeado.
+        cliente_telefono: normalizarTel(form.cliente_telefono) || form.cliente_telefono || '',
         metodo_pago_nombre: metodosPago.find(m => m.id === form.metodo_pago_id)?.nombre || '',
         metodo_envio_nombre: envSel?.nombre || '',
       }
