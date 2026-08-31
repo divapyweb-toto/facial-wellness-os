@@ -374,6 +374,36 @@ function ReglasNegocio() {
       </div>
 
       <div className="card" style={{ padding: '16px 20px' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>📬 Seguimiento a couriers y clientes</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          Umbrales y textos de los mensajes de Seguimiento y Entregas. La lista de guías y el link de
+          cada pedido se arman solos — esto es solo el texto alrededor.
+        </p>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
+          <Campo clave="seguimiento_pap_dias_cerca" label="Días para reclamar (Asunción/Central/local)" sufijo="días"
+            ayuda="Ciudad cercana sin moverse este tiempo ya es rara." />
+          <Campo clave="seguimiento_pap_dias_lejos" label="Días para reclamar (interior)" sufijo="días"
+            ayuda="El interior tarda más por logística normal, no por negligencia." />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Mensaje a PaP (primera línea)</label>
+          <textarea className="form-textarea" rows={2} value={form.plantilla_seguimiento_pap}
+            onChange={e => set('plantilla_seguimiento_pap', e.target.value)} />
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Debajo se agrega solo, agrupado por lo que dice PaP: 📦 estado / guía – nombre / 📅 fecha.
+          </span>
+        </div>
+        <div className="form-group" style={{ marginTop: 10 }}>
+          <label className="form-label">Mensaje de tracking al cliente (Lucero)</label>
+          <textarea className="form-textarea" rows={2} value={form.plantilla_tracking_lucero}
+            onChange={e => set('plantilla_tracking_lucero', e.target.value)} />
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            <code>{'{{nombre}}'}</code> y <code>{'{{link}}'}</code> se reemplazan solos por el nombre del cliente y el link de Lucero.
+          </span>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: '16px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>🛵 Tarifario Lucero del Este</h3>
           {tarifas.personalizado ? (

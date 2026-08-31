@@ -11,10 +11,12 @@ import { tasaPorTransportadora } from '../../lib/riesgoCiudad'
 import { labelTransportadora } from '../../lib/transportadoras'
 import { etiquetaMes } from '../../lib/fechas'
 import { esExportLucero, parsearExportLucero, exportLuceroAEntregas, resumenExportLucero } from '../../lib/exportLucero'
+import { linkWhatsAppTracking } from '../../lib/seguimiento'
+import { getPlantillaTrackingLucero } from '../../lib/config'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
-import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown, ArrowRight } from 'lucide-react'
+import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown, ArrowRight, MessageCircle } from 'lucide-react'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { normalizarCiudad, ZONAS } from '../../lib/ciudades'
 import MapaCiudades from './MapaCiudades'
@@ -1413,11 +1415,18 @@ export default function EntregasPage() {
           <table className="tabla-responsive">
             <thead>
               <tr>
-                <th>Ref.</th><th>Guía PaP</th><th>Estado</th><th>Ciudad</th><th>Mensajero</th><th>Producto</th><th>Importe</th><th>Cobrado</th><th>Entrega</th>
+                <th>Ref.</th><th>Guía PaP</th><th>Estado</th><th>Ciudad</th><th>Mensajero</th><th>Producto</th><th>Importe</th><th>Cobrado</th><th>Entrega</th><th></th>
               </tr>
             </thead>
             <tbody>
-              {tablaFiltrada.map((m, i) => (
+              {tablaFiltrada.map((m, i) => {
+                // Botón de tracking: solo Lucero, solo mientras está en camino
+                // (mandarle el link a un pedido ya cerrado no sirve), y solo si
+                // hay EnvioID + un celular válido — linkWhatsAppTracking ya
+                // hace esas dos validaciones y devuelve null si falta algo.
+                const esLuceroEnCamino = m.transportadora === 'lucero' && m.categoria === 'en_proceso'
+                const linkTracking = esLuceroEnCamino ? linkWhatsAppTracking(m, getPlantillaTrackingLucero()) : null
+                return (
                 <tr key={i}>
                   <td data-label="Ref." className="mono">{m.n_referencia ? `#${m.n_referencia}` : '—'}</td>
                   <td data-label="Guía PaP" className="muted" style={{ fontSize: 11 }}>{m.nro_guia_pap}</td>
@@ -1428,8 +1437,21 @@ export default function EntregasPage() {
                   <td data-label="Importe" style={{ fontWeight: 600 }}>{formatGs(m.importe)}</td>
                   <td data-label="Cobrado" style={{ fontWeight: 600, color: m.cobrado > 0 ? 'var(--green)' : 'var(--text-muted)' }}>{m.cobrado > 0 ? formatGs(m.cobrado) : '—'}</td>
                   <td data-label="Entrega" className="muted" style={{ fontSize: 11 }}>{m.fecha_entrega || '—'}{m.dias_entrega != null ? ` (${m.dias_entrega}d)` : ''}</td>
+                  <td data-label="Tracking">
+                    {linkTracking && (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ padding: '3px 8px', color: 'var(--green)' }}
+                        title="Mandarle al cliente el link de seguimiento de Lucero"
+                        onClick={() => { window.open(linkTracking, '_blank', 'noopener'); toast('WhatsApp abierto con el tracking', 'success') }}
+                      >
+                        <MessageCircle size={13} />
+                      </button>
+                    )}
+                  </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

@@ -7,6 +7,8 @@ import { construirAlertasNegocio } from '../../lib/alertasNegocio'
 import DashboardHero from './DashboardHero'
 import { rangoMesAnteriorEquivalente } from '../../lib/fechas'
 import { construirAcciones, COLOR_URGENCIA } from '../../lib/centroAcciones'
+import { entregasPaPAtascadas } from '../../lib/seguimiento'
+import { getUmbralesSeguimientoPaP } from '../../lib/config'
 import { fetchAll } from '../../lib/fetchAll'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
@@ -422,7 +424,7 @@ export default function DashboardPage() {
 
     // ── Centro de acciones: qué falta hacer, priorizado por plata en juego ──
     try {
-      const [abiertas, ultEnt, prodsBajos, sinTransp, trancadas] = await Promise.all([
+      const [abiertas, ultEnt, prodsBajos, sinTransp, trancadas, pap] = await Promise.all([
         supabase.from('ventas')
           .select('fecha, total, estado, pago_anticipado, cliente_telefono, seguimiento_at')
           .is('deleted_at', null).in('estado', ['pendiente', 'en_tramite', 'en_camino']),
@@ -436,6 +438,11 @@ export default function DashboardPage() {
         // Entregas cobradas al cliente que la transportadora todavía no depositó.
         supabase.from('entregas').select('importe, fecha_entrega')
           .eq('categoria', 'entregado').eq('rendido', false).not('fecha_entrega', 'is', null),
+        // Guías de PaP en tránsito, para la alerta de "sin moverse". Volumen
+        // chico (en_proceso son las que están volando ahora, no todo el histórico).
+        supabase.from('entregas')
+          .select('estado_pap, categoria, ciudad, fecha_ingreso, transportadora')
+          .eq('transportadora', 'pap').eq('categoria', 'en_proceso'),
       ])
       // Trancadas = entregadas hace más de 14 días y todavía sin depositar.
       const hace14 = new Date(); hace14.setDate(hace14.getDate() - 14)
@@ -454,6 +461,7 @@ export default function DashboardPage() {
           trancados: trancadasList.length,
         },
         ventasSinTransportadora: sinTransp.count || 0,
+        papAtascado: entregasPaPAtascadas(pap.data || [], getUmbralesSeguimientoPaP()),
       }))
     } catch (e) { console.warn('[dashboard] el centro de acciones es complementario: si falla, no rompe el dashboard:', e?.message || e) }
 

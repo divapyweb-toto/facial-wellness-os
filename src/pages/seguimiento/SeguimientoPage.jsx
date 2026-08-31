@@ -19,17 +19,20 @@ import { supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { labelTransportadora } from '../../lib/transportadoras'
+import { getUmbralesSeguimientoPaP, getPlantillaSeguimientoPaP } from '../../lib/config'
 import {
   construirBandeja, resumenBandeja, linkWhatsApp, pedidosParaReclamar, mensajeReclamo,
   efectividad, mensajeReclamoIndividual, codigoCourier, PLANTILLAS, ESTADOS_SEG, RESPUESTAS, DIAS_SEGUIMIENTO_DEFAULT, hoyISO,
+  entregasPaPAtascadas, mensajeSeguimientoPaP,
 } from '../../lib/seguimiento'
 import {
-  MessageCircle, CheckCircle, AlertTriangle, Wallet, RefreshCw, Send, Clock, TrendingUp,
+  MessageCircle, CheckCircle, AlertTriangle, Wallet, RefreshCw, Send, Clock, TrendingUp, Truck,
 } from 'lucide-react'
 
 export default function SeguimientoPage() {
   const [ventas, setVentas] = useState([])
   const [historicas, setHistoricas] = useState([])
+  const [entregasCrudas, setEntregasCrudas] = useState([])   // para la bandeja de PaP atascado
   const [cargando, setCargando] = useState(true)
   const [diasMin, setDiasMin] = useState(DIAS_SEGUIMIENTO_DEFAULT)
   const [filtroEstado, setFiltroEstado] = useState('todos')
@@ -51,15 +54,20 @@ export default function SeguimientoPage() {
         .order('fecha', { ascending: true }))
       // Guías reales desde `entregas`: el courier busca por SU número, no por
       // nuestra referencia interna. Sin esto el reclamo llega incompleto.
+      // Se pide también lo que hace falta para la bandeja de PaP atascado
+      // (estado_pap, categoria, fecha_ingreso, nombre_courier): es la MISMA
+      // consulta, sin agregar un segundo viaje a la base.
       let guiaPorRef = {}
       try {
         const ents = await fetchAll(() => supabase.from('entregas')
-          .select('n_referencia, nro_guia_pap, guia_transportadora'), { columnaOrden: 'nro_guia_pap' })
+          .select('n_referencia, nro_guia_pap, guia_transportadora, transportadora, estado_pap, categoria, ciudad, fecha_ingreso, nombre_courier'),
+          { columnaOrden: 'nro_guia_pap' })
         ;(ents || []).forEach(e => {
           const k = String(e.n_referencia || '').replace(/\D/g, '')
           if (k) guiaPorRef[k] = { nro_guia: e.nro_guia_pap, guia_transportadora: e.guia_transportadora }
         })
-      } catch { /* sin guías: el mensaje sale con referencia igual */ }
+        setEntregasCrudas(ents || [])
+      } catch { /* sin guías: el mensaje sale con referencia igual, y la bandeja de PaP queda vacía */ }
       setVentas((abiertas || []).map(v => ({
         ...v, ...(guiaPorRef[String(v.n_referencia || '').replace(/\D/g, '')] || {}),
       })))
@@ -84,6 +92,12 @@ export default function SeguimientoPage() {
   const resumen = useMemo(() => resumenBandeja(bandeja), [bandeja])
   const reclamos = useMemo(() => pedidosParaReclamar(bandeja), [bandeja])
   const efect = useMemo(() => efectividad(historicas), [historicas])
+  // Bandeja de PaP: eje totalmente distinto al de arriba (estado que dice el
+  // COURIER, no lo que contestó el cliente), así que se calcula aparte.
+  const papAtascado = useMemo(
+    () => entregasPaPAtascadas(entregasCrudas, getUmbralesSeguimientoPaP()),
+    [entregasCrudas]
+  )
   const visibles = useMemo(
     () => filtroEstado === 'todos' ? bandeja : bandeja.filter(v => v.estado === filtroEstado),
     [bandeja, filtroEstado]
@@ -157,6 +171,16 @@ export default function SeguimientoPage() {
     }
     toast(`${pedidos.length} pedidos reclamados a ${labelTransportadora(courierId)} — mensaje copiado`, 'success')
     await cargar()
+  }
+
+  // Seguimiento a PaP: no hay "ya avisado" que registrar — es el mismo lote
+  // atascado hasta que PaP lo mueva, así que no tiene sentido esconderlo del
+  // listado después de mandarlo una vez. Solo copia y abre WhatsApp.
+  const avisarPaP = async () => {
+    const texto = mensajeSeguimientoPaP(papAtascado.grupos, getPlantillaSeguimientoPaP())
+    await navigator.clipboard.writeText(texto).catch(() => {})
+    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank', 'noopener')
+    toast(`${papAtascado.total} guía${papAtascado.total !== 1 ? 's' : ''} — mensaje copiado`, 'success')
   }
 
   if (cargando) return (
@@ -235,6 +259,39 @@ export default function SeguimientoPage() {
               <button key={courier} className="btn btn-primary btn-sm" onClick={() => reclamarA(courier, pedidos)}>
                 <Send size={13} /> {labelTransportadora(courier)} · {pedidos.length} pedido{pedidos.length > 1 ? 's' : ''}
               </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Seguimiento a PaP: guías atascadas en su propio sistema, sin que el
+          cliente haya dicho nada todavía — eje distinto al de arriba. */}
+      {papAtascado.total > 0 && (
+        <div className="card" style={{ padding: '14px 18px', borderLeft: '3px solid var(--yellow)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Truck size={14} /> Seguimiento a PaP
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                {papAtascado.total} guía{papAtascado.total !== 1 ? 's' : ''} sin moverse hace más de lo esperado
+                (la más vieja: {papAtascado.masViejoDias} días). Lista tan actual como tu última importación del reporte de PaP.
+              </div>
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={avisarPaP}>
+              <Send size={13} /> Copiar y avisar a PaP
+            </button>
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {papAtascado.grupos.map(g => (
+              <div key={g.estado} style={{ fontSize: 12 }}>
+                <span style={{ fontWeight: 700 }}>📦 {g.estado}</span>
+                <span style={{ color: 'var(--text-muted)' }}> — {g.items.length} guía{g.items.length !== 1 ? 's' : ''}</span>
+                <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
+                  {g.items.slice(0, 4).map(it => `${it.nro_guia_pap || 's/guía'} (${it.dias}d)`).join(' · ')}
+                  {g.items.length > 4 ? ` · +${g.items.length - 4} más` : ''}
+                </div>
+              </div>
             ))}
           </div>
         </div>
