@@ -8,6 +8,17 @@
 import { NOMBRES_MESES } from './periodos'
 
 // 'YYYY-MM' → 'Julio 2026'
+// Fecha de HOY en la zona horaria de acá, en formato YYYY-MM-DD.
+//
+// No usar new Date().toISOString().split('T')[0]: eso da la fecha UTC, y
+// Paraguay va 3 horas atrás. Todo lo que se cargue después de las 21:00 sale
+// con la fecha de MAÑANA — los pedidos de la noche caen en el día siguiente y
+// descuadran el reporte diario.
+export function hoyLocal(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 export function etiquetaMes(ym) {
   if (!ym) return ''
   const [y, m] = ym.split('-')

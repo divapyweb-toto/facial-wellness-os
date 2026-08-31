@@ -12,6 +12,7 @@ import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
 import { validarVenta } from '../../lib/validation'
 import { logAccion, logAccionLote } from '../../lib/audit'
 import { Plus, Search, X, Clock, Trash2, Edit2, Save, AlertTriangle } from 'lucide-react'
+import { hoyLocal } from '../../lib/fechas'
 
 const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro']
 const ESTADOS = ['todos', 'pendiente', 'entregado', 'devuelto', 'en_tramite']
@@ -119,7 +120,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
   const [loading, setLoading] = useState(false)
   const [faltaMigracion, setFaltaMigracion] = useState(false)
   const [form, setForm] = useState({
-    fecha: new Date().toISOString().split('T')[0],
+    fecha: hoyLocal(),
     n_referencia: '',
     estado: 'pendiente',
     metodo_pago_id: '',
