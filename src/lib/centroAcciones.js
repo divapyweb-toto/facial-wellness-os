@@ -36,7 +36,7 @@ function accion(id, { titulo, detalle, monto = 0, ruta, cta, urgencia = 'media' 
 //   ventasAbiertas: [{ fecha, total, estado, pago_anticipado, cliente_telefono, seguimiento_at }]
 //   ultimaEntregaImportada: 'YYYY-MM-DD' | null
 //   gastoAdsMes: number, mesActual: 'YYYY-MM'
-//   productosBajos: [{ nombre, stock_actual, alerta_stock }]
+//   productosBajos: [{ nombre, stock_actual, stock_alerta }]
 //   sinRendir: { monto, cantidad, trancados }
 //   ventasSinTransportadora: number
 //   hoy: Date

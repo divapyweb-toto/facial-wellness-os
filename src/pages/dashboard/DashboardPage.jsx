@@ -187,14 +187,26 @@ export default function DashboardPage() {
     if (ventasMes) {
       // ── Datos del HERO: derivados de lo YA traído, sin consultas nuevas ──
       const deHoy = ventasMes.filter(v => v.fecha === hoyStr)
-      const enCalle = ventasMes.filter(v => v.estado === 'pendiente')
       setHero(h => ({
         ...(h || {}),
         hoyCount: deHoy.length,
         hoyMonto: deHoy.reduce((s, v) => s + (v.total || 0), 0),
-        enCalleCount: enCalle.length,
-        enCalleMonto: enCalle.reduce((s, v) => s + (v.total || 0), 0),
       }))
+      // Plata en la calle = TODO lo despachado y sin resolver, sin importar el
+      // mes. Antes salía de ventasMes (recortado al mes en curso) y cada día 1
+      // se reseteaba a casi cero, que es justo cuando más plata hay afuera.
+      try {
+        const { data: sinResolver } = await supabase
+          .from('ventas').select('total')
+          .is('deleted_at', null)
+          .in('estado', ['pendiente', 'en_camino', 'en_tramite'])
+        setHero(h => ({
+          ...(h || {}),
+          enCalleCount: (sinResolver || []).length,
+          enCalleMonto: (sinResolver || []).reduce((s, v) => s + (v.total || 0), 0),
+        }))
+      } catch (e) { console.warn('[dashboard] sin plata en la calle:', e?.message || e) }
+
       const entregadas = ventasMes.filter(v => v.estado === 'entregado')
       const pendientes = ventasMes.filter(v => v.estado === 'pendiente')
       const devueltas = ventasMes.filter(v => v.estado === 'devuelto')
@@ -416,7 +428,9 @@ export default function DashboardPage() {
           .is('deleted_at', null).in('estado', ['pendiente', 'en_tramite', 'en_camino']),
         supabase.from('entregas').select('fecha_entrega')
           .not('fecha_entrega', 'is', null).order('fecha_entrega', { ascending: false }).limit(1),
-        supabase.from('productos').select('nombre, stock_actual, alerta_stock').eq('activo', true),
+        // La columna es stock_alerta, NO alerta_stock: con el nombre invertido
+        // la consulta fallaba entera y la alerta de stock bajo nunca disparó.
+        supabase.from('productos').select('nombre, stock_actual, stock_alerta').eq('activo', true),
         supabase.from('ventas').select('id', { count: 'exact', head: true })
           .is('deleted_at', null).is('transportadora', null),
         // Entregas cobradas al cliente que la transportadora todavía no depositó.
@@ -428,7 +442,7 @@ export default function DashboardPage() {
       const limite = hace14.toISOString().slice(0, 10)
       const trancadasList = (trancadas.data || []).filter(e => e.fecha_entrega < limite)
       const bajos = (prodsBajos.data || []).filter(p =>
-        (p.stock_actual ?? 0) <= (p.alerta_stock ?? 0))
+        (p.stock_actual ?? 0) <= (p.stock_alerta ?? 0))
       setAcciones(construirAcciones({
         ventasAbiertas: abiertas.data || [],
         ultimaEntregaImportada: ultEnt.data?.[0]?.fecha_entrega || null,
