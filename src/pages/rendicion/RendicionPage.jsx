@@ -5,7 +5,7 @@ import { supabase } from '../../lib/supabase'
 import { sanearEntrega } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
-import { parsearFilasRendicion, conciliarRendicion, combinarArchivosRendicion } from '../../lib/conciliacionRendicion'
+import { parsearFilasRendicion, conciliarRendicion, combinarArchivosRendicion, esArchivoRendicion } from '../../lib/conciliacionRendicion'
 import { esRendicionLucero, parsearRendicionLucero, rendicionLuceroAEntregas, resumenRendicionLucero, categoriaLucero } from '../../lib/rendicionLucero'
 import { soloColumnasEntregas } from '../../lib/estadosPaP'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
@@ -387,6 +387,20 @@ export default function RendicionPage() {
 
       // ── PaP: flujo de conciliación de siempre ──
       if (dePaP.length) {
+        // El reporte de Gestión también trae NroGuia, así que si se subía por
+        // error entraba igual: sin columna Cobrado todas las filas quedaban en
+        // null, la conciliación las leía como "no cobrado" y proponía tocar
+        // decenas de guías que nunca estuvieron en una rendición.
+        const noSonRendicion = dePaP.filter(a => !esArchivoRendicion(a.objetos))
+        if (noSonRendicion.length) {
+          toast(
+            `${noSonRendicion.map(a => a.nombre).join(', ')} no parece una planilla de rendición ` +
+            `(le falta la columna Cobrado / FormaPago). Si es el reporte de Gestión, va en Entregas.`,
+            'error'
+          )
+          setImportando(false)
+          return
+        }
         const listas = dePaP.map(a => parsearFilasRendicion(a.objetos))
         const filas = combinarArchivosRendicion(listas)
         if (!filas.length) {

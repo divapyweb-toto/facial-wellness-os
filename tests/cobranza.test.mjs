@@ -19,6 +19,7 @@ import { combinar } from '../src/lib/importarPaP.js'
 import { normalizarRef, normalizarTel } from '../src/lib/referencias.js'
 import { calcularMetricasAds } from '../src/lib/metricasAds.js'
 import { sanearEntrega } from '../src/lib/estadosPaP.js'
+import { esArchivoRendicion } from '../src/lib/conciliacionRendicion.js'
 
 let fallas = 0
 const ok = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) fallas++ }
@@ -171,6 +172,21 @@ console.log('\n── sanearEntrega no le aplica las reglas de PaP a Lucero ─�
   const veneno = { transportadora: 'lucero', estado_pap: 'Entregado', categoria: 'entregado', importe: 2147483647, motivo: '' }
   ok(Math.abs(sanearEntrega(veneno).importe) <= 2000000,
     'el tope de importe se sigue aplicando a Lucero')
+}
+
+console.log('\n── la rendición no acepta el archivo equivocado ──')
+{
+  // El reporte de Gestión también trae NroGuia. Si se subía ahí, sus filas no
+  // tienen Cobrado, quedaban todas en null, y la conciliación las leía como
+  // "no cobrado": proponía tocar decenas de guías que nunca se rindieron.
+  const rendicion = [{ NroGuia: '26214651', Cobrado: 110000, FormaPago: 'Efectivo', Importe: 110000 }]
+  const gestion = [{ NroGuia: '26214651', Estado: 'ENTREGADO', Ciudad: 'CDE', FechaEnt: '2026-08-01' }]
+  ok(esArchivoRendicion(rendicion) === true, 'la planilla de rendición se acepta')
+  ok(esArchivoRendicion(gestion) === false, 'el reporte de Gestión se rechaza')
+  ok(esArchivoRendicion([]) === false && esArchivoRendicion(null) === false,
+    'vacío y null se rechazan sin reventar')
+  ok(esArchivoRendicion([{ ' NroGuia ': '1', ' Cobrado ': 0 }]) === true,
+    'las cabeceras con espacios de más se reconocen igual')
 }
 
 console.log(fallas ? `\n✗ ${fallas} falla(s)` : '\n✓ la plata cobrada está protegida')

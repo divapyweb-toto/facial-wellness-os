@@ -29,6 +29,25 @@ function esTransferencia(forma) {
 // Parsea las filas crudas del Excel (ya convertidas a objetos por SheetJS).
 // OJO: los headers del archivo de PaP vienen CON espacios (" Importe ", " Cobrado "),
 // así que normalizamos cada fila quitando espacios de las claves antes de leer.
+// ¿Estas filas vienen de una PLANILLA DE RENDICIÓN de PaP?
+//
+// El reporte de Gestión también trae NroGuia, así que si se subía por error
+// entraba igual: sus filas no tienen columna Cobrado, todas quedaban en null
+// y la conciliación las leía como "no cobrado", proponiendo tocar decenas de
+// guías que nunca estuvieron en una rendición. Se pide la columna que define
+// al archivo, no solo que tenga guías.
+export function esArchivoRendicion(rows) {
+  const filas = rows || []
+  if (!filas.length) return false
+  const claves = new Set()
+  for (const r of filas.slice(0, 20)) {
+    for (const k of Object.keys(r || {})) claves.add(String(k).trim().toLowerCase())
+  }
+  const tieneGuia = claves.has('nroguia') || claves.has('nro guia')
+  const tieneCobro = claves.has('cobrado') || claves.has('formapago') || claves.has('forma pago')
+  return tieneGuia && tieneCobro
+}
+
 export function parsearFilasRendicion(rows) {
   const out = []
   for (const rRaw of (rows || [])) {
