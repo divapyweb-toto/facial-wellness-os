@@ -34,6 +34,14 @@ import {
   RefreshCw, MapPin, Package, Phone, Truck, Wallet, MessageCircle, Hash,
 } from 'lucide-react'
 
+// Caché de sesión. Reclamos se abre con el cliente esperando del otro lado, y
+// cada entrada volvía a bajar ~1.400 filas de `ventas` + `entregas`. En el
+// iPhone eso son varios segundos mirando un spinner. Se guarda el índice ya
+// armado y se muestra al instante; la recarga sigue por detrás, así que el dato
+// nunca queda viejo más de lo que tarda esa consulta.
+let _cacheIndice = null            // { indice, at }
+const CACHE_TTL_MS = 3 * 60 * 1000
+
 const COL_VENTAS = 'id, n_referencia, fecha, cliente_nombre, cliente_telefono, cliente_direccion, ciudad, producto_nombre, cantidad, total, estado, transportadora, pago_anticipado, despachado_at'
 const COL_ENTREGAS = 'nro_guia_pap, n_referencia, guia_transportadora, estado_pap, categoria, motivo, importe, cobrado, rendido, fecha_ingreso, fecha_entrega, mensajero, ciudad, producto, transportadora'
 
@@ -309,8 +317,9 @@ export default function ReclamosPage() {
   const [elegido, setElegido] = useState(null)
   const inputRef = useRef(null)
 
-  const cargar = useCallback(async () => {
-    setCargando(true); setError(null)
+  const cargar = useCallback(async ({ silencioso = false } = {}) => {
+    if (!silencioso) setCargando(true)
+    setError(null)
     try {
       // Paginado: sin esto Supabase corta en 1.000 filas y un pedido podría
       // "no existir" justo cuando lo estás buscando con el cliente esperando.
@@ -319,16 +328,32 @@ export default function ReclamosPage() {
         fetchAll(() => supabase.from('ventas').select(COL_VENTAS).is('deleted_at', null)),
         fetchAll(() => supabase.from('entregas').select(COL_ENTREGAS), { columnaOrden: 'nro_guia_pap' }),
       ])
-      setIndice(construirIndice(vts || [], ents || []))
+      const idx = construirIndice(vts || [], ents || [])
+      _cacheIndice = { indice: idx, at: Date.now() }
+      setIndice(idx)
     } catch (e) {
-      setError(e?.message || String(e))
-      toast('No se pudieron cargar los pedidos', 'error')
+      // Si falla una recarga silenciosa no se rompe la pantalla: lo que está en
+      // pantalla vino del caché y sigue sirviendo para buscar.
+      if (!silencioso) {
+        setError(e?.message || String(e))
+        toast('No se pudieron cargar los pedidos', 'error')
+      } else {
+        console.warn('[reclamos] la recarga en segundo plano falló:', e?.message || e)
+      }
     } finally {
-      setCargando(false)
+      if (!silencioso) setCargando(false)
     }
   }, [toast])
 
-  useEffect(() => { cargar() }, [cargar])
+  useEffect(() => {
+    if (_cacheIndice && Date.now() - _cacheIndice.at < CACHE_TTL_MS) {
+      setIndice(_cacheIndice.indice)
+      setCargando(false)
+      cargar({ silencioso: true })     // se refresca por detrás
+    } else {
+      cargar()
+    }
+  }, [cargar])
   useEffect(() => { if (!cargando && !elegido) inputRef.current?.focus() }, [cargando, elegido])
 
   const resultados = useMemo(() => buscarPedidos(indice, q), [indice, q])
