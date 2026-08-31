@@ -115,6 +115,10 @@ export default function FinanzasPage() {
   const { toast } = useToast()
   const [gastos, setGastos] = useState([])
   const [ventasPorMes, setVentasPorMes] = useState([])
+  // El gasto de ads NO vive en `gastos`: se carga en Campañas y va a
+  // `campanas_ads`. Finanzas lo ignoraba por completo, así que el gasto más
+  // grande del negocio no aparecía en la pantalla de gastos.
+  const [gastoAds, setGastoAds] = useState(0)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editando, setEditando] = useState(null)
@@ -162,6 +166,15 @@ export default function FinanzasPage() {
 
     setGastos(g || [])
 
+    // Gasto de ads del mes, desde Campañas.
+    try {
+      const { data: ads } = await supabase.from('campanas_ads').select('gasto').eq('mes', filtroMes)
+      setGastoAds((ads || []).reduce((s2, a) => s2 + (a.gasto || 0), 0))
+    } catch (e) {
+      console.warn('[finanzas] sin gasto de ads del mes:', e?.message || e)
+      setGastoAds(0)
+    }
+
     // Flujo diario para chart
     const diasDelMes = new Date(year, parseInt(month), 0).getDate()
     const diasData = []
@@ -184,6 +197,13 @@ export default function FinanzasPage() {
   // KPIs del mes
   const totalGastos = gastos.reduce((s, g) => s + g.monto, 0)
   const totalPresupuestado = gastos.reduce((s, g) => s + (g.presupuestado || 0), 0)
+  // Si además hay un gasto manual de categoría Publicidad, sumar ads encima
+  // contaría lo mismo dos veces: se avisa en vez de inventar un total.
+  const gastoPublicidadManual = gastos
+    .filter(g => /public|ads|meta|marketing/i.test(g.categoria || ''))
+    .reduce((s, g) => s + g.monto, 0)
+  const posibleDobleAds = gastoAds > 0 && gastoPublicidadManual > 0
+  const salidaTotal = totalGastos + gastoAds
 
   // Gastos por categoría
   const porCategoria = {}
@@ -225,7 +245,21 @@ export default function FinanzasPage() {
         <div className="kpi-card">
           <div className="kpi-label"><TrendingDown size={12} />Total gastos</div>
           <div className="kpi-value red">{formatGs(totalGastos)}</div>
-          <div className="kpi-sub">Gastos del mes</div>
+          <div className="kpi-sub">Cargados acá, sin ads</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label"><TrendingDown size={12} />Ads del mes</div>
+          <div className="kpi-value red">{formatGs(gastoAds)}</div>
+          <div className="kpi-sub">Desde Campañas</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label"><TrendingDown size={12} />Salida total</div>
+          <div className="kpi-value red">{formatGs(salidaTotal)}</div>
+          <div className="kpi-sub">
+            {posibleDobleAds
+              ? '⚠️ hay un gasto de Publicidad cargado a mano: puede estar contado dos veces'
+              : 'Gastos + ads'}
+          </div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label"><BarChart3 size={12} />Vs. presupuesto</div>

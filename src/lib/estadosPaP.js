@@ -136,7 +136,14 @@ export function categorizarPaP(estado, motivo) {
 // y sanea el importe. Usar SIEMPRE esto al leer, porque las filas viejas fueron
 // guardadas antes de estas reglas y traen la categoría y el importe mal.
 export function sanearEntrega(e) {
-  const categoria = categorizarPaP(e?.estado_pap, e?.motivo)
+  // categorizarPaP conoce el vocabulario de estados de PUNTO A PUNTO. Las
+  // filas de Lucero ya vienen categorizadas por su propio módulo, que entiende
+  // su ciclo (Cargado, Fallido, Cancelado…). Aplicarles las reglas de PaP les
+  // cambiaba la categoría: 3 envíos 'Cancelado' guardados como devueltos
+  // pasaban a 'en_proceso' y figuraban como plata en tránsito para siempre.
+  // Los topes de sanidad del importe sí son universales y se siguen aplicando.
+  const esLucero = e?.transportadora === 'lucero'
+  const categoria = (esLucero && e?.categoria) ? e.categoria : categorizarPaP(e?.estado_pap, e?.motivo)
   const importe = importeSano(e?.importe)
   // PaP deposita el BRUTO (el flete se factura aparte, nunca se descuenta del
   // depósito). Lucero neta el flete/multa ANTES de depositar, así que
