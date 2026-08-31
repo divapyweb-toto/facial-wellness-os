@@ -990,7 +990,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
   .btn-sm { min-height: 38px; padding: 8px 12px; }
 
   /* ── Toast ─────────────────────────────────────── */
-  .toast-container { bottom: calc(var(--bottom-nav-height) + 12px); right: 12px; left: 12px; }
+  /* La barra inferior mide --bottom-nav-height MÁS el safe-area del iPhone
+     (ver .mobile-nav), así que sin sumarlo acá el toast quedaba medio tapado
+     justo cuando avisa de un error. */
+  .toast-container { bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 12px); right: 12px; left: 12px; }
   .toast { min-width: unset; max-width: 100%; animation: slideUp 0.24s var(--ease-spring) both; }
 
   /* ── Tables ─────────────────────────────────────── */
