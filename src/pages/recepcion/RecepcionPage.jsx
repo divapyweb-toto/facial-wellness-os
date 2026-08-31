@@ -79,11 +79,17 @@ export default function RecepcionPage() {
     return () => clearInterval(t)
   }, [confirmando])
 
+  // Un pedido de 2 productos son 2 filas de `ventas` con la MISMA referencia.
+  // Antes el índice hacía m[k] = v y la segunda pisaba a la primera: al
+  // escanear la caja volvía una sola línea al stock y la otra quedaba devuelta
+  // para siempre. Ahora guarda todas las líneas del pedido.
   const idxRef = useMemo(() => {
     const m = {}
     for (const v of ventas) {
       const k = normalizarEscaneo(v.n_referencia)
-      if (k) m[k] = v
+      if (!k) continue
+      if (!m[k]) m[k] = []
+      m[k].push(v)
     }
     return m
   }, [ventas])
@@ -102,34 +108,40 @@ export default function RecepcionPage() {
 
     // Buscar por referencia propia (código nuevo o etiqueta vieja),
     // o por número de guía de Punto a Punto.
-    let venta = idxRef[ref]
-    if (!venta && idxGuia[raw]) venta = idxRef[idxGuia[raw]]
-    if (!venta && idxGuia[ref]) venta = idxRef[idxGuia[ref]]
+    let lineas = idxRef[ref]
+    if (!lineas && idxGuia[raw]) lineas = idxRef[idxGuia[raw]]
+    if (!lineas && idxGuia[ref]) lineas = idxRef[idxGuia[ref]]
 
-    if (!venta) {
+    if (!lineas || !lineas.length) {
       beep(false)
       setUltimo({ tipo: 'error', titulo: 'No encontrado', detalle: `"${bruto}" no coincide con ninguna venta ni guía de transportadora.` })
       return
     }
-    if (venta.reingresado_at) {
+
+    const venta = lineas[0]   // representa al pedido en los mensajes
+    // Una caja con 2 productos son 2 filas: se reingresan las DOS de una.
+    const nuevas = lineas.filter(l => !l.reingresado_at && !tandaIds.has(l.id))
+
+    if (!nuevas.length) {
       beep(false)
-      const f = new Date(venta.reingresado_at).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })
-      setUltimo({ tipo: 'error', titulo: 'Ya lo recibiste', detalle: `#${venta.n_referencia} — ${venta.producto_nombre}. Reingresado el ${f}.` })
-      return
-    }
-    if (tandaIds.has(venta.id)) {
-      beep(false)
-      setUltimo({ tipo: 'warn', titulo: 'Repetido en esta tanda', detalle: `#${venta.n_referencia} ya está en la lista de abajo.` })
+      const yaEn = lineas.some(l => tandaIds.has(l.id))
+      if (yaEn) {
+        setUltimo({ tipo: 'warn', titulo: 'Repetido en esta tanda', detalle: `#${venta.n_referencia} ya está en la lista de abajo.` })
+      } else {
+        const f = new Date(venta.reingresado_at).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })
+        setUltimo({ tipo: 'error', titulo: 'Ya lo recibiste', detalle: `#${venta.n_referencia} — ${venta.producto_nombre}. Reingresado el ${f}.` })
+      }
       return
     }
 
-    const raro = venta.estado === 'entregado'
+    const raro = nuevas.some(l => l.estado === 'entregado')
     beep(true)
-    setTanda(prev => [{ ...venta, _raro: raro }, ...prev])
+    setTanda(prev => [...nuevas.map(l => ({ ...l, _raro: l.estado === 'entregado' })), ...prev])
+    const detalleProds = nuevas.map(l => `${l.producto_nombre} ×${l.cantidad || 1}`).join(' + ')
     setUltimo({
       tipo: raro ? 'warn' : 'ok',
-      titulo: raro ? 'Figura como ENTREGADO' : 'Recibido',
-      detalle: `#${venta.n_referencia} · ${venta.producto_nombre} ×${venta.cantidad || 1}${raro ? ' — revisá si el estado está mal' : ''}`,
+      titulo: raro ? 'Figura como ENTREGADO' : (nuevas.length > 1 ? `Recibido · ${nuevas.length} productos` : 'Recibido'),
+      detalle: `#${venta.n_referencia} · ${detalleProds}${raro ? ' — revisá si el estado está mal' : ''}`,
       venta,
     })
   }

@@ -523,23 +523,34 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
   const guardar = async (e) => {
     e.preventDefault()
     setLoading(true)
+    const cant = Math.max(1, parseInt(form.cantidad) || 1)
+    const total = parseInt(form.total) || 0
+    const envioCli = parseInt(form.envio_cliente) || 0
+    if (total < 0 || envioCli < 0 || (parseInt(form.costo_prod) || 0) < 0 || (parseInt(form.costo_envio) || 0) < 0) {
+      toast('Los montos no pueden ser negativos', 'error'); setLoading(false); return
+    }
     const { error } = await supabase.from('ventas').update({
       fecha: form.fecha,
       n_referencia: form.n_referencia,
       producto_id: form.producto_id || null,
       producto_nombre: form.producto_nombre,
-      cantidad: parseInt(form.cantidad) || 1,
-      total: parseInt(form.total) || 0,
-      precio_unit: parseInt(form.total) || 0,
+      cantidad: cant,
+      total,
+      // precio_unit es el precio POR UNIDAD del producto, sin el envío que
+      // pagó el cliente. Antes se le metía el `total` entero: por eso quedaron
+      // 42 ventas de mayo con precio_unit = total (98.000 en vez de 69.000).
+      // La ganancia no se veía afectada (margen se calcula sobre total), pero
+      // cualquier análisis de precio por producto salía mal.
+      precio_unit: Math.round(Math.max(0, total - envioCli) / cant),
       estado: form.estado,
-      ciudad: form.ciudad,
+      ciudad: (form.ciudad || '').trim(),
       cliente_nombre: form.cliente_nombre,
-      cliente_telefono: form.cliente_telefono,
+      cliente_telefono: normalizarTel(form.cliente_telefono) || form.cliente_telefono || '',
       cliente_direccion: form.cliente_direccion,
       canal_origen: form.canal_origen,
       costo_prod: parseInt(form.costo_prod) || 0,
       costo_envio: parseInt(form.costo_envio) || 0,
-      envio_cliente: parseInt(form.envio_cliente) || 0,
+      envio_cliente: envioCli,
     }).eq('id', venta.id)
     if (error) toast('Error: ' + error.message, 'error')
     else {
