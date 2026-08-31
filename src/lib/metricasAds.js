@@ -39,30 +39,55 @@ function normRef(ref) {
 //   cogsPromedio: costo de producto de respaldo si la venta no lo trae
 export function calcularMetricasAds(gasto, ventas, estadoPaP = {}, cogsPromedio = 12000) {
   const g = Number(gasto) || 0
-  let despachados = 0, entregados = 0, devueltos = 0, enProceso = 0
   let facturado = 0, cobrado = 0, cogs = 0, flete = 0
 
-  for (const v of (ventas || [])) {
+  // Los CONTEOS son por PEDIDO, no por línea: un pedido de 2 productos son 2
+  // filas en `ventas`, y contarlas como 2 pedidos abarataba el CPA a la mitad.
+  // Las sumas de plata sí van por línea, que es donde vive cada monto.
+  const pedidosDespachados = new Set()
+  const pedidosEntregados = new Set()
+  const pedidosDevueltos = new Set()
+  const pedidosEnProceso = new Set()
+  const clavePedido = (v, i) => {
+    const r = normRef(v.n_referencia)
+    // Sin referencia utilizable no se puede agrupar: cuenta como pedido propio.
+    return (r && /\d/.test(r)) ? `${r}|${v.fecha || ''}` : `__linea_${i}`
+  }
+
+  ;(ventas || []).forEach((v, i) => {
     const cat = estadoDe(v, estadoPaP)
     const total = Number(v.total) || 0
     const costoProd = Number(v.costo_prod) || cogsPromedio
     // Respaldo solo si la venta no tiene el flete congelado. Sale de config,
     // no de un número fijo: con dos transportadoras el flete ya no es único.
-    const costoEnvio = Number(v.costo_envio) || getFlete()
-    despachados++
+    // OJO: con `||` un flete de 0 caía al valor por defecto, y las líneas
+    // secundarias de un pedido multiproducto van justamente en 0 (una caja,
+    // un solo flete). Eso inventaba flete que nadie pagó.
+    const costoEnvio = v.costo_envio == null ? getFlete() : (Number(v.costo_envio) || 0)
+    const k = clavePedido(v, i)
+    pedidosDespachados.add(k)
     facturado += total
     if (cat === 'entregado') {
-      entregados++
+      pedidosEntregados.add(k)
       cobrado += total
       cogs += costoProd
       flete += costoEnvio // PaP cobra flete de los entregados
     } else if (cat === 'devuelto') {
-      devueltos++
+      pedidosDevueltos.add(k)
       flete += costoEnvio // y también de los devueltos (flete perdido)
     } else {
-      enProceso++
+      pedidosEnProceso.add(k)
     }
-  }
+  })
+
+  // Un pedido con una línea entregada y otra devuelta cuenta UNA vez, y como
+  // entregado: la caja llegó. Sin esta desambiguación se sumaría en los dos y
+  // la tasa de entrega daría más de 100%.
+  const despachados = pedidosDespachados.size
+  const entregados = pedidosEntregados.size
+  const devueltos = [...pedidosDevueltos].filter(k => !pedidosEntregados.has(k)).length
+  const enProceso = [...pedidosEnProceso]
+    .filter(k => !pedidosEntregados.has(k) && !pedidosDevueltos.has(k)).length
 
   const resueltos = entregados + devueltos
   const tasaEntrega = resueltos ? entregados / resueltos : 0

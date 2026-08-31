@@ -17,6 +17,7 @@ import { exportLuceroAEntregas, categoriaLucero as catExport } from '../src/lib/
 import { categoriaLucero as catRendicion } from '../src/lib/rendicionLucero.js'
 import { combinar } from '../src/lib/importarPaP.js'
 import { normalizarRef, normalizarTel } from '../src/lib/referencias.js'
+import { calcularMetricasAds } from '../src/lib/metricasAds.js'
 
 let fallas = 0
 const ok = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) fallas++ }
@@ -109,6 +110,41 @@ console.log('\n── el teléfono cruza al mismo cliente escriba como escriba �
     'el mismo cliente pegado de WhatsApp y tipeado a mano dan la misma clave')
   ok(normalizarTel('') === '' && normalizarTel(null) === '',
     'vacío y null no revientan')
+}
+
+console.log('\n── el CPA cuenta pedidos, no líneas ──')
+{
+  // Un pedido de 2 productos son 2 filas en `ventas`. Contarlas como 2 pedidos
+  // abarataba el CPA a la mitad y hacía ver campañas mejores de lo que son.
+  const unPedidoDosLineas = [
+    { n_referencia: '5001', fecha: '2026-08-10', total: 129000, estado: 'entregado', costo_prod: 20000, costo_envio: 29000 },
+    { n_referencia: '5001', fecha: '2026-08-10', total: 99000,  estado: 'entregado', costo_prod: 15000, costo_envio: 0 },
+  ]
+  const m = calcularMetricasAds(100000, unPedidoDosLineas, {}, 12000)
+  ok(m.despachados === 1, 'dos líneas de la misma referencia son UN pedido despachado')
+  ok(m.entregados === 1, 'y UN pedido entregado')
+  ok(m.cpaReal === 100000, 'el CPA real es el gasto entero sobre 1 pedido, no la mitad')
+  ok(m.cobrado === 228000, 'la plata sí se suma por línea (129.000 + 99.000)')
+
+  // El flete va una sola vez: la línea secundaria tiene costo_envio 0 y ese 0
+  // no puede caer al flete por defecto (era un `||` en vez de un `??`).
+  ok(m.flete === 29000, 'el flete se cuenta una sola vez, no una por línea')
+
+  const mixto = [
+    { n_referencia: '5002', fecha: '2026-08-11', total: 129000, estado: 'entregado', costo_prod: 20000, costo_envio: 29000 },
+    { n_referencia: '5002', fecha: '2026-08-11', total: 99000,  estado: 'devuelto',  costo_prod: 15000, costo_envio: 0 },
+  ]
+  const m2 = calcularMetricasAds(50000, mixto, {}, 12000)
+  ok(m2.entregados + m2.devueltos === 1, 'un pedido mitad entregado y mitad devuelto cuenta UNA vez')
+  ok(m2.tasaEntrega <= 1, 'la tasa de entrega nunca pasa de 100%')
+
+  const dosPedidos = [
+    { n_referencia: '6001', fecha: '2026-08-12', total: 129000, estado: 'entregado', costo_prod: 20000, costo_envio: 29000 },
+    { n_referencia: '6002', fecha: '2026-08-12', total: 129000, estado: 'entregado', costo_prod: 20000, costo_envio: 29000 },
+  ]
+  const m3 = calcularMetricasAds(100000, dosPedidos, {}, 12000)
+  ok(m3.entregados === 2, 'dos referencias distintas siguen siendo dos pedidos')
+  ok(m3.cpaReal === 50000, 'y el CPA se reparte entre los dos')
 }
 
 console.log(fallas ? `\n✗ ${fallas} falla(s)` : '\n✓ la plata cobrada está protegida')
