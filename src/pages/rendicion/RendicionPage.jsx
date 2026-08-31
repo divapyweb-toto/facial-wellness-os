@@ -640,6 +640,14 @@ export default function RendicionPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 14 }}>
               <ConcKPI label="PaP te rinde (efectivo)" valor={formatGs(conciliacion.totalEfectivo)} sub={`${conciliacion.countEfectivo} guías`} color="var(--green)" />
               <ConcKPI label="Ya cobraste (transferencia)" valor={formatGs(conciliacion.totalTransferencia)} sub={`${conciliacion.countTransf} prepagos`} />
+              {conciliacion.countOtra > 0 && (
+                <ConcKPI
+                  label="Otra forma de pago"
+                  valor={formatGs(conciliacion.totalOtra)}
+                  sub={conciliacion.formasNoReconocidas.map(f => `${f.forma} (${f.n})`).join(' · ')}
+                  color="var(--yellow)"
+                />
+              )}
               <ConcKPI label="Se marcan rendidas" valor={conciliacion.marcarRendido.length} sub={`de ${conciliacion.totalGuias} del archivo`} color="var(--accent)" />
               {conciliacion.noEncontradas.length > 0 && (
                 <ConcKPI label="No están en el sistema" valor={conciliacion.noEncontradas.length} sub="revisar" color="var(--yellow)" />
