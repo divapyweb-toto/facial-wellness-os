@@ -7,6 +7,8 @@ import { getEnvioCliente } from '../../lib/config'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
 import { precioSugerido, precioUnitarioSugerido, totalLinea, avisoPrecio, proximaReferenciaWA, totalesPedido, filasDeVenta } from '../../lib/pedidos'
+import { normalizarRef } from '../../lib/referencias'
+import { fetchAll } from '../../lib/fetchAll'
 import { logError } from '../../lib/errorLog'
 import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
 import { validarVenta } from '../../lib/validation'
@@ -665,18 +667,40 @@ export default function VentasPage() {
 
   const cargarVentas = useCallback(async () => {
     setLoading(true)
-    let query = supabase.from('ventas').select('*').is('deleted_at', null).order('fecha', { ascending: false }).order('created_at', { ascending: false })
-    if (filtroEstado !== 'todos') query = query.eq('estado', filtroEstado)
-    // Filtro por transportadora: permite aislar (por ejemplo) las de 'Otra'
-    // para marcarlas en lote, ya que esos couriers no dan reporte de estados.
-    if (filtroTransp !== 'todas') query = query.eq('transportadora', filtroTransp)
-    if (filtroMes) {
-      const [year, month] = filtroMes.split('-')
-      const inicio = `${year}-${month}-01`
-      const fin = new Date(year, parseInt(month), 0).toISOString().split('T')[0]
-      query = query.gte('fecha', inicio).lte('fecha', fin)
+    // fetchAll re-ejecuta la consulta en cada página, así que necesita una
+    // función que la ARME de nuevo: una query de Supabase se consume al
+    // ejecutarse y reusar el mismo objeto rompe la paginación.
+    const armarQuery = () => {
+      let q = supabase.from('ventas').select('*').is('deleted_at', null)
+      if (filtroEstado !== 'todos') q = q.eq('estado', filtroEstado)
+      // Filtro por transportadora: permite aislar (por ejemplo) las de 'Otra'
+      // para marcarlas en lote, ya que esos couriers no dan reporte de estados.
+      if (filtroTransp !== 'todas') q = q.eq('transportadora', filtroTransp)
+      if (filtroMes) {
+        const [year, month] = filtroMes.split('-')
+        const inicio = `${year}-${month}-01`
+        const fin = `${year}-${month}-${String(new Date(Number(year), Number(month), 0).getDate()).padStart(2, '0')}`
+        q = q.gte('fecha', inicio).lte('fecha', fin)
+      }
+      return q
     }
-    const { data } = await query.limit(200)
+    // Antes había un .limit(200) y la búsqueda filtraba en memoria sobre esas
+    // 200 filas: cualquier pedido más viejo salía como inexistente. Se pagina
+    // el rango completo, igual que hace Reportes.
+    let data = []
+    try {
+      data = await fetchAll(armarQuery, { columnaOrden: 'id' })
+    } catch (e) {
+      toast('No pude cargar las ventas: ' + (e?.message || e), 'error')
+      setLoading(false)
+      return
+    }
+    // fetchAll ordena por id (necesita una columna única para paginar sin
+    // repetir filas), así que el orden de pantalla se aplica acá.
+    data.sort((a, b) =>
+      String(b.fecha || '').localeCompare(String(a.fecha || '')) ||
+      String(b.created_at || '').localeCompare(String(a.created_at || ''))
+    )
     let resultado = data || []
     if (busqueda) {
       const b = busqueda.toLowerCase()
@@ -693,25 +717,55 @@ export default function VentasPage() {
 
   useEffect(() => { cargarVentas() }, [cargarVentas])
 
+  // Un pedido de 2 productos son 2 filas en `ventas`. Cambiar el estado o
+  // borrar tocaba UNA sola: quedaba media orden entregada y media pendiente.
+  // Dos filas son el mismo pedido si comparten referencia normalizada Y fecha.
+  // Se exige que la referencia tenga algún dígito: las basura ('NO TIENE',
+  // 'no hay') agruparían clientes que no tienen nada que ver.
+  // Se consulta la BASE y no la lista en memoria: con un filtro de estado
+  // activo (o con la otra línea en otra página) la hermana no está cargada, y
+  // el pedido se partiría igual. Se traen las ventas de ese día —son pocas— y
+  // se comparan por referencia normalizada.
+  const lineasDelPedido = async (venta) => {
+    if (!venta) return []
+    const ref = normalizarRef(venta.n_referencia)
+    if (!ref || !/\d/.test(ref) || !venta.fecha) return [venta]
+    const { data, error } = await supabase.from('ventas')
+      .select('*').is('deleted_at', null).eq('fecha', venta.fecha)
+    if (error || !data) return [venta]
+    const hermanas = data.filter(v => normalizarRef(v.n_referencia) === ref)
+    return hermanas.length ? hermanas : [venta]
+  }
+
   const cambiarEstado = async (id, nuevoEstado) => {
     const ventaActual = ventas.find(v => v.id === id)
-    const { error } = await supabase.from('ventas').update({ estado: nuevoEstado }).eq('id', id)
+    const lineas = await lineasDelPedido(ventaActual)
+    const ids = lineas.length ? lineas.map(v => v.id) : [id]
+    const { error } = await supabase.from('ventas').update({ estado: nuevoEstado }).in('id', ids)
     if (error) { toast('Error al actualizar', 'error'); return }
     // Ajustar stock según la transición (devuelto suma, reactivar descuenta) — el motor evita el doble descuento
-    if (ventaActual) {
-      try { await aplicarStockCambioEstado(ventaActual, nuevoEstado) } catch (e) { console.warn('stock:', e?.message) }
+    for (const l of (lineas.length ? lineas : [ventaActual])) {
+      if (!l) continue
+      try { await aplicarStockCambioEstado(l, nuevoEstado) } catch (e) { console.warn('stock:', e?.message) }
     }
-    toast('Estado actualizado', 'success'); cargarVentas()
+    toast(ids.length > 1 ? `Estado actualizado en las ${ids.length} líneas del pedido` : 'Estado actualizado', 'success')
+    cargarVentas()
   }
 
   const eliminar = async (id) => {
-    if (!confirm('¿Mover esta venta a la papelera? Podés recuperarla después.')) return
     const venta = ventas.find(v => v.id === id)
-    // Si la venta tenía stock descontado, devolverlo al borrar
-    if (venta?.stock_descontado) {
-      try { await devolverStockPorBorrado(venta) } catch (e) { logError('borrar_venta_stock', e, { id }) }
+    const lineas = await lineasDelPedido(venta)
+    const ids = lineas.length ? lineas.map(v => v.id) : [id]
+    const aviso = ids.length > 1
+      ? `Este pedido tiene ${ids.length} productos. ¿Mover el pedido COMPLETO a la papelera? Podés recuperarlo después.`
+      : '¿Mover esta venta a la papelera? Podés recuperarla después.'
+    if (!confirm(aviso)) return
+    // Si alguna línea tenía stock descontado, devolverlo al borrar
+    for (const l of (lineas.length ? lineas : [venta])) {
+      if (!l?.stock_descontado) continue
+      try { await devolverStockPorBorrado(l) } catch (e) { logError('borrar_venta_stock', e, { id: l.id }) }
     }
-    const { error } = await supabase.from('ventas').update({ deleted_at: new Date().toISOString() }).eq('id', id)
+    const { error } = await supabase.from('ventas').update({ deleted_at: new Date().toISOString() }).in('id', ids)
     if (error) { toast('Error al eliminar', 'error'); logError('borrar_venta', error, { id }); return }
     await logAccion({ accion: 'eliminar', entidad: 'venta', entidadId: id, detalle: venta ? `#${venta.n_referencia} — ${venta.producto_nombre}` : '' })
     toast('Venta movida a la papelera', 'info')

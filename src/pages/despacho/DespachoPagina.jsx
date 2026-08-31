@@ -248,6 +248,10 @@ function mapearGrupoAPedidos(grupoRows) {
     // Tarifa real de ESA transportadora en ESA ciudad — solo en la primera
     // línea del pedido (una sola caja, un solo flete; el resto va en 0).
     costo_envio: i === 0 ? sugerencia.tarifa : 0,
+    // Se marca explícitamente para que los recálculos posteriores (cambio de
+    // ciudad, cambio de transportadora) no le devuelvan el flete a las líneas
+    // secundarias. Antes lo hacían y el pedido pagaba el flete N veces.
+    lineaPrincipal: i === 0,
     esMultiProducto: multiProducto,
     numLineas: items.length,
     lineaIndice: i,
@@ -950,6 +954,20 @@ export default function DespachoPagina() {
   const [ciudadHabilitada, setCiudadHabilitada] = useState(new Set())
 
   // Aplica los overrides: despacho forzado + marca de prepago + riesgo cliente.
+  // Todo esto está indexado por n_referencia y vale SOLO para el archivo que
+  // está en pantalla. Si no se limpia, una marca "YA PAGADO", una tarifa
+  // manual o una corrección de ciudad del archivo anterior se le pegan a un
+  // pedido distinto que casualmente tenga la misma referencia.
+  const limpiarMarcasDelArchivo = () => {
+    setForzados(new Set())
+    setPrepagos(new Set())
+    setRiesgoHabilitado(new Set())
+    setCiudadHabilitada(new Set())
+    setTranspOverride({})
+    setCostoOtraManual({})
+    setEdiciones({})
+  }
+
   const todosConOverride = useMemo(
     () => todos.map(pOriginal => {
       // 1) Se aplican las correcciones manuales ANTES de cualquier cálculo.
@@ -969,7 +987,7 @@ export default function DespachoPagina() {
           transportadora: sug.transportadora,
           motivoTransportadora: sug.motivo,
           bloqueadoPorProducto: !!sug.bloqueadoPorProducto,
-          costo_envio: sug.tarifa,
+          costo_envio: p.lineaPrincipal === false ? 0 : sug.tarifa,
           cobranzaOk: sug.transportadora != null,
           faltantes,
           despachar: p.cfg?.despachar !== false && sug.transportadora != null && faltantes.length === 0,
@@ -1006,7 +1024,9 @@ export default function DespachoPagina() {
         transpManual: !!transpOverride[p.n_referencia],
         // Si la transportadora elegida no cubre la ciudad, tarifa queda null y
         // se avisa en la UI en vez de guardar un costo inventado.
-        costo_envio: tarifa,
+        // Las líneas secundarias de un pedido multiproducto van en 0: es una
+        // sola caja y un solo flete.
+        costo_envio: p.lineaPrincipal === false ? 0 : tarifa,
       }
     }),
     [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual, ediciones]
@@ -1119,6 +1139,7 @@ export default function DespachoPagina() {
         return parsearPedidoManual(bloque, catalogo || [], nRef)
       })
 
+      limpiarMarcasDelArchivo()
       setTodos(pedidos)
       setStep('preview')
       toast(`${pedidos.length} pedido${pedidos.length > 1 ? 's' : ''} procesado${pedidos.length > 1 ? 's' : ''}`, 'success')
@@ -1151,6 +1172,7 @@ export default function DespachoPagina() {
   // ── Handlers CSV ───────────────────────────────────────
   const handleFile = (file) => {
     if (!file?.name.endsWith('.csv')) { toast('Solo archivos .csv', 'error'); return }
+    limpiarMarcasDelArchivo()
     setNombreArchivo(file.name)
     const reader = new FileReader()
     reader.onload = (e) => {
@@ -1447,7 +1469,10 @@ export default function DespachoPagina() {
     }
   }
 
-  const reset = () => { setTodos([]); setResultado(null); setStep('upload'); setBusqueda(''); setNombreArchivo('') }
+  const reset = () => {
+    setTodos([]); setResultado(null); setStep('upload'); setBusqueda(''); setNombreArchivo('')
+    limpiarMarcasDelArchivo()
+  }
 
   // ── Handlers Ventas ────────────────────────────────────
   const fetchVentasPendientes = async () => {
