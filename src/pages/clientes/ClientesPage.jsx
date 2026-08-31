@@ -59,6 +59,7 @@ export default function ClientesPage() {
     const data = await fetchAll(() => supabase
       .from('ventas')
       .select('cliente_nombre, cliente_telefono, ciudad, producto_nombre, total, estado, fecha, ganancia_neta, envio_cliente')
+      .is('deleted_at', null)
       .order('fecha', { ascending: false }))
     setVentas(data || [])
     setLoading(false)
@@ -79,7 +80,10 @@ export default function ClientesPage() {
       if (!c.nombre && v.cliente_nombre) c.nombre = v.cliente_nombre
       if (!c.ciudad && v.ciudad) c.ciudad = v.ciudad
       if ((v.fecha || '') > c.ultima) c.ultima = v.fecha || ''
-      if (v.estado === 'entregado') { c.entregados++; c.ltv += (v.total || 0); c.ganancia += (v.ganancia_neta || 0) + (v.envio_cliente || 0) }
+      if (v.estado === 'entregado') { c.entregados++; c.ltv += (v.total || 0); c.ganancia += (v.ganancia_neta || 0) }
+      // Antes se le sumaba envio_cliente, pero eso lo contaba dos veces: el
+      // envío que paga el cliente ya está DENTRO de `total`, y ganancia_neta
+      // se calcula sobre total (total − costo_prod − costo_envio).
       if (v.estado === 'devuelto') c.devueltos++
       c.compras.push(v)
     })
