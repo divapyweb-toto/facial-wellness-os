@@ -172,6 +172,16 @@ export function infoLucero() {
 // Velocidad de entrega por ciudad (del tarifario vigente)
 export const velocidadLucero = (ciudadNorm) => infoLucero()[ciudadNorm]?.[1] || null
 
+// ── Link de tracking público de Lucero ──
+// Usa el ID interno de Lucero (guia_transportadora en `entregas`), NO el
+// código FW-XXXX que le mandamos nosotros — ese es un identificador interno
+// nuestro, Lucero no lo reconoce en esta URL.
+const URL_TRACKING_LUCERO = 'https://www.luceroexpress.com.py/envio.php?id='
+export function linkTrackingLucero(envioId) {
+  const id = String(envioId ?? '').trim()
+  return id ? `${URL_TRACKING_LUCERO}${id}` : null
+}
+
 // Nombre canónico en MAYÚSCULAS, como lo espera la planilla de Lucero.
 // Si mandás la ciudad con otra grafía, su sistema la marca como no reconocida.
 export const NOMBRE_OFICIAL_LUCERO = {
