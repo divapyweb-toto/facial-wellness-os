@@ -20,6 +20,7 @@ import { normalizarRef, normalizarTel } from '../src/lib/referencias.js'
 import { calcularMetricasAds } from '../src/lib/metricasAds.js'
 import { sanearEntrega } from '../src/lib/estadosPaP.js'
 import { esArchivoRendicion, parsearFilasRendicion, conciliarRendicion } from '../src/lib/conciliacionRendicion.js'
+import { indexarVentas } from '../src/lib/vinculacion.js'
 
 let fallas = 0
 const ok = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) fallas++ }
@@ -208,6 +209,23 @@ console.log('\n── ninguna forma de pago desaparece del resumen ──')
   ok(nombres.join(',') === 'POS,Pagado', 'y se dice exactamente cuáles fueron')
   ok(c.totalEfectivo + c.totalTransferencia + c.totalOtra === 390000,
     'nada de la planilla queda fuera de algún total')
+}
+
+console.log('\n── la vinculación entiende el monto de un pedido de varias líneas ──')
+{
+  // La entrega trae el importe del BULTO entero; cada fila de `ventas` guarda
+  // el total de SU línea. Sin sumar el pedido, el desempate por monto no
+  // acertaba nunca en un pedido de 2 productos.
+  const ventas = [
+    { id: 'a1', n_referencia: '7001', total: 129000, cliente_telefono: '0981000001', fecha: '2026-08-20' },
+    { id: 'a2', n_referencia: '7001', total: 99000,  cliente_telefono: '0981000001', fecha: '2026-08-20' },
+    { id: 'b1', n_referencia: '7002', total: 150000, cliente_telefono: '0981000002', fecha: '2026-08-20' },
+  ]
+  const ix = indexarVentas(ventas)
+  ok(ix.totalPedidoPorVenta.get('a1') === 228000, 'las 2 líneas del pedido suman 228.000')
+  ok(ix.totalPedidoPorVenta.get('a2') === 228000, 'y las dos filas conocen ese total')
+  ok(ix.totalPedidoPorVenta.get('b1') === 150000, 'un pedido de una línea sigue valiendo su total')
+  ok(ix.grupos.get('7001').ancla.id === 'a1', 'el ancla del pedido es estable (menor id)')
 }
 
 console.log(fallas ? `\n✗ ${fallas} falla(s)` : '\n✓ la plata cobrada está protegida')

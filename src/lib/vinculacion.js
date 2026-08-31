@@ -85,10 +85,29 @@ export function indexarVentas(ventas) {
     agregar(porTel, limpiarTel(v.cliente_telefono), v)
     agregar(porNom, normTexto(v.cliente_nombre), v)
   }
-  return { grupos, sueltas, porTel, porNom, todas: ventas || [] }
+  // Total del PEDIDO por venta: la entrega trae el importe del bulto entero,
+  // pero cada fila de `ventas` guarda solo el total de SU línea. Comparar una
+  // contra la otra nunca daba igual en un pedido de 2 productos, y el desempate
+  // por monto no servía justo donde más falta hace.
+  const totalPedidoPorVenta = new Map()
+  for (const { filas } of grupos.values()) {
+    const suma = filas.reduce((t, f) => t + (Number(f.total) || 0), 0)
+    for (const f of filas) totalPedidoPorVenta.set(f.id, suma)
+  }
+
+  return { grupos, sueltas, porTel, porNom, totalPedidoPorVenta, todas: ventas || [] }
 }
 
-const mismoMonto = (v, e) => Number(v?.total || 0) === Number(e?.importe || 0)
+// El importe de la entrega es el del BULTO. Se acepta tanto el total de la
+// línea (pedido de un producto) como el total del pedido completo (varias
+// líneas), porque según el caso el bulto es uno u otro.
+const mismoMonto = (v, e, ix) => {
+  const imp = Number(e?.importe || 0)
+  if (!imp) return false
+  if (Number(v?.total || 0) === imp) return true
+  const totalPedido = ix?.totalPedidoPorVenta?.get(v?.id)
+  return totalPedido != null && Number(totalPedido) === imp
+}
 const mismaCiudad = (v, e) => {
   const a = normTexto(v?.ciudad), b = normTexto(e?.ciudad)
   return !a || !b ? false : a === b
@@ -165,7 +184,7 @@ export function calcularVinculos(entregas, ventas, opciones = {}) {
         const libres = ix.porTel.get(tel).filter(v => !ocupadas.has(v.id) && dentroDeVentana(v, e))
         if (libres.length === 1) { venta = libres[0]; metodo = 'telefono' }
         else if (libres.length > 1) {
-          const exactas = libres.filter(v => mismoMonto(v, e))
+          const exactas = libres.filter(v => mismoMonto(v, e, ix))
           if (exactas.length === 1) { venta = exactas[0]; metodo = 'telefono' }
           else {
             razon = `${libres.length} ventas con ese teléfono${exactas.length > 1 ? ` y ${exactas.length} con el mismo importe` : ', ninguna con el mismo importe'}.`
@@ -182,13 +201,13 @@ export function calcularVinculos(entregas, ventas, opciones = {}) {
       const nom = normTexto(e.nombre_courier)
       if (nom && ix.porNom.has(nom)) {
         const libres = ix.porNom.get(nom).filter(v => !ocupadas.has(v.id) && dentroDeVentana(v, e))
-        const fuertes = libres.filter(v => mismoMonto(v, e) && mismaCiudad(v, e))
+        const fuertes = libres.filter(v => mismoMonto(v, e, ix) && mismaCiudad(v, e))
         if (fuertes.length === 1) { venta = fuertes[0]; metodo = 'nombre' }
         else if (fuertes.length > 1) {
           razon = `${fuertes.length} ventas con el mismo nombre, importe y ciudad.`
           candidatos = fuertes.map(v => aCandidato(v, 'nombre + importe + ciudad'))
         } else if (libres.length) {
-          const medios = libres.filter(v => mismoMonto(v, e))
+          const medios = libres.filter(v => mismoMonto(v, e, ix))
           razon = medios.length
             ? `Coincide el nombre y el importe, pero no la ciudad.`
             : `Coincide el nombre pero no el importe.`
