@@ -424,6 +424,35 @@ export default function EntregasPage() {
 
       // 1) Tracking
       const regs = exportLuceroAEntregas(items).map(soloColumnasEntregas)
+
+      // PRECEDENCIA: el export es tracking EN VIVO, la rendición es el cierre
+      // contable. Para 'fallido' el export devuelve 'en_proceso' a propósito
+      // (Lucero reintenta y puede terminar entregado), pero si la rendición ya
+      // cerró ese paquete como entregado o devuelto, pisarlo con 'en_proceso'
+      // borraba el cierre — y con él `cobrado`, o sea la plata. Un estado no
+      // terminal nunca degrada uno terminal.
+      const TERMINALES = new Set(['entregado', 'devuelto', 'no_despachado'])
+      try {
+        const guias = regs.map(r => r.nro_guia_pap).filter(Boolean)
+        const previo = new Map()
+        for (let i = 0; i < guias.length; i += 200) {
+          const { data } = await supabase.from('entregas')
+            .select('nro_guia_pap, categoria, cobrado, fecha_entrega')
+            .in('nro_guia_pap', guias.slice(i, i + 200))
+          for (const e of (data || [])) previo.set(String(e.nro_guia_pap), e)
+        }
+        for (const r of regs) {
+          if (TERMINALES.has(r.categoria)) continue
+          const ant = previo.get(String(r.nro_guia_pap))
+          if (!ant || !TERMINALES.has(ant.categoria)) continue
+          r.categoria = ant.categoria
+          r.cobrado = ant.cobrado ?? r.cobrado
+          r.fecha_entrega = ant.fecha_entrega ?? r.fecha_entrega
+        }
+      } catch (e) {
+        console.warn('[lucero] no se pudo leer el estado previo; se guarda sin proteger cierres:', e?.message || e)
+      }
+
       let guardados = 0, errorMsg = null
       for (let i = 0; i < regs.length; i += 100) {
         let chunk = regs.slice(i, i + 100)
@@ -531,12 +560,18 @@ export default function EntregasPage() {
       let porRef = 0, porTel = 0, porNombre = 0, sinMatch = 0
       let updOk = 0, updVacio = 0, updFail = 0, vincOk = 0, vincFail = 0
       let resumenVinculo = null
+      // Se declara ACÁ, fuera del try, porque el aviso de "entregado sin
+      // importe" se arma después del catch y `ventas` solo vive adentro.
+      let refsPrepago = new Set()
       let diagnostico = errEntregas ? `Las entregas no se guardaron: ${errEntregas}` : null
       if (faltanColsVinculo && !diagnostico) {
         diagnostico = 'Las entregas se guardaron, pero falta correr la migración 001 en Supabase: sin las columnas de vínculo no se puede pegar cada guía con su venta.'
       }
       try {
         const { data: ventas, error: errSel } = await fetchAllSafe(() => supabase.from('ventas').select('*').is('deleted_at', null))
+        refsPrepago = new Set(
+          (ventas || []).filter(v => v.pago_anticipado).map(v => normalizarRef(v.n_referencia)).filter(Boolean)
+        )
         if (errSel) { diagnostico = diagnostico || ('No pude leer las ventas: ' + errSel.message) }
         else if (!ventas || !ventas.length) { diagnostico = diagnostico || 'La consulta de ventas vino vacía (¿permisos de la tabla ventas?)' }
         else {
@@ -603,8 +638,17 @@ export default function EntregasPage() {
         }
       } catch (e) { diagnostico = diagnostico || ('Error inesperado: ' + (e?.message || e)) }
 
+      // ── Avisos de plata que el importador venía guardando en silencio ──
+      // (a) importes corruptos que se descartaron; (b) paquetes que PaP dice
+      // entregados pero sin importe: los prepagos son legítimos, el resto es
+      // mercadería entregada que el sistema no registra como cobrada.
+      const sinImporte = (reportesNuevos.entregadosSinImporte || [])
+        .filter(x => x.ref && !refsPrepago.has(x.ref))
+      const descartados = reportesNuevos.importesDescartados || []
+
       setResultadoGuardado({ ok, porRef, porTel, porNombre, sinMatch, updOk, updVacio, updFail,
-        vincOk, vincFail, faltanColsVinculo, resumenVinculo, diagnostico })
+        vincOk, vincFail, faltanColsVinculo, resumenVinculo, diagnostico,
+        sinImporte, descartados })
       toast(diagnostico ? `Guardado con avisos — mirá el detalle` : `${ok} entregas · ${updOk} ventas actualizadas`, diagnostico ? 'error' : 'success')
     } catch (err) {
       toast('Error guardando: ' + err.message, 'error')
@@ -784,6 +828,28 @@ export default function EntregasPage() {
                 <button className="btn btn-sm btn-secondary" onClick={() => navigate('/vinculos')}>
                   <AlertTriangle size={13} /> {resultadoGuardado.sinMatch} sin vincular — revisar ahora
                 </button>
+              </div>
+            )}
+
+            {/* Entregado pero sin plata: o falta el importe en el reporte, o el
+                paquete se entregó sin cobrar. Antes esto entraba mudo. */}
+            {resultadoGuardado.sinImporte?.length > 0 && (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--yellow)' }}>
+                <AlertTriangle size={13} style={{ verticalAlign: -2 }} />{' '}
+                <b>{resultadoGuardado.sinImporte.length} paquete(s) entregados con importe 0</b> y sin prepago
+                registrado: {resultadoGuardado.sinImporte.slice(0, 6).map(x => x.ref || x.guia).join(', ')}
+                {resultadoGuardado.sinImporte.length > 6 ? '…' : ''}. Revisá si te pagaron.
+              </div>
+            )}
+
+            {/* Importes corruptos: el tope de sanidad los descarta para que un
+                dato roto no envenene las sumas, pero hay que saber cuáles. */}
+            {resultadoGuardado.descartados?.length > 0 && (
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--yellow)' }}>
+                <AlertTriangle size={13} style={{ verticalAlign: -2 }} />{' '}
+                <b>{resultadoGuardado.descartados.length} importe(s) descartados</b> por venir corruptos desde
+                PaP: {resultadoGuardado.descartados.slice(0, 4).map(x => `${x.ref || '?'} (${x.valor})`).join(', ')}
+                {resultadoGuardado.descartados.length > 4 ? '…' : ''}.
               </div>
             )}
 

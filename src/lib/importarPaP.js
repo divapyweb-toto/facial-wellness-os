@@ -70,6 +70,10 @@ export function combinar(paqData, gesData) {
   const out = []
   // Registros cuyo Importe vino corrupto desde PaP (se avisan en pantalla).
   const importesDescartados = []
+  // Paquetes que PaP dice ENTREGADOS pero sin plata: o es un prepago (y está
+  // bien) o el reporte vino sin el importe y estás dando por cobrado algo que
+  // nadie te pagó. Quien lo consuma cruza con pago_anticipado para saber cuál.
+  const entregadosSinImporte = []
 
   guias.forEach(guia => {
     if (!guia || guia === 'undefined') return
@@ -94,6 +98,7 @@ export function combinar(paqData, gesData) {
       })
     }
     const ref = normalizarRef((p && p['NroGuiaRef']) ? p['NroGuiaRef'] : (g ? g['NroGuiaRef'] : ''))
+    if (cat === 'entregado' && !importe) entregadosSinImporte.push({ guia, ref })
     const ciudad = ((g ? g['Ciudad'] : (p ? p['Ciudad'] : '')) || '').trim()
     const mensajero = (g ? g['Recurso'] : '') || ''
     const telefono = limpiarTel(g ? g['Telefono'] : '')
@@ -138,5 +143,6 @@ export function combinar(paqData, gesData) {
 
   // Se cuelgan del array para que quien lo use pueda avisar sin cambiar la firma.
   out.importesDescartados = importesDescartados
+  out.entregadosSinImporte = entregadosSinImporte
   return out
 }

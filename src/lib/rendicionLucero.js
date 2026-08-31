@@ -200,6 +200,9 @@ export function parsearRendicionLucero(rowsRaw) {
 }
 
 // Mapea el estado final de Lucero a las categorías internas del sistema.
+// Contraparte de la categoriaLucero() de exportLucero.js — ver la nota de allá.
+// Esta lee el archivo de RENDICIÓN, que es el cierre: acá 'fallido' ya no se
+// reintenta, es una devolución. Por eso las dos difieren y está bien.
 export function categoriaLucero(estadoFinal) {
   const e = String(estadoFinal || '').toLowerCase()
   if (e.includes('entregado')) return 'entregado'
