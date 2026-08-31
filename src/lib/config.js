@@ -16,9 +16,11 @@ import { supabase } from './supabase'
 // Valores por defecto = los que estaban en el código.
 const DEFAULTS = {
   flete_pap: 29000,
-  // Envío que le cobrás al cliente en productos del Grupo A (lo paga él, va
-  // dentro del total). Grupo B tiene envío gratis y no usa este valor.
-  envio_cliente: 33000,
+  // Desde el 25/08/2026 el envío va INCLUIDO en el precio y no se cobra
+  // aparte: el default tiene que ser 0, igual que la fila de `config`. Si
+  // quedaba en 33000 y la carga de config fallaba, cada pedido nuevo salía
+  // 33.000 Gs más caro sin que nada avisara.
+  envio_cliente: 0,
   riesgo_bloqueo_fallos: 2,
   riesgo_bloqueo_tasa: 0.5,
   riesgo_tasa: 0.34,
