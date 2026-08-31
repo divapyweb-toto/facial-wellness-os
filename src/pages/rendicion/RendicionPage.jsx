@@ -11,6 +11,7 @@ import { soloColumnasEntregas } from '../../lib/estadosPaP'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
 import { hoyLocal } from '../../lib/fechas'
+import { normalizarRef } from '../../lib/referencias'
 
 const formatGs = (n) => Math.round(n || 0).toLocaleString('es-PY') + ' Gs.'
 const fechaCorta = (d) => d ? new Date(d).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'
@@ -58,7 +59,9 @@ export default function RendicionPage() {
         const prep = await fetchAll(() => supabase
           .from('ventas').select('n_referencia').eq('pago_anticipado', true))
         if (activo) {
-          const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
+          // Se usa la normalización canónica del sistema (normalizarRef), no una
+          // copia local: 'WA-0007' tiene que dar '7' acá y en todas las pantallas.
+          const norm = normalizarRef
           setRefsPrepago(new Set((prep || []).map(v => norm(v.n_referencia))))
         }
       } catch (e) { /* la columna puede no existir todavía; se ignora */ }
@@ -144,7 +147,7 @@ export default function RendicionPage() {
   const [vista, setVista] = useState('todas')  // 'todas' | 'pap' | 'lucero'
 
   const { statsPaP, statsLucero, statsTotal, hayLucero, luceroEnProceso } = useMemo(() => {
-    const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
+    const norm = normalizarRef
     const esPrepago = (m) => refsPrepago.has(norm(m.n_referencia)) || refsPrepago.has(norm(m.nro_guia_ref))
     const items = historico.map(h => ({ ...sanearEntrega(h), _prepago: esPrepago(h) }))
     const itemsPaP = items.filter(m => (m.transportadora || 'pap') === 'pap')
@@ -227,18 +230,25 @@ export default function RendicionPage() {
     .filter(m => seleccionados.has(m.nro_guia_pap))
     .reduce((s, m) => s + (m.importe || 0), 0)
 
+  // Fecha REAL del depósito. Antes se usaba siempre "hoy": si subías la
+  // rendición del martes un jueves, todos los paquetes quedaban cobrados el
+  // jueves y con 2 días de más de demora. dias_rendicion es el número con el
+  // que se mide cuánto tarda cada courier en pagarte, así que quedaba inflado.
+  const [fechaDeposito, setFechaDeposito] = useState(hoyLocal())
+
   // ── Marcar como rendido manual ─────────────────────────
   const marcarRendidoManual = async () => {
     if (!seleccionados.size) return
     setMarcando(true)
-    const hoy = hoyLocal()
+    const deposito = fechaDeposito || hoyLocal()
+    const tDeposito = new Date(`${deposito}T12:00:00`).getTime()
     const items = stats.listaSinRendir.filter(m => seleccionados.has(m.nro_guia_pap))
 
     const updates = items.map(m => {
       const fEnt = m.fecha_entrega ? new Date(m.fecha_entrega) : null
-      const dias = fEnt ? Math.max(0, Math.round((Date.now() - fEnt.getTime()) / 86400000)) : null
+      const dias = fEnt ? Math.max(0, Math.round((tDeposito - fEnt.getTime()) / 86400000)) : null
       return supabase.from('entregas')
-        .update({ rendido: true, fecha_rendido: hoy, dias_rendicion: dias })
+        .update({ rendido: true, fecha_rendido: deposito, dias_rendicion: dias })
         .eq('nro_guia_pap', m.nro_guia_pap)
     })
 
@@ -399,23 +409,31 @@ export default function RendicionPage() {
   const confirmarRendicion = async () => {
     if (!conciliacion?.marcarRendido.length) return
     setImportando(true)
-    const hoy = hoyLocal()
+    const deposito = fechaDeposito || hoyLocal()
+    const tDeposito = new Date(`${deposito}T12:00:00`).getTime()
     // Mapa guía → fecha_entrega para calcular días
     const fechaPorGuia = {}
     for (const h of historico) fechaPorGuia[String(h.nro_guia_pap)] = h.fecha_entrega
 
     const updates = conciliacion.marcarRendido.map(m => {
       const fEnt = fechaPorGuia[String(m.nro_guia_pap)] ? new Date(fechaPorGuia[String(m.nro_guia_pap)]) : null
-      const dias = fEnt ? Math.max(0, Math.round((Date.now() - fEnt.getTime()) / 86400000)) : null
+      const dias = fEnt ? Math.max(0, Math.round((tDeposito - fEnt.getTime()) / 86400000)) : null
       return supabase.from('entregas')
-        .update({ rendido: true, fecha_rendido: hoy, dias_rendicion: dias })
+        .update({ rendido: true, fecha_rendido: deposito, dias_rendicion: dias })
         .eq('nro_guia_pap', m.nro_guia_pap)
     })
     const results = await Promise.all(updates)
     const ok = results.filter(r => !r.error).length
+    const fallaron = results.filter(r => r.error)
     if (ok > 0) {
       await cargarHistorico()
       toast(`${ok} guías marcadas como rendidas`, 'success')
+    }
+    // Antes los errores se descartaban en silencio: podías creer que quedaron
+    // todas rendidas cuando la mitad no se había guardado.
+    if (fallaron.length) {
+      console.warn('[rendicion] guías que no se pudieron marcar:', fallaron.map(r => r.error?.message))
+      toast(`${fallaron.length} guía(s) NO se pudieron marcar. Revisá y volvé a confirmar.`, 'error')
     }
     setConciliacion(null)
     setNombreArchivo('')
@@ -620,7 +638,18 @@ export default function RendicionPage() {
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                Fecha del depósito
+                <input
+                  type="date"
+                  className="form-input"
+                  value={fechaDeposito}
+                  max={hoyLocal()}
+                  onChange={e => setFechaDeposito(e.target.value)}
+                  style={{ width: 'auto', minHeight: 34, padding: '5px 8px', fontSize: 12 }}
+                />
+              </label>
               <button className="btn btn-ghost" onClick={() => { setConciliacion(null); setNombreArchivo(''); }}>Cancelar</button>
               <button className="btn btn-primary" onClick={confirmarRendicion} disabled={importando || !conciliacion.marcarRendido.length}>
                 <CheckCircle size={14} /> Confirmar y marcar {conciliacion.marcarRendido.length} rendidas
@@ -749,6 +778,17 @@ export default function RendicionPage() {
                   <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                     <b style={{ color: 'var(--text-primary)' }}>{seleccionados.size}</b> seleccionada{seleccionados.size !== 1 ? 's' : ''} · <b style={{ color: 'var(--green)' }}>{formatGs(montoSeleccionado)}</b>
                   </span>
+<label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                    Fecha del depósito
+                    <input
+                      type="date"
+                      className="form-input"
+                      value={fechaDeposito}
+                      max={hoyLocal()}
+                      onChange={e => setFechaDeposito(e.target.value)}
+                      style={{ width: 'auto', minHeight: 34, padding: '5px 8px', fontSize: 12 }}
+                    />
+                  </label>
                   <button
                     onClick={marcarRendidoManual}
                     disabled={marcando}

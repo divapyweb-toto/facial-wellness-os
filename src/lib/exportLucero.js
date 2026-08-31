@@ -100,6 +100,13 @@ const num = (v) => {
 
 // ── Estado de Lucero → categoría interna ──
 // 'en_proceso' incluye FALLIDO a propósito: es recuperable (ver regla 1).
+// OJO: hay OTRA categoriaLucero() en rendicionLucero.js y NO son la misma, a
+// propósito. Esta lee el export EN VIVO, donde 'fallido' es un intento fallido
+// que Lucero va a reintentar (ver el ciclo de estados arriba), así que devuelve
+// 'en_proceso'. La de la rendición lee el archivo de CIERRE, donde 'fallido' ya
+// es definitivo y devuelve 'devuelto'. No unificarlas: la protección de
+// precedencia vive en procesarExportLucero (un estado no terminal nunca pisa
+// uno terminal).
 export function categoriaLucero(estado) {
   const e = norm(estado)
   if (e.includes('entregado')) return 'entregado'
@@ -212,8 +219,12 @@ export function exportLuceroAEntregas(items) {
     ...(it.tarifa != null ? { costo_envio: it.tarifa + (it.multa || 0) } : {}),
     fecha_ingreso: it.fechaCreado,
     fecha_entrega: it.categoria === 'entregado' ? it.fechaUltimoEstado : null,
-    rendido: it.rendido,
-    fecha_rendido: it.rendido ? it.fechaRendicion : null,
+    // El export es fuente de TRACKING, no contable. Si Lucero todavía no lo
+    // marcó rendido, NO se pisa: ese paquete puede haberse conciliado desde la
+    // planilla de rendición, que es la fuente contable. Escribir `false` acá
+    // borraba el registro de que ya te habían pagado. Mismo criterio que
+    // costo_envio unas líneas arriba: la clave se omite a propósito.
+    ...(it.rendido ? { rendido: true, fecha_rendido: it.fechaRendicion } : {}),
     mensajero: it.transportador || '',
     // Igual que en PaP: lo que dice Lucero, para poder cruzar y auditar.
     telefono_courier: it.telefono || '',
