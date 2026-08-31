@@ -19,7 +19,7 @@ import { combinar } from '../src/lib/importarPaP.js'
 import { normalizarRef, normalizarTel } from '../src/lib/referencias.js'
 import { calcularMetricasAds } from '../src/lib/metricasAds.js'
 import { sanearEntrega } from '../src/lib/estadosPaP.js'
-import { esArchivoRendicion } from '../src/lib/conciliacionRendicion.js'
+import { esArchivoRendicion, parsearFilasRendicion, conciliarRendicion } from '../src/lib/conciliacionRendicion.js'
 
 let fallas = 0
 const ok = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) fallas++ }
@@ -187,6 +187,27 @@ console.log('\n── la rendición no acepta el archivo equivocado ──')
     'vacío y null se rechazan sin reventar')
   ok(esArchivoRendicion([{ ' NroGuia ': '1', ' Cobrado ': 0 }]) === true,
     'las cabeceras con espacios de más se reconocen igual')
+}
+
+console.log('\n── ninguna forma de pago desaparece del resumen ──')
+{
+  // Lo que no dice "efectivo" ni "transfer" (POS, QR, "Pagado"…) no entraba en
+  // ningún total: la guía se marcaba rendida y esa plata desaparecía.
+  const filas = parsearFilasRendicion([
+    { NroGuia: '1', Cobrado: 100000, FormaPago: 'Efectivo', Importe: 100000 },
+    { NroGuia: '2', Cobrado: null,   FormaPago: 'Transferencia', Importe: 120000 },
+    { NroGuia: '3', Cobrado: 90000,  FormaPago: 'Pagado', Importe: 90000 },
+    { NroGuia: '4', Cobrado: 80000,  FormaPago: 'POS', Importe: 80000 },
+  ])
+  const c = conciliarRendicion(filas, [])
+  ok(c.totalEfectivo === 100000, 'el efectivo se cuenta como antes')
+  ok(c.totalTransferencia === 120000, 'la transferencia también')
+  ok(c.countOtra === 2 && c.totalOtra === 170000,
+    'las dos formas no reconocidas suman 170.000 en su propio total')
+  const nombres = c.formasNoReconocidas.map(f => f.forma).sort()
+  ok(nombres.join(',') === 'POS,Pagado', 'y se dice exactamente cuáles fueron')
+  ok(c.totalEfectivo + c.totalTransferencia + c.totalOtra === 390000,
+    'nada de la planilla queda fuera de algún total')
 }
 
 console.log(fallas ? `\n✗ ${fallas} falla(s)` : '\n✓ la plata cobrada está protegida')

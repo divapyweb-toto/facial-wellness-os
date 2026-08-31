@@ -124,6 +124,12 @@ export function conciliarRendicion(filas, entregas) {
   let totalEfectivo = 0           // plata que PaP te rinde (efectivo)
   let totalTransferencia = 0      // plata cobrada por el cliente (prepago)
   let countEfectivo = 0, countTransf = 0
+  // Todo lo que no dice "efectivo" ni "transfer" (POS, QR, "Pagado"…) no
+  // entraba en NINGÚN total: la guía se marcaba rendida y la plata desaparecía
+  // del resumen. Ahora se junta aparte y se muestra, con el nombre exacto que
+  // usó PaP para poder reconocerlo.
+  let countOtra = 0, totalOtra = 0
+  const formasNoReconocidas = new Map()
 
   for (const f of filas) {
     // Buscar la entrega: primero por nro de guía PaP, luego por referencia
@@ -135,6 +141,11 @@ export function conciliarRendicion(filas, entregas) {
     } else if (f.transferencia) {
       countTransf++
       totalTransferencia += f.importe
+    } else {
+      countOtra++
+      totalOtra += (f.cobrado != null ? f.cobrado : f.importe) || 0
+      const nombre = String(f.formaPago || '(vacío)').trim() || '(vacío)'
+      formasNoReconocidas.set(nombre, (formasNoReconocidas.get(nombre) || 0) + 1)
     }
 
     if (!e) {
@@ -173,6 +184,10 @@ export function conciliarRendicion(filas, entregas) {
     totalFaltante,          // plata que PaP te rindió de menos
     countEfectivo,
     countTransf,
+    // Formas de pago que no encajan en efectivo ni transferencia.
+    countOtra,
+    totalOtra,
+    formasNoReconocidas: [...formasNoReconocidas.entries()].map(([forma, n]) => ({ forma, n })),
     totalGuias: filas.length,
   }
 }
