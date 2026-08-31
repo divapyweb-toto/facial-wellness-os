@@ -102,6 +102,18 @@ export default function ClientesPage() {
 
   const conCompras = useMemo(() => clientes.filter(c => c.entregados > 0), [clientes])
   const ltvTotal = useMemo(() => clientes.reduce((s, c) => s + c.ltv, 0), [clientes])
+
+  // Las ventas sin teléfono NI nombre no se pueden atribuir a nadie, así que
+  // quedan fuera de esta pantalla. Eso está bien, pero el KPI no lo decía y el
+  // "LTV total" parecía ser toda tu facturación cuando le faltaban 6.221.000.
+  const sinAtribuir = useMemo(() => {
+    const fuera = ventas.filter(v =>
+      v.estado === 'entregado' &&
+      !normalizarTel(v.cliente_telefono) &&
+      !(v.cliente_nombre || '').trim()
+    )
+    return { cantidad: fuera.length, monto: fuera.reduce((s, v) => s + (v.total || 0), 0) }
+  }, [ventas])
   const ltvProm = conCompras.length ? ltvTotal / conCompras.length : 0
 
   return (
@@ -115,7 +127,7 @@ export default function ClientesPage() {
 
       <div className="kpi-grid">
         <div className="kpi-card"><div className="kpi-label"><Users size={11} /> Total clientes</div><div className="kpi-value">{clientes.length}</div><div className="kpi-sub">Únicos por teléfono</div></div>
-        <div className="kpi-card"><div className="kpi-label"><TrendingUp size={11} /> LTV total</div><div className="kpi-value green">{formatGs(ltvTotal)}</div><div className="kpi-sub">Cobrado histórico</div></div>
+        <div className="kpi-card"><div className="kpi-label"><TrendingUp size={11} /> LTV total</div><div className="kpi-value green">{formatGs(ltvTotal)}</div><div className="kpi-sub">{sinAtribuir.cantidad > 0 ? `Cobrado histórico · ${formatGs(sinAtribuir.monto)} sin cliente identificado` : 'Cobrado histórico'}</div></div>
         <div className="kpi-card"><div className="kpi-label"><Star size={11} /> LTV promedio</div><div className="kpi-value">{formatGs(ltvProm)}</div><div className="kpi-sub">Por cliente con compras</div></div>
         <div className="kpi-card"><div className="kpi-label"><ShoppingBag size={11} /> Con compras</div><div className="kpi-value">{conCompras.length}</div><div className="kpi-sub">Al menos 1 entregado</div></div>
       </div>
