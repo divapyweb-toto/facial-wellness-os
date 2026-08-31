@@ -423,7 +423,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
             </div>
             <div className="form-group">
               <label className="form-label">Teléfono</label>
-              <input className="form-input" placeholder="0981000000" value={form.cliente_telefono}
+              <input className="form-input" type="tel" inputMode="numeric" autoComplete="tel" placeholder="0981000000" value={form.cliente_telefono}
                 onChange={e => setForm(f => ({ ...f, cliente_telefono: e.target.value }))} />
             </div>
           </div>
@@ -586,7 +586,7 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">Teléfono</label>
-              <input className="form-input" value={form.cliente_telefono} onChange={e => set('cliente_telefono', e.target.value)} />
+              <input className="form-input" type="tel" inputMode="numeric" autoComplete="tel" value={form.cliente_telefono} onChange={e => set('cliente_telefono', e.target.value)} />
             </div>
             <div className="form-group">
               <label className="form-label">Ciudad</label>

@@ -164,7 +164,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
-  min-height: -webkit-fill-available;
+  min-height: 100dvh;   /* en iOS 100vh incluye la barra del navegador */
   overscroll-behavior: none;
 }
 
@@ -187,7 +187,7 @@ body {
 }
 
 /* ─── Layout Shell ───────────────────────────────────── */
-.app-shell           { display: flex; min-height: 100vh; }
+.app-shell           { display: flex; min-height: 100vh; min-height: 100dvh; }
 .mobile-nav          { display: none; }
 .mobile-more-overlay { display: none; }
 
@@ -195,6 +195,7 @@ body {
   flex: 1;
   margin-left: var(--sidebar-width);
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex; flex-direction: column;
   transition: margin-left var(--t-base) var(--ease-smooth);
 }
@@ -212,6 +213,7 @@ body {
   top: 0; left: 0;
   width: var(--sidebar-width);
   height: 100vh;
+  height: 100dvh;
   background: var(--bg-surface);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
@@ -516,6 +518,15 @@ td.mono  { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; lett
   outline: none;
   border-color: var(--border-focus);
   box-shadow: 0 0 0 3px rgba(200,241,53,0.10), 0 0 0 1px rgba(200,241,53,0.35);
+}
+
+/* iOS hace zoom automático sobre cualquier campo de menos de 16px, y después
+   la pantalla queda corrida y hay que volver con los dedos. Con 14px pasaba en
+   TODOS los campos del sistema. Se sube a 16px solo donde se toca con el dedo,
+   en vez de bloquear el zoom con maximum-scale (eso rompe la accesibilidad).
+   En escritorio no cambia nada. */
+@media (pointer: coarse) {
+  .form-input, .form-select, .form-textarea { font-size: 16px; }
 }
 
 /* Inputs de fecha/hora: restaurar selector nativo clickeable */

@@ -65,7 +65,12 @@ export default function RecepcionPage() {
   useEffect(() => { cargar() }, [cargar])
 
   // Mantener el foco en el input: el escáner "teclea" y necesita el campo activo.
+  // SOLO donde hay lector, o sea donde hay mouse/teclado. En iPhone no hay
+  // escáner y este intervalo reabre el teclado cada 800 ms: no se puede
+  // scrollear ni tocar nada. Ahí el foco se pone una sola vez, al tocar.
   useEffect(() => {
+    const conLector = typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches
+    if (!conLector) return
     const t = setInterval(() => {
       if (inputRef.current && document.activeElement !== inputRef.current && !confirmando) {
         inputRef.current.focus()
