@@ -24,8 +24,14 @@ export default function CalculadoraPage() {
   // Cálculos principales
   const costo = parseFloat(form.costo_producto) || 0
   const precio = parseFloat(form.precio_venta) || 0
-  const costoEnvio = parseFloat(form.costo_envio) || costoFleteActual()
-  const envioCliente = form.grupo_envio === 'A' ? (parseFloat(form.envio_cliente) || getEnvioCliente()) : 0
+  // Con `||` un 0 escrito a mano caía al valor por defecto, así que no se podía
+  // simular envío gratis — que desde el 25/08 es justamente el modelo. El
+  // respaldo aplica solo cuando el campo está VACÍO, no cuando vale cero.
+  const vacio = (x) => x === '' || x === null || x === undefined
+  const costoEnvio = vacio(form.costo_envio) ? costoFleteActual() : (parseFloat(form.costo_envio) || 0)
+  const envioCliente = form.grupo_envio === 'A'
+    ? (vacio(form.envio_cliente) ? getEnvioCliente() : (parseFloat(form.envio_cliente) || 0))
+    : 0
   const presupuestoAds = parseFloat(form.presupuesto_ads) || 0
   const ventasEstimadas = parseFloat(form.ventas_estimadas) || 1
 
