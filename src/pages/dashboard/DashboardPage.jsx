@@ -156,7 +156,7 @@ export default function DashboardPage() {
     try {
       const { data: adsRows } = await supabase.from('campanas_ads').select('gasto').eq('mes', inicioMes.slice(0, 7))
       totalAdsMes = (adsRows || []).reduce((s, c) => s + (c.gasto || 0), 0)
-    } catch (e) { /* sin gasto de ads cargado */ }
+    } catch (e) { console.warn('[dashboard] sin gasto de ads cargado:', e?.message || e) }
 
     // Protección anti-doble: ¿hay ads en Campañas Y también un gasto de "Publicidad"?
     const gastoPublicidad = (gastosMes || []).filter(g => /public|ads|meta|marketing/i.test(g.categoria || '')).reduce((s, g) => s + (g.monto || 0), 0)
@@ -264,6 +264,7 @@ export default function DashboardPage() {
     const hace7 = new Date(); hace7.setDate(hace7.getDate() - 6)
     const { data: ventasChart } = await supabase
       .from('ventas').select('fecha, total, estado, ganancia_neta')
+      .is('deleted_at', null)
       .gte('fecha', hace7.toISOString().split('T')[0]).order('fecha')
 
     if (ventasChart) {
@@ -294,6 +295,7 @@ export default function DashboardPage() {
     // Top productos
     const { data: topProds } = await supabase
       .from('ventas').select('producto_nombre, total, ganancia_neta, estado, cantidad')
+      .is('deleted_at', null)
       .gte('fecha', inicioMes).lte('fecha', finMes).eq('estado', 'entregado')
     if (topProds) {
       const agrupado = {}
@@ -334,7 +336,7 @@ export default function DashboardPage() {
         })
     }
     const hace5 = new Date(); hace5.setDate(hace5.getDate() - 5)
-    const { data: viejos } = await supabase.from('ventas').select('id').eq('estado', 'pendiente').lt('fecha', hace5.toISOString().split('T')[0])
+    const { data: viejos } = await supabase.from('ventas').select('id').is('deleted_at', null).eq('estado', 'pendiente').lt('fecha', hace5.toISOString().split('T')[0])
     if (viejos?.length) alertasActivas.push({ tipo: 'pendiente', color: 'yellow', msg: `${viejos.length} pedido(s) pendiente(s) con más de 5 días sin resolver` })
 
     // Advertencia anti-doble-conteo: ads cargado en Campañas Y en Gastos (Publicidad)
@@ -357,7 +359,7 @@ export default function DashboardPage() {
       datosAlertas.ventasMesActual = (vAct || []).reduce((s, v) => s + (v.total || 0), 0)
       datosAlertas.ventasMesAnterior = (vAnt || []).reduce((s, v) => s + (v.total || 0), 0)
       datosAlertas.diasComparados = diasComparados
-    } catch (e) { /* sin comparación de ventas */ }
+    } catch (e) { console.warn('[dashboard] sin comparación de ventas:', e?.message || e) }
 
     try {
       // Recompra pendientes (clientes listos hoy, estimación)
@@ -375,14 +377,17 @@ export default function DashboardPage() {
         if (v.fecha && new Date(v.fecha).getTime() < hace15) candidatos.add(tel)
       }
       datosAlertas.recompraPendientes = candidatos.size
-    } catch (e) { /* sin alerta de recompra */ }
+    } catch (e) { console.warn('[dashboard] sin alerta de recompra:', e?.message || e) }
 
     try {
       // Plata de PaP sin rendir
-      const { data: sinRend } = await supabase.from('entregas').select('importe').eq('cobrado', true).eq('rendido', false).limit(2000)
-      datosAlertas.montoSinRendir = (sinRend || []).reduce((s, e) => s + (Number(e.importe) || 0), 0)
+      // `cobrado` es el IMPORTE cobrado (un entero), no un booleano: con
+      // .eq('cobrado', true) Postgres rechazaba la consulta entera y el catch
+      // de abajo se tragaba el error, así que esta alerta nunca disparó.
+      const { data: sinRend } = await supabase.from('entregas').select('cobrado').gt('cobrado', 0).eq('rendido', false).limit(2000)
+      datosAlertas.montoSinRendir = (sinRend || []).reduce((s, e) => s + (Number(e.cobrado) || 0), 0)
       datosAlertas.cantSinRendir = (sinRend || []).length
-    } catch (e) { /* sin alerta de rendición */ }
+    } catch (e) { console.warn('[dashboard] sin alerta de rendición:', e?.message || e) }
 
     try {
       // Tasa de entrega este mes vs mes anterior (mismo tramo de días)
@@ -398,7 +403,7 @@ export default function DashboardPage() {
       datosAlertas.tasaEntregaActual = tAct.tasa
       datosAlertas.tasaEntregaAnterior = tAnt.tasa
       datosAlertas.entregasResueltas = tAct.resueltos
-    } catch (e) { /* sin alerta de entrega */ }
+    } catch (e) { console.warn('[dashboard] sin alerta de entrega:', e?.message || e) }
 
     const alertasInteligentes = construirAlertasNegocio(datosAlertas)
     setAlertas([...alertasActivas, ...alertasInteligentes])
@@ -436,10 +441,10 @@ export default function DashboardPage() {
         },
         ventasSinTransportadora: sinTransp.count || 0,
       }))
-    } catch (e) { /* el centro de acciones es complementario: si falla, no rompe el dashboard */ }
+    } catch (e) { console.warn('[dashboard] el centro de acciones es complementario: si falla, no rompe el dashboard:', e?.message || e) }
 
     // Ventas recientes
-    const { data: recientes } = await supabase.from('ventas').select('*').order('created_at', { ascending: false }).limit(8)
+    const { data: recientes } = await supabase.from('ventas').select('*').is('deleted_at', null).order('created_at', { ascending: false }).limit(8)
     setVentasRecientes(recientes || [])
 
     setLoading(false)

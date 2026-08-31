@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
-import { calcularStockCombo, aplicarStockLoteNuevasVentas, calcularDiferencias, aplicarConteoFisico } from '../../lib/stockEngine'
+import { calcularStockCombo, aplicarStockLoteNuevasVentas, previsualizarStockLote, calcularDiferencias, aplicarConteoFisico } from '../../lib/stockEngine'
 import { calcularCostoPonderado, calcularCostoCombo } from '../../lib/costoPonderado'
 import { calcularVelocidades, analizarReposicion, sugerirReposicion, URGENCIA_CFG } from '../../lib/stockIntel'
 import { Package, Plus, TrendingDown, AlertTriangle, Edit2, X, Save, Layers, Clock, TrendingUp, CheckCircle } from 'lucide-react'
@@ -263,6 +263,8 @@ export default function StockPage() {
   const [modalProducto, setModalProducto] = useState(null) // null=cerrado, 'nuevo'=nuevo, objeto=editar
   const [activeTab, setActiveTab] = useState('stock')
   const [confirmSync, setConfirmSync] = useState(false)
+  const [preview, setPreview] = useState(null)      // qué va a descontar Sincronizar
+  const [cargandoPreview, setCargandoPreview] = useState(false)
   const [sincronizando, setSincronizando] = useState(false)
   const [conteos, setConteos] = useState({})        // { producto_id: valor tipeado }
   const [aplicandoConteo, setAplicandoConteo] = useState(false)
@@ -290,12 +292,34 @@ export default function StockPage() {
 
   // Sincronizar stock: descuenta las ventas que todavía no descontaron
   // (importaciones viejas). Idempotente: las ya descontadas se saltean.
+  // Abre el diálogo YA con la cuenta hecha: qué productos toca, cuántas
+  // unidades y cómo queda el stock. Sin esto el botón es una caja negra.
+  const abrirSync = async () => {
+    setConfirmSync(true)
+    setPreview(null)
+    setCargandoPreview(true)
+    try {
+      const ventas = await fetchAll(() => supabase
+        .from('ventas')
+        .select('id, producto_id, cantidad, estado, n_referencia, stock_descontado, reingresado_at')
+        .is('deleted_at', null))
+      setPreview(await previsualizarStockLote(ventas || []))
+    } catch (e) {
+      console.warn('[stock] no se pudo previsualizar la sincronización:', e?.message || e)
+      setPreview(null)
+    }
+    setCargandoPreview(false)
+  }
+
   const sincronizarStock = async () => {
     setSincronizando(true)
     try {
       const ventas = await fetchAll(() => supabase
         .from('ventas')
-        .select('id, producto_id, cantidad, estado, n_referencia, stock_descontado')
+        // reingresado_at es OBLIGATORIO: estaFueraDelDeposito() se apoya en él.
+        // Sin esta columna leía undefined, daba `true` para todo y descontaba
+        // también la mercadería que ya había vuelto al depósito escaneada.
+        .select('id, producto_id, cantidad, estado, n_referencia, stock_descontado, reingresado_at')
         .is('deleted_at', null))
       const res = await aplicarStockLoteNuevasVentas(ventas || [])
       if (res.descontadas > 0) {
@@ -357,7 +381,7 @@ export default function StockPage() {
           <p className="page-subtitle">{productos.length} productos · {formatGs(valorTotal)} en inventario</p>
         </div>
         <div className="page-actions">
-          <button className="btn btn-secondary" onClick={() => setConfirmSync(true)} title="Descontar ventas que aún no descontaron stock">
+          <button className="btn btn-secondary" onClick={abrirSync} title="Descontar ventas que aún no descontaron stock">
             <TrendingDown size={15} /> Sincronizar
           </button>
           <button className="btn btn-primary" onClick={() => setModalProducto('nuevo')}>
@@ -768,15 +792,61 @@ export default function StockPage() {
             </div>
             <div style={{ padding: '4px 4px 8px' }}>
               <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6, marginTop: 0 }}>
-                Esto descuenta del stock todas las ventas que todavía no lo hicieron (las importaciones que nunca descontaron). Corrige tu inventario para que refleje lo que realmente tenés.
+                Descuenta las ventas que todavía no descontaron stock. Solo toca las pendientes: las ya contadas se saltean, así que no descuenta dos veces.
               </p>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                Es seguro: solo toca las ventas pendientes de descontar (las ya contadas se saltean), así que podés correrlo sin miedo a descontar dos veces. Las ventas devueltas no se descuentan.
+
+              {cargandoPreview && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Calculando qué se va a descontar…</p>}
+
+              {!cargandoPreview && preview && preview.ventas === 0 && (
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  No hay nada pendiente: el stock ya está sincronizado.
+                </p>
+              )}
+
+              {!cargandoPreview && preview && preview.ventas > 0 && (
+                <>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 8px' }}>
+                    Va a descontar <strong>{preview.unidades} unidad{preview.unidades === 1 ? '' : 'es'}</strong> de {preview.ventas} venta{preview.ventas === 1 ? '' : 's'}:
+                  </p>
+                  <div style={{ overflowX: 'auto', maxHeight: 260, overflowY: 'auto' }}>
+                    <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase' }}>
+                          <th style={{ padding: '4px 6px' }}>Producto</th>
+                          <th style={{ padding: '4px 6px', textAlign: 'right' }}>Descuenta</th>
+                          <th style={{ padding: '4px 6px', textAlign: 'right' }}>Ahora</th>
+                          <th style={{ padding: '4px 6px', textAlign: 'right' }}>Queda</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.lineas.map(l => (
+                          <tr key={l.producto_id} style={{ borderTop: '1px solid var(--border)' }}>
+                            <td style={{ padding: '5px 6px' }}>{l.nombre}</td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right' }}>−{l.cantidad}</td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', color: 'var(--text-muted)' }}>{l.stockActual}</td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 600, color: l.stockDespues < 0 ? 'var(--danger)' : 'inherit' }}>
+                              {l.stockDespues}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {preview.lineas.some(l => l.stockDespues < 0) && (
+                    <p style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.6, marginBottom: 0 }}>
+                      Los productos en rojo quedan en negativo. Suele significar que ya ajustaste ese stock a mano: si es así, cancelá y hacé un conteo físico en vez de sincronizar.
+                    </p>
+                  )}
+                </>
+              )}
+
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 0 }}>
+                Las devoluciones también descuentan mientras la mercadería no haya vuelto: recién suma de nuevo cuando la escaneás en Recepción.
               </p>
             </div>
             <div className="modal-footer" style={{ padding: 0, border: 'none' }}>
               <button className="btn btn-ghost" onClick={() => setConfirmSync(false)} disabled={sincronizando}>Cancelar</button>
-              <button className="btn btn-primary" onClick={sincronizarStock} disabled={sincronizando}>
+              <button className="btn btn-primary" onClick={sincronizarStock} disabled={sincronizando || cargandoPreview || preview?.ventas === 0}>
                 {sincronizando ? 'Sincronizando…' : 'Sincronizar ahora'}
               </button>
             </div>

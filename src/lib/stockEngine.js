@@ -193,6 +193,50 @@ export function agregarDeltasStock(ventas, prodById) {
 // Descuenta stock de un LOTE de ventas nuevas (importación), en pocas queries.
 // Solo descuenta las que corresponden (estado que descuenta + con producto_id + no descontadas ya).
 // Devuelve { descontadas, productos } para feedback.
+// Calcula QUÉ descontaría aplicarStockLoteNuevasVentas, SIN escribir nada.
+// Misma selección y mismos deltas que la función real, para poder mostrarle al
+// usuario exactamente qué va a pasar antes de que pase. Un "Sincronizar" que no
+// te dice qué toca es un botón que da miedo apretar.
+export async function previsualizarStockLote(ventas) {
+  const aDescontar = (ventas || []).filter(v => v?.id && v?.producto_id && v?.stock_descontado !== true && estaFueraDelDeposito(v))
+  if (!aDescontar.length) return { ventas: 0, lineas: [], unidades: 0 }
+
+  const idsProducto = [...new Set(aDescontar.map(v => v.producto_id))]
+  const { data: prods } = await supabase
+    .from('productos')
+    .select('id, nombre, es_combo, componente_1_id, componente_1_qty, componente_2_id, componente_2_qty')
+    .in('id', idsProducto)
+  const prodById = {}
+  for (const p of (prods || [])) prodById[p.id] = p
+
+  const compIds = new Set()
+  for (const p of (prods || [])) {
+    if (p.es_combo) { if (p.componente_1_id) compIds.add(p.componente_1_id); if (p.componente_2_id) compIds.add(p.componente_2_id) }
+  }
+  if (compIds.size) {
+    const { data: comps } = await supabase.from('productos').select('id, nombre').in('id', [...compIds])
+    for (const c of (comps || [])) if (!prodById[c.id]) prodById[c.id] = c
+  }
+
+  const deltas = agregarDeltasStock(aDescontar, prodById)
+  const ids = Object.keys(deltas)
+  if (!ids.length) return { ventas: aDescontar.length, lineas: [], unidades: 0 }
+
+  const { data: stocks } = await supabase.from('productos').select('id, stock_actual').in('id', ids)
+  const stockById = {}
+  for (const s of (stocks || [])) stockById[s.id] = s.stock_actual || 0
+
+  const lineas = ids.map(pid => ({
+    producto_id: pid,
+    nombre: deltas[pid].nombre,
+    cantidad: deltas[pid].cantidad,
+    stockActual: stockById[pid] || 0,
+    stockDespues: (stockById[pid] || 0) - deltas[pid].cantidad,
+  })).sort((a, b) => b.cantidad - a.cantidad)
+
+  return { ventas: aDescontar.length, lineas, unidades: lineas.reduce((t, l) => t + l.cantidad, 0) }
+}
+
 export async function aplicarStockLoteNuevasVentas(ventas) {
   const aDescontar = (ventas || []).filter(v => v?.id && v?.producto_id && v?.stock_descontado !== true && estaFueraDelDeposito(v))
   if (!aDescontar.length) return { descontadas: 0, productos: 0 }
