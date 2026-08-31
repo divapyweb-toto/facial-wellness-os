@@ -80,11 +80,11 @@ export default function ReportesPage() {
       // `es_mayorista` puede no existir todavía (migración 005). fetchAllSafe
       // evita que el reporte entero falle por eso: si la columna falta, se
       // reintenta sin ella y el filtro simplemente no se aplica.
-      fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono, transportadora, pago_anticipado, es_mayorista').gte('fecha', inicio).lte('fecha', fin).order('fecha'))
-        .catch(() => fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, ciudad, cliente_telefono, transportadora, pago_anticipado').gte('fecha', inicio).lte('fecha', fin).order('fecha'))),
-      fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta, es_mayorista').gte('fecha', inicioPrev).lte('fecha', finPrev))
-        .catch(() => fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta').gte('fecha', inicioPrev).lte('fecha', finPrev))),
-      fetchAll(() => supabase.from('gastos').select('fecha, monto, categoria, concepto').gte('fecha', inicio).lte('fecha', fin)),
+      fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, cantidad, ciudad, cliente_telefono, transportadora, pago_anticipado, es_mayorista').is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin).order('fecha'))
+        .catch(() => fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, cantidad, ciudad, cliente_telefono, transportadora, pago_anticipado').is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin).order('fecha'))),
+      fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta, es_mayorista').is('deleted_at', null).gte('fecha', inicioPrev).lte('fecha', finPrev))
+        .catch(() => fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta').is('deleted_at', null).gte('fecha', inicioPrev).lte('fecha', finPrev))),
+      fetchAll(() => supabase.from('gastos').select('fecha, monto, categoria, concepto').is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin)),
       fetchAll(() => supabase.from('campanas_ads').select('*').gte('mes', inicio.slice(0, 7)).lte('mes', fin.slice(0, 7))),
       fetchAll(() => supabase.from('productos').select('id, nombre, costo_unit, activo').eq('activo', true)),
       fetchAll(() => supabase.from('entregas').select('n_referencia, categoria, estado_pap, motivo, importe, rendido, dias_rendicion, fecha_entrega').gte('fecha_entrega', inicio).lte('fecha_entrega', fin), { columnaOrden: 'nro_guia_pap' }),
