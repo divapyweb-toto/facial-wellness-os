@@ -826,7 +826,7 @@ function ModalEditarPedido({ pedido, onGuardar, onCerrar }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             <div>
               <label className="form-label">Teléfono</label>
-              <input className="form-input" value={f.telefono} onChange={e => set('telefono', e.target.value)} placeholder="0981234567" />
+              <input className="form-input" type="tel" inputMode="numeric" autoComplete="tel" value={f.telefono} onChange={e => set('telefono', e.target.value)} placeholder="0981234567" />
             </div>
             <div>
               <label className="form-label">Ciudad</label>
