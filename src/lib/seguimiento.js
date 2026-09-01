@@ -24,6 +24,7 @@
 // ═══════════════════════════════════════════════════════════
 import { normalizarCiudad } from './ciudades'
 import { linkTrackingLucero } from './transportadoras'
+import { normTexto } from './buscadorPedidos'
 
 // Días desde el despacho antes de escribir por primera vez.
 export const DIAS_SEGUIMIENTO_DEFAULT = 4
@@ -255,13 +256,19 @@ const fechaLarga = (iso) => {
 // horas exactas — es la precisión real del dato, no una que inventamos.
 //
 // Se agrupa por el estado CRUDO que dice PaP (`estado_pap`), tal cual viene —
-// no por una lista fija de dos textos. Si PaP usa una palabra nueva, igual
-// aparece agrupada bien; una lista fija se queda muda el día que cambian la
-// redacción de un estado.
-export function entregasPaPAtascadas(entregas, { diasCerca = 1, diasLejos = 2, hoy = new Date() } = {}) {
+// eso sí es dinámico, para que un texto nuevo agrupe bien solo. Pero CUÁLES
+// estados entran a la lista NO es dinámico: "Custodio" y "No Gestionado" caen
+// en categoria='en_proceso' cuando su motivo no matchea una palabra de
+// devolución (ver categorizarPaP en estadosPaP.js), y sin embargo para el
+// negocio son bajas, no pedidos circulando — reclamarle esos a PaP no sirve.
+// Por eso además de "en_proceso" hace falta la lista explícita y editable de
+// qué estados vale la pena reclamar (estadosReclamables, desde Config).
+export function entregasPaPAtascadas(entregas, { diasCerca = 1, diasLejos = 2, estadosReclamables = ['Asignado a ruta', 'En Oficina'], hoy = new Date() } = {}) {
+  const permitidos = new Set((estadosReclamables || []).map(normTexto))
   const hoyDate = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())
   const items = (entregas || [])
-    .filter(e => (e.transportadora || 'pap') === 'pap' && e.categoria === 'en_proceso')
+    .filter(e => (e.transportadora || 'pap') === 'pap' && e.categoria === 'en_proceso'
+      && permitidos.has(normTexto(e.estado_pap)))
     .map(e => {
       const fi = e.fecha_ingreso ? new Date(String(e.fecha_ingreso).slice(0, 10) + 'T00:00:00') : null
       const dias = fi && !isNaN(fi) ? Math.floor((hoyDate - fi) / 86400000) : null
