@@ -41,32 +41,53 @@ console.log('\n── entregasPaPAtascadas: caso real del 31/08/2026 ──')
     { transportadora: 'pap', categoria: 'entregado', estado_pap: 'Entregado', n_referencia: '1000', nro_guia_pap: '26350005', ciudad: 'CORONEL OVIEDO', fecha_ingreso: '2026-08-20', nombre_courier: 'Cliente Entregado' },
     // Una de Lucero — NO debería mezclarse acá (es un flujo distinto).
     { transportadora: 'lucero', categoria: 'en_proceso', estado_pap: 'Cargado', n_referencia: '2000', nro_guia_pap: 'L-2000', ciudad: 'ASUNCION', fecha_ingreso: '2026-08-20', nombre_courier: 'Cliente Lucero' },
-    // Otro estado crudo distinto, para probar que agrupa dinámicamente.
+    // "No Gestionado" y "Custodio" llegan a categoria='en_proceso' (el motivo
+    // no matcheaba devolución), pero Enrique confirmó: para él son BAJAS, no
+    // pedidos circulando. No deberían aparecer aunque sean "en_proceso".
     { transportadora: 'pap', categoria: 'en_proceso', estado_pap: 'No Gestionado', n_referencia: '3000', nro_guia_pap: '26350006', ciudad: 'ASUNCION', fecha_ingreso: '2026-08-25', nombre_courier: 'Cliente E' },
+    { transportadora: 'pap', categoria: 'en_proceso', estado_pap: 'Custodio', n_referencia: '3001', nro_guia_pap: '26350007', ciudad: 'ASUNCION', fecha_ingreso: '2026-01-05', nombre_courier: 'Cliente F' },
+    // "En Oficina" no apareció en 2 meses de datos reales, pero Enrique la
+    // nombró explícitamente como estado a reclamar — tiene que funcionar
+    // aunque nunca se haya visto en la base.
+    { transportadora: 'pap', categoria: 'en_proceso', estado_pap: 'En Oficina', n_referencia: '4000', nro_guia_pap: '26350008', ciudad: 'ASUNCION', fecha_ingreso: '2026-08-25', nombre_courier: 'Cliente G' },
   ]
 
   const r = entregasPaPAtascadas(entregas, { diasCerca: 1, diasLejos: 2, hoy: HOY })
-  ok(r.total === 5, `5 guías atascadas (no la fresca, no la entregada, no la de Lucero) — dio ${r.total}`)
+  ok(r.total === 5, `4 "Asignado a ruta" viejas + 1 "En Oficina" = 5 — dio ${r.total}`)
   ok(!r.items.some(i => i.n_referencia === '9999'), 'la recién ingresada hoy no aparece (0 días < umbral)')
   ok(!r.items.some(i => i.n_referencia === '1000'), 'la ya entregada no aparece')
   ok(!r.items.some(i => i.transportadora === 'lucero'), 'Lucero no se mezcla con la lista de PaP')
+  ok(!r.items.some(i => i.n_referencia === '3000'), '"No Gestionado" NO aparece — es una baja, no se reclama')
+  ok(!r.items.some(i => i.n_referencia === '3001'), '"Custodio" NO aparece — mismo motivo')
+  ok(r.items.some(i => i.n_referencia === '4000'), '"En Oficina" SÍ aparece, aunque nunca estuvo en los datos reales')
   ok(r.masViejoDias === 11, `la más vieja tiene 11 días — dio ${r.masViejoDias}`)
 
   const grupoAsignado = r.grupos.find(g => g.estado === 'Asignado a ruta')
   ok(grupoAsignado?.items.length === 4, 'las 4 "Asignado a ruta" quedan agrupadas juntas')
-  const grupoNoGestionado = r.grupos.find(g => g.estado === 'No Gestionado')
-  ok(grupoNoGestionado?.items.length === 1, 'un estado crudo distinto ("No Gestionado") arma SU PROPIO grupo, sin lista fija')
+  ok(!r.grupos.some(g => g.estado === 'No Gestionado' || g.estado === 'Custodio'),
+    'los estados excluidos ni siquiera arman un grupo vacío')
   ok(grupoAsignado.items[0].dias === 11 && grupoAsignado.items[1].dias === 11 || grupoAsignado.items[0].dias >= grupoAsignado.items[1].dias,
     'dentro de cada grupo, las más viejas van primero')
+}
+
+console.log('\n── la lista de estados reclamables es editable, no fija ──')
+{
+  const entregas = [
+    { transportadora: 'pap', categoria: 'en_proceso', estado_pap: 'Preparando envio especial', n_referencia: '5000', nro_guia_pap: 'g5000', ciudad: 'ASUNCION', fecha_ingreso: '2026-08-25', nombre_courier: 'X' },
+  ]
+  ok(entregasPaPAtascadas(entregas, { hoy: HOY }).total === 0,
+    'con la lista por defecto, un estado no listado no se reclama')
+  const r2 = entregasPaPAtascadas(entregas, { estadosReclamables: ['Preparando envio especial'], hoy: HOY })
+  ok(r2.total === 1, 'agregándolo a la lista (como haría Enrique desde Config), sí se reclama')
 }
 
 console.log('\n── el umbral es distinto según la zona de la ciudad ──')
 {
   const entregas = [
     // Asunción es zona 'metro': con diasCerca=1, un día ya alcanza.
-    { transportadora: 'pap', categoria: 'en_proceso', estado_pap: 'X', n_referencia: '1', nro_guia_pap: 'g1', ciudad: 'ASUNCION', fecha_ingreso: '2026-08-30', nombre_courier: 'A' },
+    { transportadora: 'pap', categoria: 'en_proceso', estado_pap: 'Asignado a ruta', n_referencia: '1', nro_guia_pap: 'g1', ciudad: 'ASUNCION', fecha_ingreso: '2026-08-30', nombre_courier: 'A' },
     // Villarrica es 'interior': con diasLejos=2, un solo día NO alcanza todavía.
-    { transportadora: 'pap', categoria: 'en_proceso', estado_pap: 'X', n_referencia: '2', nro_guia_pap: 'g2', ciudad: 'VILLARRICA', fecha_ingreso: '2026-08-30', nombre_courier: 'B' },
+    { transportadora: 'pap', categoria: 'en_proceso', estado_pap: 'Asignado a ruta', n_referencia: '2', nro_guia_pap: 'g2', ciudad: 'VILLARRICA', fecha_ingreso: '2026-08-30', nombre_courier: 'B' },
   ]
   const r = entregasPaPAtascadas(entregas, { diasCerca: 1, diasLejos: 2, hoy: HOY })
   ok(r.items.some(i => i.n_referencia === '1'), 'Asunción (metro) con 1 día ya está atascada')

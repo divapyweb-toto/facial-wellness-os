@@ -40,6 +40,13 @@ const DEFAULTS = {
   // por logística normal (ver zona en ciudades.js).
   seguimiento_pap_dias_cerca: 1,
   seguimiento_pap_dias_lejos: 2,
+  // Qué estados de PaP vale la pena reclamar. "Custodio" y "No Gestionado"
+  // llegan a categoria='en_proceso' cuando el motivo no matchea una palabra
+  // de devolución (ver categorizarPaP), pero para Enrique son bajas, no
+  // pedidos circulando — insistirle a PaP por esos no sirve de nada. Lista
+  // en texto, separada por coma, para poder sumar un estado nuevo sin tocar
+  // código si PaP inventa uno.
+  seguimiento_pap_estados_reclamables: 'Asignado a ruta, En Oficina',
   // Primera línea del mensaje agrupado a PaP. Lo demás (la lista de guías,
   // agrupada por el estado que dice PaP) se arma solo — no hace falta
   // tocarlo para eso.
@@ -143,6 +150,8 @@ export const getDatosPago = () => ({
 export const getUmbralesSeguimientoPaP = () => ({
   diasCerca: getConfig('seguimiento_pap_dias_cerca'),
   diasLejos: getConfig('seguimiento_pap_dias_lejos'),
+  estadosReclamables: String(getConfig('seguimiento_pap_estados_reclamables') || '')
+    .split(',').map(s => s.trim()).filter(Boolean),
 })
 export const getPlantillaSeguimientoPaP = () => getConfig('plantilla_seguimiento_pap')
 export const getPlantillaTrackingLucero = () => getConfig('plantilla_tracking_lucero')

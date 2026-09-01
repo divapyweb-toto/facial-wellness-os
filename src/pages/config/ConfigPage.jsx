@@ -385,6 +385,16 @@ function ReglasNegocio() {
           <Campo clave="seguimiento_pap_dias_lejos" label="Días para reclamar (interior)" sufijo="días"
             ayuda="El interior tarda más por logística normal, no por negligencia." />
         </div>
+        <div className="form-group" style={{ marginBottom: 14 }}>
+          <label className="form-label">Estados de PaP que vale la pena reclamar</label>
+          <input className="form-input" value={form.seguimiento_pap_estados_reclamables}
+            onChange={e => set('seguimiento_pap_estados_reclamables', e.target.value)}
+            style={{ maxWidth: 420 }} />
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Separados por coma, tal cual los escribe PaP. Todo lo que NO esté acá (Custodio, No Gestionado,
+            Devuelto, Entregado…) se considera baja o cerrado y no entra a la lista de reclamos.
+          </span>
+        </div>
         <div className="form-group">
           <label className="form-label">Mensaje a PaP (primera línea)</label>
           <textarea className="form-textarea" rows={2} value={form.plantilla_seguimiento_pap}
