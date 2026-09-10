@@ -106,7 +106,10 @@ export default function RecompraPage() {
     return todo.filter(r => r.tipo === filtro)
   }, [seg, filtro])
 
-  // Arma el mensaje de WhatsApp para un cliente y lo copia al portapapeles.
+  // Arma el mensaje de WhatsApp, lo copia, abre el chat, Y marca al cliente
+  // como contactado en el mismo paso — antes eran dos botones separados y si
+  // te olvidabas del segundo clic, el cliente volvía a aparecer al día
+  // siguiente como si nunca le hubieras escrito.
   // Objetivo: vender el producto y cerrar YA con pago anticipado por transferencia.
   const mensajeWhatsApp = (r) => {
     const nombre = (r.nombre || '').split(' ')[0] || 'Hola'
@@ -144,18 +147,28 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
     const tel = String(r.telefono || '').replace(/\D/g, '').replace(/^0/, '595')
     const url = `https://wa.me/${tel}?text=${encodeURIComponent(cuerpo)}`
     window.open(url, '_blank')
+
+    // Se marca contactado en el mismo clic. Si esto falla, no se pierde nada
+    // grave: el mensaje ya se copió y WhatsApp ya se abrió, solo que el
+    // cliente podría volver a aparecer antes de tiempo — se avisa por si
+    // pasa, en vez de fallar en silencio.
+    marcarContactado(r, { silencioso: true })
   }
 
-  // Marcar un cliente puntual como contactado (registra el cooldown)
-  const marcarContactado = async (r) => {
+  // Marcar un cliente como contactado (registra el cooldown). `silencioso`
+  // se usa cuando esto se dispara solo al abrir WhatsApp, para no duplicar
+  // el toast de "¡Copiado!" con uno de "contactado" al mismo tiempo.
+  const marcarContactado = async (r, { silencioso = false } = {}) => {
     try {
       const { error } = await supabase.from('recompra_log').insert([{
         telefono: r.telefono, grupo: String(r.grupo), producto_ofrecido: r.productoOfrecido,
       }])
       if (error) throw error
-      toast(`${r.nombre || r.telefono} marcado como contactado`, 'success')
+      if (!silencioso) toast(`${r.nombre || r.telefono} marcado como contactado`, 'success')
       cargar()
-    } catch (e) { toast('Error: ' + e.message, 'error') }
+    } catch (e) {
+      toast(`No se pudo marcar a ${r.nombre || r.telefono} como contactado: ${e.message}`, 'error')
+    }
   }
 
   // ── Exportar Excel (opcional, se mantiene) ──
@@ -193,7 +206,7 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
       {/* Explicación breve */}
       <div className="card" style={{ padding: '12px 16px' }}>
         <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
-          Clientes que ya recibieron su producto y es buen momento para ofrecerles algo. Tocá <strong style={{ color: '#25D366' }}>WhatsApp</strong> y se abre el chat con el mensaje listo. Después marcá <strong>Contactado</strong> para no repetirlo en {getVentanasRecompra().diasCooldown} días.
+          Clientes que ya recibieron su producto y es buen momento para ofrecerles algo. Tocá <strong style={{ color: '#25D366' }}>WhatsApp</strong> y se abre el chat con el mensaje listo — queda marcado como contactado solo, no vuelve a aparecer por {getVentanasRecompra().diasCooldown} días. Si lo contactaste de otra forma (llamada, en persona), usá <strong>Contactado</strong> para marcarlo sin pasar por WhatsApp.
         </p>
       </div>
 
@@ -251,7 +264,7 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
                 </button>
                 <button
                   onClick={() => marcarContactado(r)}
-                  title="Marcar como contactado (no vuelve a aparecer por un tiempo)"
+                  title="Marcar como contactado SIN abrir WhatsApp — usalo si ya lo contactaste por otra vía"
                   style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600, borderRadius: 8, cursor: 'pointer', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}
                 >
                   ✓ Contactado
