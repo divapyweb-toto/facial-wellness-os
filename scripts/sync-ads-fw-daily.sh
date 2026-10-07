@@ -5,7 +5,10 @@ PROJECT_ROOT="/Users/enriqueramirez/Negocios"
 FW_OS="$PROJECT_ROOT/fw-os"
 LOG_FILE="$FW_OS/logs/sync-ads-fw.log"
 CLAUDE_BIN="/Users/enriqueramirez/.local/bin/claude"
-AD_ACCOUNT_ID="1075263797491391"
+# Cuentas de Meta a sincronizar, como "ad_account_id:tienda". Facial Wellness
+# (1075263797491391:fw) está sin campañas desde oct-2026 y la conexión de Meta
+# de esta Mac hoy ve la cuenta de Voltra: se reactiva sumándola acá.
+CUENTAS=("1829928881223795:voltra")
 
 mkdir -p "$FW_OS/logs"
 
@@ -19,8 +22,9 @@ cd "$PROJECT_ROOT"
 # Corre una sincronización y devuelve su salida completa (para poder revisarla
 # antes de decidir si hace falta reintentar).
 run_sync() {
+  local cuenta="$1" tienda="$2"
   caffeinate -is "$CLAUDE_BIN" -p \
-    "Sincronizá el gasto de Meta Ads hacia gasto_ads_diario en Supabase. ad_account_id: ${AD_ACCOUNT_ID}. \
+    "Sincronizá el gasto de Meta Ads hacia gasto_ads_diario en Supabase. ad_account_id: ${cuenta}. tienda: ${tienda} (guardá tienda='${tienda}' en CADA fila que cargues). \
 SIEMPRE volvé a sincronizar el día de AYER, tenga o no tenga ya una fila cargada — Meta sigue ajustando el gasto de un día \
 por un tiempo después de que cierra, y a veces ayer se cargó a mano con el día todavía sin cerrar (gasto parcial), así que \
 el upsert de hoy tiene que pisarlo con el monto final. Además, fijate en Supabase qué otros días de los últimos 7 (sin \
@@ -40,8 +44,11 @@ anterior. Traé y cargá el gasto de ayer SIEMPRE, más cualquier otro día de e
   # la hora del disparo (10am — movido del 8am original porque a esa hora
   # la Mac casi siempre estaba con la tapa cerrada), pero sí evita que se
   # duerma DURANTE la corrida, que es lo que se vio en el log varios días.
+  for par in "${CUENTAS[@]}"; do
+  cuenta="${par%%:*}"; tienda="${par##*:}"
+  echo "--- cuenta ${cuenta} (${tienda}) ---"
   set +e
-  salida="$(run_sync 2>&1)"
+  salida="$(run_sync "$cuenta" "$tienda" 2>&1)"
   ok=$?
   set -e
   echo "$salida"
@@ -54,10 +61,11 @@ anterior. Traé y cargá el gasto de ayer SIEMPRE, más cualquier otro día de e
     echo "----- primer intento con problemas, reintentando en 30s -----"
     sleep 30
     set +e
-    salida2="$(run_sync 2>&1)"
+    salida2="$(run_sync "$cuenta" "$tienda" 2>&1)"
     set -e
     echo "$salida2"
   fi
+  done
   echo "===== fin $(date '+%Y-%m-%d %H:%M:%S') ====="
   echo
 } >> "$LOG_FILE" 2>&1
