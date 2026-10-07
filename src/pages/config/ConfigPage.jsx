@@ -374,6 +374,24 @@ function ReglasNegocio() {
       </div>
 
       <div className="card" style={{ padding: '16px 20px' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>💸 Gastos automáticos (Voltra)</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          Reportes suma solos: Meta Ads diario, WhatsApp API y Claude API (los dos últimos el sistema los registra en dólares).
+        </p>
+        <Campo clave="usd_pyg" label="Tipo de cambio" sufijo="Gs. por 1 USD"
+          ayuda="Sin este valor, WhatsApp y Claude se muestran en dólares y no se suman a la utilidad." />
+        <div className="form-group" style={{ marginTop: 10 }}>
+          <label className="form-label">Gastos fijos mensuales</label>
+          <textarea className="form-textarea" rows={4} value={form.gastos_fijos_voltra}
+            onChange={e => set('gastos_fijos_voltra', e.target.value)}
+            placeholder={'Shopify: 180000\nSupabase: 25 usd'} />
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Una línea por gasto: nombre, dos puntos y el monto por mes (guaraníes, o "usd"). Se prorratean según el período del reporte.
+          </span>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: '16px 20px' }}>
         <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>📬 Seguimiento a couriers y clientes</h3>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           Umbrales y textos de los mensajes de Seguimiento y Entregas. La lista de guías y el link de

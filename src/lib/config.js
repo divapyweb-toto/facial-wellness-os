@@ -38,6 +38,13 @@ const DEFAULTS = {
   // "atascado" y ofrecer reclamarlo. Dos umbrales porque una ciudad cercana
   // que no se mueve en 1 día es sospechosa; una del interior puede tardar más
   // por logística normal (ver zona en ciudades.js).
+  // Guaraníes por dólar. Lo usan los gastos que el sistema registra en USD
+  // (WhatsApp API, Claude API). 0 = sin cargar: Reportes los muestra en
+  // dólares y NO los suma, en vez de inventar una cotización.
+  usd_pyg: 0,
+  // Gastos fijos mensuales de Voltra, una línea por gasto:  "Shopify: 180000"
+  // o "Supabase: 25 usd". Reportes los prorratea según el período.
+  gastos_fijos_voltra: '',
   seguimiento_pap_dias_cerca: 1,
   seguimiento_pap_dias_lejos: 2,
   // Qué estados de PaP vale la pena reclamar. "Custodio" y "No Gestionado"
@@ -152,6 +159,10 @@ export const getUmbralesSeguimientoPaP = () => ({
   diasLejos: getConfig('seguimiento_pap_dias_lejos'),
   estadosReclamables: String(getConfig('seguimiento_pap_estados_reclamables') || '')
     .split(',').map(s => s.trim()).filter(Boolean),
+})
+export const getGastosAutomaticosConfig = () => ({
+  usdPyg: getConfig('usd_pyg'),
+  gastosFijosTexto: getConfig('gastos_fijos_voltra'),
 })
 export const getPlantillaSeguimientoPaP = () => getConfig('plantilla_seguimiento_pap')
 export const getPlantillaTrackingLucero = () => getConfig('plantilla_tracking_lucero')

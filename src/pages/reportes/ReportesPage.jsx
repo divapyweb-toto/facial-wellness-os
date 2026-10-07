@@ -1,6 +1,9 @@
 // src/pages/reportes/ReportesPage.jsx
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { supabaseTienda as supabase, formatGs, formatPct } from '../../lib/supabase'
+import { supabaseTienda as supabase, supabase as supabaseCrudo, formatGs, formatPct } from '../../lib/supabase'
+import { armarGastosAutomaticos, cargarGastosAutomaticos } from '../../lib/gastosAutomaticos'
+import { getGastosAutomaticosConfig } from '../../lib/config'
+import { getTienda } from '../../lib/tienda'
 import { fetchAll } from '../../lib/fetchAll'
 import { agruparSerie } from '../../lib/periodos'
 import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat, FileText } from 'lucide-react'
@@ -90,6 +93,20 @@ export default function ReportesPage() {
       fetchAll(() => supabase.from('entregas').select('n_referencia, categoria, estado_pap, motivo, importe, rendido, dias_rendicion, fecha_entrega').gte('fecha_entrega', inicio).lte('fecha_entrega', fin), { columnaOrden: 'nro_guia_pap' }),
     ])
 
+    // ── Gastos que se cargan solos (Meta diario, WhatsApp API, Claude API, fijos) ──
+    // El cliente crudo a propósito: la tienda se filtra adentro, y si la
+    // columna `tienda` de gasto_ads_diario todavía no existe no se rompe nada.
+    const rawAuto = await cargarGastosAutomaticos(supabaseCrudo, { inicio, fin })
+    const diasMesAuto = new Date(year, month, 0).getDate()
+    const diasPeriodoAuto = Math.round((new Date(fin + 'T00:00:00') - new Date(inicio + 'T00:00:00')) / 86400000) + 1
+    const cfgAuto = getGastosAutomaticosConfig()
+    const auto = armarGastosAutomaticos({
+      ...rawAuto, productos,
+      mesesConCampanas: new Set((campanas || []).filter(c => Number(c.gasto) > 0).map(c => c.mes)),
+      tienda: getTienda(), usdPyg: cfgAuto.usdPyg, gastosFijosTexto: cfgAuto.gastosFijosTexto,
+      fraccionMes: Math.min(1, diasPeriodoAuto / diasMesAuto),
+    })
+
     // ── Filtro de mayoristas ──
     // Se aplica ACÁ, una sola vez, sobre la lista cruda: así todo lo que se
     // calcula abajo (contribución por producto, ticket, tasas, gráficos)
@@ -167,7 +184,8 @@ export default function ReportesPage() {
     }
 
     const totalGastos = (gastos || []).reduce((s, g) => s + g.monto, 0)
-    const totalGastoAds = (campanas || []).reduce((s, c) => s + c.gasto, 0)
+    // Publicidad cargada a mano en Campañas + Meta diario de los meses que no tienen Campañas.
+    const totalGastoAds = (campanas || []).reduce((s, c) => s + c.gasto, 0) + auto.metaTotal
 
     // ── Comparativa con mes anterior ──
     const entregadasPrev = (ventasPrev || []).filter(v => v.estado === 'entregado')
@@ -290,7 +308,7 @@ export default function ReportesPage() {
     const costoMercaderiaVendida = cogsEntregadas               // costo de lo entregado/vendido
     // Ganancia = cobrado − flete − costo mercadería − gastos − gasto en ads (Meta).
     // El ads viene del módulo Campañas y también es plata que sale.
-    const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida - totalGastoAds
+    const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida - totalGastoAds - auto.totalGs
     // Protección anti-doble: ¿hay gasto de "Publicidad" en Gastos Y también ads en Campañas?
     const gastoPublicidadRep = (gastos || []).filter(g => /public|ads|meta|marketing/i.test(g.categoria || '')).reduce((s, g) => s + (g.monto || 0), 0)
     const posibleDobleAdsRep = totalGastoAds > 0 && gastoPublicidadRep > 0
@@ -301,6 +319,7 @@ export default function ReportesPage() {
     ;(entregas || []).forEach(e => { const k = normRef(e.n_referencia); if (k && e.categoria) estadoPaPRep[k] = e.categoria })
     const gastoPorFam = {}
     ;(campanas || []).forEach(c => { const f = c.nombre || c.familia; if (f) gastoPorFam[f] = (gastoPorFam[f] || 0) + (Number(c.gasto) || 0) })
+    Object.entries(auto.metaPorFamilia).forEach(([f, g]) => { gastoPorFam[f] = (gastoPorFam[f] || 0) + g })
     const adsDetalle = FAMILIAS_ADS_REP.map(([fam, label]) => {
       const vs = (ventas || []).filter(v => familiaProducto(v.producto_nombre) === fam)
       const gasto = gastoPorFam[fam] || 0
@@ -387,6 +406,7 @@ export default function ReportesPage() {
       porProducto: porProductoArr,
       porDia, campanas: campanas || [],
       gastos: gastos || [],
+      auto,
       adsDetalle, adsTotal,
       ventas: ventas || [],
       comparativa, cobranza, ciudades, porDiaSemana, motivos,
@@ -882,6 +902,11 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               ⚠️ Tenés Meta Ads cargado en Campañas <strong>y</strong> un gasto de "Publicidad" este período. Se está restando dos veces. Borrá el gasto de Publicidad — el ads ya se cuenta desde Campañas.
             </div>
           )}
+          {datos.auto.faltaTipoCambio && (
+            <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(234,179,8,0.1)', border: '1px solid var(--yellow)', fontSize: 12.5, color: 'var(--text-secondary)' }}>
+              ⚠️ Falta el tipo de cambio: WhatsApp API y Claude API (US$ {datos.auto.usdSinConvertir.toFixed(2)}) <strong>no están sumados</strong> a la utilidad. Cargalo en Config → Gastos automáticos.
+            </div>
+          )}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
               Cómo se arma tu utilidad firme
@@ -892,6 +917,9 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
                 { l: 'Costo de mercadería vendida (entregadas)', v: datos.costoMercaderiaVendida, signo: '−' },
                 { l: `Flete de envíos (${datos.entregados + datos.devueltos} resueltos)`, v: datos.fleteFirme, signo: '−' },
                 { l: 'Gasto en Meta Ads', v: datos.totalGastoAds, signo: '−' },
+                { l: `WhatsApp API (US$ ${datos.auto.waUsd.toFixed(2)})`, v: datos.auto.whatsappGs, signo: '−' },
+                { l: `Claude API (US$ ${datos.auto.claudeUsd.toFixed(2)})`, v: datos.auto.claudeGs, signo: '−' },
+                ...datos.auto.fijos.map(f => ({ l: `${f.concepto} (fijo, prorrateado)`, v: f.gs, signo: '−' })),
                 { l: 'Otros gastos del mes', v: datos.totalGastos, signo: '−' },
               ].filter(r => r.v !== undefined && r.v !== 0).map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 13 }}>
