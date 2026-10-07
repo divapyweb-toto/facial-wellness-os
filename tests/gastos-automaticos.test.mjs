@@ -1,4 +1,5 @@
 import { armarGastosAutomaticos, parsearGastosFijos } from '../src/lib/gastosAutomaticos.js'
+import { tasaDelDia, cargarTasas, traerTasaOnline } from '../src/lib/tipoCambio.js'
 
 let fallas = 0
 const ok = (c, m) => { console.log(`${c ? '✓' : '✗'} ${m}`); if (!c) fallas++ }
@@ -38,6 +39,37 @@ r = armarGastosAutomaticos({ gastosFijosTexto: 'Shopify: 180000\nSupabase: 25 us
 ok(r.fijosGs === 90000 + 87500, `se prorratean al período (medio mes) — dio ${r.fijosGs}`)
 r = armarGastosAutomaticos({ gastosFijosTexto: 'Supabase: 25 usd', tienda: 'voltra', usdPyg: 0 })
 ok(r.faltaTipoCambio && r.fijosGs === 0, 'un fijo en dólares sin tipo de cambio también espera')
+
+console.log('\n── cada gasto con el cambio de SU día ──')
+const tasas = new Map([['2026-10-06', 7000], ['2026-10-07', 7100]])
+// 07-10 a las 20:00 en Paraguay = 23:00 UTC; 06-10 a las 23:30 en Paraguay = 02:30 UTC del día 7.
+const filas = [{ costo_usd: 1, creado_en: '2026-10-07T23:00:00Z' }, { costo_usd: 1, creado_en: '2026-10-07T02:30:00Z' }]
+r = armarGastosAutomaticos({ waMensajes: filas, tasas, tienda: 'voltra' })
+ok(r.whatsappGs === 7100 + 7000, `cada dólar usa el cambio de su día paraguayo (no el de UTC) — dio ${r.whatsappGs}`)
+ok(r.rangoTasa.min === 7000 && r.rangoTasa.max === 7100 && r.rangoTasa.prom === 7050, 'el reporte puede mostrar el rango y el promedio usado')
+ok(tasaDelDia(tasas, '2026-10-10') === 7100 && tasaDelDia(tasas, '2026-10-01') === 7000, 'un día sin cotización usa el anterior más cercano (o el posterior)')
+ok(tasaDelDia(new Map(), '2026-10-07', 0) === 0, 'sin ninguna cotización ni respaldo: 0 (se avisa, no se inventa)')
+r = armarGastosAutomaticos({ waMensajes: [{ costo_usd: 2, creado_en: '2026-10-07T12:00:00Z' }], tasas: new Map(), usdPyg: 0, tienda: 'voltra' })
+ok(r.faltaTipoCambio && r.whatsappGs === 0 && r.usdSinConvertir === 2, 'sin cambio posible queda en dólares y avisa')
+
+console.log('\n── cargarTasas: tabla, memoria y fuente pública ──')
+const guardado = []
+const cliente = { from: () => ({
+  select: () => ({ gte: () => ({ lte: async () => ({ data: [{ fecha: '2026-10-05', usd_pyg: 7300 }] }) }) }),
+  upsert: async (filas) => { guardado.push(...filas); return {} },
+}) }
+const pedidos = []
+const fetchFn = async (url) => { pedidos.push(url); const f = url.match(/(\d{4}-\d{2}-\d{2})/)[1]; return { ok: true, json: async () => ({ usd: { pyg: f === '2026-10-06' ? 5850 : 5860 } }) } }
+const mem = new Map(); const almacen = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) }
+const res = await cargarTasas(cliente, ['2026-10-05', '2026-10-06', '2026-10-08'], { fetchFn, almacen, hoy: '2026-10-08' })
+ok(res.tasas.get('2026-10-05') === 7300 && pedidos.every(u => !u.includes('2026-10-05')), 'lo guardado en la tabla (o corregido a mano) manda y no se vuelve a pedir')
+ok(res.tasas.get('2026-10-06') === 5850, 'lo que falta se trae de la fuente pública por fecha')
+ok(guardado.length === 1 && guardado[0].fecha === '2026-10-06', 'se guarda lo traído (menos hoy, que todavía se mueve)')
+ok(res.tasas.get('2026-10-08') === 5860, 'hoy se usa igual, aunque no se guarde como definitivo')
+const antes = pedidos.length
+await cargarTasas(cliente, ['2026-10-06'], { fetchFn, almacen, hoy: '2026-10-08' })
+ok(pedidos.length === antes, 'la segunda vez sale de la memoria, sin red')
+ok(await traerTasaOnline('2026-10-06', async () => { throw new Error('sin red') }) === null, 'sin red devuelve null (no revienta el reporte)')
 
 console.log(fallas ? `\n✗ ${fallas} falla(s)` : '\n✓ los gastos automáticos suman sin duplicar ni inventar')
 process.exit(fallas ? 1 : 0)
