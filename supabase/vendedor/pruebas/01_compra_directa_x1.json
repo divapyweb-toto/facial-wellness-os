@@ -1,0 +1,70 @@
+{
+  "id": "01_compra_directa_x1",
+  "titulo": "Compra directa de 1 bolsa de tiras",
+  "cobertura": [
+    "compra_x1"
+  ],
+  "cliente": {
+    "nombre": "Rosa Benítez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "Hola, cuánto salen las tiras nasales?",
+    "dale, una nomás",
+    "Rosa Benítez, Luque, Sportivo Luqueño 123 casi Teniente Rojas, frente a la despensa Don Pedro",
+    "si"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo",
+      "crear_pedido_cod"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "112.000"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola. Las tiras nasales ayudan a reducir los ronquidos y dan hasta 30 % más de aire por la nariz.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Perfecto. Pasame tu nombre completo, ciudad y dirección con una referencia. El número ya lo tengo.",
+      "herramientas": []
+    },
+    {
+      "texto": "Pedido: Tiras nasales x1. Total al recibir: Gs 112.000 (con envío de Gs 33.000).\nEntrega a Rosa Benítez, Luque, Sportivo Luqueño 123 casi Teniente Rojas. ¿Confirmás?",
+      "herramientas": []
+    },
+    {
+      "texto": "Listo Rosa, ya cargamos tu pedido. En unos minutos te llega la confirmación.",
+      "herramientas": [
+        {
+          "nombre": "crear_pedido_cod",
+          "input": {
+            "sku": "TIRAS-X1",
+            "handle": "tiras-nasales",
+            "cantidad": 1,
+            "nombre": "Rosa Benítez",
+            "ciudad": "Luque"
+          }
+        }
+      ]
+    }
+  ]
+}

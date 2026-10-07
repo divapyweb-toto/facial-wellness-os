@@ -1,0 +1,40 @@
+{
+  "id": "31_producto_inexistente",
+  "titulo": "Producto que no existe: no inventa precio",
+  "cobertura": [
+    "producto_inexistente"
+  ],
+  "cliente": {
+    "nombre": "Graciela Torres",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "cuánto sale el masajeador de cuello?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Ese producto no lo tenemos, Graciela. Tenemos tiras nasales, parches bucales y raspador de lengua.\n¿Te interesa alguno?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "masajeador de cuello"
+          }
+        }
+      ]
+    }
+  ]
+}

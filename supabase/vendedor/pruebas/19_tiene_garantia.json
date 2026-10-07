@@ -1,0 +1,37 @@
+{
+  "id": "19_tiene_garantia",
+  "titulo": "\"¿tiene garantía?\"",
+  "cobertura": [
+    "garantia"
+  ],
+  "cliente": {
+    "nombre": "Patricia Núñez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "¿tiene garantía?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "no_debe_contener": [
+      "no hay",
+      "no tiene",
+      "no aceptamos"
+    ],
+    "debe_contener_alguno": [
+      "caso por caso"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Cualquier problema lo vemos por acá caso por caso, Patricia.\n¿Querés que te pase con una persona del equipo?",
+      "herramientas": []
+    }
+  ]
+}

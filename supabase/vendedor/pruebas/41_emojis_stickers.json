@@ -1,0 +1,47 @@
+{
+  "id": "41_emojis_stickers",
+  "titulo": "Emojis y stickers: responde con máximo 1 emoji",
+  "cobertura": [
+    "emojis"
+  ],
+  "cliente": {
+    "nombre": "Karen López",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "[sticker]",
+    "😂😂😂👍 cuanto sale lo de la nariz 🙏"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "112.000"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola, Karen. ¿Te ayudo con algo de Voltra?",
+      "herramientas": []
+    },
+    {
+      "texto": "Hola. Las tiras nasales ayudan a reducir los ronquidos y dan hasta 30 % más de aire por la nariz.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    }
+  ]
+}

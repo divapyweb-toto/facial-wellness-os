@@ -1,0 +1,35 @@
+{
+  "id": "40_fuera_de_tema",
+  "titulo": "Fuera de tema: vuelve a Voltra",
+  "cobertura": [
+    "fuera_tema"
+  ],
+  "cliente": {
+    "nombre": "Javier Ramos",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "quién ganó el partido de Cerro ayer?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_derivar": false,
+    "no_debe_contener": [
+      "ganó",
+      "goles",
+      "empate"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "De eso no te sé decir, Javier. Te ayudo con las tiras, los parches o tu pedido.",
+      "herramientas": []
+    }
+  ]
+}

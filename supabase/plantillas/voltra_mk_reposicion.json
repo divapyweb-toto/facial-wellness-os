@@ -1,0 +1,52 @@
+{
+  "name": "voltra_mk_reposicion",
+  "language": "es",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, tus {{2}} Voltra se estarían terminando en unos días.\n¿Te preparo {{3}} por Gs {{4}}? Te llega en 2 a 5 días hábiles y pagás al recibir.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "tiras nasales",
+            "otra bolsa",
+            "79.000"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Sí, mandame"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Más adelante"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "No quiero ofertas"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto",
+      "oferta",
+      "precio sin 'Gs'"
+    ],
+    "botones_payload": [
+      "mk_si",
+      "mk_luego",
+      "mk_baja"
+    ],
+    "aviso": "M1 de recompra (día min(0,85·D, D−7) desde la entrega). Oferta y precio salen de config_wa.recompra. Botón de baja: 'No quiero ofertas' (QUICK_REPLY, payload mk_baja). wa-webhook tiene que llamar a registrarBaja (functions/recompra/baja.ts)."
+  }
+}

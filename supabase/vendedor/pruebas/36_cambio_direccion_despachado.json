@@ -1,0 +1,62 @@
+{
+  "id": "36_cambio_direccion_despachado",
+  "titulo": "Cambio de dirección con pedido YA despachado",
+  "cobertura": [
+    "cambio_direccion"
+  ],
+  "cliente": {
+    "nombre": "Sandra Cardozo",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": [
+      {
+        "nombre": "#1043",
+        "producto": "Tiras nasales x1",
+        "total": 112000,
+        "estado_confirmacion": "confirmado",
+        "estado_envio": "DESPACHADO",
+        "courier": "lucero",
+        "plazo": "1 a 3 días hábiles",
+        "creado_en": "2026-10-02"
+      }
+    ]
+  },
+  "mensajes": [
+    "necesito cambiar la dirección de entrega"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "estado_pedido",
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true,
+    "no_debe_contener": [
+      "ya lo cambiamos",
+      "listo, cambiado"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Tu pedido #1043 ya salió con Lucero, Sandra. Le paso el caso a una persona del equipo para coordinarlo con el courier.",
+      "herramientas": [
+        {
+          "nombre": "estado_pedido",
+          "input": {}
+        },
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "cambio_direccion_despachado",
+            "resumen": "Pedido #1043 despachado, quiere cambiar dirección"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

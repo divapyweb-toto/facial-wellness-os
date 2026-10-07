@@ -1,0 +1,53 @@
+{
+  "id": "34_donde_esta_mi_pedido",
+  "titulo": "\"¿dónde está mi pedido?\"",
+  "cobertura": [
+    "estado_pedido"
+  ],
+  "cliente": {
+    "nombre": "Mónica Riveros",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": [
+      {
+        "nombre": "#1043",
+        "producto": "Tiras nasales x1",
+        "total": 112000,
+        "estado_confirmacion": "confirmado",
+        "estado_envio": "DESPACHADO",
+        "courier": "lucero",
+        "plazo": "1 a 3 días hábiles",
+        "creado_en": "2026-10-02"
+      }
+    ]
+  },
+  "mensajes": [
+    "hola, dónde está mi pedido?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "estado_pedido"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "1043",
+      "Lucero"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola, Mónica. Tu pedido #1043 ya salió con Lucero del Este y llega en 1 a 3 días hábiles.\nTené listo Gs 112.000 para pagar al recibir.",
+      "herramientas": [
+        {
+          "nombre": "estado_pedido",
+          "input": {}
+        }
+      ]
+    }
+  ]
+}

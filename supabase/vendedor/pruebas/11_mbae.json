@@ -1,0 +1,46 @@
+{
+  "id": "11_mbae",
+  "titulo": "\"mba'e\" indecisión: una razón y pregunta cerrada",
+  "cobertura": [
+    "jopara",
+    "mbae"
+  ],
+  "cliente": {
+    "nombre": "Osvaldo Ferreira",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "hola precio tiras",
+    "y bueno mba'e... no sé"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Hola. Las tiras nasales ayudan a reducir los ronquidos y dan hasta 30 % más de aire por la nariz.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Lo bueno es que no adelantás nada: pagás cuando te llega.\n¿Te preparo 1 bolsa para que las pruebes?",
+      "herramientas": []
+    }
+  ]
+}

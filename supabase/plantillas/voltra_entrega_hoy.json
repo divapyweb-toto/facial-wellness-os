@@ -1,0 +1,37 @@
+{
+  "name": "voltra_entrega_hoy",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, hoy te llega tu pedido de Voltra.\nTené listo Gs {{2}} en efectivo para pagar al recibir.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "129.000"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Necesito ayuda"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "total sin 'Gs'"
+    ],
+    "botones_payload": [
+      "ayuda"
+    ]
+  }
+}

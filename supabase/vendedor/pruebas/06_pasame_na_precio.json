@@ -1,0 +1,43 @@
+{
+  "id": "06_pasame_na_precio",
+  "titulo": "\"pasame na el precio\"",
+  "cobertura": [
+    "jopara",
+    "pasame_na"
+  ],
+  "cliente": {
+    "nombre": "Nelson Duarte",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "pasame na el precio de los parches"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "112.000"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola. Los parches bucales evitan respirar por la boca mientras dormís y ayudan a tener menos boca seca al despertar.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "parches bucales"
+          }
+        }
+      ]
+    }
+  ]
+}

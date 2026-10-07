@@ -1,0 +1,166 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "PEDIDO",
+      "title": "Tu pedido Voltra",
+      "terminal": true,
+      "success": true,
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextSubheading",
+            "text": "Completá tus datos para el envío"
+          },
+          {
+            "type": "Form",
+            "name": "datos_pedido",
+            "children": [
+              {
+                "type": "TextInput",
+                "name": "nombre",
+                "label": "Nombre y apellido",
+                "input-type": "text",
+                "required": true,
+                "min-chars": "3",
+                "max-chars": "60"
+              },
+              {
+                "type": "Dropdown",
+                "name": "ciudad",
+                "label": "Ciudad",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "asuncion",
+                    "title": "Asunción"
+                  },
+                  {
+                    "id": "ciudad_del_este",
+                    "title": "Ciudad del Este"
+                  },
+                  {
+                    "id": "encarnacion",
+                    "title": "Encarnación"
+                  },
+                  {
+                    "id": "luque",
+                    "title": "Luque"
+                  },
+                  {
+                    "id": "san_lorenzo",
+                    "title": "San Lorenzo"
+                  },
+                  {
+                    "id": "capiata",
+                    "title": "Capiatá"
+                  },
+                  {
+                    "id": "lambare",
+                    "title": "Lambaré"
+                  },
+                  {
+                    "id": "fernando_de_la_mora",
+                    "title": "Fernando de la Mora"
+                  },
+                  {
+                    "id": "limpio",
+                    "title": "Limpio"
+                  },
+                  {
+                    "id": "nemby",
+                    "title": "Ñemby"
+                  },
+                  {
+                    "id": "mariano_roque_alonso",
+                    "title": "Mariano Roque Alonso"
+                  },
+                  {
+                    "id": "hernandarias",
+                    "title": "Hernandarias"
+                  },
+                  {
+                    "id": "presidente_franco",
+                    "title": "Presidente Franco"
+                  },
+                  {
+                    "id": "minga_guazu",
+                    "title": "Minga Guazú"
+                  },
+                  {
+                    "id": "otra",
+                    "title": "Otra"
+                  }
+                ]
+              },
+              {
+                "type": "TextInput",
+                "name": "otra_ciudad",
+                "label": "Otra ciudad",
+                "input-type": "text",
+                "required": false,
+                "max-chars": "40",
+                "helper-text": "Solo si elegiste Otra"
+              },
+              {
+                "type": "TextInput",
+                "name": "direccion",
+                "label": "Dirección",
+                "input-type": "text",
+                "required": true,
+                "min-chars": "5",
+                "max-chars": "120",
+                "helper-text": "Calle, número y barrio"
+              },
+              {
+                "type": "TextInput",
+                "name": "referencia",
+                "label": "Referencia",
+                "input-type": "text",
+                "required": false,
+                "max-chars": "120",
+                "helper-text": "Ej.: frente a la escuela, portón verde"
+              },
+              {
+                "type": "RadioButtonsGroup",
+                "name": "cantidad",
+                "label": "Cantidad",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "1",
+                    "title": "×1"
+                  },
+                  {
+                    "id": "2",
+                    "title": "×2"
+                  },
+                  {
+                    "id": "3",
+                    "title": "×3"
+                  }
+                ]
+              },
+              {
+                "type": "Footer",
+                "label": "Enviar datos",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "nombre": "${form.nombre}",
+                    "ciudad": "${form.ciudad}",
+                    "otra_ciudad": "${form.otra_ciudad}",
+                    "direccion": "${form.direccion}",
+                    "referencia": "${form.referencia}",
+                    "cantidad": "${form.cantidad}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

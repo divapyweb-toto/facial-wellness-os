@@ -6,3 +6,16 @@ logs/
 
 # Scripts temporales de inspección (los crean los agentes al explorar)
 _insp*.mjs
+
+# Planes internos (el repo es público)
+docs/
+
+# Deno (Edge Functions): el lockfile no se versiona. supabase/functions/deno.json
+# tiene "lock": false; si alguien corre deno desde la raíz y se genera uno, se ignora.
+deno.lock
+
+# Variables de producción (secretos). Se versiona solo .env.produccion.ejemplo
+.env.produccion
+
+# Estado local de la CLI de Supabase (project ref, versiones)
+supabase/.temp/

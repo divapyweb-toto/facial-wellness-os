@@ -1,0 +1,48 @@
+{
+  "id": "10_nde_precio",
+  "titulo": "\"nde\" ante el precio: explicar y ofrecer ×2",
+  "cobertura": [
+    "jopara",
+    "nde"
+  ],
+  "cliente": {
+    "nombre": "Blanca Insfrán",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "cuanto los parches",
+    "nde 112 mil? caro luego"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "125.000"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola. Los parches bucales evitan respirar por la boca mientras dormís y ayudan a tener menos boca seca al despertar.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "parches bucales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Es una bolsa de 30 parches, te dura un mes usándolo cada noche.\nCon 2 bolsas sale Gs 125.000 y pagás un solo envío. ¿Te armo el de 2?",
+      "herramientas": []
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "id": "37_reclamo_danado",
+  "titulo": "Reclamo: producto dañado",
+  "cobertura": [
+    "reclamo_danado"
+  ],
+  "cliente": {
+    "nombre": "Raquel Alonso",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": [
+      {
+        "nombre": "#1043",
+        "producto": "Tiras nasales x1",
+        "total": 112000,
+        "estado_confirmacion": "confirmado",
+        "estado_envio": "DESPACHADO",
+        "courier": "lucero",
+        "plazo": "1 a 3 días hábiles",
+        "creado_en": "2026-10-02"
+      }
+    ]
+  },
+  "mensajes": [
+    "me llegó la caja aplastada y las tiras rotas",
+    "[imagen]"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true,
+    "debe_contener_alguno": [
+      "foto"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Perdón, Raquel. ¿Me mandás una foto de cómo llegó?",
+      "herramientas": []
+    },
+    {
+      "texto": "Gracias por la foto. Le paso tu caso a una persona del equipo para resolverlo hoy.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "reclamo_danado",
+            "resumen": "Pedido #1043 llegó dañado, mandó foto"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

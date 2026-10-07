@@ -1,0 +1,47 @@
+{
+  "name": "voltra_mk_cruzada",
+  "language": "es",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, para acompañar tu {{2}} tenemos {{3}} a Gs {{4}}.\nPagás al recibir. ¿Te lo mando?",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "raspador de lengua",
+            "parches bucales",
+            "79.000"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Lo quiero"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "No quiero ofertas"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto comprado",
+      "producto afín",
+      "precio sin 'Gs'"
+    ],
+    "botones_payload": [
+      "mk_quiero",
+      "mk_baja"
+    ],
+    "aviso": "Venta cruzada día 14 para compra única. El documento fija Gs 79.000 en el texto; acá va como variable para que el precio salga de config_wa. Botón de baja: 'No quiero ofertas' (QUICK_REPLY, payload mk_baja). wa-webhook tiene que llamar a registrarBaja (functions/recompra/baja.ts)."
+  }
+}

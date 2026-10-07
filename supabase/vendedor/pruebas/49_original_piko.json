@@ -1,0 +1,42 @@
+{
+  "id": "49_original_piko",
+  "titulo": "\"¿es original piko?\": prueba concreta",
+  "cobertura": [
+    "jopara",
+    "piko"
+  ],
+  "cliente": {
+    "nombre": "Gustavo Romero",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "y es original piko eso?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "enviar_media"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Te paso un video real del producto y de cómo llega.\nAdemás pagás recién cuando lo tenés en la mano.",
+      "herramientas": [
+        {
+          "nombre": "enviar_media",
+          "input": {
+            "producto": "tiras nasales",
+            "tipo": "video_real"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "name": "voltra_recordatorio_confirmacion",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, tu pedido de Voltra ({{2}}) sigue esperando tu confirmación.\nConfirmalo para que lo despachemos.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "1 Tiras nasales"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Confirmar"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Corregir datos"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cancelar"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto"
+    ],
+    "botones_payload": [
+      "conf_si",
+      "conf_corregir",
+      "conf_cancelar"
+    ]
+  }
+}

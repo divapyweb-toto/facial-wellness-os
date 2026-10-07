@@ -1,0 +1,69 @@
+{
+  "_nota": "Datos de PRUEBA, inventados. Precios del catálogo de prueba (no se leen de Shopify). Teléfonos 0981000000 y nombres inventados (repo público).",
+  "envio": 33000,
+  "catalogos": {
+    "base": [
+      {
+        "sku": "TIRAS-X1",
+        "handle": "tiras-nasales",
+        "nombre": "Tiras nasales x1 (30 u.)",
+        "precio": 79000,
+        "cantidad": 1
+      },
+      {
+        "sku": "TIRAS-X2",
+        "handle": "tiras-nasales",
+        "nombre": "Tiras nasales x2",
+        "precio": 125000,
+        "cantidad": 2
+      },
+      {
+        "sku": "TIRAS-X3",
+        "handle": "tiras-nasales",
+        "nombre": "Tiras nasales x3",
+        "precio": 155000,
+        "cantidad": 3
+      },
+      {
+        "sku": "PARCHES-X1",
+        "handle": "parches-bucales",
+        "nombre": "Parches bucales x1 (30 u.)",
+        "precio": 79000,
+        "cantidad": 1
+      },
+      {
+        "sku": "PARCHES-X2",
+        "handle": "parches-bucales",
+        "nombre": "Parches bucales x2",
+        "precio": 125000,
+        "cantidad": 2
+      },
+      {
+        "sku": "PARCHES-X3",
+        "handle": "parches-bucales",
+        "nombre": "Parches bucales x3",
+        "precio": 155000,
+        "cantidad": 3
+      },
+      {
+        "sku": "PACK-TP",
+        "handle": "pack-tiras-parches",
+        "nombre": "Pack tiras + parches",
+        "precio": 120000,
+        "cantidad": 1
+      },
+      {
+        "sku": "RASPADOR-X1",
+        "handle": "raspador-lengua",
+        "nombre": "Raspador de lengua",
+        "precio": 79000,
+        "cantidad": 1
+      }
+    ]
+  },
+  "afirmaciones_permitidas": [
+    "Las tiras nasales ayudan a reducir los ronquidos y dan hasta 30 % más de aire por la nariz.",
+    "Los parches bucales evitan respirar por la boca mientras dormís y ayudan a tener menos boca seca al despertar.",
+    "El raspador remueve bacterias y restos de la lengua y ayuda a eliminar el mal aliento."
+  ]
+}

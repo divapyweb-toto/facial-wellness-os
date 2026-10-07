@@ -1,0 +1,45 @@
+{
+  "name": "voltra_mk_lanzamiento",
+  "language": "es",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Llegó {{1}} a Voltra. Como ya sos cliente, lo tenés a Gs {{2}} hasta el {{3}}.\n¿Te lo mando?",
+      "example": {
+        "body_text": [
+          [
+            "el limpiador facial",
+            "99.000",
+            "31 de octubre"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Lo quiero"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "No quiero ofertas"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "producto nuevo",
+      "precio cliente sin 'Gs'",
+      "fecha límite"
+    ],
+    "botones_payload": [
+      "mk_quiero",
+      "mk_baja"
+    ],
+    "aviso": "Lanzamiento solo al segmento afín; cuenta en el tope de 3 por mes. El documento pide imagen de cabecera: falta (necesita header_handle subido a Meta y soporte de cabecera en procesar-envios). Botón de baja: 'No quiero ofertas' (QUICK_REPLY, payload mk_baja). wa-webhook tiene que llamar a registrarBaja (functions/recompra/baja.ts)."
+  }
+}

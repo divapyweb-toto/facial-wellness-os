@@ -367,7 +367,7 @@ const RUTEO_OFICIAL = {
     'María Auxiliadora',           'Mariscal Estigarribia (Chaco)', 'Natalio',
     'Neuland',                     'Pedro Juan Caballero',        'Pilar',
     'Puente Kyjhá',                'Salto del Guairá',            'San Antonio',
-    'San Cristóbal',               'Encarnación',        'San José de los Arroyos',
+    'San Cristóbal',               'San Ignacio Misiones',        'San José de los Arroyos',
     'San Juan Nepomuceno',         'Santa Rosa del Mbutuy',       'Trinidad',
     'Villa Hayes',                 'Villarrica',
   ],

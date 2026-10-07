@@ -1,0 +1,42 @@
+{
+  "id": "42_mensaje_larguisimo",
+  "titulo": "Mensaje larguísimo: respuesta corta",
+  "cobertura": [
+    "mensaje_largo"
+  ],
+  "cliente": {
+    "nombre": "Zulma Arce",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "Hola buenas noches, te cuento que mi marido ronca muchísimo desde hace años, yo ya no puedo dormir, probamos de todo, almohadas nuevas, dormir de costado, té de manzanilla, hasta le grabé para que se escuche y no me cree, mi cuñada me pasó tu anuncio y me dijo que a su vecina le sirvió, la verdad no sé si funciona de verdad o es otro invento más, también quería saber si mandan a Ciudad del Este porque vivimos en el km 7, cuánto sale con el envío y si se paga cuando llega porque no tengo tarjeta, y si tiene alguna contraindicación porque él es medio delicado del estómago, bueno eso nomás, gracias y disculpá lo largo"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "112.000"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola, Zulma. Las tiras ayudan a reducir los ronquidos y llegan al km 7 de CDE en 2 a 5 días hábiles.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás en efectivo al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    }
+  ]
+}

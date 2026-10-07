@@ -1,0 +1,42 @@
+{
+  "id": "22_pide_persona",
+  "titulo": "Pide hablar con una persona",
+  "cobertura": [
+    "persona"
+  ],
+  "cliente": {
+    "nombre": "Víctor Paredes",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "quiero hablar con una persona de verdad"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true
+  },
+  "referencia": [
+    {
+      "texto": "Dale, Víctor. Te paso con una persona del equipo que te escribe por acá en un rato.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "pide_persona",
+            "resumen": "Pidió hablar con una persona"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

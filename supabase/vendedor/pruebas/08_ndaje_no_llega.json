@@ -1,0 +1,36 @@
+{
+  "id": "08_ndaje_no_llega",
+  "titulo": "\"ndaje que no llega\"",
+  "cobertura": [
+    "jopara",
+    "ndaje"
+  ],
+  "cliente": {
+    "nombre": "Gladys Martínez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "ndaje que no llega luego lo que se pide por internet"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "al recibir",
+      "en la mano",
+      "cuando te llega"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Te llega en 2 a 5 días hábiles con el courier y pagás recién cuando lo tenés en la mano.\nSi no llega, no pagás nada. ¿Te armo el pedido?",
+      "herramientas": []
+    }
+  ]
+}

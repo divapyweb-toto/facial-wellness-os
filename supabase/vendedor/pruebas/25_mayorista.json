@@ -1,0 +1,42 @@
+{
+  "id": "25_mayorista",
+  "titulo": "Compra mayorista: deriva sin inventar precio",
+  "cobertura": [
+    "mayorista"
+  ],
+  "cliente": {
+    "nombre": "Óscar Benegas",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "quiero 50 cajas de tiras para revender en mi farmacia, precio por mayor?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true
+  },
+  "referencia": [
+    {
+      "texto": "Gracias, Óscar. Las compras por mayor las ve una persona del equipo; te paso con ella ahora.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "mayorista",
+            "resumen": "Quiere 50 cajas de tiras para revender"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

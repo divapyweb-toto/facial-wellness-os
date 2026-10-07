@@ -1,0 +1,68 @@
+{
+  "id": "35_cambio_direccion_no_despachado",
+  "titulo": "Cambio de dirección con pedido NO despachado",
+  "cobertura": [
+    "cambio_direccion"
+  ],
+  "cliente": {
+    "nombre": "Fernando Báez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": [
+      {
+        "nombre": "#1051",
+        "producto": "Parches bucales x2",
+        "total": 158000,
+        "estado_confirmacion": "confirmado",
+        "estado_envio": "EN_PREPARACION",
+        "courier": "pap",
+        "plazo": "2 a 5 días hábiles",
+        "creado_en": "2026-10-05"
+      }
+    ]
+  },
+  "mensajes": [
+    "me equivoqué de dirección en el pedido, se puede cambiar?",
+    "Avda. Mcal. López 3300 casi Washington, Asunción, edificio gris, 2do piso"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "estado_pedido",
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true,
+    "no_debe_contener": [
+      "ya lo cambiamos",
+      "ya está cambiad"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Sí, Fernando: tu pedido #1051 todavía no salió. Pasame la dirección nueva con una referencia.",
+      "herramientas": [
+        {
+          "nombre": "estado_pedido",
+          "input": {}
+        }
+      ]
+    },
+    {
+      "texto": "Anotado. Le paso la dirección nueva a una persona del equipo para que la cambie antes del despacho.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "cambio_direccion",
+            "resumen": "Pedido #1051 sin despachar, nueva dirección"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "name": "voltra_pedido_despachado",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, tu pedido de Voltra ({{2}}) ya salió con {{3}}.\nTe llega en {{4}}. Tené listo Gs {{5}} en efectivo para pagar al recibir.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "1 Tiras nasales",
+            "Lucero del Este",
+            "1 a 3 días hábiles",
+            "129.000"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Necesito ayuda"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto",
+      "courier",
+      "plazo del courier (config_wa.plazos_courier)",
+      "total sin 'Gs'"
+    ],
+    "botones_payload": [
+      "ayuda"
+    ]
+  }
+}

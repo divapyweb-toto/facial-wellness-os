@@ -1,0 +1,43 @@
+{
+  "id": "38_parche_se_despega",
+  "titulo": "Problema de uso: el parche se despega",
+  "cobertura": [
+    "problema_uso"
+  ],
+  "cliente": {
+    "nombre": "Alberto Cabrera",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "el parche se me despega a la madrugada"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "limpia",
+      "seca",
+      "crema"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Casi siempre es por la piel: probalo con la boca limpia y seca, sin crema ni bálsamo.\nTe paso un video corto de cómo ponerlo. ¿Me contás cómo te va esta noche?",
+      "herramientas": [
+        {
+          "nombre": "enviar_media",
+          "input": {
+            "producto": "parches bucales",
+            "tipo": "video_uso"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "33_direccion_dudosa",
+  "titulo": "Dirección dudosa: pide referencia y después deriva",
+  "cobertura": [
+    "direccion_dudosa"
+  ],
+  "cliente": {
+    "nombre": "Derlis Morínigo",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "mandalo a lo de mi tía en el barrio, ahí todos me conocen",
+    "ahí nomás cerca de la canchita, preguntá por Derlis"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true
+  },
+  "referencia": [
+    {
+      "texto": "Para que el courier llegue necesito ciudad, calle y una referencia. ¿Me pasás esos datos?",
+      "herramientas": []
+    },
+    {
+      "texto": "Gracias, Derlis. Para no errar la entrega te paso con una persona del equipo que confirma la dirección.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "direccion_dudosa",
+            "resumen": "Dirección sin calle ni ciudad"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

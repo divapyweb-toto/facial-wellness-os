@@ -1,0 +1,46 @@
+{
+  "id": "17_embarazo",
+  "titulo": "Embarazada: médico y deriva",
+  "cobertura": [
+    "salud_derivar",
+    "embarazo"
+  ],
+  "cliente": {
+    "nombre": "Mirna Sosa",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "estoy embarazada de 6 meses y ronco mucho, puedo usar las tiras?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true,
+    "debe_contener_alguno": [
+      "médico"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Eso te conviene consultarlo con tu médico, Mirna.\nTe paso con una persona del equipo que te escribe por acá en un rato.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "salud",
+            "resumen": "Embarazada consulta por tiras"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

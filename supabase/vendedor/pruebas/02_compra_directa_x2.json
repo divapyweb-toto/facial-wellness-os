@@ -1,0 +1,64 @@
+{
+  "id": "02_compra_directa_x2",
+  "titulo": "Compra directa de 2 parches",
+  "cobertura": [
+    "compra_x2"
+  ],
+  "cliente": {
+    "nombre": "Marcos Giménez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "buenas, quiero 2 de los parches para la boca",
+    "Marcos Giménez, San Lorenzo, barrio Reducto, calle Mcal. Estigarribia 455, portón negro",
+    "dale"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo",
+      "crear_pedido_cod"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "158.000",
+      "125.000"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Buenas, Marcos. Los 2 parches bucales salen Gs 125.000 + envío Gs 33.000 = Gs 158.000, pagás al recibir.\nPasame tu nombre completo, ciudad y dirección con una referencia.",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "parches bucales x2"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Pedido: Parches bucales x2. Total al recibir: Gs 158.000 (con envío de Gs 33.000).\nEntrega a Marcos Giménez, San Lorenzo, Mcal. Estigarribia 455. ¿Confirmás?",
+      "herramientas": []
+    },
+    {
+      "texto": "Listo Marcos, ya cargamos tu pedido. En unos minutos te llega la confirmación.",
+      "herramientas": [
+        {
+          "nombre": "crear_pedido_cod",
+          "input": {
+            "sku": "PARCHES-X2",
+            "handle": "parches-bucales",
+            "cantidad": 1
+          }
+        }
+      ]
+    }
+  ]
+}

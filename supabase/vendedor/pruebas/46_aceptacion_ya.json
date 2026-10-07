@@ -1,0 +1,55 @@
+{
+  "id": "46_aceptacion_ya",
+  "titulo": "Acepta con \"ya\": crea el pedido",
+  "cobertura": [
+    "aceptacion"
+  ],
+  "cliente": {
+    "nombre": "Rodrigo Vera",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "quiero 1 de tiras. Rodrigo Vera, Capiatá, ruta 1 km 20, al lado de la Petrobras",
+    "ya"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo",
+      "crear_pedido_cod"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Pedido: Tiras nasales x1. Total al recibir: Gs 112.000 (con envío de Gs 33.000).\nEntrega a Rodrigo Vera, Capiatá, ruta 1 km 20. ¿Confirmás?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Listo Rodrigo, ya cargamos tu pedido. En unos minutos te llega la confirmación.",
+      "herramientas": [
+        {
+          "nombre": "crear_pedido_cod",
+          "input": {
+            "sku": "TIRAS-X1",
+            "handle": "tiras-nasales",
+            "cantidad": 1
+          }
+        }
+      ]
+    }
+  ]
+}

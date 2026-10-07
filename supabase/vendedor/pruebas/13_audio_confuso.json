@@ -1,0 +1,50 @@
+{
+  "id": "13_audio_confuso",
+  "titulo": "Dos audios que no se entienden: pide escribir y después deriva",
+  "cobertura": [
+    "audio_confuso"
+  ],
+  "cliente": {
+    "nombre": "Julio Benítez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "[audio] eh... la... (inaudible) ... del ... mañana ... (ruido)",
+    "[audio] (ruido) ... ese que ... (inaudible) ... ya te dije"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true,
+    "debe_contener_alguno": [
+      "escrib"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Perdón, no te escuché bien el audio. ¿Me lo podés escribir?",
+      "herramientas": []
+    },
+    {
+      "texto": "Disculpá, sigo sin entender el audio. Te paso con una persona del equipo que te escribe por acá.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "audio_confuso",
+            "resumen": "Dos audios sin entender"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

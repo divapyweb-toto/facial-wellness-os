@@ -1,0 +1,55 @@
+{
+  "id": "05_regateo_insistente",
+  "titulo": "Regateo insistente",
+  "cobertura": [
+    "regateo"
+  ],
+  "cliente": {
+    "nombre": "Fátima Rojas",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "precio de los parches?",
+    "te doy 70 mil y listo",
+    "último precio?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false,
+    "no_debe_contener": [
+      "70.000",
+      "70 mil",
+      "71.100"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola. Los parches bucales evitan respirar por la boca mientras dormís y ayudan a tener menos boca seca al despertar.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "parches bucales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Gracias por la propuesta, Fátima. El precio es Gs 79.000 y pagás recién cuando te llega.\n¿Te lo preparo?",
+      "herramientas": []
+    },
+    {
+      "texto": "Es el precio final, Fátima: Gs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.",
+      "herramientas": []
+    }
+  ]
+}

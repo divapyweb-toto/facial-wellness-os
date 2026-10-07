@@ -1,0 +1,51 @@
+{
+  "id": "32_sin_telefono",
+  "titulo": "Cliente sin teléfono (solo usuario)",
+  "cobertura": [
+    "sin_telefono"
+  ],
+  "cliente": {
+    "nombre": "Luchi",
+    "telefono": null,
+    "wa_username": "luchi_py"
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "quiero las tiras",
+    "una"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo",
+      "pedir_telefono"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Hola. Las tiras nasales ayudan a reducir los ronquidos y dan hasta 30 % más de aire por la nariz.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Perfecto. Para que el courier te llame al llegar, tocá el botón y compartime tu número.",
+      "herramientas": [
+        {
+          "nombre": "pedir_telefono",
+          "input": {}
+        }
+      ]
+    }
+  ]
+}

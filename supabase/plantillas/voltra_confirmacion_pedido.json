@@ -1,0 +1,54 @@
+{
+  "name": "voltra_confirmacion_pedido",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, recibimos tu pedido de Voltra: {{2}}.\nTotal a pagar al recibir: Gs {{3}} (con envío de Gs 33.000).\nEntrega en {{4}}, {{5}}. ¿Confirmás los datos?",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "1 Tiras nasales",
+            "129.000",
+            "Calle Falsa 123",
+            "Ciudad del Este"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Confirmar"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Corregir datos"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cancelar"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto y cantidad",
+      "total con envío, sin 'Gs'",
+      "dirección",
+      "ciudad"
+    ],
+    "botones_payload": [
+      "conf_si",
+      "conf_corregir",
+      "conf_cancelar"
+    ],
+    "aviso": "El envío de Gs 33.000 queda fijo en el texto aprobado: si cambia la tarifa hay que crear una plantilla nueva."
+  }
+}

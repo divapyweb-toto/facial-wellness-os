@@ -1,0 +1,44 @@
+{
+  "id": "14_audio_jopara",
+  "titulo": "Audio en jopara con señal de compra",
+  "cobertura": [
+    "audio_claro",
+    "jopara"
+  ],
+  "cliente": {
+    "nombre": "Carlos Ayala",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "[audio] che amigo mba'éichapa, pasame na el precio de los parches pio, ha mandame katu dos"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "158.000"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Bien, Carlos. Los 2 parches salen Gs 125.000 + envío Gs 33.000 = Gs 158.000, pagás al recibir.\nPasame tu nombre completo, ciudad y dirección con una referencia.",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "parches bucales x2"
+          }
+        }
+      ]
+    }
+  ]
+}

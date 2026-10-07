@@ -26,6 +26,8 @@ const SistemaPage = lazy(() => import('./pages/sistema/SistemaPage'))
 const SeguimientoPage = lazy(() => import('./pages/seguimiento/SeguimientoPage'))
 const ReclamosPage = lazy(() => import('./pages/reclamos/ReclamosPage'))
 const VinculosPage = lazy(() => import('./pages/vinculos/VinculosPage'))
+const BandejaPage = lazy(() => import('./pages/bandeja/BandejaPage'))
+const KpiWhatsappPage = lazy(() => import('./pages/kpi-whatsapp/KpiWhatsappPage'))
 
 // Spinner mientras carga una página diferida
 // Esqueleto con la forma de una página (título + tarjetas), no un spinner
@@ -78,6 +80,8 @@ export default function App() {
           <Route path="seguimiento" element={<Suspense fallback={<PageLoader />}><SeguimientoPage /></Suspense>} />
           <Route path="reclamos" element={<Suspense fallback={<PageLoader />}><ReclamosPage /></Suspense>} />
           <Route path="vinculos" element={<Suspense fallback={<PageLoader />}><VinculosPage /></Suspense>} />
+          <Route path="bandeja" element={<Suspense fallback={<PageLoader />}><BandejaPage /></Suspense>} />
+          <Route path="kpi-whatsapp" element={<Suspense fallback={<PageLoader />}><KpiWhatsappPage /></Suspense>} />
           <Route path="inteligencia" element={<Suspense fallback={<PageLoader />}><InteligenciaEntregaPage /></Suspense>} />
           <Route path="recepcion" element={<Suspense fallback={<PageLoader />}><RecepcionPage /></Suspense>} />
           <Route path="calculadora" element={<Suspense fallback={<PageLoader />}><CalculadoraPage /></Suspense>} />

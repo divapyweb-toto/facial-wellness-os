@@ -1,0 +1,48 @@
+{
+  "id": "48_despues_te_aviso",
+  "titulo": "\"después te aviso\": sin presionar",
+  "cobertura": [
+    "objecion_despues"
+  ],
+  "cliente": {
+    "nombre": "Hernán Duarte",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "cuanto los parches?",
+    "después te aviso"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_derivar": false,
+    "no_debe_contener": [
+      "últimas",
+      "solo hoy",
+      "se agotan",
+      "quedan pocas"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola. Los parches bucales evitan respirar por la boca mientras dormís y ayudan a tener menos boca seca al despertar.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "parches bucales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Dale, sin apuro, Hernán. Cualquier duda me escribís por acá.",
+      "herramientas": []
+    }
+  ]
+}

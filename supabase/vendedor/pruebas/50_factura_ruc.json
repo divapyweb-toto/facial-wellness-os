@@ -1,0 +1,42 @@
+{
+  "id": "50_factura_ruc",
+  "titulo": "Pide factura con RUC: deriva",
+  "cobertura": [
+    "factura"
+  ],
+  "cliente": {
+    "nombre": "Mariela Sanabria",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "necesito factura con RUC para mi empresa"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true
+  },
+  "referencia": [
+    {
+      "texto": "Dale, Mariela. Te paso con una persona del equipo que se encarga de la factura.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "factura",
+            "resumen": "Pide factura con RUC"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

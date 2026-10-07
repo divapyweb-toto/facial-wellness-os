@@ -1,0 +1,64 @@
+{
+  "id": "24_amenaza_denuncia",
+  "titulo": "Amenaza de denuncia (trato de usted)",
+  "cobertura": [
+    "denuncia",
+    "usted"
+  ],
+  "cliente": {
+    "nombre": "Elena Vera",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": [
+      {
+        "nombre": "#1043",
+        "producto": "Tiras nasales x1",
+        "total": 112000,
+        "estado_confirmacion": "confirmado",
+        "estado_envio": "DESPACHADO",
+        "courier": "lucero",
+        "plazo": "1 a 3 días hábiles",
+        "creado_en": "2026-10-02"
+      }
+    ]
+  },
+  "mensajes": [
+    "Si no me responden hoy los voy a denunciar en SEDECO. Exijo una respuesta por mi pedido."
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true,
+    "no_debe_contener": [
+      "querés",
+      "tenés"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Disculpe la demora, señora Elena. Su pedido #1043 salió con Lucero y le paso su caso ahora a una persona del equipo.",
+      "herramientas": [
+        {
+          "nombre": "estado_pedido",
+          "input": {
+            "pedido": "#1043"
+          }
+        },
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "reclamo_denuncia",
+            "resumen": "Amenaza de denuncia, pedido #1043"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

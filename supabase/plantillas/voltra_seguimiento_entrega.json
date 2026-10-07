@@ -1,0 +1,43 @@
+{
+  "name": "voltra_seguimiento_entrega",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, ¿cómo te fue con tu pedido de Voltra ({{2}})?\nContanos si llegó todo bien.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "1 Tiras nasales"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Todo bien"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Tuve un problema"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto"
+    ],
+    "botones_payload": [
+      "seg_bien",
+      "seg_problema"
+    ],
+    "aviso": "Utilidad porque nombra un pedido concreto y ya entregado; sin ofertas. Riesgo de recategorización a marketing."
+  }
+}

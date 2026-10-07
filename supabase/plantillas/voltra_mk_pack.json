@@ -1,0 +1,52 @@
+{
+  "name": "voltra_mk_pack",
+  "language": "es",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, para que no te quedes sin {{2}}: {{3}} sale Gs {{4}} con un solo envío.\n¿Te lo preparo?",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "tiras nasales",
+            "el pack de 2 bolsas",
+            "125.000"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Quiero el pack"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Solo 1 bolsa"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "No quiero ofertas"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto",
+      "oferta",
+      "precio sin 'Gs'"
+    ],
+    "botones_payload": [
+      "mk_pack",
+      "mk_una",
+      "mk_baja"
+    ],
+    "aviso": "M2 de recompra (día D÷0,8−3), solo si no recompró. Botón de baja: 'No quiero ofertas' (QUICK_REPLY, payload mk_baja). wa-webhook tiene que llamar a registrarBaja (functions/recompra/baja.ts)."
+  }
+}

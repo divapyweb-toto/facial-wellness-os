@@ -1,0 +1,42 @@
+{
+  "id": "09_guau",
+  "titulo": "\"de gua'u nomás es\": se muestra video real",
+  "cobertura": [
+    "jopara",
+    "guau"
+  ],
+  "cliente": {
+    "nombre": "Hugo Cáceres",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "eso de las tiras de gua'u nomás luego es"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "enviar_media"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Te paso un video real de cómo se usan y lo que se nota al respirar.\nY pagás recién cuando te llega, así lo ves con tus ojos.",
+      "herramientas": [
+        {
+          "nombre": "enviar_media",
+          "input": {
+            "producto": "tiras nasales",
+            "tipo": "video_uso"
+          }
+        }
+      ]
+    }
+  ]
+}

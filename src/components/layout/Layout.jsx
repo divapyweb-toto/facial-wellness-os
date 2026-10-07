@@ -7,7 +7,7 @@ import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
   Users, Calculator, BarChart3, PackageCheck, MapPin, X, MessageCircle,
-  Grid3X3, Search as SearchIcon, Repeat, PackageOpen, ClipboardCheck, Link2,
+  Grid3X3, Search as SearchIcon, Repeat, PackageOpen, ClipboardCheck, Link2, Inbox,
 } from 'lucide-react'
 
 // ── Logo embebido (PNG transparente, negro → invertir con CSS) ──
@@ -18,6 +18,8 @@ const navPrincipal = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/ventas',    icon: ShoppingCart,    label: 'Ventas'    },
   { to: '/clientes',  icon: Users,           label: 'Clientes'  },
+  { to: '/bandeja',   icon: Inbox,           label: 'Bandeja WhatsApp' },
+  { to: '/kpi-whatsapp', icon: BarChart3,    label: 'KPI WhatsApp' },
   { to: '/stock',     icon: Package,         label: 'Stock'     },
 ]
 const navLogistica = [

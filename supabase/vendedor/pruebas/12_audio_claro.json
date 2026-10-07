@@ -1,0 +1,43 @@
+{
+  "id": "12_audio_claro",
+  "titulo": "Audio transcripto claro",
+  "cobertura": [
+    "audio_claro"
+  ],
+  "cliente": {
+    "nombre": "Teresa Aquino",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "[audio] Hola buenas tardes, quería saber cuánto salen las tiras para no roncar y si llegan hasta Encarnación"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "112.000"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Hola, Teresa. Las tiras salen Gs 79.000 + envío Gs 33.000 = Gs 112.000 y llegan a Encarnación en 2 a 5 días hábiles.\nPagás al recibir. ¿Te las preparo?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    }
+  ]
+}

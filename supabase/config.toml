@@ -1,0 +1,17 @@
+# Configuración mínima de Supabase CLI para fw-os. Sin secretos:
+# los valores se cargan con `supabase secrets set` (ver CONTRATO-OLA1.md).
+project_id = "fw-os"
+
+# Los webhooks externos (Meta, Shopify, Telegram) no mandan JWT de Supabase;
+# cada función verifica su propia firma.
+[functions.wa-webhook]
+verify_jwt = false
+
+[functions.shopify-webhook]
+verify_jwt = false
+
+[functions.telegram-webhook]
+verify_jwt = false
+
+[functions.pago-qr-webhook]
+verify_jwt = false

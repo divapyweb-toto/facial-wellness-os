@@ -1,0 +1,34 @@
+{
+  "id": "47_es_confiable",
+  "titulo": "Desconfianza: pago al recibir",
+  "cobertura": [
+    "objecion_confianza"
+  ],
+  "cliente": {
+    "nombre": "Lorena Giménez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "es confiable? no quiero que me estafen como la otra vez"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "cuando te llega",
+      "al recibir"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Te entiendo, Lorena. Pagás recién cuando te llega, no adelantás nada.\n¿Te paso el precio de lo que buscás?",
+      "herramientas": []
+    }
+  ]
+}

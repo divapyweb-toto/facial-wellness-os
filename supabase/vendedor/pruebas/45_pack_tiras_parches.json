@@ -1,0 +1,43 @@
+{
+  "id": "45_pack_tiras_parches",
+  "titulo": "Pregunta por el pack",
+  "cobertura": [
+    "compra_pack"
+  ],
+  "cliente": {
+    "nombre": "Norma Espínola",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "tienen las tiras y los parches juntos?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "120.000",
+      "153.000"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Sí, el pack de tiras nasales y parches bucales sale Gs 120.000 + envío Gs 33.000 = Gs 153.000.\nPagás al recibir. ¿Te lo preparo?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "pack tiras + parches"
+          }
+        }
+      ]
+    }
+  ]
+}

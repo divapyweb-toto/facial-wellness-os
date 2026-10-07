@@ -1,0 +1,27 @@
+{
+  "name": "voltra_recuperar_borrador",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, dejaste sin terminar tu pedido de Voltra ({{2}}).\nSi querés completarlo o tenés una duda, respondé a este mensaje.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "1 Tiras nasales"
+          ]
+        ]
+      }
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto"
+    ],
+    "botones_payload": [],
+    "aviso": "Solo se manda si el borrador trae evidencia de consentimiento (ver ola4.recuperacion). Un único mensaje por borrador. Utilidad porque nombra un pedido concreto que el cliente empezó; sin ofertas ni descuentos. Riesgo: Meta puede recategorizarla a marketing (USD 0,074 en vez de 0,0113); si pasa, revisar el costo antes de activar."
+  }
+}

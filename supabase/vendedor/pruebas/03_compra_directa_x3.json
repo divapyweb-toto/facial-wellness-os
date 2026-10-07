@@ -1,0 +1,75 @@
+{
+  "id": "03_compra_directa_x3",
+  "titulo": "Compra directa de 3 bolsas de tiras",
+  "cobertura": [
+    "compra_x3"
+  ],
+  "cliente": {
+    "nombre": "Liliana Ortiz",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "hola, tienen tiras nasales? quiero para 3 meses",
+    "si, el de 3",
+    "Liliana Ortiz, Fernando de la Mora, zona norte, calle Las Residentas 870 casi Rca. Argentina, casa amarilla",
+    "sí confirmo"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo",
+      "crear_pedido_cod"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "188.000",
+      "155.000"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola, Liliana. Para 3 meses te conviene el de 3: Gs 155.000 + envío Gs 33.000 = Gs 188.000, pagás al recibir.\n¿Te lo armo?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales x3"
+          }
+        },
+        {
+          "nombre": "enviar_opciones",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Perfecto. Pasame tu nombre completo, ciudad y dirección con una referencia. El número ya lo tengo.",
+      "herramientas": []
+    },
+    {
+      "texto": "Pedido: Tiras nasales x3. Total al recibir: Gs 188.000 (con envío de Gs 33.000).\nEntrega a Liliana Ortiz, Fernando de la Mora, Las Residentas 870. ¿Confirmás?",
+      "herramientas": []
+    },
+    {
+      "texto": "Listo Liliana, ya cargamos tu pedido. En unos minutos te llega la confirmación.",
+      "herramientas": [
+        {
+          "nombre": "crear_pedido_cod",
+          "input": {
+            "sku": "TIRAS-X3",
+            "handle": "tiras-nasales",
+            "cantidad": 1
+          }
+        }
+      ]
+    }
+  ]
+}

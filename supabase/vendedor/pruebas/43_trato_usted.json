@@ -1,0 +1,50 @@
+{
+  "id": "43_trato_usted",
+  "titulo": "Cliente que trata de usted",
+  "cobertura": [
+    "usted"
+  ],
+  "cliente": {
+    "nombre": "Ignacio Fretes",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "Buenas tardes, ¿podría usted indicarme el precio de los parches bucales?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "usted",
+      "se los",
+      "señor"
+    ],
+    "no_debe_contener": [
+      "querés",
+      "tenés",
+      "pasame",
+      "pagás"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Buenas tardes, señor Ignacio. Los parches bucales salen Gs 79.000 + envío Gs 33.000 = Gs 112.000.\nUsted paga al recibir. ¿Se los preparo?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "parches bucales"
+          }
+        }
+      ]
+    }
+  ]
+}

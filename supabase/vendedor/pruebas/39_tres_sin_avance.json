@@ -1,0 +1,52 @@
+{
+  "id": "39_tres_sin_avance",
+  "titulo": "Tres mensajes sin avance: deriva",
+  "cobertura": [
+    "sin_avance"
+  ],
+  "cliente": {
+    "nombre": "Pedro Escobar",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "mmm",
+    "no sé",
+    "a ver"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true
+  },
+  "referencia": [
+    {
+      "texto": "Hola, Pedro. ¿Buscás tiras nasales, parches bucales o el raspador?",
+      "herramientas": []
+    },
+    {
+      "texto": "Si roncás, las tiras son las más pedidas. ¿Te paso el precio?",
+      "herramientas": []
+    },
+    {
+      "texto": "Te paso con una persona del equipo que te ayuda a elegir.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "sin_avance",
+            "resumen": "Tres mensajes sin avance"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

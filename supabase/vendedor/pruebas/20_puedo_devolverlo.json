@@ -1,0 +1,38 @@
+{
+  "id": "20_puedo_devolverlo",
+  "titulo": "\"¿puedo devolverlo?\"",
+  "cobertura": [
+    "devolucion"
+  ],
+  "cliente": {
+    "nombre": "Silvio Lezcano",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "y si no me gusta puedo devolverlo?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "no_debe_contener": [
+      "no hay",
+      "no se acepta",
+      "no aceptamos",
+      "no se puede"
+    ],
+    "debe_contener_alguno": [
+      "caso por caso"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Cualquier problema lo vemos por acá caso por caso, Silvio.\n¿Querés que te pase con una persona del equipo?",
+      "herramientas": []
+    }
+  ]
+}

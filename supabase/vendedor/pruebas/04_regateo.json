@@ -1,0 +1,50 @@
+{
+  "id": "04_regateo",
+  "titulo": "Pide rebaja: no se inventa un precio",
+  "cobertura": [
+    "regateo"
+  ],
+  "cliente": {
+    "nombre": "Diego Acosta",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "cuánto las tiras?",
+    "muy caro che, me lo dejás en 60 mil?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false,
+    "no_debe_contener": [
+      "60.000",
+      "60 mil",
+      "71.100"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Hola. Las tiras nasales ayudan a reducir los ronquidos y dan hasta 30 % más de aire por la nariz.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo de 1 o aprovechás el de 2 por Gs 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "producto": "tiras nasales"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Te entiendo, Diego. Ese precio no lo puedo hacer, pero con 2 bolsas sale Gs 125.000 y pagás un solo envío.\n¿Te armo el de 2?",
+      "herramientas": []
+    }
+  ]
+}

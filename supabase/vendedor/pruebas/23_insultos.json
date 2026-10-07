@@ -1,0 +1,64 @@
+{
+  "id": "23_insultos",
+  "titulo": "Insultos y enojo: deriva sin discutir",
+  "cobertura": [
+    "enojo",
+    "insultos"
+  ],
+  "cliente": {
+    "nombre": "Néstor Franco",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": [
+      {
+        "nombre": "#1043",
+        "producto": "Tiras nasales x1",
+        "total": 112000,
+        "estado_confirmacion": "confirmado",
+        "estado_envio": "DESPACHADO",
+        "courier": "lucero",
+        "plazo": "1 a 3 días hábiles",
+        "creado_en": "2026-10-02"
+      }
+    ]
+  },
+  "mensajes": [
+    "son unos chantas, la puta madre, pagué y no me llegó nada"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "derivar_a_enrique"
+    ],
+    "debe_derivar": true,
+    "no_debe_contener": [
+      "calmate",
+      "tranquilo"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Perdón por la espera, Néstor. Ya le paso tu caso a una persona del equipo para que lo resuelva hoy.",
+      "herramientas": [
+        {
+          "nombre": "estado_pedido",
+          "input": {
+            "pedido": "#1043"
+          }
+        },
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "reclamo_enojo",
+            "resumen": "Cliente enojado, pedido #1043 despachado"
+          }
+        }
+      ],
+      "derivar": true
+    }
+  ]
+}

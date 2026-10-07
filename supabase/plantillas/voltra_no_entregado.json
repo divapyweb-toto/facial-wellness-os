@@ -1,0 +1,48 @@
+{
+  "name": "voltra_no_entregado",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, hoy no pudimos entregar tu pedido de Voltra ({{2}}).\n¿Querés que lo intentemos de nuevo?",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "1 Tiras nasales"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Volver a intentar"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cambiar dirección"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cancelar"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "producto"
+    ],
+    "botones_payload": [
+      "ne_reintentar",
+      "ne_direccion",
+      "ne_cancelar"
+    ],
+    "aviso": "Dice 'hoy': programarla el mismo día en que el courier marca el no entregado."
+  }
+}
