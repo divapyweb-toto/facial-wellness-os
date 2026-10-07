@@ -17,6 +17,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
+import { refUtil } from '../../lib/buscadorPedidos'
 import { useToast } from '../../lib/toast'
 import { labelTransportadora } from '../../lib/transportadoras'
 import { getUmbralesSeguimientoPaP, getPlantillaSeguimientoPaP } from '../../lib/config'
@@ -63,13 +64,13 @@ export default function SeguimientoPage() {
           .select('n_referencia, nro_guia_pap, guia_transportadora, transportadora, estado_pap, categoria, ciudad, fecha_ingreso, nombre_courier'),
           { columnaOrden: 'nro_guia_pap' })
         ;(ents || []).forEach(e => {
-          const k = String(e.n_referencia || '').replace(/\D/g, '')
+          const k = refUtil(e.n_referencia)
           if (k) guiaPorRef[k] = { nro_guia: e.nro_guia_pap, guia_transportadora: e.guia_transportadora }
         })
         setEntregasCrudas(ents || [])
       } catch { /* sin guías: el mensaje sale con referencia igual, y la bandeja de PaP queda vacía */ }
       setVentas((abiertas || []).map(v => ({
-        ...v, ...(guiaPorRef[String(v.n_referencia || '').replace(/\D/g, '')] || {}),
+        ...v, ...(guiaPorRef[refUtil(v.n_referencia)] || {}),
       })))
       // Histórico solo para medir efectividad (ya cerradas y contactadas).
       try {

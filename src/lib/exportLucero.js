@@ -33,6 +33,7 @@
 //    Motivo después de "Nota:". Se extrae de ahí.
 // ═══════════════════════════════════════════════════════════
 import { esImporteCorrupto } from './estadosPaP'
+import { normalizarRef } from './referencias'
 
 
 const norm = (s) => String(s ?? '')
@@ -51,10 +52,7 @@ export function esExportLucero(filas) {
 // 'FW-2025' → '2025' · '2018' → '2018'
 export function refDesdeCodigo(codigo) {
   if (codigo == null) return ''
-  const r = String(codigo).replace(/[#\s.\-/]/g, '').trim()
-  const m = r.match(/^[A-Za-z]{1,4}0*(\d+)$/)
-  if (m) return String(parseInt(m[1], 10))
-  return /^\d+$/.test(r) ? String(parseInt(r, 10)) : r
+  return normalizarRef(codigo)
 }
 
 // '28/07/2026 00:00' → '2026-07-28' · '31/07/2026 (Lote 419)' → '2026-07-31'

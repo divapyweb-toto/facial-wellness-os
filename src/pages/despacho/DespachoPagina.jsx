@@ -1,6 +1,7 @@
 // src/pages/despacho/DespachoPagina.jsx
 import { useState, useRef, useMemo } from 'react'
-import { limpiarTel } from '../../lib/referencias'
+import { limpiarTel, refVoltra } from '../../lib/referencias'
+import { esPedidoImportable, filasCsvDesdePedidoShopify } from '../../lib/pedidosVoltra'
 import * as XLSX from 'xlsx'
 import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRun, BorderStyle, Table, TableRow, TableCell, WidthType, convertMillimetersToTwip } from 'docx'
 import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
@@ -161,7 +162,12 @@ function mapearGrupoAPedidos(grupoRows) {
   const estado = clasificarEstado(primero('Tags'), primero('Cancelled at'))
   const cfg = ESTADO_CONFIG[estado]
   const fecha = (primero('Created at') || '').split(' ')[0] || hoyLocal()
-  const ref = (primero('Name') || '').replace('#', '').trim()
+  // Voltra (Vendor = VOLTRA PARAGUAY): Shopify numera igual en cualquier tienda,
+  // así que el #1003 de Voltra es 'VT-1003' y no puede chocar con el 1003 de FW.
+  const esVoltra = /voltra/i.test(String(primero('Vendor') || ''))
+  const tienda = esVoltra ? 'voltra' : 'fw'
+  const origenWhatsApp = /ORIGEN_WHATSAPP/i.test(String(primero('Tags') || '')) || /whatsapp/i.test(String(extraerNota(notas, 'origen') || ''))
+  const ref = esVoltra ? refVoltra(primero('Name')) : (primero('Name') || '').replace('#', '').trim()
   const nombre = (extraerNota(notas, 'Nombre y apellido') || primero('Billing Name') || primero('Shipping Name') || '').replace(/\s*-\s*$/, '').trim()
   const ciudad = extraerNota(notas, 'ciudad') || primero('Shipping City') || ''
   const departamento = extraerNota(notas, 'departamento') || ''
@@ -237,7 +243,7 @@ function mapearGrupoAPedidos(grupoRows) {
     : null
 
   return items.map((it, i) => ({
-    n_referencia: ref, cliente_nombre: nombre, ciudad, departamento, direccion,
+    n_referencia: ref, tienda, origenWhatsApp, cliente_nombre: nombre, ciudad, departamento, direccion,
     referencia_dir: refDir,          // separada: Lucero la pide en su propia columna
     telefono, producto_nombre: it.producto_nombre, cantidad: it.cantidad,
     total: totales[i], fecha, estado_releasit: estado,
@@ -440,6 +446,8 @@ const MODO_CODIGO_LUCERO = 'prefijo'    // 'vacio' | 'prefijo' | 'numero'
 const PREFIJO_LUCERO = 'FW-'
 
 function codigoLucero(ref) {
+  // Voltra ya lleva su prefijo ('VT-1003'): va tal cual, sin anteponer 'FW-'.
+  if (/^VT-\d+$/.test(String(ref || '').trim())) return String(ref).trim()
   if (MODO_CODIGO_LUCERO === 'vacio') return ''
   if (MODO_CODIGO_LUCERO === 'prefijo') return `${PREFIJO_LUCERO}${String(ref || '').trim()}`
   const n = parseInt(ref)
@@ -921,6 +929,7 @@ export default function DespachoPagina() {
   const [ventasPend, setVentasPend] = useState([])
   const [selVentas, setSelVentas] = useState(new Set())
   const [cargVentas, setCargVentas] = useState(false)
+  const [trayendoVoltra, setTrayendoVoltra] = useState(false)
   const [busqVentas, setBusqVentas] = useState('')
 
   // ── Memos CSV ──────────────────────────────────────────
@@ -1248,6 +1257,55 @@ export default function DespachoPagina() {
     }
   }
 
+  const filaVentaDePedido = (p, catalogo) => {
+      const prod = matchProducto(p.producto_nombre, catalogo)
+      // ── Cierre automático: prepago + transportadora sin reporte ──
+      // TSI, Multienvíos y cualquier courier convencional NO entregan reporte
+      // de estados, así que estas ventas nunca podrían salir de 'pendiente':
+      // no hay archivo que importar ni rendición que las cierre. Quedarían
+      // restando flete sin sumar nunca el ingreso, hundiendo la ganancia.
+      // Como además están 100% pagadas por adelantado (la plata YA entró y no
+      // depende de que el cliente reciba), se marcan entregadas al despachar.
+      // OJO: solo aplica a 'otra'. PaP y Lucero SÍ tienen reporte — esas se
+      // cierran con el dato real, no por suposición.
+      const cierreAutomatico = p.prepago && p.transportadora === 'otra'
+      return {
+        fecha: p.fecha,
+        producto_nombre: prod ? prod.nombre : p.producto_nombre,
+        cantidad: p.cantidad,
+        precio_unit: p.total,
+        total: p.total,
+        n_referencia: p.n_referencia,
+        tienda: p.tienda || 'fw',
+        estado: cierreAutomatico ? 'entregado' : 'pendiente',
+        // Los pedidos cargados a mano NO vinieron de Shopify — dejarlos como
+        // "Shopify Orgánico" ensuciaría cualquier reporte por canal de origen.
+        canal_origen: (p.origenManual || p.origenWhatsApp) ? 'WhatsApp' : 'Shopify Orgánico',
+        ciudad: p.ciudad,
+        cliente_nombre: p.cliente_nombre,
+        cliente_telefono: p.telefono,
+        cliente_direccion: p.direccion,
+        producto_id: prod ? prod.id : null,
+        costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
+        // Lo que la lista sugería para esa cantidad, al momento de importar.
+        // Guardarlo es lo que permite ver después si el pedido llevó descuento
+        // o upsell: descuento = precio_lista − total. Sin esto, un precio
+        // rebajado es indistinguible de un error de carga.
+        precio_lista: prod ? precioSugerido(prod, p.cantidad || 1) : null,
+        // Flete REAL de la transportadora elegida en ESA ciudad. Se congela acá:
+        // si mañana cambia la tarifa, los reportes viejos no se mueven.
+        costo_envio: p.costo_envio ?? tarifaDe(p.transportadora || 'pap', p.ciudad) ?? costoFleteActual(),
+        transportadora: p.transportadora || 'pap',
+        envio_cliente: 0,
+        metodo_envio_nombre: (TRANSPORTADORAS[p.transportadora] || TRANSPORTADORAS.pap).nombre,
+        metodo_pago_nombre: p.prepago ? 'Transferencia (anticipado)' : 'Efectivo COD',
+        pago_anticipado: !!p.prepago,  // pagó por adelantado (transferencia verificada)
+        estado_releasit: p.estado_releasit,
+        // CI/RUC del pedido manual (columna opcional — ver nota de guardado tolerante abajo).
+        notas: p.notas || null,
+      }
+    }
+
   const cargarVentas = async () => {
     if (!paraDespacho.length) return
     setCargando(true)
@@ -1330,53 +1388,7 @@ export default function DespachoPagina() {
       catalogo = data || []
     } catch (e) { /* sin catálogo, costo_prod=0 */ }
 
-    const ventasArr = nuevas.map(p => {
-      const prod = matchProducto(p.producto_nombre, catalogo)
-      // ── Cierre automático: prepago + transportadora sin reporte ──
-      // TSI, Multienvíos y cualquier courier convencional NO entregan reporte
-      // de estados, así que estas ventas nunca podrían salir de 'pendiente':
-      // no hay archivo que importar ni rendición que las cierre. Quedarían
-      // restando flete sin sumar nunca el ingreso, hundiendo la ganancia.
-      // Como además están 100% pagadas por adelantado (la plata YA entró y no
-      // depende de que el cliente reciba), se marcan entregadas al despachar.
-      // OJO: solo aplica a 'otra'. PaP y Lucero SÍ tienen reporte — esas se
-      // cierran con el dato real, no por suposición.
-      const cierreAutomatico = p.prepago && p.transportadora === 'otra'
-      return {
-        fecha: p.fecha,
-        producto_nombre: prod ? prod.nombre : p.producto_nombre,
-        cantidad: p.cantidad,
-        precio_unit: p.total,
-        total: p.total,
-        n_referencia: p.n_referencia,
-        estado: cierreAutomatico ? 'entregado' : 'pendiente',
-        // Los pedidos cargados a mano NO vinieron de Shopify — dejarlos como
-        // "Shopify Orgánico" ensuciaría cualquier reporte por canal de origen.
-        canal_origen: p.origenManual ? 'WhatsApp' : 'Shopify Orgánico',
-        ciudad: p.ciudad,
-        cliente_nombre: p.cliente_nombre,
-        cliente_telefono: p.telefono,
-        cliente_direccion: p.direccion,
-        producto_id: prod ? prod.id : null,
-        costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
-        // Lo que la lista sugería para esa cantidad, al momento de importar.
-        // Guardarlo es lo que permite ver después si el pedido llevó descuento
-        // o upsell: descuento = precio_lista − total. Sin esto, un precio
-        // rebajado es indistinguible de un error de carga.
-        precio_lista: prod ? precioSugerido(prod, p.cantidad || 1) : null,
-        // Flete REAL de la transportadora elegida en ESA ciudad. Se congela acá:
-        // si mañana cambia la tarifa, los reportes viejos no se mueven.
-        costo_envio: p.costo_envio ?? tarifaDe(p.transportadora || 'pap', p.ciudad) ?? costoFleteActual(),
-        transportadora: p.transportadora || 'pap',
-        envio_cliente: 0,
-        metodo_envio_nombre: (TRANSPORTADORAS[p.transportadora] || TRANSPORTADORAS.pap).nombre,
-        metodo_pago_nombre: p.prepago ? 'Transferencia (anticipado)' : 'Efectivo COD',
-        pago_anticipado: !!p.prepago,  // pagó por adelantado (transferencia verificada)
-        estado_releasit: p.estado_releasit,
-        // CI/RUC del pedido manual (columna opcional — ver nota de guardado tolerante abajo).
-        notas: p.notas || null,
-      }
-    })
+    const ventasArr = nuevas.map(p => filaVentaDePedido(p, catalogo))
     for (let i = 0; i < ventasArr.length; i += 50) {
       let chunk = ventasArr.slice(i, i + 50)
       let { error } = await supabase.from('ventas').insert(chunk)
@@ -1493,8 +1505,67 @@ export default function DespachoPagina() {
     setCargVentas(false)
   }
 
+  // Pasa a Ventas los pedidos de Voltra que entraron por Shopify/WhatsApp y
+  // todavía no están. Usa EXACTAMENTE el mismo camino que el CSV de Shopify
+  // (mismas filas → mismo mapeo → misma fila de venta), así las dos vías dan
+  // el mismo resultado y no se duplican: el pedido #1003 es 'VT-1003' en las dos,
+  // y lo que ya existe en ventas con esa referencia se saltea.
+  const traerPedidosVoltra = async ({ silencioso = false } = {}) => {
+    setTrayendoVoltra(true)
+    try {
+      const desde = new Date(Date.now() - 90 * 86400000).toISOString()
+      const { data: filas, error } = await fetchAllSafe(() => supabase
+        .from('shopify_pedidos').select('shopify_order_id, nombre, es_borrador, raw')
+        .gte('creado_en', desde), { columnaOrden: 'shopify_order_id' })
+      if (error) throw error
+
+      const pedidos = (filas || []).filter(esPedidoImportable)
+        .flatMap(f => agruparFilasPorReferencia(filasCsvDesdePedidoShopify(f)).flatMap(mapearGrupoAPedidos))
+        .filter(p => p.producto_nombre)
+      // Solo los confirmados (o con ayuda): igual que Despacho, un pedido sin
+      // confirmar no se despacha, así que tampoco entra a Ventas todavía.
+      const listos = pedidos.filter(p => p.cfg?.despachar)
+      const sinConfirmar = new Set(pedidos.filter(p => !p.cfg?.despachar && p.estado_releasit !== 'cancelado').map(p => p.n_referencia)).size
+      if (!listos.length) {
+        if (!silencioso) toast(sinConfirmar ? `Hay ${sinConfirmar} pedido(s) de Voltra sin confirmar todavía` : 'No hay pedidos de Voltra para traer', 'info')
+        return
+      }
+
+      const refs = [...new Set(listos.map(p => p.n_referencia))]
+      const cuenta = new Map()
+      const { data: ya } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs).is('deleted_at', null)
+      ;(ya || []).forEach(d => cuenta.set(String(d.n_referencia), (cuenta.get(String(d.n_referencia)) || 0) + 1))
+      const vistas = new Map()
+      const nuevas = []
+      for (const p of listos) {
+        const r = String(p.n_referencia)
+        const v = vistas.get(r) || 0
+        if (v >= (cuenta.get(r) || 0)) nuevas.push(p)
+        vistas.set(r, v + 1)
+      }
+      if (!nuevas.length) { if (!silencioso) toast('Todos los pedidos de Voltra ya están en Ventas', 'info'); return }
+
+      const { data: catalogo } = await supabase.from('productos').select('id, nombre, costo_unit').eq('activo', true)
+      let filasVenta = nuevas.map(p => filaVentaDePedido(p, catalogo || []))
+      let { error: errIns } = await supabase.from('ventas').insert(filasVenta)
+      if (errIns && /Could not find the '(\w+)' column/.test(errIns.message || '')) {
+        const col = errIns.message.match(/Could not find the '(\w+)' column/)[1]
+        filasVenta = filasVenta.map(r => { const o = { ...r }; delete o[col]; return o })
+        ;({ error: errIns } = await supabase.from('ventas').insert(filasVenta))
+      }
+      if (errIns) throw errIns
+      const nPedidos = new Set(nuevas.map(p => p.n_referencia)).size
+      toast(`${nPedidos} pedido${nPedidos === 1 ? '' : 's'} de Voltra pasaron a Ventas`, 'success')
+      fetchVentasPendientes()
+    } catch (e) {
+      toast('No se pudieron traer los pedidos de Voltra: ' + (e.message || ''), 'error')
+    } finally { setTrayendoVoltra(false) }
+  }
+
   const irAVentas = () => {
     setModo('ventas')
+    // Al entrar se traen solos los pedidos nuevos de Voltra (sin avisos si no hay).
+    traerPedidosVoltra({ silencioso: true }).then(() => {}, () => {})
     if (!ventasPend.length && !cargVentas) fetchVentasPendientes()
   }
 
@@ -1670,6 +1741,15 @@ export default function DespachoPagina() {
               >
                 <RefreshCw size={12} style={{ animation: cargVentas ? 'spin 1s linear infinite' : 'none' }} />
                 {cargVentas ? 'Cargando…' : 'Recargar'}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => traerPedidosVoltra()}
+                disabled={trayendoVoltra}
+                title="Pasa a Ventas los pedidos de Voltra que entraron por la web o WhatsApp"
+                style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+              >
+                <ShoppingBag size={12} /> {trayendoVoltra ? 'Trayendo…' : 'Traer pedidos de Voltra'}
               </button>
               <button
                 className="btn btn-secondary btn-sm"

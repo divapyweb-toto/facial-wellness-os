@@ -23,6 +23,7 @@
 // ═══════════════════════════════════════════════════════════
 
 import { esImporteCorrupto } from './estadosPaP'
+import { normalizarRef } from './referencias'
 
 // Normaliza texto de encabezado: sin tildes, minúscula, sin espacios extra.
 const normHeader = (s) => String(s ?? '')
@@ -74,11 +75,7 @@ export function placeholderEntregaLucero(venta) {
 // poder cruzar con la venta, que guarda el número pelado.
 export function refDesdeCodigoLucero(codigo) {
   if (codigo == null) return ''
-  let r = String(codigo).replace(/[#\s.\-/]/g, '').trim()
-  const conPrefijo = r.match(/^[A-Za-z]{1,4}0*(\d+)$/)
-  if (conPrefijo) return String(parseInt(conPrefijo[1], 10))
-  if (/^\d+$/.test(r)) return String(parseInt(r, 10))
-  return r
+  return normalizarRef(codigo)
 }
 
 const num = (v) => {

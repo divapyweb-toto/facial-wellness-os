@@ -30,6 +30,13 @@
 //   'ABCD'     → 'ABCD'    (texto sin números: se deja tal cual)
 export function normalizarRef(ref) {
   if (!ref) return ''
+  // Voltra: 'VT-1003' / '#vt1003' / 'VT-01003' → 'VT-1003'. El prefijo VT NO se
+  // borra (a diferencia de FW-, L- y WA-): Shopify numera igual en cualquier
+  // tienda, así que el #1003 de Voltra y el 1003 de Facial Wellness son pedidos
+  // distintos y no pueden cruzar entre sí. Forma canónica CON guion, para que
+  // lo guardado en ventas y lo que devuelve el courier sea idéntico.
+  const vt = String(ref).trim().match(/^#?\s*VT\s*[-\s]?\s*0*(\d+)$/i)
+  if (vt) return `VT-${parseInt(vt[1], 10)}`
   // Quitar #, espacios y cualquier separador
   let r = String(ref).replace(/[#\s.\-/]/g, '').trim()
   // Prefijo de transportadora o de canal (FW-, L-, WA-). Los códigos que
@@ -77,3 +84,13 @@ export function limpiarTel(tel) {
 // distintos en archivos distintos. Se mantiene el nombre para no romper
 // imports existentes, pero apunta a la misma implementación.
 export const normalizarTel = limpiarTel
+
+// ─── Pedidos de Voltra ──────────────────────────────────────
+// Número de pedido de Shopify (Voltra) → referencia propia: '#1003' → 'VT-1003'.
+// Es lo que se guarda en ventas.n_referencia y lo que viaja al courier.
+export function refVoltra(nombre) {
+  const n = String(nombre ?? '').replace(/[^0-9]/g, '')
+  return n ? `VT-${parseInt(n, 10)}` : ''
+}
+
+export const esRefVoltra = (ref) => /^VT-\d+$/.test(normalizarRef(ref))
