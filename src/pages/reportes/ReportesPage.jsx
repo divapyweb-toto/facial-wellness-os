@@ -1,7 +1,8 @@
 // src/pages/reportes/ReportesPage.jsx
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { supabaseTienda as supabase, supabase as supabaseCrudo, formatGs, formatPct } from '../../lib/supabase'
-import { armarGastosAutomaticos, cargarGastosAutomaticos } from '../../lib/gastosAutomaticos'
+import { armarGastosAutomaticos, cargarGastosAutomaticos, diaLocal } from '../../lib/gastosAutomaticos'
+import { cargarTasas } from '../../lib/tipoCambio'
 import { getGastosAutomaticosConfig } from '../../lib/config'
 import { getTienda } from '../../lib/tienda'
 import { fetchAll } from '../../lib/fetchAll'
@@ -100,8 +101,13 @@ export default function ReportesPage() {
     const diasMesAuto = new Date(year, month, 0).getDate()
     const diasPeriodoAuto = Math.round((new Date(fin + 'T00:00:00') - new Date(inicio + 'T00:00:00')) / 86400000) + 1
     const cfgAuto = getGastosAutomaticosConfig()
+    // Cada gasto en dólares se convierte con el cambio de SU día (no uno solo).
+    const hoyAuto = new Date().toISOString().slice(0, 10)
+    const fechaTasaFijos = fin < hoyAuto ? fin : hoyAuto
+    const diasUsd = [...rawAuto.waMensajes, ...rawAuto.turnosIA, ...rawAuto.ciclosMejora].map(r => diaLocal(r.creado_en)).concat(fechaTasaFijos)
+    const { tasas } = await cargarTasas(supabaseCrudo, diasUsd)
     const auto = armarGastosAutomaticos({
-      ...rawAuto, productos,
+      ...rawAuto, productos, tasas, fechaTasaFijos,
       mesesConCampanas: new Set((campanas || []).filter(c => Number(c.gasto) > 0).map(c => c.mes)),
       tienda: getTienda(), usdPyg: cfgAuto.usdPyg, gastosFijosTexto: cfgAuto.gastosFijosTexto,
       fraccionMes: Math.min(1, diasPeriodoAuto / diasMesAuto),
@@ -904,7 +910,12 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
           )}
           {datos.auto.faltaTipoCambio && (
             <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(234,179,8,0.1)', border: '1px solid var(--yellow)', fontSize: 12.5, color: 'var(--text-secondary)' }}>
-              ⚠️ Falta el tipo de cambio: WhatsApp API y Claude API (US$ {datos.auto.usdSinConvertir.toFixed(2)}) <strong>no están sumados</strong> a la utilidad. Cargalo en Config → Gastos automáticos.
+              ⚠️ Falta el tipo de cambio: WhatsApp API y Claude API (US$ {datos.auto.usdSinConvertir.toFixed(2)}) <strong>no están sumados</strong> a la utilidad. No se pudo obtener la cotización: cargá un tipo de cambio de respaldo en Config → Gastos automáticos.
+            </div>
+          )}
+          {datos.auto.rangoTasa && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+              Dólares convertidos con el cambio de cada día: ₲{Math.round(datos.auto.rangoTasa.min).toLocaleString('es-PY')} a ₲{Math.round(datos.auto.rangoTasa.max).toLocaleString('es-PY')} por US$ (promedio ₲{datos.auto.rangoTasa.prom.toLocaleString('es-PY')}). Cotización de referencia; se puede corregir por día en la tabla tipo_cambio.
             </div>
           )}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>

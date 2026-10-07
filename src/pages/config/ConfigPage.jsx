@@ -378,8 +378,8 @@ function ReglasNegocio() {
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           Reportes suma solos: Meta Ads diario, WhatsApp API y Claude API (los dos últimos el sistema los registra en dólares).
         </p>
-        <Campo clave="usd_pyg" label="Tipo de cambio" sufijo="Gs. por 1 USD"
-          ayuda="Sin este valor, WhatsApp y Claude se muestran en dólares y no se suman a la utilidad." />
+        <Campo clave="usd_pyg" label="Tipo de cambio de respaldo" sufijo="Gs. por 1 USD"
+          ayuda="Cada gasto en dólares se convierte solo con el cambio de su día. Este valor se usa únicamente si no se puede obtener la cotización de ese día." />
         <div className="form-group" style={{ marginTop: 10 }}>
           <label className="form-label">Gastos fijos mensuales</label>
           <textarea className="form-textarea" rows={4} value={form.gastos_fijos_voltra}

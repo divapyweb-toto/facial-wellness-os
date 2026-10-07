@@ -14,8 +14,27 @@
 // Config. Si falta, NO se inventa uno: se muestran en dólares y no se suman.
 // ═══════════════════════════════════════════════════════════
 import { familiaProducto } from './recompra'
+import { tasaDelDia } from './tipoCambio'
 
 const num = (v) => Number(v) || 0
+
+// Día de Paraguay (UTC-3) de un instante guardado en UTC.
+export const diaLocal = (iso) => (iso ? new Date(new Date(iso).getTime() - 3 * 3600000).toISOString().slice(0, 10) : null)
+
+// Convierte dólares a guaraníes con el cambio del día de CADA fila. Una fila sin
+// fecha usa el respaldo; sin cambio posible, queda sin convertir (y se avisa).
+function convertirPorDia(filas, tasas, respaldo) {
+  let usd = 0, gs = 0, sinConvertir = 0, usdConvertido = 0
+  const usadas = []
+  for (const f of filas) {
+    const d = num(f.costo_usd)
+    if (!d) continue
+    usd += d
+    const t = tasaDelDia(tasas, diaLocal(f.creado_en), respaldo)
+    if (t > 0) { gs += d * t; usdConvertido += d; usadas.push(t) } else sinConvertir += d
+  }
+  return { usd, gs: Math.round(gs), sinConvertir, usdConvertido, usadas }
+}
 
 // Gastos fijos escritos en Config, una línea por gasto:
 //   Shopify: 180000          (guaraníes por mes)
@@ -39,7 +58,7 @@ export function parsearGastosFijos(texto) {
 export function armarGastosAutomaticos({
   adsDiario = [], productos = [], mesesConCampanas = new Set(),
   waMensajes = [], turnosIA = [], ciclosMejora = [],
-  tienda = 'voltra', usdPyg = 0, gastosFijosTexto = '', fraccionMes = 1,
+  tienda = 'voltra', usdPyg = 0, tasas = new Map(), fechaTasaFijos = null, gastosFijosTexto = '', fraccionMes = 1,
 } = {}) {
   const idAFamilia = new Map((productos || []).map(p => [p.id, familiaProducto(p.nombre)]))
 
@@ -59,32 +78,35 @@ export function armarGastosAutomaticos({
 
   // WhatsApp y Claude son de Voltra: Facial Wellness no los usa.
   const aplicaVoltra = tienda === 'voltra' || tienda === 'todas'
-  const waUsd = aplicaVoltra ? waMensajes.reduce((s, m) => s + num(m.costo_usd), 0) : 0
-  const claudeUsd = aplicaVoltra
-    ? turnosIA.filter(t => !t.simulado).reduce((s, t) => s + num(t.costo_usd), 0)
-      + ciclosMejora.reduce((s, c) => s + num(c.costo_usd), 0)
-    : 0
+  const wa = aplicaVoltra ? convertirPorDia(waMensajes, tasas, usdPyg) : { usd: 0, gs: 0, sinConvertir: 0, usdConvertido: 0, usadas: [] }
+  const cl = aplicaVoltra
+    ? convertirPorDia([...turnosIA.filter(t => !t.simulado), ...ciclosMejora], tasas, usdPyg)
+    : { usd: 0, gs: 0, sinConvertir: 0, usdConvertido: 0, usadas: [] }
+  const waUsd = wa.usd, claudeUsd = cl.usd
 
-  const hayTC = num(usdPyg) > 0
-  const aGs = (usd) => (hayTC ? Math.round(usd * usdPyg) : 0)
-
-  // Gastos fijos mensuales (prorrateados al período).
+  // Fijos en dólares: el cambio de la fecha de referencia (fin del período, o hoy).
+  const tFijos = tasaDelDia(tasas, fechaTasaFijos, usdPyg)
   const fijos = aplicaVoltra ? parsearGastosFijos(gastosFijosTexto).map(f => {
-    const faltaTC = f.usd && !hayTC
-    const gs = faltaTC ? 0 : Math.round((f.usd ? f.monto * usdPyg : f.monto) * fraccionMes)
+    const faltaTC = f.usd && !(tFijos > 0)
+    const gs = faltaTC ? 0 : Math.round((f.usd ? f.monto * tFijos : f.monto) * fraccionMes)
     return { concepto: f.concepto, gs, faltaTC }
   }) : []
 
-  const whatsappGs = aGs(waUsd), claudeGs = aGs(claudeUsd)
+  const whatsappGs = wa.gs, claudeGs = cl.gs
   const fijosGs = fijos.reduce((s, f) => s + f.gs, 0)
-  const usdSinConvertir = hayTC ? 0 : waUsd + claudeUsd
+  const usdSinConvertir = wa.sinConvertir + cl.sinConvertir
+  const usadas = [...wa.usadas, ...cl.usadas]
+  const usdConv = wa.usdConvertido + cl.usdConvertido
+  const rangoTasa = usadas.length
+    ? { min: Math.min(...usadas), max: Math.max(...usadas), prom: Math.round((whatsappGs + claudeGs) / usdConv) }
+    : null
   return {
     metaTotal, metaPorFamilia, metaDescartado,
     waUsd, claudeUsd, whatsappGs, claudeGs,
     fijos, fijosGs,
     // Lo que se suma a los gastos del reporte (Meta se suma aparte, a la publicidad).
     totalGs: whatsappGs + claudeGs + fijosGs,
-    usdPyg: num(usdPyg), faltaTipoCambio: !hayTC && (waUsd > 0 || claudeUsd > 0 || fijos.some(f => f.faltaTC)),
+    rangoTasa, faltaTipoCambio: usdSinConvertir > 0 || fijos.some(f => f.faltaTC),
     usdSinConvertir,
   }
 }
@@ -100,9 +122,9 @@ export async function cargarGastosAutomaticos(cliente, { inicio, fin }) {
   if (ads === null) ads = await seguro(() => cliente.from('gasto_ads_diario').select('fecha, gasto, producto_id').gte('fecha', inicio).lte('fecha', fin).limit(5000)) || []
 
   const [wa, turnos, ciclos] = await Promise.all([
-    seguro(() => cliente.from('wa_mensajes').select('costo_usd').not('costo_usd', 'is', null).gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(20000)),
-    seguro(() => cliente.from('vendedor_turnos').select('costo_usd, simulado').gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(20000)),
-    seguro(() => cliente.from('mejora_ciclos').select('costo_usd').gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(1000)),
+    seguro(() => cliente.from('wa_mensajes').select('costo_usd, creado_en').not('costo_usd', 'is', null).gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(20000)),
+    seguro(() => cliente.from('vendedor_turnos').select('costo_usd, simulado, creado_en').gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(20000)),
+    seguro(() => cliente.from('mejora_ciclos').select('costo_usd, creado_en').gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(1000)),
   ])
   return { adsDiario: ads, waMensajes: wa || [], turnosIA: turnos || [], ciclosMejora: ciclos || [] }
 }
