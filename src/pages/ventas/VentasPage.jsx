@@ -380,7 +380,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
 
           {/* ── RESUMEN ── */}
           {tot.lineas > 0 && (
-            <div style={{ background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.2)', borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ background: 'var(--accent-dim)', border: '1px solid rgba(46,139,212,0.2)', borderRadius: 8, padding: '12px 16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>
                   Total que paga el cliente{envioCliente > 0 ? ' (con envío)' : ''}
@@ -889,7 +889,7 @@ export default function VentasPage() {
       </div>
 
       {seleccionadas.size > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 16px', background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.3)', borderRadius: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 16px', background: 'var(--accent-dim)', border: '1px solid rgba(46,139,212,0.3)', borderRadius: 8 }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>{seleccionadas.size} venta(s) seleccionada(s)</span>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => setSeleccionadas(new Set())}>Deseleccionar</button>

@@ -67,7 +67,7 @@
   font-size: 14px; line-height: 1.42; white-space: pre-wrap; word-break: break-word;
 }
 .burbuja.in { align-self: flex-start; background: var(--bg-hover); border-bottom-left-radius: 4px; }
-.burbuja.out { align-self: flex-end; background: var(--accent-dim-lg); border: 1px solid rgba(200,241,53,0.22); border-bottom-right-radius: 4px; }
+.burbuja.out { align-self: flex-end; background: var(--accent-dim-lg); border: 1px solid rgba(46,139,212,0.22); border-bottom-right-radius: 4px; }
 .burbuja.fallido { border-color: rgba(239,68,68,0.5); background: var(--red-dim); }
 .burbuja-pie { display: flex; justify-content: flex-end; gap: 4px; align-items: center; font-size: 10.5px; color: var(--text-muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
 .burbuja-tipo { font-size: 12px; color: var(--text-secondary); font-style: italic; }

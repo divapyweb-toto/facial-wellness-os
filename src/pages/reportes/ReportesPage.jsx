@@ -23,7 +23,7 @@ const FAMILIAS_ADS_REP = [
   ['lengua', 'Raspador de Lengua'], ['jaw', 'JawFlex Pro'], ['botella', 'Botella Flexible'], ['bebird', 'Bebird Pro'],
 ]
 
-const COLORS = ['#c8f135', '#22c55e', '#3b82f6', '#a78bfa', '#f59e0b', '#ef4444', '#ec4899']
+const COLORS = ['#2e8bd4', '#22c55e', '#3b82f6', '#a78bfa', '#f59e0b', '#ef4444', '#ec4899']
 
 // Badge de variación vs mes anterior
 // eslint-disable-next-line no-unused-vars
@@ -745,7 +745,7 @@ ${tabla(['Métrica', 'Valor'], [
 
 ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a => `<li>${esc(typeof a === 'string' ? a : (a.texto || a.mensaje || JSON.stringify(a)))}</li>`).join('')}</ul>` : ''}
 
-<div class="foot">Facial Wellness OS · reporte generado automáticamente · ${new Date().toISOString().slice(0, 10)}</div>
+<div class="foot">Voltra OS · reporte generado automáticamente · ${new Date().toISOString().slice(0, 10)}</div>
 </body></html>`)
     win.document.close()
     setTimeout(() => { win.focus(); win.print() }, 400)
@@ -1112,8 +1112,8 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
                 <AreaChart data={datos.porDia} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="gradV" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#c8f135" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#c8f135" stopOpacity={0} />
+                      <stop offset="5%" stopColor="#2e8bd4" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#2e8bd4" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -1121,7 +1121,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
                   <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false}
                     tickFormatter={v => v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : `${(v/1000).toFixed(0)}k`} />
                   <Tooltip formatter={v => [formatGs(v)]} contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 11 }} />
-                  <Area type="monotone" dataKey="ventas" name="Ventas" stroke="#c8f135" fill="url(#gradV)" strokeWidth={2} dot={false} />
+                  <Area type="monotone" dataKey="ventas" name="Ventas" stroke="#2e8bd4" fill="url(#gradV)" strokeWidth={2} dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -1298,7 +1298,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
           {/* Footer del reporte */}
           <div className="reporte-pie" style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '12px 0' }}>
             <span>Generado el {new Date().toLocaleDateString('es-PY', { day: '2-digit', month: 'long', year: 'numeric' })}</span>
-            <span>Facial Wellness OS · Ciudad del Este, Paraguay</span>
+            <span>Voltra OS · Ciudad del Este, Paraguay</span>
           </div>
         </div>
       )}

@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../lib/AuthContext'
 import { Eye, EyeOff, LogIn } from 'lucide-react'
+import LOGO_SRC from '../../assets/marca/voltra-logo-blanco.png'
 
 export default function LoginPage() {
   const { signIn } = useAuth()
@@ -45,7 +46,7 @@ export default function LoginPage() {
         transform: 'translateX(-50%)',
         width: '600px',
         height: '400px',
-        background: 'radial-gradient(ellipse, rgba(200,241,53,0.06) 0%, transparent 70%)',
+        background: 'radial-gradient(ellipse, rgba(46,139,212,0.06) 0%, transparent 70%)',
         pointerEvents: 'none',
       }} />
 
@@ -63,19 +64,10 @@ export default function LoginPage() {
             justifyContent: 'center',
             width: '100%',
           }}>
-            <span style={{
-              fontFamily: 'var(--font-display)',
-              fontSize: 20,
-              fontWeight: 800,
-              color: 'var(--text-primary)',
-              letterSpacing: '-0.03em',
-              textTransform: 'uppercase',
-            }}>
-              FACIAL <span style={{ color: 'var(--accent)' }}>WELLNESS</span>
-            </span>
+            <img src={LOGO_SRC} alt="Voltra" draggable={false} style={{ height: 30, width: 'auto', display: 'block' }} />
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-            Business OS · v1.0
+            Voltra OS · v1.0
           </p>
         </div>
 
@@ -86,7 +78,7 @@ export default function LoginPage() {
               Iniciar sesión
             </h1>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
-              Ingresá con tu cuenta de Facial Wellness
+              Ingresá con tu cuenta de Voltra
             </p>
           </div>
 
@@ -149,7 +141,7 @@ export default function LoginPage() {
         </div>
 
         <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)' }}>
-          Facial Wellness · Ciudad del Este, Paraguay
+          Voltra · Ciudad del Este, Paraguay
         </p>
       </div>
     </div>

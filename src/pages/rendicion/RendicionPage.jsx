@@ -882,7 +882,7 @@ export default function RendicionPage() {
                         <td data-label="Transp." style={{ padding: '8px 6px' }}>
                           <span style={{
                             fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
-                            background: m.transportadora === 'lucero' ? 'var(--accent-dim, rgba(200,241,53,0.15))' : 'var(--border)',
+                            background: m.transportadora === 'lucero' ? 'var(--accent-dim, rgba(46,139,212,0.15))' : 'var(--border)',
                             color: m.transportadora === 'lucero' ? 'var(--accent)' : 'var(--text-secondary)',
                           }}>
                             {m.transportadora === 'lucero' ? 'Lucero' : 'PAP'}

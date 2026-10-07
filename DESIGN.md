@@ -1,4 +1,4 @@
-# Sistema de diseño — Facial Wellness OS v4
+# Sistema de diseño — Voltra OS v5
 
 Guía corta para que cualquier pantalla nueva se vea y se sienta parte del
 sistema. Todo vive en `src/index.css`. **Regla de oro: si vas a escribir un
@@ -8,9 +8,9 @@ estilo inline, primero fijate si ya existe la primitiva.**
 
 | Elemento | Valor |
 |---|---|
-| Fondo | Negro profundo `#060606` con luz ambiental verde ácido |
-| Acento | Verde ácido `#c8f135` — la firma de la marca |
-| Títulos de página | Barlow Condensed **itálica 800 MAYÚSCULAS** (eco del logo) |
+| Fondo | Negro azulado `#05080c` con luz ambiental azul Voltra |
+| Acento | Azul Voltra `#2e8bd4` — la firma de la marca (logo en `src/assets/marca/`) |
+| Títulos de página | Archivo **ancho 800 MAYÚSCULAS** (eco del logo) |
 | Números | Space Grotesk, siempre `tabular-nums` (la plata alineada) |
 | Cuerpo | Inter |
 | Movimiento | Resortes (`--ease-spring`), 100–300 ms, respeta `prefers-reduced-motion` |
@@ -54,7 +54,7 @@ el menú. Nunca se disparan mientras escribís en un campo.
 2. **Estados vacíos guían**: `.empty-state` siempre con título + qué hacer.
 3. **Errores en español y con acción**: qué pasó + qué hacer, nunca el código pelado.
 4. **La plata en `tabular-nums`** — columnas de montos que no bailan.
-5. **Verde ácido = marca e interacción primaria.** Semáforos: `--green/--yellow/--red`.
+5. **Azul Voltra = marca e interacción primaria.** Semáforos: `--green/--yellow/--red`.
    No mezclar: el acento no es un color de estado.
 6. **Nada de valores de negocio en el código** — precios, tarifas y umbrales
    van a Config (ver auditoría F-04).

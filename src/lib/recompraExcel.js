@@ -22,7 +22,7 @@ function fechaHoy() {
 
 export async function generarExcelRecompra(segmentado) {
   const wb = new ExcelJS.Workbook()
-  wb.creator = 'Facial Wellness OS'
+  wb.creator = 'Voltra OS'
   wb.created = new Date()
   const fecha = fechaHoy()
 

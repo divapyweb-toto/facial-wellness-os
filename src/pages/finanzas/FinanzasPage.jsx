@@ -320,7 +320,7 @@ export default function FinanzasPage() {
 
       {/* Barra de selección masiva */}
       {sel.size > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 16px', background: 'var(--accent-dim)', border: '1px solid rgba(200,241,53,0.3)', borderRadius: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 16px', background: 'var(--accent-dim)', border: '1px solid rgba(46,139,212,0.3)', borderRadius: 8 }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>{sel.size} gasto(s) seleccionado(s)</span>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => setSel(new Set())}>Deseleccionar</button>

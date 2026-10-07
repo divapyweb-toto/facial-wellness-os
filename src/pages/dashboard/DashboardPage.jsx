@@ -100,7 +100,7 @@ function SaldoModal({ onClose, onSaved }) {
                 <div key={s.id} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   padding: '8px 12px', background: i === 0 ? 'var(--accent-dim)' : 'var(--bg-hover)',
-                  borderRadius: 6, border: i === 0 ? '1px solid rgba(200,241,53,0.2)' : 'none',
+                  borderRadius: 6, border: i === 0 ? '1px solid rgba(46,139,212,0.2)' : 'none',
                 }}>
                   <div>
                     <div style={{ fontWeight: 700, color: i === 0 ? 'var(--accent)' : 'var(--text-primary)', fontSize: 14 }}>

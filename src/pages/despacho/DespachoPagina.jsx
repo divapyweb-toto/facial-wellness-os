@@ -618,12 +618,12 @@ async function descargarGuiasDOCX(pedidos) {
     children.push(
       new Paragraph({
         spacing: { after: 20 },
-        children: [new TextRun({ text: 'FACIAL WELLNESS', bold: true, size: 34 })],
+        children: [new TextRun({ text: 'VOLTRA E.A.S.', bold: true, size: 34 })],
       }),
       new Paragraph({
         spacing: { after: 100 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: '000000' } },
-        children: [new TextRun({ text: 'Ciudad del Este  ·  CI 6.103.233  ·  Tel. 0985-914-500', size: 18, color: GRIS })],
+        children: [new TextRun({ text: 'Ciudad del Este  ·  RUC 80177762-3  ·  Tel. 0995-637-538', size: 18, color: GRIS })],
       }),
     )
 
@@ -677,7 +677,7 @@ async function descargarGuiasDOCX(pedidos) {
     children.push(
       seccion('PEDIDO'),
       tabla([
-        fila('PRODUCTO', p.esMultiProducto ? p.tipoCombinado : getTipo(p.producto_nombre), { destacado: true }),
+        fila('PRODUCTO', String(p.esMultiProducto ? p.tipoCombinado : getTipo(p.producto_nombre)).replace(/\s*Facial Wellness/gi, ''), { destacado: true }),
         p.esMultiProducto
           ? fila('DETALLE', p.descripcionCombinada)
           : fila('CANTIDAD', `${p.cantidad || 1} unidad${(p.cantidad || 1) === 1 ? '' : 'es'}`),
