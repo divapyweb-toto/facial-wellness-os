@@ -1,9 +1,11 @@
 // _shared/vendedor/config.ts · Dueño: G1 (ola 2)
 // Arma la configuración de un turno a partir de las filas de config_wa (semilla: supabase/seed_vendedor.sql).
 // Puro: si falta una clave usa el default del código y lo deja anotado en `faltantes` (el I/O lo loguea).
-import { PROMESAS_SALUD_DEFAULT } from "./filtro_salida.ts";
+import { MULETILLAS_DEFAULT, NIEGA_IA_DEFAULT, PROMESAS_SALUD_DEFAULT, URGENCIA_DEFAULT } from "./filtro_salida.ts";
 import type { EntradaGlosario } from "./prompt.ts";
-import { CFG_VENDEDOR_DEFAULT, type CfgVendedor, type ConfigTurno } from "./tipos.ts";
+import { type CfgRespuestasFijas, RESPUESTAS_FIJAS_DEFAULT } from "./respuestas_fijas.ts";
+import { type CfgRitmo, RITMO_DEFAULT } from "./ritmo.ts";
+import { CFG_VENDEDOR_DEFAULT, type CfgEstilo, type CfgVendedor, type ConfigTurno } from "./tipos.ts";
 
 export const CLAVES_CONFIG_VENDEDOR = [
   "vendedor",
@@ -16,6 +18,9 @@ export const CLAVES_CONFIG_VENDEDOR = [
   "vendedor_media",
   "vendedor_textos",
   "vendedor_prompt",
+  "vendedor_ritmo",
+  "vendedor_respuestas_fijas",
+  "vendedor_estilo",
   "aceptaciones",
   "palabras_prohibidas",
 ] as const;
@@ -63,11 +68,40 @@ export function armarConfigTurno(filas: Record<string, unknown>): { cfg: ConfigT
   const textos = tomar("vendedor_textos", (v) => (esObj(v) ? v as Record<string, string> : null), {});
   const aceptaciones = tomar("aceptaciones", listaStrings, ACEPTACIONES_DEFAULT);
   const prohibidas = tomar("palabras_prohibidas", (v) => listaStrings(v) ?? (esObj(v) ? listaStrings(v.lista) : null), PROHIBIDAS_DEFAULT);
+  const ritmo = tomar<CfgRitmo>("vendedor_ritmo", (v) => {
+    if (!esObj(v)) return null;
+    const r: CfgRitmo = { ...RITMO_DEFAULT };
+    for (const k of Object.keys(RITMO_DEFAULT) as (keyof CfgRitmo)[]) {
+      const x = v[k];
+      if (typeof x === "number" && Number.isFinite(x) && x >= 0) r[k] = x;
+    }
+    return r;
+  }, { ...RITMO_DEFAULT });
+  const respuestasFijas = tomar<CfgRespuestasFijas>("vendedor_respuestas_fijas", (v) => {
+    if (!esObj(v)) return null;
+    const r: CfgRespuestasFijas = { ...RESPUESTAS_FIJAS_DEFAULT };
+    for (const [k, x] of Object.entries(v)) {
+      const l = listaStrings(x) ?? (typeof x === "string" && x.trim() ? [x] : null);
+      if (l?.length) r[k] = l;
+    }
+    return r;
+  }, { ...RESPUESTAS_FIJAS_DEFAULT });
+  const estilo = tomar<CfgEstilo>("vendedor_estilo", (v) =>
+    esObj(v)
+      ? {
+        muletillas: listaStrings(v.muletillas) ?? MULETILLAS_DEFAULT,
+        urgencia: listaStrings(v.urgencia) ?? URGENCIA_DEFAULT,
+        niega_ia: listaStrings(v.niega_ia) ?? NIEGA_IA_DEFAULT,
+      }
+      : null, { muletillas: MULETILLAS_DEFAULT, urgencia: URGENCIA_DEFAULT, niega_ia: NIEGA_IA_DEFAULT });
   const p = filas["vendedor_prompt"];
   const plantillaPrompt = typeof p === "string" && p.trim() ? p : null; // opcional: no cuenta como faltante
 
   return {
-    cfg: { vendedor, envio, glosario, fichas, afirmaciones, aceptaciones, prohibidas, promesasSalud, ofertas, media, textos, plantillaPrompt },
+    cfg: {
+      vendedor, envio, glosario, fichas, afirmaciones, aceptaciones, prohibidas, promesasSalud, ofertas, media, textos, plantillaPrompt,
+      ritmo, respuestasFijas, estilo,
+    },
     faltantes: faltantes.filter((k) => k !== "vendedor_prompt"),
   };
 }

@@ -1,0 +1,38 @@
+{
+  "id": "60_sticker_suelto",
+  "titulo": "Sticker suelto al empezar: respuesta fija y humana, sin gastar en el modelo",
+  "cobertura": [
+    "sticker"
+  ],
+  "cliente": {
+    "nombre": "Noelia Paredes",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "[sticker]"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_derivar": false,
+    "no_debe_usar_herramienta": [
+      "consultar_catalogo",
+      "derivar_a_enrique"
+    ],
+    "debe_contener_alguno": [
+      "dormir"
+    ],
+    "max_respuestas_por_turno": 1
+  },
+  "referencia": [
+    {
+      "texto": "Jaja buenísimo. ¿Lo buscás para dormir mejor o para el aliento?",
+      "herramientas": []
+    }
+  ]
+}

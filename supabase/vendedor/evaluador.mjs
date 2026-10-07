@@ -2,7 +2,7 @@
 // Evalúa lo que respondió el vendedor en cada caso de supabase/vendedor/pruebas/*.json.
 //  - Reglas deterministas (las mismas que usa la auditoría diaria): palabras prohibidas, precios
 //    que no están en el catálogo del caso, promesas de salud, > 3 líneas, > 1 pregunta, > 1 emoji,
-//    revela instrucciones.
+//    revela instrucciones, muletillas de bot, formato markdown y urgencia inventada.
 //  - Expectativas del caso: herramientas, derivar, textos que no deben / deben aparecer.
 //  - Juez de tono opcional (solo modo real): Claude puntúa naturalidad 1-5 en voseo paraguayo.
 // Corre en Node (≥ 23, quita los tipos de reglas.ts solo) y en Deno.
@@ -79,7 +79,8 @@ export function fragmentosDelPrompt(textoPrompt) {
  * Evalúa un caso. Devuelve `aprobado` y la lista de fallas con su código.
  * Códigos de falla de regla: los de reglas.ts. De expectativa: falta_herramienta,
  * herramienta_no_esperada, no_deriva, deriva_sin_motivo, contiene_prohibido_caso,
- * falta_texto_esperado, sin_respuesta, error.
+ * falta_texto_esperado, sin_respuesta, error, demasiadas_burbujas (max_respuestas_por_turno),
+ * mensaje_largo (max_caracteres) y repite (max_una_vez: el ×2 o "¿qué te frena?" más de una vez).
  */
 export function evaluarCaso(caso, resultado, comun = {}, extra = {}) {
   const exp = caso.expectativas ?? {};
@@ -117,7 +118,25 @@ export function evaluarCaso(caso, resultado, comun = {}, extra = {}) {
     fallas.push({ codigo: "deriva_sin_motivo", detalle: "derivó un caso que la IA tenía que resolver" });
   }
 
+  turnos.forEach((tu, i) => {
+    const n = (tu.respuestas ?? []).length;
+    if (typeof exp.max_respuestas_por_turno === "number" && n > exp.max_respuestas_por_turno) {
+      fallas.push({ codigo: "demasiadas_burbujas", detalle: `${n} mensajes en un turno`, turno: i + 1 });
+    }
+    for (const texto of tu.respuestas ?? []) {
+      if (typeof exp.max_caracteres === "number" && texto.length > exp.max_caracteres) {
+        fallas.push({ codigo: "mensaje_largo", detalle: `${texto.length} caracteres`, turno: i + 1 });
+      }
+    }
+  });
+
   const unido = normalizar(todas.join("\n"));
+  // Ofertas o preguntas que van una sola vez por conversación (×2, "¿qué te frena?").
+  for (const s of exp.max_una_vez ?? []) {
+    const ns = normalizar(s);
+    const veces = ns ? unido.split(ns).length - 1 : 0;
+    if (veces > 1) fallas.push({ codigo: "repite", detalle: `"${s}" ${veces} veces` });
+  }
   for (const s of exp.no_debe_contener ?? []) {
     if (unido.includes(normalizar(s))) fallas.push({ codigo: "contiene_prohibido_caso", detalle: s });
   }
@@ -137,6 +156,8 @@ export function evaluarCaso(caso, resultado, comun = {}, extra = {}) {
       promesas_salud: contar("promesa_salud"),
       revela_instrucciones: contar("revela_instrucciones"),
       no_deriva: contar("no_deriva"),
+      muletillas_bot: contar("muletilla_bot"),
+      markdown: contar("markdown"),
     },
     derivado,
     herramientas: [...herramientas],

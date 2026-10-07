@@ -43,14 +43,16 @@ Qué hace, en orden (cada paso lo anuncia en una línea antes de hacerlo):
 |---|---|---|
 | 1 | Chequea `supabase`, `deno`, `node`, que estén todas las variables (sin mostrarlas), que los webhooks tengan `verify_jwt = false` en `config.toml` | — |
 | 2 | `supabase link` al proyecto | `--saltar-link` |
-| 3 | `supabase db push`: TODAS las migraciones de `supabase/migrations/` que falten, en orden. Después las semillas `supabase/seed_*.sql` (primero `seed_config_wa.sql`) y los secretos de Vault `project_url` y `service_role_key` (crea o actualiza; `service_role_key` = `SUPABASE_SERVICE_ROLE_KEY`, si no los crons dan 401) | `--saltar-db` |
+| 3 | `supabase db push`: TODAS las migraciones de `supabase/migrations/` que falten, en orden (incluidas `20261006000011_vendedor_perfil`, `…0012_mejora_mensual` y `…0013_cron_mejora_mensual`). Después las semillas `supabase/seed_*.sql`: primero `seed_config_wa.sql`, después las demás de `config_wa` en orden alfabético (incluida la nueva `seed_mejora_mensual.sql`) y al final `seed_vendedor_versiones.sql` (versión 1 del prompt). Ninguna pisa un valor ya cargado (por ejemplo `tope_mensual_usd` o `whatsapp_enrique`). Y los secretos de Vault `project_url` y `service_role_key` (crea o actualiza; `service_role_key` = `SUPABASE_SERVICE_ROLE_KEY`, si no los crons dan 401) | `--saltar-db` |
 | 4 | `supabase secrets set` con los secretos de las funciones (archivo temporal que se borra al final) | `--saltar-secretos` |
-| 5 | Despliega TODAS las carpetas de `supabase/functions/` menos `_shared` | `--saltar-funciones` |
+| 5 | Despliega TODAS las carpetas de `supabase/functions/` menos `_shared` (incluida `mejora-mensual`). Si Supabase responde "Function deploy failed due to an internal error", reintenta hasta 3 veces con 15 s de espera antes de cortar | `--saltar-funciones` |
 | 6 | Webhooks: Meta (suscribe la app a la WABA y comprueba el GET de verificación), Shopify (por API con el token de la app, **no** desde Notificaciones de la tienda, que firma con otra clave; no duplica), Telegram (`setWebhook` con `secret_token`). Con `--registrar-numero`, antes registra el número con tu PIN | `--saltar-webhooks` |
 | 7 | Plantillas: solo las valida; con `--plantillas` las manda a aprobación de Meta (tarda de minutos a 24 h) | — |
 | 8 | Prueba de punta a punta en modo seguro: funciones responden, tablas existen, firma inválida da 401, un pedido de PRUEBA firmado programa los 4 envíos; después los cancela y borra el pedido. No manda nada | `--saltar-e2e` · `--e2e-real` manda la confirmación de verdad a `PRUEBA_TELEFONO` |
 
 **[ENRIQUE]** Sin `WA_APP_ID`, la URL del webhook de Meta se pone una vez a mano: developers.facebook.com → tu app → WhatsApp → Configuración → Webhook → URL `https://<ref>.supabase.co/functions/v1/wa-webhook`, token = `WA_VERIFY_TOKEN`, campos `messages`, `phone_number_quality_update`, `account_update`, `message_template_status_update`. Con `WA_APP_ID` lo hace el script.
+
+Las migraciones 0011-0013 y las semillas nuevas no necesitan nada aparte: entran con el mismo `bash scripts/desplegar.sh`. Si cambiás `supabase/vendedor/prompt_sistema.md` o la batería, antes de desplegar corré `node scripts/generar-seed-versiones.mjs` y `node scripts/generar-bateria-embebida.mjs` (los tests avisan si quedaron desfasados). La semilla de versiones solo carga la versión 1 si la tabla está vacía: un prompt nuevo en producción entra por el ciclo mensual o como versión `manual`.
 
 Qué se puede romper: la migración 0001 agrega la columna `tienda` (default `'fw'`) a `ventas`, `entregas`, `productos`, `gastos`, `campanas_ads`, `stock_movimientos` y `recompra_log`. No cambia datos y las pantallas actuales no la usan.
 
@@ -76,3 +78,5 @@ Crons (SQL Editor): `select jobname, schedule from cron.job;` y `select status, 
 | `shopify-webhook` responde 401 a pedidos reales | El webhook se creó desde Notificaciones de la tienda; borrarlo y repetir el paso 6 |
 | Crons con "Faltan los secretos de Vault" o 401 | Paso 3 salteado, o la service role no es la legacy `eyJ...` |
 | Mensajes bloqueados con `config_palabras_prohibidas_no_disponible` | Falta la semilla (paso 3) |
+| Una función falla 4 veces seguidas al desplegar | Error de Supabase que no se resolvió solo: repetir el comando más tarde (es idempotente) |
+| El vendedor sigue con el prompt viejo después de aplicar una versión | Caché de 5 min: esperar o redesplegar la función |

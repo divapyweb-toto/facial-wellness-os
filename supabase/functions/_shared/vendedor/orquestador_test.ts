@@ -1,7 +1,8 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
 import { type Bloque, ErrorClaude, type PedidoClaude, type RespuestaClaude, simularRespuesta, USO_CERO } from "../claude.ts";
 import { _limpiarCacheCatalogo } from "./herramientas.ts";
-import { armarHistorial, demoraSegundos, type DepsOrquestador, type FilaHistorial, type FilaTurno, procesarTurno } from "./orquestador.ts";
+import { armarHistorial, bloquePendiente, type DepsOrquestador, type FilaHistorial, type FilaTurno, procesarTurno } from "./orquestador.ts";
+import type { PerfilCliente } from "./perfil.ts";
 import { CLIENTE, configPrueba, CONV, depsPrueba, TEL } from "./prueba_utiles.ts";
 import type { ConfigTurno } from "./tipos.ts";
 
@@ -32,6 +33,10 @@ function escenario(guion: Guion, op: {
   ultimo?: string;
   historial?: FilaHistorial[];
   telefono?: string | null;
+  perfil?: PerfilCliente;
+  /** Ids del último entrante en cada consulta (para simular un mensaje que llega mientras "escribe"). */
+  ultimos?: string[];
+  azar?: number;
 } = {}) {
   _limpiarCacheCatalogo();
   const h = depsPrueba();
@@ -40,17 +45,22 @@ function escenario(guion: Guion, op: {
   const sumas: number[] = [];
   const esperas: number[] = [];
   const leidos: string[] = [];
+  const perfiles: PerfilCliente[] = [];
+  const ultimos = [...(op.ultimos ?? [])];
   let reloj = new Date("2026-10-06T15:00:00Z").getTime();
   const deps: DepsOrquestador = {
     config: () => Promise.resolve(op.cfg ?? configPrueba()),
-    conversacion: () => Promise.resolve({ id: CONV, estado: op.estado ?? "ia", cliente_id: CLIENTE, turnos_ia: op.turnos ?? 0 }),
+    conversacion: () =>
+      Promise.resolve({ id: CONV, estado: op.estado ?? "ia", cliente_id: CLIENTE, turnos_ia: op.turnos ?? 0, perfil_vendedor: perfiles.at(-1) ?? op.perfil ?? {} }),
     cliente: () => Promise.resolve({ id: CLIENTE, telefono: op.telefono === undefined ? TEL : op.telefono, wa_user_id: "PY.1234567890", nombre: "Ana Prueba" }),
     historial: () => Promise.resolve(op.historial ?? [{ direccion: "in", texto: "hola", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" }]),
-    ultimoEntranteId: () => Promise.resolve(op.ultimo ?? "wamid.IN1"),
+    ultimoEntranteId: () => Promise.resolve(ultimos.length ? ultimos.shift()! : op.ultimo ?? "wamid.IN1"),
     gastoMesUsd: () => Promise.resolve(op.gasto ?? 0),
     preciosPrevios: () => Promise.resolve([]),
     registrarTurno: (f) => (turnos.push(f), Promise.resolve()),
     sumarTurno: (_c, costo) => (sumas.push(costo), Promise.resolve()),
+    guardarPerfil: (_c, p) => (perfiles.push(p), Promise.resolve()),
+    ...(op.azar !== undefined ? { aleatorio: () => op.azar! } : {}),
     marcarLeidoYEscribiendo: (id) => (leidos.push(id), Promise.resolve()),
     llamarModelo: async (p) => {
       pedidos.push(structuredClone(p));
@@ -64,18 +74,18 @@ function escenario(guion: Guion, op: {
     ahora: () => new Date(reloj),
     herramientas: h.deps,
   };
-  return { deps, reg: h.reg, pedidos, turnos, sumas, esperas, leidos };
+  return { deps, reg: h.reg, pedidos, turnos, sumas, esperas, leidos, perfiles };
 }
 
 const ENTRADA = { conversacion_id: CONV, wa_message_id: "wamid.IN1", texto: "hola" };
 
-Deno.test("turno: respuesta directa → marca leído, espera 2-6 s, responde y registra costo", async () => {
+Deno.test("turno: respuesta directa → marca leído, espera 4-25 s (leer + escribir), responde y registra costo", async () => {
   const e = escenario(() => texto("¡Hola! Contame qué estás buscando y te paso precio y envío."));
   const r = await procesarTurno(ENTRADA, e.deps);
   assertEquals(r.accion, "respondido");
   assertEquals(e.reg.textos, [{ to: TEL, texto: "¡Hola! Contame qué estás buscando y te paso precio y envío." }]);
   assert(e.leidos.includes("wamid.IN1"));
-  assert(e.esperas.length === 1 && e.esperas[0] >= 2000 && e.esperas[0] <= 6000, String(e.esperas));
+  assert(e.esperas.length === 1 && e.esperas[0] >= 4000 && e.esperas[0] <= 25000, String(e.esperas));
   assertEquals(e.turnos.length, 1);
   assertEquals(e.turnos[0].accion, "respondido");
   assertEquals(e.sumas, [0.0002]);
@@ -212,10 +222,19 @@ Deno.test("historial: empieza con user, une roles seguidos, saca fallidos y term
   assertFalse(JSON.stringify(m).includes("falló"));
 });
 
-Deno.test("demora proporcional al largo, entre 2 y 6 s", () => {
-  assertEquals(demoraSegundos("ok", 2, 6), 2);
-  assertEquals(demoraSegundos("x".repeat(150), 2, 6), 4);
-  assertEquals(demoraSegundos("x".repeat(900), 2, 6), 6);
+Deno.test("bloque pendiente: los mensajes del cliente desde nuestra última respuesta, con el actual transcripto", () => {
+  const filas: FilaHistorial[] = [
+    { direccion: "in", texto: "hola", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "i0" },
+    { direccion: "out", texto: "Hola, ¿para dormir o para el aliento?", tipo: "text", contenido: {}, estado: "entregado", wa_message_id: "o1" },
+    { direccion: "in", texto: "para dormir", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "i1" },
+    { direccion: "out", texto: "falló", tipo: "text", contenido: {}, estado: "fallido", wa_message_id: "o2" },
+    { direccion: "in", texto: null, tipo: "audio", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" },
+  ];
+  assertEquals(bloquePendiente(filas, { conversacion_id: CONV, wa_message_id: "wamid.IN1", texto: "[audio] mi marido ronca" }), [
+    "para dormir",
+    "[audio] mi marido ronca",
+  ]);
+  assertEquals(bloquePendiente([], ENTRADA), ["hola"]);
 });
 
 // ---------- derivación: texto del modelo + frase del médico ----------
@@ -312,4 +331,175 @@ Deno.test("derivación por salud con el simulador determinista → el cliente ve
   const e = escenario((p) => simularRespuesta(p));
   await procesarTurno({ ...ENTRADA, texto: "tengo apnea, esto me sirve?" }, e.deps);
   assert(cuerpo(e.reg.interactivos[0].interactive).startsWith(FRASE_MEDICO));
+});
+
+// ---------- respuestas fijas (sin modelo) ----------
+
+const fila = (direccion: "in" | "out", texto: string, id: string): FilaHistorial => ({
+  direccion, texto, tipo: "text", contenido: {}, estado: direccion === "in" ? "recibido" : "entregado", wa_message_id: id,
+});
+const pedidoChat = (estado: "resumen" | "creado") => ({
+  id: "pc-1", conversacion_id: CONV, cliente_id: CLIENTE, estado, datos: {} as never, total: 112000, shopify_order_id: null, creado_en: "2026-10-06T14:00:00Z",
+});
+
+Deno.test("fija: sticker suelto al empezar → texto fijo de config, sin llamar al modelo ni contar turno", async () => {
+  const e = escenario(() => texto("no debería"), { historial: [fila("in", "[sticker]", "wamid.IN1")], azar: 0 });
+  const r = await procesarTurno({ ...ENTRADA, texto: "[sticker]" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(e.pedidos.length, 0);
+  assertEquals(e.reg.textos.map((t) => t.texto), ["Jaja buenísimo. ¿Lo buscás para dormir mejor o para el aliento?"]);
+  assertEquals(e.sumas, []); // no gasta el tope de turnos
+  assertEquals(e.turnos[0].modelo, "fija");
+  assertEquals(e.turnos[0].accion, "respondido:fija:sticker_inicio");
+  assertEquals(e.turnos[0].costo_usd, 0);
+  assert(e.esperas[0] >= 4000, "también espera como una persona");
+});
+
+Deno.test("fija: 'gracias' con el pedido creado → 'de nada' fijo; un segundo 'gracias' no se contesta igual", async () => {
+  const hist = [fila("out", "Listo Ana, ya cargamos tu pedido #1050.", "o1"), fila("in", "gracias!!", "wamid.IN1")];
+  const e = escenario(() => texto("no debería"), { historial: hist, azar: 0 });
+  e.reg.pedidosChat.push(pedidoChat("creado"));
+  await procesarTurno({ ...ENTRADA, texto: "gracias!!" }, e.deps);
+  assertEquals(e.pedidos.length, 0);
+  assertEquals(e.reg.textos.map((t) => t.texto), ["De nada. Cualquier cosa me escribís por acá."]);
+
+  const hist2 = [fila("out", "De nada. Cualquier cosa me escribís por acá.", "o2"), fila("in", "gracias", "wamid.IN1")];
+  const e2 = escenario(() => texto("no debería"), { historial: hist2 });
+  e2.reg.pedidosChat.push(pedidoChat("creado"));
+  const r2 = await procesarTurno({ ...ENTRADA, texto: "gracias" }, e2.deps);
+  assertEquals(r2.accion, "omitido");
+  assertEquals(e2.reg.textos.length, 0);
+  assertEquals(e2.pedidos.length, 0);
+});
+
+Deno.test("fija: 'ok' con un resumen esperando el sí → lo resuelve el modelo (puede ser la confirmación)", async () => {
+  const e = escenario(() => texto("Perfecto, lo confirmo ahora."), { historial: [fila("in", "ok", "wamid.IN1")] });
+  e.reg.pedidosChat.push(pedidoChat("resumen"));
+  await procesarTurno({ ...ENTRADA, texto: "ok" }, e.deps);
+  assertEquals(e.pedidos.length, 1);
+});
+
+// ---------- perfil del cliente ----------
+
+Deno.test("perfil: registrar_perfil junto con el texto → una sola llamada, se responde y se guarda el perfil", async () => {
+  const e = escenario(() => ({
+    ...texto(""),
+    contenido: [
+      { type: "text", text: "Para la boca seca van los parches. ¿Te paso precio y envío?" },
+      { type: "tool_use", id: "tu_p", name: "registrar_perfil", input: { necesidad: "boca_seca", perfil: "curioso" } },
+    ],
+    stop_reason: "tool_use",
+  }));
+  const r = await procesarTurno({ ...ENTRADA, texto: "me despierto con la boca seca" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(e.pedidos.length, 1);
+  assertEquals(e.reg.textos.map((t) => t.texto).join("\n"), "Para la boca seca van los parches. ¿Te paso precio y envío?");
+  assertEquals(e.perfiles.at(-1), { necesidad: "boca_seca", perfil: "curioso" });
+  assertEquals(e.turnos[0].herramientas[0].nombre, "registrar_perfil");
+});
+
+Deno.test("perfil: el ya detectado va en el contexto (no se re-pregunta) y no se cachea con el prompt", async () => {
+  const e = escenario(() => texto("Te mando el video real de cómo se pone."), { perfil: { necesidad: "ronca", perfil: "desconfiado", ofrecido_x2: true } });
+  await procesarTurno({ ...ENTRADA, texto: "y funciona de verdad?" }, e.deps);
+  const sys = e.pedidos[0].system as { text: string }[];
+  assert(sys[1].text.includes("PERFIL YA DETECTADO"));
+  assert(sys[1].text.includes("desconfiado: prueba concreta"));
+  assert(sys[1].text.includes("YA OFRECISTE EL ×2"));
+  assertFalse(sys[0].text.includes("desconfiado: prueba concreta")); // el bloque cacheado es igual para todos
+});
+
+Deno.test("perfil: ofrecer el ×2 queda marcado; una respuesta neutra no toca el perfil", async () => {
+  const e = escenario(() => texto("Con 2 bolsas te ahorrás un envío. ¿Te armo el de 2?"));
+  await procesarTurno({ ...ENTRADA, texto: "y si llevo más?" }, e.deps);
+  assertEquals(e.perfiles.at(-1)?.ofrecido_x2, true);
+  const n = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"));
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, n.deps);
+  assertEquals(n.perfiles, []);
+});
+
+Deno.test("cierre: si ya preguntó '¿qué te frena?', repetirlo se bloquea y regenera", async () => {
+  const e = escenario((_p, n) => (n === 1 ? texto("Dale. ¿Qué te frena?") : texto("Dale, sin apuro. Cualquier cosa me escribís por acá.")), {
+    perfil: { pregunto_freno: true },
+  });
+  await procesarTurno({ ...ENTRADA, texto: "lo voy a pensar" }, e.deps);
+  assertEquals(e.reg.textos.map((t) => t.texto).join(" "), "Dale, sin apuro. Cualquier cosa me escribís por acá.");
+  assert((e.pedidos[1].mensajes.at(-1)!.content as string).includes("insiste_que_te_frena"));
+});
+
+// ---------- que no suene a bot ----------
+
+Deno.test("estilo: muletilla de bot → regenera una vez con el motivo", async () => {
+  const e = escenario((_p, n) => (n === 1 ? texto("¡Claro! ¡Te ayudo con eso!") : texto("Te paso precio y envío ahora. ¿Es para vos?")));
+  await procesarTurno({ ...ENTRADA, texto: "me pasás info?" }, e.deps);
+  assertEquals(e.reg.textos.map((t) => t.texto), ["Te paso precio y envío ahora. ¿Es para vos?"]);
+  const control = e.pedidos[1].mensajes.at(-1)!.content as string;
+  assert(control.includes("muletilla_bot:¡claro"), control);
+  assert(control.includes("exclamaciones_de_bot"), control);
+  assert(e.turnos[0].regenerado);
+});
+
+Deno.test("honestidad: '¿sos un bot?' exige decir 'asistente virtual'; negar serlo nunca sale", async () => {
+  const ok = "Soy el asistente virtual de Voltra. Si preferís, te paso con Enrique, ¿querés?";
+  const e = escenario((_p, n) => (n === 1 ? texto("Soy Ana, del equipo de Voltra. ¿Qué buscás?") : texto(ok)), {
+    historial: [fila("in", "sos un bot?", "wamid.IN1")],
+  });
+  await procesarTurno({ ...ENTRADA, texto: "sos un bot?" }, e.deps);
+  assertEquals(e.reg.textos.map((t) => t.texto).join("\n"), ok);
+  const control = e.pedidos[1].mensajes.at(-1)!.content as string;
+  assert(control.includes("honestidad:falta_asistente_virtual"));
+  assert(control.includes("asistente virtual de Voltra (sin decir que sos una persona)"));
+
+  const miente = escenario(() => texto("No soy un bot, soy Ana."), { historial: [fila("in", "sos una persona real?", "wamid.IN1")] });
+  const r = await procesarTurno({ ...ENTRADA, texto: "sos una persona real?" }, miente.deps);
+  assertEquals(r.motivo, "filtro");
+  assertFalse(miente.reg.textos.some((t) => t.texto.includes("No soy un bot")));
+  assert(miente.turnos[0].filtro.intentos[0].motivos.some((m) => m.startsWith("niega_ser_asistente")));
+});
+
+Deno.test("estilo: sin que pregunte, no se anuncia como asistente virtual", async () => {
+  const e = escenario((_p, n) => (n === 1 ? texto("Soy el asistente virtual de Voltra, ¿qué buscás?") : texto("Contame, ¿es para dormir o para el aliento?")));
+  await procesarTurno({ ...ENTRADA, texto: "hola" }, e.deps);
+  assert(e.turnos[0].filtro.intentos[0].motivos.some((m) => m.startsWith("se_anuncia_como_ia")));
+  assertEquals(e.reg.textos.map((t) => t.texto), ["Contame, ¿es para dormir o para el aliento?"]);
+});
+
+// ---------- ritmo humano ----------
+
+Deno.test("ritmo: respuesta larga → 2 burbujas (la pregunta sola), con 'escribiendo…' y pausa entre ambas", async () => {
+  const t = "Las tiras abren la nariz para que entre más aire al dormir y se ponen en segundos.\n¿Es para vos o para regalar?";
+  const e = escenario(() => texto(t), { azar: 0.5 });
+  await procesarTurno({ ...ENTRADA, texto: "para qué sirven las tiras?" }, e.deps);
+  assertEquals(e.reg.textos.map((x) => x.texto), [
+    "Las tiras abren la nariz para que entre más aire al dormir y se ponen en segundos.",
+    "¿Es para vos o para regalar?",
+  ]);
+  assertEquals(e.esperas.length, 2);
+  assert(e.esperas[0] >= 4000 && e.esperas[0] <= 25000, String(e.esperas));
+  assert(e.esperas[1] >= 1500 && e.esperas[1] <= 7000, String(e.esperas));
+  assertEquals(e.turnos[0].respuesta, t);
+  assert(e.leidos.length >= 3, "marca leído y 'escribiendo…' antes de cada burbuja");
+});
+
+Deno.test("ritmo: espera 8 s de silencio; si el cliente escribe mientras 'escribe', no manda y responde el turno nuevo", async () => {
+  const cfg = configPrueba({ vendedor: { espera_agrupar_s: 8, whatsapp_enrique: null } });
+  const e = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { cfg, ultimos: ["wamid.IN1", "wamid.IN2"] });
+  const r = await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, e.deps);
+  assertEquals(r.accion, "agrupado");
+  assertEquals(e.esperas[0], 8000);
+  assertEquals(e.reg.textos.length, 0);
+  assertEquals(e.turnos[0].accion, "agrupado:llego_otro_mensaje");
+});
+
+Deno.test("ritmo: de noche (Asunción) tarda más que de día con el mismo mensaje", async () => {
+  const msg = "Te llega en 2 a 5 días hábiles. ¿Es para vos?";
+  const dia = escenario(() => texto(msg), { azar: 0.5 });
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, dia.deps);
+  const noche = escenario(() => texto(msg), { azar: 0.5 });
+  const ahoraNoche = new Date("2026-10-07T05:30:00Z").getTime(); // 02:30 en Asunción
+  let reloj = ahoraNoche;
+  noche.deps.ahora = () => new Date(reloj);
+  noche.deps.dormir = (ms) => (noche.esperas.push(ms), reloj += ms, Promise.resolve());
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, noche.deps);
+  assert(noche.esperas[0] > dia.esperas[0], `${noche.esperas[0]} vs ${dia.esperas[0]}`);
+  assertEquals(noche.reg.textos.length, 1, "de noche responde igual");
 });

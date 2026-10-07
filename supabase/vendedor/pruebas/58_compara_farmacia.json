@@ -1,0 +1,51 @@
+{
+  "id": "58_compara_farmacia",
+  "titulo": "Compara con la farmacia: no habla mal de nadie, cuenta lo concreto",
+  "cobertura": [
+    "farmacia"
+  ],
+  "cliente": {
+    "nombre": "Ramón Giménez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "en la farmacia vi tiras más baratas, por qué las de ustedes salen más?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false,
+    "no_debe_contener": [
+      "truchas",
+      "son malas",
+      "peores",
+      "mentira",
+      "copia"
+    ],
+    "debe_contener_alguno": [
+      "bolsa",
+      "tu casa"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Acá la bolsa trae 30 tiras, te llega a tu casa y pagás al recibir: Gs 79.000 + envío Gs 33.000 = Gs 112.000.\n¿Las querés probar?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "tiras"
+          }
+        }
+      ]
+    }
+  ]
+}

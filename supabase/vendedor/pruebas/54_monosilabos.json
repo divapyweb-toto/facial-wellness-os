@@ -1,0 +1,59 @@
+{
+  "id": "54_monosilabos",
+  "titulo": "Cliente que responde con monosílabos: preguntas cerradas y mensajes cortos",
+  "cobertura": [
+    "monosilabos"
+  ],
+  "cliente": {
+    "nombre": "Lucas Fernández",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "hola",
+    "si",
+    "no sé",
+    "tiras"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "112.000"
+    ],
+    "max_caracteres": 140
+  },
+  "referencia": [
+    {
+      "texto": "Hola Lucas, ¿buscás algo para dormir mejor o para el aliento?",
+      "herramientas": []
+    },
+    {
+      "texto": "Buenísimo. ¿Es por los ronquidos o por la boca seca?",
+      "herramientas": []
+    },
+    {
+      "texto": "Tranqui. ¿Tiras para la nariz o parches para la boca?",
+      "herramientas": []
+    },
+    {
+      "texto": "Las tiras salen Gs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Te armo 1?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "tiras"
+          }
+        }
+      ]
+    }
+  ]
+}

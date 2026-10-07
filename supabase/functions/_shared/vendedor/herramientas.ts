@@ -19,6 +19,7 @@ import {
 } from "../wa_interactivos.ts";
 import { enlaceWaMe, formatoChatNecesitaEnrique, formatoPedidoNuevo } from "../telegram_formato.ts";
 import { botonEnlace } from "./interactivos.ts";
+import { NECESIDADES, normalizarPerfil, PERFILES } from "./perfil.ts";
 import type { CtxTurno, DatosPedidoChat, DepsHerramientas, LineaPedido, PedidoChat, ProductoShopify } from "./tipos.ts";
 
 // ---------- utilidades puras ----------
@@ -179,6 +180,19 @@ export const HERRAMIENTAS: Herramienta[] = [
     },
   },
   {
+    name: "registrar_perfil",
+    description:
+      "Anota qué le pasa al cliente y cómo encararlo, para no volver a preguntarlo en los próximos mensajes. Llamala en la MISMA respuesta en la que le escribís al cliente (no devuelve nada que tengas que esperar). Solo cuando detectás algo nuevo.",
+    input_schema: {
+      type: "object",
+      properties: {
+        necesidad: { type: "string", enum: [...NECESIDADES] },
+        perfil: { type: "string", enum: [...PERFILES] },
+        nota: { type: "string", description: "Dato corto útil para después, sin datos personales sensibles (máx. 120 caracteres)." },
+      },
+    },
+  },
+  {
     name: "pedir_telefono",
     description: "Botón para que el cliente comparta su número con un toque (cuando el chat no tiene teléfono). Necesario antes de crear el pedido. Después no escribas nada más.",
     input_schema: { type: "object", properties: { texto: { type: "string" } }, required: ["texto"] },
@@ -219,7 +233,16 @@ export async function catalogo(deps: DepsHerramientas, ctx: CtxTurno): Promise<P
   return productos;
 }
 
-export type OfertaCatalogo = { cantidad: number; precio: number; precio_texto: string; total: number; total_texto: string };
+/** `ahorro`: lo que ahorra contra comprar esa cantidad a precio de lista (lo calcula el servidor, no el modelo). */
+export type OfertaCatalogo = {
+  cantidad: number;
+  precio: number;
+  precio_texto: string;
+  total: number;
+  total_texto: string;
+  ahorro: number;
+  ahorro_texto: string;
+};
 export type ItemCatalogo = {
   handle: string;
   titulo: string;
@@ -248,7 +271,10 @@ export function itemsCatalogo(productos: ProductoShopify[], ctx: CtxTurno): Item
       .map(([c, precio]) => ({ cantidad: Number(c), precio }))
       .filter((o) => Number.isInteger(o.cantidad) && o.cantidad > 1 && o.precio > 0)
       .sort((a, b) => a.cantidad - b.cantidad)
-      .map((o) => ({ ...o, precio_texto: gs(o.precio), total: o.precio + envio, total_texto: gs(o.precio + envio) }));
+      .map((o) => {
+        const ahorro = Math.max(0, v.price * o.cantidad - o.precio);
+        return { ...o, precio_texto: gs(o.precio), total: o.precio + envio, total_texto: gs(o.precio + envio), ahorro, ahorro_texto: gs(ahorro) };
+      });
     return {
       handle: p.handle,
       titulo: p.title,
@@ -293,7 +319,7 @@ async function consultarCatalogo(input: Record<string, unknown>, ctx: CtxTurno, 
       envio_texto: gs(ctx.cfg.envio.costo_gs),
       plazo: ctx.cfg.envio.plazo,
       productos: items.map(({ imagen: _i, ...resto }) => resto),
-      nota: "total = precio + envío. Usá solo estos montos.",
+      nota: "total = precio + envío; ahorro = lo que ahorra la oferta contra comprar por unidad (además paga un solo envío). Usá solo estos montos.",
     },
   };
 }
@@ -710,6 +736,8 @@ export const EJECUTORES: Record<string, Ejecutor> = {
       texto_previo: x?.textoModelo ?? null,
     }, c, d),
   enviar_media: enviarMediaHerr,
+  // El orquestador guarda el perfil en la conversación (wa_conversaciones.perfil_vendedor); acá solo se valida.
+  registrar_perfil: (i) => Promise.resolve({ resultado: { ok: true, perfil: normalizarPerfil(i) } }),
   pedir_ubicacion: (i, c, d) => enviarInteractivoRevisado(i, c, d, (t) => ubicacionRequest(t)),
   enviar_formulario: (i, c, d) => {
     const flowId = c.cfg.vendedor.flow_id;

@@ -1,0 +1,55 @@
+{
+  "id": "51_desconfiado",
+  "titulo": "Cliente desconfiado: prueba concreta (video, pagás al recibir, RUC), sin presionar",
+  "cobertura": [
+    "desconfiado"
+  ],
+  "cliente": {
+    "nombre": "Gabriela Sosa",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "vi el anuncio pero no confío mucho, ya me estafaron una vez con algo de internet",
+    "y cómo sé que es real?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "enviar_media"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "cuando te llega",
+      "al recibir",
+      "en tu puerta"
+    ],
+    "no_debe_contener": [
+      "confiá en mí",
+      "te lo juro"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Te entiendo, Gabriela. Acá pagás recién cuando te llega, no adelantás nada.\n¿Qué producto viste en el anuncio?",
+      "herramientas": []
+    },
+    {
+      "texto": "Te paso el video real de cómo se usa y cómo llega.\nVoltra es una empresa con RUC y el courier te cobra recién en tu puerta.",
+      "herramientas": [
+        {
+          "nombre": "enviar_media",
+          "input": {
+            "handle": "tiras-nasales",
+            "tipo": "video"
+          }
+        }
+      ]
+    }
+  ]
+}

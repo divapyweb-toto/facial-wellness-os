@@ -132,10 +132,45 @@ listar_funciones() {
 
 listar_migraciones() { find "$DIR_MIGRACIONES" -maxdepth 1 -name '*.sql' -print | sort; }
 
-# Semillas: seed_config_wa.sql primero (las demás pueden leer config_wa), después el resto en orden alfabético.
+# Semillas, en este orden: seed_config_wa.sql primero (las demás pueden leer config_wa); después las demás de
+# config_wa en orden alfabético (seed_integracion, seed_mejora_mensual, seed_ola4, …, seed_vendedor); al final
+# las que cargan OTRAS tablas (SEMILLAS_AL_FINAL: seed_vendedor_versiones.sql necesita la migración 0012).
+# Todas son idempotentes y no pisan valores existentes de config_wa (on conflict do nothing / merges que solo
+# agregan claves faltantes).
+SEMILLAS_AL_FINAL="seed_vendedor_versiones.sql"
 listar_semillas() {
+  local s n
   [ -f "$DIR_SB/seed_config_wa.sql" ] && printf '%s\n' "$DIR_SB/seed_config_wa.sql"
-  find "$DIR_SB" -maxdepth 1 -name 'seed_*.sql' ! -name 'seed_config_wa.sql' -print | sort
+  while IFS= read -r s; do
+    n="$(basename "$s")"
+    [ "$n" = "seed_config_wa.sql" ] && continue
+    [[ " $SEMILLAS_AL_FINAL " == *" $n "* ]] && continue
+    printf '%s\n' "$s"
+  done < <(find "$DIR_SB" -maxdepth 1 -name 'seed_*.sql' -print | sort)
+  for n in $SEMILLAS_AL_FINAL; do
+    [ -f "$DIR_SB/$n" ] && printf '%s\n' "$DIR_SB/$n"
+  done
+  return 0
+}
+
+# Despliega una función con hasta 3 reintentos (15 s entre intentos): Supabase a veces responde 500
+# "Function deploy failed due to an internal error" y al reintentar sale bien.
+REINTENTOS_DEPLOY=3
+ESPERA_REINTENTO_S=15
+desplegar_funcion() {
+  local f="$1" intento=1 total=$((REINTENTOS_DEPLOY + 1))
+  while true; do
+    if supabase functions deploy "$f" --project-ref "$REF" --use-api; then
+      return 0
+    fi
+    if [ "$intento" -ge "$total" ]; then
+      aviso "$f: falló el despliegue $total veces"
+      return 1
+    fi
+    aviso "$f: falló el despliegue (intento $intento de $total); reintento en ${ESPERA_REINTENTO_S} s"
+    sleep "$ESPERA_REINTENTO_S"
+    intento=$((intento + 1))
+  done
 }
 
 verify_jwt_false() { # ¿config.toml tiene verify_jwt = false para la función $1?
@@ -333,7 +368,7 @@ if [ "$SALTAR_FUNCIONES" = 0 ]; then
   paso "Despliego las ${#FUNCIONES[@]} funciones de supabase/functions (menos _shared)"
   for f in "${FUNCIONES[@]}"; do
     info "$f"
-    supabase functions deploy "$f" --project-ref "$REF" --use-api
+    desplegar_funcion "$f" || falla "No se pudo desplegar la función $f después de $((REINTENTOS_DEPLOY + 1)) intentos. Repetí el comando (es idempotente) o corré: supabase functions deploy $f --project-ref $REF --use-api"
   done
   ok "funciones desplegadas en $SUPABASE_URL/functions/v1/<nombre>"
 fi

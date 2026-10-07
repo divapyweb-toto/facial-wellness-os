@@ -71,3 +71,74 @@ Deno.test("montosDeResultado junta números y montos escritos del resultado de u
   const m = montosDeResultado({ productos: [{ precio: 79000, total_texto: "112.000", ofertas: [{ precio: 125000 }] }], envio: 33000, cantidad: 2 });
   assertEquals(m.sort(), [112000, 125000, 33000, 79000].sort());
 });
+
+// ---------- que no suene a bot ----------
+
+const motivosDe = (t: string, extra: Record<string, unknown> = {}) => revisarRespuesta(t, { ...op, ...extra }).motivos;
+
+Deno.test("filtro: muletillas de bot se bloquean (con y sin tildes)", () => {
+  for (
+    const [t, m] of [
+      ["¡Claro! Te paso el precio.", "¡claro"],
+      ["Claro! Ya te digo.", "claro!"],
+      ["Por supuesto, te lo mando.", "por supuesto"],
+      ["Como asistente de Voltra te recomiendo las tiras.", "como asistente"],
+      ["Estoy aquí para ayudarte con tu pedido.", "estoy aqui para ayudar"],
+      ["No dudes en escribirme.", "no dudes en"],
+      ["Listo. ¿Hay algo más en lo que pueda ayudarte?", "algo mas en lo que pueda ayudar"],
+      ["Hola, ¿en qué puedo ayudarte?", "en que puedo ayudarte"],
+      ["Entiendo tu preocupación, pagás al recibir.", "entiendo tu preocupacion"],
+      ["Excelente pregunta: se usan de noche.", "excelente pregunta"],
+    ] as const
+  ) {
+    assert(motivosDe(t).includes(`muletilla_bot:${m}`), `${t}: ${motivosDe(t)}`);
+  }
+  // Lo natural pasa.
+  for (const t of ["Dale, te paso el precio. ¿Es para vos?", "Mirá, las tiras se ponen en segundos.", "Claro que sí llega a Encarnación."]) {
+    assertEquals(motivosDe(t), [], t);
+  }
+});
+
+Deno.test("filtro: markdown (negrita doble, viñetas, listas, títulos, enlaces) se bloquea; *una* palabra no", () => {
+  assert(motivosDe("Las **tiras** son lo mejor.").includes("markdown:negrita_doble"));
+  assert(motivosDe("Tenemos:\n- tiras\n- parches").includes("markdown:vinetas"));
+  assert(motivosDe("Pasos:\n1. Limpiá la nariz\n2. Pegá la tira").some((m) => m.startsWith("markdown:")));
+  assert(motivosDe("## Precios").includes("markdown:titulo"));
+  assert(motivosDe("Mirá [el video](https://x.test)").includes("markdown:enlace_markdown"));
+  assertFalse(motivosDe("Pagás *al recibir*.").some((m) => m.startsWith("markdown")));
+});
+
+Deno.test("filtro: saludo vacío como primera línea y '¡' al inicio de cada frase", () => {
+  assert(motivosDe("¡Hola!\n¿Buscás algo para dormir?").includes("saludo_vacio"));
+  assert(motivosDe("Hola Ana 👋\n¿Es para vos?").includes("saludo_vacio"));
+  assert(motivosDe("Buenas, ¿cómo estás?").includes("saludo_vacio"));
+  assertFalse(motivosDe("Hola Ana, te llega en 2 a 5 días hábiles. ¿Es para vos?").includes("saludo_vacio"));
+  assertFalse(motivosDe("Hola. Las tiras abren la nariz.").includes("saludo_vacio"));
+  assert(motivosDe("¡Genial! ¡Te lo mando hoy!").includes("exclamaciones_de_bot"));
+  assertFalse(motivosDe("¡Buenísimo! Te lo preparo.").includes("exclamaciones_de_bot"));
+});
+
+Deno.test("filtro: urgencia, stock o reseñas inventadas se bloquean", () => {
+  for (const t of ["Quedan pocas, aprovechá.", "Son las últimas unidades.", "Solo por hoy a ese precio.", "Es el más vendido.", "Mirá las reseñas de clientes."]) {
+    assert(motivosDe(t).some((m) => m.startsWith("urgencia_inventada")), t);
+  }
+});
+
+Deno.test("filtro honestidad: nunca niega ser asistente; si preguntan lo dice; si no preguntan no se anuncia", () => {
+  assert(motivosDe("No soy un bot, soy Ana.").some((m) => m.startsWith("niega_ser_asistente")));
+  assert(motivosDe("Soy una persona del equipo.").some((m) => m.startsWith("niega_ser_asistente")));
+  const honesta = "Soy el asistente virtual de Voltra. Si preferís, te paso con Enrique, ¿querés?";
+  assertEquals(motivosDe(honesta, { preguntaBot: true }), []);
+  assert(motivosDe("Soy Ana, del equipo. ¿Qué buscás?", { preguntaBot: true }).includes("honestidad:falta_asistente_virtual"));
+  assert(motivosDe(honesta).some((m) => m.startsWith("se_anuncia_como_ia")));
+});
+
+Deno.test("filtro cierre: '¿qué te frena?' una sola vez por conversación", () => {
+  assertEquals(motivosDe("Dale. ¿Qué te frena?"), []);
+  assert(motivosDe("Dale. ¿Qué te frena?", { yaPreguntoFreno: true }).includes("insiste_que_te_frena"));
+});
+
+Deno.test("filtro: listas configurables desde config_wa.vendedor_estilo", () => {
+  assert(motivosDe("Joya, te paso.", { muletillas: ["joya"] }).includes("muletilla_bot:joya"));
+  assertEquals(motivosDe("¡Claro! Te paso.", { muletillas: [] }).filter((m) => m.startsWith("muletilla")), []);
+});

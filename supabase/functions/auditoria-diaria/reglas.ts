@@ -37,6 +37,8 @@ export interface OpcionesReglas {
   fragmentosPrompt?: string[];
   /** Si false, no se revisan precios (por ejemplo, un mensaje humano sin catálogo). */
   revisarPrecios?: boolean;
+  /** Muletillas de bot (por defecto MULETILLAS_BOT; config_wa.vendedor_estilo.muletillas). */
+  muletillas?: string[];
 }
 
 export type CodigoMotivo =
@@ -46,7 +48,10 @@ export type CodigoMotivo =
   | "demasiadas_lineas"
   | "mas_de_una_pregunta"
   | "mas_de_un_emoji"
-  | "revela_instrucciones";
+  | "revela_instrucciones"
+  | "muletilla_bot"
+  | "markdown"
+  | "urgencia_inventada";
 
 export interface Motivo {
   codigo: CodigoMotivo;
@@ -168,13 +173,71 @@ export function contarEmojis(texto: string): number {
   return (t.match(/\p{Extended_Pictographic}/gu) ?? []).length;
 }
 
+// ---------------------------------------------------------------- que no suene a bot
+
+/**
+ * Muletillas de bot: sin tildes ni mayúsculas, los signos ¡ ¿ cuentan. Misma lista que
+ * _shared/vendedor/filtro_salida.ts (MULETILLAS_DEFAULT) y config_wa.vendedor_estilo; un test las compara.
+ */
+export const MULETILLAS_BOT = [
+  "¡claro", "claro!", "por supuesto", "como asistente", "estoy aqui para ayudar", "no dudes en",
+  "algo mas en lo que pueda ayudar", "algo mas en que pueda ayudar", "algo mas en lo que te pueda ayudar",
+  "en que puedo ayudarte", "en que te puedo ayudar", "en que le puedo ayudar", "en que puedo ayudarle",
+  "puedo ayudarte con algo mas", "te ayudo con algo mas", "entiendo tu preocupacion", "entiendo su preocupacion",
+  "excelente pregunta", "gran pregunta", "espero haberte ayudado", "espero que esto te ayude", "fue un placer ayudarte",
+];
+
+/** Negar ser un asistente virtual también se marca como frase de bot (y es mentir). */
+export const NIEGA_IA = [
+  "soy una persona", "soy humano", "soy humana", "no soy un bot", "no soy bot", "no soy un robot", "no soy una ia",
+  "no soy una maquina", "no soy inteligencia artificial", "soy de carne y hueso", "soy una persona real",
+];
+
+export const URGENCIA_INVENTADA = [
+  "ultimas unidades", "quedan pocas", "quedan pocos", "pocas unidades", "solo por hoy", "hasta agotar", "se agota",
+  "se estan agotando", "tiempo limitado", "antes de que se termine", "el mas vendido", "los mas vendidos",
+  "todos lo estan comprando", "miles de clientes", "cientos de clientes", "nuestros clientes dicen", "resenas",
+];
+
+function frasesEn(texto: string, lista: string[]): string[] {
+  const t = normalizar(texto);
+  return lista.filter((f) => {
+    const nf = normalizar(f).trim();
+    return nf.length > 0 && t.includes(nf);
+  });
+}
+
+/** Muletillas de bot, "¡" al inicio de 2+ frases y negar ser un asistente virtual. */
+export function muletillasBot(texto: string, lista: string[] = MULETILLAS_BOT): string[] {
+  const halladas = [...frasesEn(texto, lista), ...frasesEn(texto, NIEGA_IA)];
+  if ((String(texto ?? "").match(/(?:^|[.!?…\n]\s*)¡/g) ?? []).length >= 2) halladas.push("¡ al inicio de cada frase");
+  return halladas;
+}
+
+/** Formato markdown: **negrita**, __x__, viñetas, listas numeradas, títulos, [texto](url). */
+export function formatoMarkdown(texto: string): string[] {
+  const t = String(texto ?? "");
+  const out: string[] = [];
+  if (/\*\*[^*\n]+\*\*/.test(t)) out.push("**negrita**");
+  if (/__[^_\n]+__/.test(t)) out.push("__subrayado__");
+  if (/(^|\n)\s*[-*•·]\s+\S/.test(t)) out.push("viñetas");
+  if (/(^|\n)\s*\d{1,2}[.)]\s+\S/.test(t)) out.push("lista numerada");
+  if (/(^|\n)\s*#{1,6}\s/.test(t)) out.push("título #");
+  if (/\[[^\]]+\]\([^)]+\)/.test(t)) out.push("enlace [x](url)");
+  return out;
+}
+
+export function urgenciaInventada(texto: string): string[] {
+  return frasesEn(texto, URGENCIA_INVENTADA);
+}
+
 /** Señales genéricas de que la respuesta expone el prompt o las herramientas internas. */
 const SENALES_INSTRUCCIONES: RegExp[] = [
   /\bsystem prompt\b/u,
   /\bprompt (de|del) sistema\b/u,
   /\bmis instrucciones (son|dicen|indican)\b/u,
   /\bme (programaron|configuraron|ordenaron) (para|que)\b/u,
-  /\b(consultar_catalogo|estado_pedido|crear_pedido_cod|derivar_a_enrique|enviar_media|pedir_ubicacion|enviar_formulario|enviar_opciones|pedir_telefono|notificar_venta|pasar_a_humano)\b/u,
+  /\b(consultar_catalogo|estado_pedido|crear_pedido_cod|derivar_a_enrique|enviar_media|pedir_ubicacion|enviar_formulario|enviar_opciones|pedir_telefono|notificar_venta|pasar_a_humano|registrar_perfil)\b/u,
   /\{(glosario|envio_y_plazos|fichas_de_producto|afirmaciones_permitidas|lista_de_aceptaciones)\}/u,
   /\bafirmaciones permitidas\b/u,
   /\bdatos \(unica fuente\)/u,
@@ -217,6 +280,9 @@ export function revisarTexto(texto: string, o: OpcionesReglas = {}): ResultadoRe
   for (const r of revelaInstrucciones(texto, o.fragmentosPrompt ?? [])) {
     motivos.push({ codigo: "revela_instrucciones", detalle: r });
   }
+  for (const m of muletillasBot(texto, o.muletillas ?? MULETILLAS_BOT)) motivos.push({ codigo: "muletilla_bot", detalle: m });
+  for (const m of formatoMarkdown(texto)) motivos.push({ codigo: "markdown", detalle: m });
+  for (const m of urgenciaInventada(texto)) motivos.push({ codigo: "urgencia_inventada", detalle: m });
   return { ok: motivos.length === 0, motivos, precios };
 }
 

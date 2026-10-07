@@ -11,6 +11,10 @@
 //   - Sonnet 5.5: no acepta thinking {type:"disabled"} ni tool_choice any/tool; con pensamiento adaptativo
 //     hay que devolver los bloques `thinking` sin tocar dentro del bucle de herramientas (se hace: se
 //     agrega `contenido` completo). Haiku 4.5: sin `thinking` ni `effort` (effort da error en Haiku 4.5).
+//   - Salida estructurada (GA, sin header beta): output_config.format = {type:"json_schema", schema}. La aceptan
+//     Haiku 4.5 y Sonnet 5.5, también en el Batch API. No se combina con prefill del asistente ni con citas.
+//     Esquema: todo objeto con additionalProperties:false; sin minLength/maxLength/minimum/maximum (la
+//     validación de largos y rangos sigue del lado nuestro).
 //
 // Precios: NUNCA en el código. Se leen de config_wa.precios_claude (USD por millón de tokens).
 // Modo simulado: sin ANTHROPIC_API_KEY o con MODO_SIMULADO=1 responde un simulador determinista.
@@ -77,6 +81,11 @@ export type PedidoClaude = {
   esfuerzo?: "low" | "medium" | "high";
   /** Sonnet 5.5 en la API de Claude: reintento del lado del servidor ante una negativa (fallbacks:"default"). */
   fallbackServidor?: boolean;
+  /**
+   * Salida estructurada (output_config.format json_schema). Opcional: quien llama igual valida la respuesta.
+   * No usar junto con prefill (un mensaje final del asistente): la API lo rechaza.
+   */
+  esquemaJson?: Record<string, unknown>;
 };
 
 export type RespuestaClaude = {
@@ -233,7 +242,10 @@ export function armarCuerpo(p: PedidoClaude, paraLote = false): { cuerpo: Record
   // Va después de los marcadores de 1 h (regla de orden: el TTL más largo primero).
   if (p.cache) cuerpo.cache_control = { type: "ephemeral" };
   const betas: string[] = [];
-  if (p.esfuerzo && !esHaiku(p.modelo)) cuerpo.output_config = { effort: p.esfuerzo };
+  const outputConfig: Record<string, unknown> = {};
+  if (p.esfuerzo && !esHaiku(p.modelo)) outputConfig.effort = p.esfuerzo;
+  if (p.esquemaJson) outputConfig.format = { type: "json_schema", schema: p.esquemaJson };
+  if (Object.keys(outputConfig).length) cuerpo.output_config = outputConfig;
   if (!paraLote && p.fallbackServidor && esSonnet55(p.modelo)) {
     cuerpo.fallbacks = "default";
     betas.push("server-side-fallback-2026-07-01");

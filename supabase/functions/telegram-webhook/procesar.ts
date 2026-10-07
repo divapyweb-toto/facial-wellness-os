@@ -4,6 +4,8 @@
 // a dobles en memoria).
 //
 // Callbacks (contrato): cancelar:<shopify_order_id>, reponer:<id>, escribo:<id>.
+// Mejora mensual (M3): mej_aplicar:<ciclo>, mej_descartar:<ciclo>, mej_detalle:<ciclo>,
+// mej_volver:<numero de versión> → lógica en ../mejora-mensual/aprobacion.ts.
 // Idempotencia en dos capas:
 //   1. update_id en eventos_crudos → un reintento de Telegram no se procesa dos veces.
 //   2. "acción reclamada" (fuente telegram, id_externo = `accion:<data>`) →
@@ -14,6 +16,7 @@ import {
   enlaceWaMe,
   textoConDecision,
 } from "../_shared/telegram_formato.ts";
+import { decidirMejora, type DepsDecision, type ResultadoDecision } from "../mejora-mensual/aprobacion.ts";
 
 // ─── Tipos mínimos de la Bot API que usamos ─────────────────
 export interface TgBotonCrudo {
@@ -77,6 +80,8 @@ export interface Dependencias {
   enviarTextoCliente(pedido: PedidoContexto, destino: string, texto: string): Promise<{ ok: boolean; error?: string }>;
   responderCallback(callbackQueryId: string, texto: string): Promise<void>;
   editarMensaje(chatId: number, messageId: number, textoHtml: string, botones: BotonTelegram[][]): Promise<void>;
+  /** Botones mej_* del ciclo mensual de mejora. Sin esto, se responden como desconocidos. */
+  mejora?: DepsDecision;
 }
 
 export type Resultado =
@@ -84,7 +89,8 @@ export type Resultado =
   | { tipo: "repetido" }
   | { tipo: "ya_hecho"; accion: AccionTelegram; id: number }
   | { tipo: "hecho"; accion: AccionTelegram; id: number; notas: string[] }
-  | { tipo: "error"; accion: AccionTelegram; id: number; error: string };
+  | { tipo: "error"; accion: AccionTelegram; id: number; error: string }
+  | { tipo: "mejora"; data: string; resultado: ResultadoDecision["tipo"]; error?: string };
 
 const VENTANA_MS = 24 * 60 * 60 * 1000;
 
@@ -227,6 +233,8 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
   if (!cq) return { tipo: "ignorado", motivo: "no es un callback" };
   const idEvento = idEventoDe(update);
 
+  if (deps.mejora && /^mej_[a-z]+:/.test(cq.data ?? "")) return procesarMejora(cq, idEvento, deps, deps.mejora);
+
   const cb = parsearCallback(cq.data);
   if (!cb) {
     await deps.responderCallback(cq.id, "Botón desconocido.");
@@ -326,4 +334,27 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
   }
   const resumen = `Listo: ${DECISION[accion]}.`;
   return cerrar({ tipo: "hecho", accion, id, notas }, resumen);
+}
+
+/** Botones del ciclo mensual de mejora (mej_*). La idempotencia la resuelve decidirMejora. */
+async function procesarMejora(
+  cq: TgCallbackQuery,
+  idEvento: string,
+  deps: Dependencias,
+  mejora: DepsDecision,
+): Promise<Resultado> {
+  const data = cq.data ?? "";
+  let r: ResultadoDecision;
+  try {
+    r = await decidirMejora(data, cq.message?.text ?? "", mejora);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    r = { tipo: "error", aviso: `No se pudo: ${msg}`, error: msg };
+  }
+  if (r.edicion && cq.message && cq.message.date !== 0) {
+    await deps.editarMensaje(cq.message.chat.id, cq.message.message_id, r.edicion.html, r.edicion.botones);
+  }
+  await deps.responderCallback(cq.id, r.aviso);
+  await deps.marcarEventoProcesado(idEvento, r.tipo === "error" ? r.error ?? "error" : undefined);
+  return { tipo: "mejora", data, resultado: r.tipo, ...(r.error ? { error: r.error } : {}) };
 }

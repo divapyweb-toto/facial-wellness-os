@@ -1,6 +1,6 @@
 {
   "id": "41_emojis_stickers",
-  "titulo": "Emojis y stickers: responde con máximo 1 emoji",
+  "titulo": "Emojis y stickers: sticker suelto con respuesta fija, después máximo 1 emoji",
   "cobertura": [
     "emojis"
   ],
@@ -29,7 +29,7 @@
   },
   "referencia": [
     {
-      "texto": "Hola, Karen. ¿Te ayudo con algo de Voltra?",
+      "texto": "Jaja buenísimo. ¿Lo buscás para dormir mejor o para el aliento?",
       "herramientas": []
     },
     {

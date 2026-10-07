@@ -1,0 +1,52 @@
+{
+  "id": "55_cuatro_seguidos",
+  "titulo": "4 mensajes seguidos: espera el silencio y responde todo junto (máx. 2 burbujas)",
+  "cobertura": [
+    "rafaga"
+  ],
+  "cliente": {
+    "nombre": "Marta Villalba",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    [
+      "hola",
+      "vi lo de las tiras",
+      "cuánto sale?",
+      "mandan a Luque?"
+    ]
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "112.000"
+    ],
+    "max_respuestas_por_turno": 2
+  },
+  "referencia": [
+    {
+      "texto": [
+        "Sí, a Luque te llega en 2 a 5 días hábiles: Gs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.",
+        "¿Roncás vos o es para tu pareja?"
+      ],
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "tiras"
+          }
+        }
+      ]
+    }
+  ]
+}

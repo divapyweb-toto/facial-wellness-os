@@ -4,6 +4,10 @@
 //
 // Revisa: palabras prohibidas (config_wa.palabras_prohibidas), precios que no salieron del catálogo
 // de ESTA conversación, promesas de salud, más de 3 líneas, más de 1 pregunta, más de 1 emoji.
+// Y que no suene a bot (config_wa.vendedor_estilo): muletillas de bot ("¡Claro!", "No dudes en"...), formato
+// markdown (**negrita**, viñetas), saludo vacío como primera línea, "¡" al inicio de varias frases, urgencia o
+// stock inventados, negar ser un asistente virtual, anunciarse como IA sin que pregunten, o no decirlo cuando
+// el cliente pregunta directamente si es un bot, e insistir con "¿qué te frena?".
 import { contienePalabraProhibida } from "../filtro.ts";
 
 export type OpcionesFiltro = {
@@ -19,6 +23,16 @@ export type OpcionesFiltro = {
   maxPreguntas?: number;
   maxEmojis?: number;
   maxCaracteres?: number;
+  /** Muletillas de bot (config_wa.vendedor_estilo.muletillas). */
+  muletillas?: string[];
+  /** Frases de urgencia, stock o reseñas inventadas (config_wa.vendedor_estilo.urgencia). */
+  urgencia?: string[];
+  /** Frases que niegan ser un asistente virtual (config_wa.vendedor_estilo.niega_ia). */
+  niegaIA?: string[];
+  /** El cliente preguntó directamente si es un bot: la respuesta TIENE que decir "asistente virtual". */
+  preguntaBot?: boolean;
+  /** Ya se preguntó "¿qué te frena?" en esta conversación: no se repite. */
+  yaPreguntoFreno?: boolean;
 };
 
 export type ResultadoFiltro = { ok: boolean; motivos: string[] };
@@ -33,8 +47,68 @@ export const PROMESAS_SALUD_DEFAULT = [
   "recomendado por médicos", "aprobado por médicos", "te soluciona la apnea", "para la apnea", "quita la apnea",
 ];
 
+/** Muletillas de bot (se comparan sin tildes ni mayúsculas; los signos ¡ ¿ cuentan). */
+export const MULETILLAS_DEFAULT = [
+  "¡claro", "claro!", "por supuesto", "como asistente", "estoy aqui para ayudar", "no dudes en",
+  "algo mas en lo que pueda ayudar", "algo mas en que pueda ayudar", "algo mas en lo que te pueda ayudar",
+  "en que puedo ayudarte", "en que te puedo ayudar", "en que le puedo ayudar", "en que puedo ayudarle",
+  "puedo ayudarte con algo mas", "te ayudo con algo mas", "entiendo tu preocupacion", "entiendo su preocupacion",
+  "excelente pregunta", "gran pregunta", "espero haberte ayudado", "espero que esto te ayude", "fue un placer ayudarte",
+];
+
+/** Urgencia, stock o reseñas inventadas (Ley 1334, art. 35: publicidad que induce a error). */
+export const URGENCIA_DEFAULT = [
+  "ultimas unidades", "quedan pocas", "quedan pocos", "pocas unidades", "solo por hoy", "hasta agotar", "se agota",
+  "se estan agotando", "tiempo limitado", "antes de que se termine", "el mas vendido", "los mas vendidos",
+  "todos lo estan comprando", "miles de clientes", "cientos de clientes", "nuestros clientes dicen", "resenas",
+];
+
+/** Negar ser un asistente virtual es mentir (política de WhatsApp): nunca. */
+export const NIEGA_IA_DEFAULT = [
+  "soy una persona", "soy humano", "soy humana", "no soy un bot", "no soy bot", "no soy un robot", "no soy una ia",
+  "no soy una maquina", "no soy inteligencia artificial", "soy de carne y hueso", "soy una persona real",
+];
+
+/** Anunciarse como IA sin que el cliente pregunte baja las ventas: solo se dice si preguntan. */
+const SE_ANUNCIA_IA = ["asistente virtual", "soy un bot", "soy una ia", "inteligencia artificial", "soy un robot"];
+
 function normalizar(s: string): string {
   return s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+function contieneFrase(t: string, lista: string[]): string | null {
+  for (const f of lista) {
+    const nf = normalizar(String(f ?? "")).trim();
+    if (nf && t.includes(nf)) return f;
+  }
+  return null;
+}
+
+/** Formato markdown que WhatsApp no muestra como una persona escribe: **negrita**, __x__, viñetas, títulos, [x](url). */
+export function tieneMarkdown(texto: string): string | null {
+  if (/\*\*[^*\n]+\*\*/.test(texto)) return "negrita_doble";
+  if (/__[^_\n]+__/.test(texto)) return "subrayado";
+  if (/(^|\n)\s*[-*•·]\s+\S/.test(texto)) return "vinetas";
+  if (/(^|\n)\s*\d{1,2}[.)]\s+\S/.test(texto)) return "lista_numerada";
+  if (/(^|\n)\s*#{1,6}\s/.test(texto)) return "titulo";
+  if (/\[[^\]]+\]\([^)]+\)/.test(texto)) return "enlace_markdown";
+  return null;
+}
+
+const RE_SALUDO_VACIO =
+  /^(?:hola+|holis|buenas|buen dia|buenos dias|buenas tardes|buenas noches|que tal|hey)(?:[ ,]+[a-zñ]+){0,2}(?: (?:como (?:estas|esta|andas|te va)|que tal))?$/u;
+
+/** La primera línea es solo un saludo ("¡Hola!", "Hola Ana 👋", "Buenas, ¿cómo estás?"): no engancha. */
+export function primeraLineaSaludoVacio(texto: string): boolean {
+  const primera = (texto ?? "").trim().split(/\n/)[0] ?? "";
+  const t = normalizar(primera).replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, " ").replace(/[¡!¿?.,;:…]+/g, " ")
+    .replace(/\s+/g, " ").trim();
+  return !!t && RE_SALUDO_VACIO.test(t);
+}
+
+/** Frases que arrancan con "¡" (al inicio del texto o después de . ! ? o salto de línea). */
+export function frasesConExclamacionInicial(texto: string): number {
+  return ((texto ?? "").match(/(?:^|[.!?…\n]\s*)¡/g) ?? []).length;
 }
 
 // ---------- precios ----------
@@ -149,6 +223,26 @@ export function revisarRespuesta(texto: string, op: OpcionesFiltro): ResultadoFi
   const emojis = contarEmojis(t);
   if (emojis > (op.maxEmojis ?? 1)) motivos.push(`mas_de_${op.maxEmojis ?? 1}_emoji:${emojis}`);
   if (op.maxCaracteres && t.length > op.maxCaracteres) motivos.push(`mas_de_${op.maxCaracteres}_caracteres:${t.length}`);
+
+  // Que no suene a bot.
+  const nt = normalizar(t);
+  const muletilla = contieneFrase(nt, op.muletillas ?? MULETILLAS_DEFAULT);
+  if (muletilla) motivos.push(`muletilla_bot:${muletilla}`);
+  const md = tieneMarkdown(t);
+  if (md) motivos.push(`markdown:${md}`);
+  if (primeraLineaSaludoVacio(t)) motivos.push("saludo_vacio");
+  if (frasesConExclamacionInicial(t) >= 2) motivos.push("exclamaciones_de_bot");
+  const urg = contieneFrase(nt, op.urgencia ?? URGENCIA_DEFAULT);
+  if (urg) motivos.push(`urgencia_inventada:${urg}`);
+  const niega = contieneFrase(nt, op.niegaIA ?? NIEGA_IA_DEFAULT);
+  if (niega) motivos.push(`niega_ser_asistente:${niega}`);
+  if (op.preguntaBot) {
+    if (!nt.includes("asistente virtual")) motivos.push("honestidad:falta_asistente_virtual");
+  } else {
+    const anuncia = contieneFrase(nt, SE_ANUNCIA_IA);
+    if (anuncia) motivos.push(`se_anuncia_como_ia:${anuncia}`);
+  }
+  if (op.yaPreguntoFreno && /que te frena|que le frena/.test(nt)) motivos.push("insiste_que_te_frena");
 
   return { ok: motivos.length === 0, motivos };
 }

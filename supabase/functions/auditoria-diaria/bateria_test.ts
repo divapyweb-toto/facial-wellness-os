@@ -16,9 +16,9 @@ type Caso = any;
 
 const { comun, casos } = cargarCasos();
 
-Deno.test("hay 50 casos bien armados y con id único", () => {
-  assertEquals(casos.length, 50);
-  assertEquals(new Set(casos.map((c: Caso) => c.id)).size, 50);
+Deno.test("hay 60 casos bien armados y con id único", () => {
+  assertEquals(casos.length, 60);
+  assertEquals(new Set(casos.map((c: Caso) => c.id)).size, 60);
   for (const c of casos) assertEquals(validarCaso(c), [], c.id);
 });
 
@@ -31,6 +31,9 @@ Deno.test("los casos cubren todo lo pedido en el plan", () => {
       "bot", "persona", "insultos", "denuncia", "mayorista", "injection", "producto_inexistente", "sin_telefono",
       "direccion_dudosa", "estado_pedido", "cambio_direccion", "reclamo_danado", "problema_uso", "sin_avance",
       "fuera_tema", "emojis", "mensaje_largo", "usted", "vos",
+      // 06-10: perfiles, cierre, ritmo y honestidad
+      "desconfiado", "regateo_duro", "lo_voy_a_pensar", "monosilabos", "rafaga", "apurado", "regalo", "farmacia",
+      "sos_persona", "sticker",
     ]
   ) assert(cob.has(k), `falta cobertura: ${k}`);
   assert(casos.filter((c: Caso) => c.cobertura.includes("injection")).length >= 5, "injection en varios estilos");
@@ -44,16 +47,18 @@ Deno.test("los casos no traen datos reales (repo público)", () => {
   for (const t of telefonos) assert(t.endsWith("981000000"), `teléfono que no es de prueba: ${t}`);
 });
 
-Deno.test("runner simulado: las 50 respuestas de referencia aprueban (sin red)", async () => {
+Deno.test("runner simulado: las 60 respuestas de referencia aprueban (sin red)", async () => {
   const { filas, resumen } = await correrBateria({ casos, comun, ejecutor: ejecutarReferencia });
   const malas = filas.filter((f: Caso) => !f.evaluacion.aprobado).map((f: Caso) => `${f.caso.id}: ${JSON.stringify(f.evaluacion.fallas)}`);
   assertEquals(malas, []);
-  assertEquals(resumen.aprobados, 50);
+  assertEquals(resumen.aprobados, 60);
   assertEquals(resumen.palabras_prohibidas, 0);
+  assertEquals(resumen.muletillas_bot, 0);
+  assertEquals(resumen.markdown, 0);
   assertEquals(resumen.precios_inventados, 0);
 });
 
-Deno.test("runner simulado: un vendedor malo reprueba los 50 y se cuentan prohibidas y precios", async () => {
+Deno.test("runner simulado: un vendedor malo reprueba los 60 y se cuentan prohibidas y precios", async () => {
   const malo = (caso: Caso) => ({
     turnos: caso.mensajes.map((entrada: string) => ({
       entrada,
@@ -63,8 +68,8 @@ Deno.test("runner simulado: un vendedor malo reprueba los 50 y se cuentan prohib
   });
   const { resumen } = await correrBateria({ casos, comun, ejecutor: malo });
   assertEquals(resumen.aprobados, 0);
-  assert(resumen.palabras_prohibidas >= 50);
-  assert(resumen.precios_inventados >= 50);
+  assert(resumen.palabras_prohibidas >= 60);
+  assert(resumen.precios_inventados >= 60);
   assert(resumen.no_deriva > 0);
 });
 
@@ -131,6 +136,41 @@ Deno.test("adaptador: el vendedor de G1 corre de punta a punta con su simulador 
     }
     const apnea = await correrCaso(casos.find((c: Caso) => c.id.startsWith("16_")), comun, "claude-haiku-4-5", {});
     assertEquals(apnea.turnos[0].derivado, true);
+  } finally {
+    console.log = log;
+    _configurarClaude();
+  }
+});
+
+Deno.test("runner: un vendedor robótico (muletillas y markdown) reprueba y se cuenta", async () => {
+  const robot = (caso: Caso) => ({
+    turnos: caso.mensajes.map((m: string | string[]) => ({
+      entrada: Array.isArray(m) ? m.join("\n") : m,
+      respuestas: ["¡Claro! **Excelente pregunta.**\n- Tiras\n- Parches\n¿Hay algo más en lo que pueda ayudarte?"],
+      herramientas: [],
+    })),
+  });
+  const { resumen } = await correrBateria({ casos, comun, ejecutor: robot });
+  assertEquals(resumen.aprobados, 0);
+  assert(resumen.muletillas_bot >= 60, String(resumen.muletillas_bot));
+  assert(resumen.markdown >= 60, String(resumen.markdown));
+});
+
+Deno.test("adaptador: una ráfaga de 4 mensajes se responde una sola vez, con todo junto (simulador)", async () => {
+  _configurarClaude({ modoSimulado: () => true, apiKey: () => undefined, precios: () => Promise.resolve(null) });
+  const log = console.log;
+  console.log = () => {};
+  try {
+    const caso = casos.find((c: Caso) => c.id === "55_cuatro_seguidos");
+    const r = await correrCaso(caso, comun, "claude-haiku-4-5", {});
+    assertEquals(r.turnos.length, 1);
+    const t = r.turnos[0] as Caso;
+    assertEquals(t.acciones, ["agrupado", "agrupado", "agrupado", "respondido"]);
+    assert(t.respuestas.length >= 1 && t.respuestas.length <= 2, JSON.stringify(t.respuestas));
+    assert(t.herramientas.some((h: Caso) => h.nombre === "consultar_catalogo"));
+    const sticker = await correrCaso(casos.find((c: Caso) => c.id === "60_sticker_suelto"), comun, "claude-haiku-4-5", {});
+    assertEquals((sticker.turnos[0] as Caso).costo_usd, 0);
+    assert(String((sticker.turnos[0] as Caso).accion).includes("fija:sticker_inicio"));
   } finally {
     console.log = log;
     _configurarClaude();

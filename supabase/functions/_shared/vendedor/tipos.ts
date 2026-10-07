@@ -2,7 +2,9 @@
 // Tipos compartidos del vendedor con IA (configuración, contexto del turno y filas de datos).
 import type { BotonTelegram } from "../telegram_formato.ts";
 import type { OpcionesEnvio, ResultadoEnvio } from "../wa.ts";
-import type { EntradaGlosario } from "./prompt.ts";
+import type { EntradaGlosario, FichaCfg } from "./prompt.ts";
+import type { CfgRitmo } from "./ritmo.ts";
+import type { CfgRespuestasFijas } from "./respuestas_fijas.ts";
 
 /** config_wa.vendedor (semilla en supabase/seed_vendedor.sql). Si falta una clave se usa el default del código. */
 export type CfgVendedor = {
@@ -12,10 +14,13 @@ export type CfgVendedor = {
   max_iteraciones: number;
   max_turnos_conversacion: number;
   tope_mensual_usd: number;
+  /** Mensajes del historial que viajan al modelo (los más nuevos). El perfil del cliente va aparte, resumido. */
   historial_mensajes: number;
-  demora_min_s: number;
-  demora_max_s: number;
-  /** Espera antes de responder para juntar mensajes seguidos del cliente (segundos). */
+  /**
+   * Segundos de silencio que se esperan antes de responder para juntar mensajes seguidos del cliente: cada
+   * mensaje nuevo reinicia la espera y responde solo el turno del último, con todo junto. La demora de
+   * "leer + escribir" está en config_wa.vendedor_ritmo.
+   */
   espera_agrupar_s: number;
   cache_ttl: "5m" | "1h";
   /** Solo modelos que lo aceptan (no Haiku 4.5). */
@@ -34,14 +39,12 @@ export type CfgVendedor = {
 export const CFG_VENDEDOR_DEFAULT: CfgVendedor = {
   modelo: "claude-haiku-4-5-20251001",
   modelo_alternativo: "claude-sonnet-5-5",
-  max_tokens: 1024,
+  max_tokens: 600,
   max_iteraciones: 6,
   max_turnos_conversacion: 20,
   tope_mensual_usd: 45,
-  historial_mensajes: 30,
-  demora_min_s: 2,
-  demora_max_s: 6,
-  espera_agrupar_s: 3,
+  historial_mensajes: 12,
+  espera_agrupar_s: 8,
   cache_ttl: "1h",
   esfuerzo: "low",
   fallback_servidor: true,
@@ -62,11 +65,14 @@ export type OfertasCantidad = Record<string, Record<string, number>>;
 /** Fotos y videos por producto (config_wa.vendedor_media): {handle: {video?: url, uso?: url, foto?: url}}. */
 export type MediaProductos = Record<string, Record<string, string>>;
 
+/** config_wa.vendedor_estilo: frases que suenan a bot o que mienten (las usa el filtro de salida). */
+export type CfgEstilo = { muletillas: string[]; urgencia: string[]; niega_ia: string[] };
+
 export type ConfigTurno = {
   vendedor: CfgVendedor;
   envio: EnvioVendedor;
   glosario: EntradaGlosario[];
-  fichas: Record<string, { ficha?: string; consejo_uso?: string }>;
+  fichas: Record<string, FichaCfg>;
   afirmaciones: string[];
   aceptaciones: string[];
   prohibidas: string[];
@@ -75,6 +81,9 @@ export type ConfigTurno = {
   media: MediaProductos;
   textos: Record<string, string>;
   plantillaPrompt: string | null;
+  ritmo: CfgRitmo;
+  respuestasFijas: CfgRespuestasFijas;
+  estilo: CfgEstilo;
 };
 
 /** Datos del turno que conocen las herramientas. */

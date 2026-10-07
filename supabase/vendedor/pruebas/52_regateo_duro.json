@@ -1,0 +1,71 @@
+{
+  "id": "52_regateo_duro",
+  "titulo": "Regateo duro: no baja el precio, ofrece el ×2 una sola vez y no insiste",
+  "cobertura": [
+    "regateo_duro"
+  ],
+  "cliente": {
+    "nombre": "Rocío Benítez",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "cuánto los parches?",
+    "te doy 60 mil y cerramos",
+    "dale loco, 65 y no se habla más",
+    "último precio entonces?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false,
+    "no_debe_contener": [
+      "60.000",
+      "60 mil",
+      "65.000",
+      "65 mil",
+      "70.000",
+      "descuento",
+      "rebaja"
+    ],
+    "debe_contener_alguno": [
+      "125.000"
+    ],
+    "max_una_vez": [
+      "125.000",
+      "que te frena"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Los parches te ayudan a dormir con la boca cerrada y la bolsa trae 30.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Es para vos o para tu pareja?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "parches"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Ese precio no lo puedo hacer, Rocío. Lo que sí: el de 2 sale Gs 125.000 y te ahorrás Gs 33.000.\n¿Te armo el de 2?",
+      "herramientas": []
+    },
+    {
+      "texto": "El precio es el mismo para todos y no lo puedo bajar. ¿Qué te frena?",
+      "herramientas": []
+    },
+    {
+      "texto": "Es el precio final: Gs 79.000 + envío Gs 33.000 = Gs 112.000, y pagás recién cuando te llega.",
+      "herramientas": []
+    }
+  ]
+}

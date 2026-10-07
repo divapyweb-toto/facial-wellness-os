@@ -7,6 +7,8 @@ import {
   extraerPrecios,
   palabrasProhibidas,
   promesasSalud,
+  formatoMarkdown,
+  muletillasBot,
   revelaInstrucciones,
   type OpcionesReglas,
   revisarTexto,
@@ -167,4 +169,38 @@ Deno.test("juez de tono: arma el pedido y lee el puntaje (fetch falso)", async (
   assert(r.costo_usd > 0);
   const sinClave = await juzgarTono(CASO, turno("Hola"), {});
   assertEquals(sinClave.puntaje, null);
+});
+
+Deno.test("reglas nuevas: muletillas de bot (y negar ser asistente) se marcan como muletilla_bot", () => {
+  for (
+    const t of [
+      "¡Claro! Te paso el precio.", "Por supuesto, te lo mando.", "Como asistente te recomiendo las tiras.",
+      "Estoy aquí para ayudarte.", "No dudes en escribirme.", "¿Hay algo más en lo que pueda ayudarte?",
+      "Entiendo tu preocupación.", "Excelente pregunta.", "¡Hola! ¿En qué puedo ayudarte?", "No soy un bot, soy Ana.",
+      "¡Genial! ¡Te lo mando!",
+    ]
+  ) assert(codigos(t).includes("muletilla_bot"), t);
+  assertEquals(muletillasBot("Dale, te paso el precio. ¿Es para vos?"), []);
+  assertEquals(muletillasBot("Soy el asistente virtual de Voltra. Si preferís, te paso con Enrique, ¿querés?"), []);
+});
+
+Deno.test("reglas nuevas: markdown (negrita doble, viñetas, listas, títulos, enlaces)", () => {
+  assert(codigos("Las **tiras** salen Gs 79.000.").includes("markdown"));
+  assertEquals(formatoMarkdown("Tenemos:\n- tiras\n* parches\n1. raspador\n## Precios\n[video](https://x.test)"), ["viñetas", "lista numerada", "título #", "enlace [x](url)"]);
+  assertEquals(formatoMarkdown("Pagás *al recibir* y te llega en 2 a 5 días."), []);
+  assert(codigos("Quedan pocas, aprovechá.").includes("urgencia_inventada"));
+});
+
+Deno.test("evaluarCaso: burbujas por turno, largo por mensaje y ofertas que van una sola vez", () => {
+  const caso = { ...CASO, expectativas: { max_respuestas_por_turno: 2, max_caracteres: 60, max_una_vez: ["el de 2"] } };
+  const r = evaluarCaso(caso, {
+    turnos: [
+      { entrada: "a", respuestas: ["¿Te armo 1 o el de 2?", "Uno.", "Dos."], herramientas: [] },
+      { entrada: "b", respuestas: ["Te repito: el de 2 te conviene porque pagás un solo envío y te dura dos meses."], herramientas: [] },
+    ],
+  }, COMUN);
+  const c = r.fallas.map((f: { codigo: string }) => f.codigo);
+  assert(c.includes("demasiadas_burbujas"));
+  assert(c.includes("mensaje_largo"));
+  assert(c.includes("repite"));
 });

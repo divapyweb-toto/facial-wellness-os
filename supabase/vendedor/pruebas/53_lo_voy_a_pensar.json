@@ -1,0 +1,70 @@
+{
+  "id": "53_lo_voy_a_pensar",
+  "titulo": "\"Lo voy a pensar\": una sola vez \"¿qué te frena?\" y después no insiste",
+  "cobertura": [
+    "lo_voy_a_pensar"
+  ],
+  "cliente": {
+    "nombre": "Claudia Ríos",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "precio de las tiras?",
+    "lo voy a pensar",
+    "es que no sé si me va a servir"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "que te frena"
+    ],
+    "max_una_vez": [
+      "que te frena"
+    ],
+    "no_debe_contener": [
+      "últimas",
+      "solo hoy",
+      "quedan pocas",
+      "se agota"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Las tiras abren la nariz para que entre más aire al dormir.\nGs 79.000 + envío Gs 33.000 = Gs 112.000, pagás al recibir.\n¿Roncás vos o tu pareja se queja?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "tiras"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Dale, sin apuro. ¿Qué te frena?",
+      "herramientas": []
+    },
+    {
+      "texto": "Te paso el video de cómo se ponen, así ves si son para vos.\nY pagás recién cuando te llega.",
+      "herramientas": [
+        {
+          "nombre": "enviar_media",
+          "input": {
+            "handle": "tiras-nasales",
+            "tipo": "uso"
+          }
+        }
+      ]
+    }
+  ]
+}

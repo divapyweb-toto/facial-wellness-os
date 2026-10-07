@@ -1,9 +1,14 @@
 // _shared/vendedor/orquestador.ts · Dueño: G1 (ola 2)
-// Un turno del vendedor con IA: arma el historial, llama al modelo con herramientas en bucle (con límite de
-// vueltas), aplica el filtro de salida, regenera una vez con el motivo y, si vuelve a fallar, si la API falla
-// o si se pasa el tope de gasto o de turnos, deriva a Enrique. El texto que el modelo escribe junto con
-// derivar_a_enrique pasa por el filtro y va arriba del botón (en salud, antecedido por la frase del médico). Respeta el ritmo humano: marca leído, muestra
-// "escribiendo…" y responde a los 2 a 6 s según el largo. Registra vendedor_turnos y el costo en la conversación.
+// Un turno del vendedor con IA: arma el historial (los últimos N mensajes + el perfil del cliente resumido),
+// llama al modelo con herramientas en bucle (con límite de vueltas), aplica el filtro de salida (reglas duras y
+// "que no suene a bot"), regenera una vez con el motivo y, si vuelve a fallar, si la API falla o si se pasa el
+// tope de gasto o de turnos, deriva a Enrique. El texto que el modelo escribe junto con derivar_a_enrique pasa
+// por el filtro y va arriba del botón (en salud, antecedido por la frase del médico).
+// Ahorro: un sticker suelto al empezar, un "gracias" suelto o un "ok" después del pedido se responden con un
+// texto fijo de config (sin modelo); registrar_perfil no gasta otra vuelta si viene junto con el texto.
+// Ritmo humano (ritmo.ts): espera ~8 s de silencio para juntar mensajes seguidos, marca leído, muestra
+// "escribiendo…" el tiempo de leer + escribir (con variación, más lento de noche) y parte las respuestas largas
+// en 2 burbujas. Registra vendedor_turnos, el costo y el perfil en la conversación.
 // Sin I/O propio: todo entra por `DepsOrquestador` (io.ts en producción).
 import {
   type Bloque,
@@ -22,7 +27,18 @@ import {
 import { partesAsuncion } from "../horario.ts";
 import { montosDeResultado, revisarRespuesta } from "./filtro_salida.ts";
 import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type MotivoDerivacion } from "./herramientas.ts";
+import {
+  fusionarPerfil,
+  marcasDeRespuesta,
+  mismoPerfil,
+  normalizarPerfil,
+  type PerfilCliente,
+  preguntaSiEsBot,
+  textoPerfil,
+} from "./perfil.ts";
 import { armarPrompt } from "./prompt.ts";
+import { elegirVariante, tipoRespuestaFija } from "./respuestas_fijas.ts";
+import { calcularDemoraMs, partirEnBurbujas, pausaBurbujaMs } from "./ritmo.ts";
 import type { ConfigTurno, CtxTurno, DepsHerramientas } from "./tipos.ts";
 
 export type FilaHistorial = {
@@ -52,7 +68,8 @@ export type FilaTurno = {
 
 export type DepsOrquestador = {
   config(): Promise<ConfigTurno>;
-  conversacion(id: string): Promise<{ id: string; estado: string; cliente_id: string; turnos_ia: number } | null>;
+  /** `perfil_vendedor`: jsonb de wa_conversaciones (migración 0011); null/ausente = sin perfil todavía. */
+  conversacion(id: string): Promise<{ id: string; estado: string; cliente_id: string; turnos_ia: number; perfil_vendedor?: unknown } | null>;
   cliente(id: string): Promise<{ id: string; telefono: string | null; wa_user_id: string | null; nombre: string | null } | null>;
   /** Últimos `limite` mensajes de la conversación en orden cronológico. */
   historial(conversacionId: string, limite: number): Promise<FilaHistorial[]>;
@@ -62,6 +79,10 @@ export type DepsOrquestador = {
   preciosPrevios(conversacionId: string): Promise<number[]>;
   registrarTurno(fila: FilaTurno): Promise<void>;
   sumarTurno(conversacionId: string, costoUsd: number): Promise<void>;
+  /** Guarda el perfil detectado (wa_conversaciones.perfil_vendedor). */
+  guardarPerfil(conversacionId: string, perfil: PerfilCliente): Promise<void>;
+  /** Azar en [0,1) para la variación del ritmo y las variantes fijas (tests: determinista). */
+  aleatorio?: () => number;
   marcarLeidoYEscribiendo(waMessageId: string): Promise<unknown>;
   llamarModelo(p: PedidoClaude): Promise<RespuestaClaude>;
   dormir(ms: number): Promise<void>;
@@ -111,22 +132,42 @@ export function armarHistorial(filas: FilaHistorial[], entrada: EntradaTurno): M
   return out;
 }
 
-/** Segundos de demora según el largo: de `min` (texto corto) a `max` (≥ 300 caracteres). */
-export function demoraSegundos(texto: string, min: number, max: number): number {
-  const f = Math.min(1, (texto?.length ?? 0) / 300);
-  return Math.round((min + (max - min) * f) * 10) / 10;
+/**
+ * Mensajes seguidos del cliente que todavía no tienen respuesta (desde nuestro último mensaje), en orden.
+ * El mensaje actual se reemplaza por `entrada.texto` (puede venir transcripto) y se agrega si no está.
+ */
+export function bloquePendiente(filas: FilaHistorial[], entrada: EntradaTurno): string[] {
+  const out: string[] = [];
+  let actualVisto = false;
+  for (let i = filas.length - 1; i >= 0; i--) {
+    const f = filas[i];
+    if (f.direccion === "out") {
+      if (f.estado === "fallido") continue;
+      break;
+    }
+    const c = (f.contenido ?? {}) as Record<string, unknown>;
+    let t: string | null;
+    if (f.wa_message_id && f.wa_message_id === entrada.wa_message_id) {
+      actualVisto = true;
+      t = entrada.texto;
+    } else t = f.texto ?? (typeof c.texto_vendedor === "string" ? c.texto_vendedor : null) ?? `[${f.tipo ?? "mensaje"}]`;
+    if (t?.trim()) out.unshift(t.trim());
+  }
+  if (!actualVisto) out.push(entrada.texto);
+  return out;
 }
 
 const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 
 /** Bloque variable del system (después del breakpoint de caché): fecha, hora y datos del cliente. */
-export function contextoDinamico(ahora: Date, cli: { nombre: string | null; telefono: string | null }): string {
+export function contextoDinamico(ahora: Date, cli: { nombre: string | null; telefono: string | null }, perfil?: PerfilCliente): string {
   const p = partesAsuncion(ahora);
   const dia = DIAS[new Date(Date.UTC(p.anio, p.mes - 1, p.dia)).getUTCDay()];
   const hh = String(p.hora).padStart(2, "0"), mm = String(p.minuto).padStart(2, "0");
   return [
     `AHORA: ${dia} ${p.dia}/${p.mes}/${p.anio}, ${hh}:${mm} (hora de Asunción).`,
     `CLIENTE: ${cli.nombre ? `se llama ${cli.nombre} en WhatsApp` : "sin nombre en WhatsApp"}; ${cli.telefono ? "el chat tiene su teléfono" : "el chat NO tiene su teléfono (pedilo con pedir_telefono antes de cerrar)"}.`,
+    ...(perfil ? [textoPerfil(perfil)] : []),
   ].join("\n");
 }
 
@@ -144,15 +185,21 @@ function resumirResultado(r: unknown): unknown {
 
 // ---------- turno ----------
 
+/** Herramientas que no necesitan otra vuelta del modelo si vienen junto con el texto para el cliente. */
+const HERRAMIENTAS_SILENCIOSAS = new Set(["registrar_perfil"]);
+
 export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador): Promise<ResultadoTurno> {
+  const inicio = deps.ahora().getTime();
   const conv0 = await deps.conversacion(entrada.conversacion_id);
   if (!conv0 || conv0.estado !== "ia") return { accion: "omitido", motivo: "conversacion_no_esta_en_ia" };
   const cfg = await deps.config();
   const v = cfg.vendedor;
+  const azar = () => deps.aleatorio?.() ?? Math.random();
 
   await deps.marcarLeidoYEscribiendo(entrada.wa_message_id).catch(() => {});
 
-  // Mensajes seguidos del cliente: responde solo el turno del último (que ve todo el historial).
+  // Mensajes seguidos del cliente: se espera `espera_agrupar_s` de silencio; si llegó otro, responde el turno
+  // del último (que ve todo junto).
   if (v.espera_agrupar_s > 0) {
     await deps.dormir(v.espera_agrupar_s * 1000);
     const ultimo = await deps.ultimoEntranteId(entrada.conversacion_id);
@@ -163,7 +210,13 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   const cli = await deps.cliente(conv.cliente_id);
   if (!cli) return { accion: "omitido", motivo: "cliente_inexistente" };
 
-  const inicio = deps.ahora().getTime();
+  const filasHistorial = await deps.historial(conv.id, v.historial_mensajes);
+  const bloque = bloquePendiente(filasHistorial, entrada);
+  const textoCliente = bloque.join("\n");
+  const perfil0 = normalizarPerfil(conv.perfil_vendedor ?? conv0.perfil_vendedor);
+  let perfil: PerfilCliente = { ...perfil0 };
+  const preguntaBot = preguntaSiEsBot(textoCliente);
+
   const permitidos: number[] = [cfg.envio.costo_gs, ...(await deps.preciosPrevios(conv.id).catch(() => [] as number[]))];
   const opcionesFiltro = () => ({
     catalogo: permitidos,
@@ -171,6 +224,11 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     afirmaciones: cfg.afirmaciones,
     promesasSalud: cfg.promesasSalud,
     maxCaracteres: v.max_caracteres,
+    muletillas: cfg.estilo.muletillas,
+    urgencia: cfg.estilo.urgencia,
+    niegaIA: cfg.estilo.niega_ia,
+    preguntaBot,
+    yaPreguntoFreno: !!perfil0.pregunto_freno,
   });
   const ctx: CtxTurno = {
     conversacionId: conv.id,
@@ -201,14 +259,19 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     accion: "",
   };
 
-  const cerrar = async (r: ResultadoTurno): Promise<ResultadoTurno> => {
+  const cerrar = async (r: ResultadoTurno, op: { contarTurno?: boolean } = {}): Promise<ResultadoTurno> => {
     fila.accion = r.accion + (r.motivo ? `:${r.motivo}` : "");
     fila.costo_usd = Math.round(fila.costo_usd * 1e8) / 1e8;
+    const usadas = fila.herramientas.map((h) => h.nombre);
+    const perfilFinal = fusionarPerfil(perfil, marcasDeRespuesta(fila.respuesta ?? "", usadas));
     try {
       await deps.registrarTurno(fila);
-      await deps.sumarTurno(conv.id, fila.costo_usd);
+      if (op.contarTurno !== false) await deps.sumarTurno(conv.id, fila.costo_usd);
     } catch (e) {
       console.error("vendedor: no se pudo registrar el turno:", e);
+    }
+    if (!mismoPerfil(perfil0, perfilFinal)) {
+      await deps.guardarPerfil(conv.id, perfilFinal).catch((e) => console.error("vendedor: no se pudo guardar el perfil:", e));
     }
     return { ...r, costo_usd: fila.costo_usd };
   };
@@ -220,6 +283,59 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     return await cerrar({ accion: "derivado", motivo });
   };
 
+  /** Espera con "escribiendo…" visible (WhatsApp lo apaga a los ~25 s: se renueva). */
+  const esperarEscribiendo = async (ms: number) => {
+    const paso = Math.max(1000, cfg.ritmo.renovar_escribiendo_s * 1000);
+    let resta = ms;
+    while (resta > 0) {
+      await deps.marcarLeidoYEscribiendo(entrada.wa_message_id).catch(() => {});
+      const d = Math.min(resta, paso);
+      await deps.dormir(d);
+      resta -= d;
+    }
+  };
+
+  /** Demora de leer + escribir (descontando lo que ya pasó), burbujas y envío. */
+  const responder = async (texto: string, accionOk: ResultadoTurno["accion"], motivoOk?: string, op: { contarTurno?: boolean } = {}) => {
+    const burbujas = partirEnBurbujas(texto, cfg.ritmo.partir_desde_caracteres);
+    const objetivo = calcularDemoraMs({ textoCliente, textoRespuesta: burbujas[0] ?? texto, ahora: deps.ahora(), ritmo: cfg.ritmo, azar: azar() });
+    const resta = objetivo - (deps.ahora().getTime() - inicio);
+    if (resta > 0) await esperarEscribiendo(resta);
+    // Si mientras "escribía" el cliente mandó otro mensaje, responde ese turno con todo junto.
+    if (v.espera_agrupar_s > 0) {
+      const ultimo = await deps.ultimoEntranteId(conv.id).catch(() => null);
+      if (ultimo && ultimo !== entrada.wa_message_id) return await cerrar({ accion: "agrupado", motivo: "llego_otro_mensaje" }, op);
+    }
+    fila.respuesta = texto;
+    for (let i = 0; i < burbujas.length; i++) {
+      if (i > 0) await esperarEscribiendo(pausaBurbujaMs(burbujas[i], cfg.ritmo, azar()));
+      const envio = await deps.herramientas.enviarTexto(ctx.destino, burbujas[i], { clienteId: cli.id, conversacionId: conv.id });
+      if (!envio.ok) {
+        await deps.herramientas.avisar(`<b>El vendedor IA no pudo responder</b>\nError: ${envio.error ?? "desconocido"}\nConversación: ${conv.id}`);
+        return await cerrar({ accion: "error_envio", motivo: envio.error, respuesta: texto }, op);
+      }
+    }
+    return await cerrar({ accion: accionOk, motivo: motivoOk, respuesta: texto }, op);
+  };
+
+  // Respuestas fijas (sin modelo): sticker al empezar, "gracias" suelto, "ok" después del pedido.
+  if (bloque.length === 1) {
+    const pedidoChat = await deps.herramientas.ultimoPedidoChat(conv.id).catch(() => null);
+    const nuestros = filasHistorial.filter((f) => f.direccion === "out" && f.estado !== "fallido" && (f.texto ?? "").trim());
+    const tipo = tipoRespuestaFija(entrada.texto, { hayMensajesNuestros: nuestros.length > 0, estadoPedidoChat: pedidoChat?.estado ?? null });
+    if (tipo) {
+      fila.modelo = "fija";
+      const texto = elegirVariante(tipo, cfg.respuestasFijas, nuestros.at(-1)?.texto ?? null, azar());
+      if (texto === null) return await cerrar({ accion: "omitido", motivo: `fija_repetida:${tipo}` }, { contarTurno: false });
+      const rev = revisarRespuesta(texto, opcionesFiltro());
+      fila.filtro.intentos.push(rev);
+      if (rev.ok) return await responder(texto, "respondido", `fija:${tipo}`, { contarTurno: false });
+      console.warn(`vendedor: la respuesta fija ${tipo} no pasa el filtro (${rev.motivos.join(", ")}): uso el modelo`);
+      fila.modelo = v.modelo;
+      fila.filtro.intentos = [];
+    }
+  }
+
   // Topes (antes de gastar).
   if (conv.turnos_ia >= v.max_turnos_conversacion) {
     return await derivar("tope_turnos", `La conversación llegó a ${conv.turnos_ia} turnos de IA sin cerrarse. Último mensaje: "${entrada.texto.slice(0, 200)}"`);
@@ -229,7 +345,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     return await derivar("tope_gasto", `Se alcanzó el tope mensual de IA (USD ${gasto.toFixed(2)} de ${v.tope_mensual_usd}). Último mensaje: "${entrada.texto.slice(0, 200)}"`);
   }
 
-  // Prompt: bloque estable (cacheado 1 h) + bloque variable.
+  // Prompt: bloque estable (cacheado 1 h) + bloque variable (fecha, cliente y perfil).
   let productos: Awaited<ReturnType<typeof catalogo>> = [];
   try {
     productos = await catalogo(deps.herramientas, ctx);
@@ -238,16 +354,16 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   }
   const promptBase = armarPrompt({
     glosario: cfg.glosario,
-    fichas: productos.map((p) => ({ handle: p.handle, titulo: p.title, ficha: cfg.fichas[p.handle]?.ficha, consejo_uso: cfg.fichas[p.handle]?.consejo_uso })),
+    fichas: productos.map((p) => ({ handle: p.handle, titulo: p.title, ...(cfg.fichas[p.handle] ?? {}) })),
     envio: cfg.envio,
     afirmaciones: cfg.afirmaciones,
     aceptaciones: cfg.aceptaciones,
   }, cfg.plantillaPrompt ?? undefined);
   const system: BloqueTexto[] = [
     { type: "text", text: promptBase },
-    { type: "text", text: contextoDinamico(ctx.ahora, cli) },
+    { type: "text", text: contextoDinamico(ctx.ahora, cli, perfil0) },
   ];
-  const mensajes: Mensaje[] = armarHistorial(await deps.historial(conv.id, v.historial_mensajes), entrada);
+  const mensajes: Mensaje[] = armarHistorial(filasHistorial, entrada);
 
   const pedido = (msgs: Mensaje[]): PedidoClaude => ({
     modelo: v.modelo,
@@ -268,6 +384,20 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     fila.modelo = r.modelo || fila.modelo;
     return r;
   };
+  /** registrar_perfil: se fusiona en el perfil del turno y queda en el registro (sin otra vuelta del modelo). */
+  const anotarSilenciosas = (contenido: Bloque[]) => {
+    for (const u of usosDeHerramientas(contenido).filter((x) => HERRAMIENTAS_SILENCIOSAS.has(x.name))) {
+      const nuevo = normalizarPerfil(u.input);
+      perfil = fusionarPerfil(perfil, nuevo);
+      fila.herramientas.push({ nombre: u.name, input: u.input, resultado: { ok: true, perfil: nuevo }, error: false });
+    }
+  };
+  /** Solo herramientas silenciosas + texto: el texto es la respuesta final. */
+  const soloSilenciosasConTexto = (contenido: Bloque[]) => {
+    const usos = usosDeHerramientas(contenido);
+    return usos.length > 0 && usos.every((u) => HERRAMIENTAS_SILENCIOSAS.has(u.name)) && !!textoDe(contenido).trim();
+  };
+  const sinHerramientas = (contenido: Bloque[]): Bloque[] => contenido.filter((b) => b.type !== "tool_use");
 
   // Bucle de herramientas.
   let textoFinal: string | null = null;
@@ -278,9 +408,10 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         return await derivar("falla_ia", `El modelo se negó a responder. Mensaje del cliente: "${entrada.texto.slice(0, 200)}"`);
       }
       const usos = usosDeHerramientas(r.contenido);
-      if (!usos.length) {
+      if (!usos.length || soloSilenciosasConTexto(r.contenido)) {
+        anotarSilenciosas(r.contenido);
         textoFinal = textoDe(r.contenido);
-        mensajes.push({ role: "assistant", content: r.contenido });
+        mensajes.push({ role: "assistant", content: sinHerramientas(r.contenido) });
         break;
       }
       // Se devuelve el contenido completo (incluye bloques thinking en Sonnet 5.5), sin tocarlo.
@@ -295,6 +426,11 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
       for (const u of usos) {
         if (terminal) {
           resultados.push({ type: "tool_result", tool_use_id: u.id, content: JSON.stringify({ ok: false, error: "omitida: ya se le respondió al cliente" }), is_error: true });
+          continue;
+        }
+        if (HERRAMIENTAS_SILENCIOSAS.has(u.name)) {
+          anotarSilenciosas([u]);
+          resultados.push({ type: "tool_result", tool_use_id: u.id, content: JSON.stringify({ ok: true }) });
           continue;
         }
         let textoModelo: string | null = null;
@@ -337,12 +473,20 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         role: "user",
         content:
           `[CONTROL INTERNO, no lo ve el cliente] Tu respuesta anterior se bloqueó por: ${rev.motivos.join(", ")}. ` +
-          `Escribí otra que cumpla las reglas (1 a 3 líneas, una pregunta, máximo 1 emoji, solo precios de consultar_catalogo, sin palabras prohibidas ni promesas de salud). Respondé solo con el texto para el cliente.`,
+          `Escribí otra que cumpla las reglas: 1 a 3 líneas, la primera con la respuesta o un beneficio (no un saludo solo), una sola pregunta al final, ` +
+          `máximo 1 emoji, sin frases de bot ("¡Claro!", "No dudes en", "¿En qué puedo ayudarte?"), sin markdown ni viñetas, sin urgencia inventada, ` +
+          `solo precios de consultar_catalogo, sin palabras prohibidas ni promesas de salud` +
+          (preguntaBot ? `, y decí que sos el asistente virtual de Voltra (sin decir que sos una persona)` : "") +
+          `. Respondé solo con el texto para el cliente.`,
       },
     ];
     try {
       const r2 = await llamar(intento);
-      textoFinal = usosDeHerramientas(r2.contenido).length ? "" : textoDe(r2.contenido);
+      const usos2 = usosDeHerramientas(r2.contenido);
+      if (!usos2.length || soloSilenciosasConTexto(r2.contenido)) {
+        anotarSilenciosas(r2.contenido);
+        textoFinal = textoDe(r2.contenido);
+      } else textoFinal = "";
     } catch (e) {
       return await derivar("falla_ia", `La IA falló al regenerar (${e instanceof Error ? e.message.slice(0, 120) : e}).`);
     }
@@ -353,19 +497,5 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     }
   }
 
-  // Ritmo humano: demora proporcional al largo, descontando lo que ya tardó el modelo.
-  const objetivoMs = demoraSegundos(textoFinal, v.demora_min_s, v.demora_max_s) * 1000;
-  const yaPaso = deps.ahora().getTime() - inicio;
-  if (objetivoMs > yaPaso) {
-    await deps.marcarLeidoYEscribiendo(entrada.wa_message_id).catch(() => {});
-    await deps.dormir(objetivoMs - yaPaso);
-  }
-  fila.respuesta = textoFinal;
-  const envio = await deps.herramientas.enviarTexto(ctx.destino, textoFinal, { clienteId: cli.id, conversacionId: conv.id });
-  if (!envio.ok) {
-    await deps.herramientas.avisar(`<b>El vendedor IA no pudo responder</b>\nError: ${envio.error ?? "desconocido"}\nConversación: ${conv.id}`);
-    return await cerrar({ accion: "error_envio", motivo: envio.error, respuesta: textoFinal });
-  }
-  return await cerrar({ accion: "respondido", respuesta: textoFinal });
+  return await responder(textoFinal, "respondido");
 }
-

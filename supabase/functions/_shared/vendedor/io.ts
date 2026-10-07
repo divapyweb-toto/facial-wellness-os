@@ -15,6 +15,7 @@ import { enviarMedia } from "./enviar_wa.ts";
 import { montosDeResultado } from "./filtro_salida.ts";
 import type { DepsOrquestador, FilaHistorial } from "./orquestador.ts";
 import type { ConfigTurno, DepsHerramientas, PedidoChat, PedidoCliente, ProductoShopify } from "./tipos.ts";
+import { crearCacheVersion, type FilaVersion } from "./version_activa.ts";
 
 function falla(contexto: string, error: { message: string } | null): void {
   if (error) throw new Error(`${contexto}: ${error.message}`);
@@ -162,12 +163,23 @@ export const depsHerramientasReales: DepsHerramientas = {
 
 let cacheConfig: { cfg: ConfigTurno; hasta: number } | null = null;
 
+/** Versión activa del prompt (ciclo mensual de mejora), con caché de 5 min. Sin tabla o sin activa: null. */
+const versionActiva = crearCacheVersion(async (): Promise<FilaVersion | null> => {
+  const { data, error } = await db().from("vendedor_versiones").select("numero,prompt,ejemplos,faq,objeciones")
+    .eq("estado", "activa").maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data ?? null) as FilaVersion | null;
+});
+
 export const depsOrquestadorReales: DepsOrquestador = {
   async config() {
     if (cacheConfig && cacheConfig.hasta > Date.now()) return cacheConfig.cfg;
     const { data, error } = await db().from("config_wa").select("clave,valor").in("clave", [...CLAVES_CONFIG_VENDEDOR]);
     falla("config_wa (vendedor)", error);
-    const filas = Object.fromEntries((data ?? []).map((f) => [f.clave, f.valor]));
+    const filas: Record<string, unknown> = Object.fromEntries((data ?? []).map((f) => [f.clave, f.valor]));
+    // Versión activa de vendedor_versiones > config_wa.vendedor_prompt > prompt del archivo.
+    const plantillaVersion = await versionActiva.obtener();
+    if (plantillaVersion) filas.vendedor_prompt = plantillaVersion;
     const { cfg, faltantes } = armarConfigTurno(filas);
     if (faltantes.length) console.warn(`vendedor: config_wa sin ${faltantes.join(", ")}: uso los valores por defecto del código`);
     cacheConfig = { cfg, hasta: Date.now() + 60_000 };
@@ -175,9 +187,20 @@ export const depsOrquestadorReales: DepsOrquestador = {
   },
 
   async conversacion(id) {
-    const { data, error } = await db().from("wa_conversaciones").select("id,estado,cliente_id,turnos_ia").eq("id", id).maybeSingle();
-    falla("conversación", error);
+    let r = await db().from("wa_conversaciones").select("id,estado,cliente_id,turnos_ia,perfil_vendedor").eq("id", id).maybeSingle();
+    // Sin la migración 0011 todavía aplicada: se sigue sin perfil (no se corta el vendedor).
+    if (r.error && /perfil_vendedor/.test(r.error.message)) {
+      console.warn("vendedor: falta la columna perfil_vendedor (migración 20261006000011): sigo sin perfil");
+      r = await db().from("wa_conversaciones").select("id,estado,cliente_id,turnos_ia").eq("id", id).maybeSingle();
+    }
+    falla("conversación", r.error);
+    const data = r.data as { id: string; estado: string; cliente_id: string; turnos_ia: number | null; perfil_vendedor?: unknown } | null;
     return data ? { ...data, turnos_ia: Number(data.turnos_ia ?? 0) } : null;
+  },
+
+  async guardarPerfil(conversacionId, perfil) {
+    const { error } = await db().from("wa_conversaciones").update({ perfil_vendedor: perfil }).eq("id", conversacionId);
+    falla("perfil del cliente", error);
   },
 
   async cliente(id) {

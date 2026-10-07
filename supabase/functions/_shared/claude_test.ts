@@ -65,6 +65,16 @@ Deno.test("cuerpo: Sonnet 5.5 lleva effort y fallback del servidor (no en lote)"
   assertEquals(b.cuerpo.fallbacks, undefined);
 });
 
+Deno.test("cuerpo: esquemaJson va en output_config.format (junto al effort; en Haiku sin effort; también en lote)", () => {
+  const esquema = { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false };
+  const m = [{ role: "user" as const, content: "x" }];
+  const s = armarCuerpo({ modelo: "claude-sonnet-5-5", system: "s", mensajes: m, esfuerzo: "medium", esquemaJson: esquema });
+  assertEquals(s.cuerpo.output_config, { effort: "medium", format: { type: "json_schema", schema: esquema } });
+  const h = armarCuerpo({ modelo: "claude-haiku-4-5-20251001", system: "s", mensajes: m, esfuerzo: "low", esquemaJson: esquema }, true);
+  assertEquals(h.cuerpo.output_config, { format: { type: "json_schema", schema: esquema } });
+  assertEquals(h.betas, []);
+});
+
 function respuestaApi(status: number, cuerpo: unknown): Response {
   return new Response(JSON.stringify(cuerpo), { status, headers: { "content-type": "application/json" } });
 }

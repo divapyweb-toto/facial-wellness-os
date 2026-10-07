@@ -11,10 +11,10 @@ import {
 } from "./herramientas.ts";
 import { configPrueba, ctxPrueba, depsPrueba } from "./prueba_utiles.ts";
 
-Deno.test("definiciones: las 9 herramientas del contrato con JSON Schema", () => {
+Deno.test("definiciones: las 9 herramientas del contrato + registrar_perfil, con JSON Schema", () => {
   assertEquals(HERRAMIENTAS.map((h) => h.name).sort(), [
     "consultar_catalogo", "crear_pedido_cod", "derivar_a_enrique", "enviar_formulario", "enviar_media",
-    "enviar_opciones", "estado_pedido", "pedir_telefono", "pedir_ubicacion",
+    "enviar_opciones", "estado_pedido", "pedir_telefono", "pedir_ubicacion", "registrar_perfil",
   ]);
   for (const h of HERRAMIENTAS) assertEquals(h.input_schema.type, "object");
 });
@@ -28,7 +28,9 @@ Deno.test("consultar_catalogo: precios de Shopify + ofertas + envío y caché de
   assertEquals(prods.length, 1);
   assertEquals(prods[0].precio, 79000);
   assertEquals(prods[0].total, 112000);
-  assertEquals((prods[0].ofertas as Array<Record<string, unknown>>)[0], { cantidad: 2, precio: 125000, precio_texto: "125.000", total: 158000, total_texto: "158.000" });
+  assertEquals((prods[0].ofertas as Array<Record<string, unknown>>)[0], {
+    cantidad: 2, precio: 125000, precio_texto: "125.000", total: 158000, total_texto: "158.000", ahorro: 33000, ahorro_texto: "33.000",
+  });
   await ejecutarHerramienta("consultar_catalogo", {}, ctx, deps);
   assertEquals(reg.catalogoLlamadas, 1);
   reg.avanzarReloj(11 * 60_000);
@@ -226,4 +228,11 @@ Deno.test("textoClienteDerivacion: orden médico → texto del modelo → botón
     textoClienteDerivacion({ textos: { derivacion_salud: "Andá al médico." }, conBoton: false, motivo: "salud", textoModelo: "" }),
     "Andá al médico.\nLe paso tu caso a Enrique y te escribe por acá apenas lo vea.",
   );
+});
+
+Deno.test("registrar_perfil: valida y descarta valores fuera de la lista", async () => {
+  const { deps } = depsPrueba();
+  const r = await ejecutarHerramienta("registrar_perfil", { necesidad: "boca_seca", perfil: "inventado", nota: "es para el marido" }, ctxPrueba(), deps);
+  assertEquals(r.resultado, { ok: true, perfil: { necesidad: "boca_seca", nota: "es para el marido" } });
+  assertFalse(r.esError);
 });

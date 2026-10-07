@@ -1,0 +1,62 @@
+{
+  "id": "56_apurado",
+  "titulo": "Cliente apurado: cierra ya pidiendo los datos, sin explicar de más",
+  "cobertura": [
+    "apurado"
+  ],
+  "cliente": {
+    "nombre": "Alcides Romero",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "necesito 2 tiras, cuánto y listo, no tengo tiempo",
+    "Alcides Romero, Lambaré, Cacique Lambaré 845 casi Av. Cacique, frente al colegio",
+    "si"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo",
+      "crear_pedido_cod"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "158.000"
+    ],
+    "max_caracteres": 200
+  },
+  "referencia": [
+    {
+      "texto": "Las 2 tiras salen Gs 125.000 + envío Gs 33.000 = Gs 158.000, pagás al recibir.\nPasame nombre, ciudad y dirección con una referencia.",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "tiras"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Pedido: Tiras nasales x2. Total al recibir: Gs 158.000.\nEntrega a Alcides Romero, Lambaré, Cacique Lambaré 845. ¿Confirmás?",
+      "herramientas": []
+    },
+    {
+      "texto": "Listo Alcides, ya cargamos tu pedido. En unos minutos te llega la confirmación.",
+      "herramientas": [
+        {
+          "nombre": "crear_pedido_cod",
+          "input": {
+            "confirmar": true
+          }
+        }
+      ]
+    }
+  ]
+}

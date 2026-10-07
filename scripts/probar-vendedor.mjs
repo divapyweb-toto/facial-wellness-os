@@ -55,6 +55,9 @@ export function validarCaso(caso) {
   const p = [];
   if (!caso.id) p.push("sin id");
   if (!Array.isArray(caso.mensajes) || !caso.mensajes.length) p.push("sin mensajes");
+  else if (caso.mensajes.some((m) => (Array.isArray(m) ? !m.length || m.some((x) => typeof x !== "string") : typeof m !== "string"))) {
+    p.push("mensaje mal armado (texto o lista de textos)");
+  }
   if (!caso.cliente?.nombre) p.push("cliente sin nombre");
   if (!caso.expectativas) p.push("sin expectativas");
   if (!Array.isArray(caso.referencia) || caso.referencia.length !== caso.mensajes?.length) {
@@ -68,11 +71,11 @@ export function validarCaso(caso) {
 /** Vendedor de referencia: devuelve las respuestas escritas en el caso (sin red, determinista). */
 export function ejecutarReferencia(caso) {
   return {
-    turnos: caso.mensajes.map((entrada, i) => {
+    turnos: caso.mensajes.map((m, i) => {
       const r = caso.referencia?.[i] ?? { texto: "" };
       return {
-        entrada,
-        respuestas: r.texto ? [r.texto] : [],
+        entrada: Array.isArray(m) ? m.join("\n") : m, // ráfaga: varios mensajes seguidos, una respuesta
+        respuestas: Array.isArray(r.texto) ? r.texto : r.texto ? [r.texto] : [], // 2 burbujas = lista
         herramientas: r.herramientas ?? [],
         derivado: !!r.derivar,
         uso: { entrada: 0, salida: 0, cache_lectura: 0, cache_escritura: 0 },
@@ -160,6 +163,8 @@ export function resumir(filas) {
     promesas_salud: suma("promesas_salud"),
     revela_instrucciones: suma("revela_instrucciones"),
     no_deriva: suma("no_deriva"),
+    muletillas_bot: suma("muletillas_bot"),
+    markdown: suma("markdown"),
     tono_promedio: tonos.length ? tonos.reduce((a, b) => a + b, 0) / tonos.length : null,
     tono_evaluados: tonos.length,
     costo_total_usd: costo,
@@ -231,6 +236,8 @@ export function armarInforme(porModelo, recomendacion, meta = {}) {
   l.push(fila("Promesas de salud", (r) => r.promesas_salud));
   l.push(fila("Revela instrucciones", (r) => r.revela_instrucciones));
   l.push(fila("No derivó cuando debía", (r) => r.no_deriva));
+  l.push(fila("Muletillas de bot", (r) => r.muletillas_bot ?? 0));
+  l.push(fila("Markdown", (r) => r.markdown ?? 0));
   l.push(fila("Tono promedio (1-5)", (r) => `${num(r.tono_promedio)} (${r.tono_evaluados})`));
   l.push(fila("Costo total", (r) => usd(r.costo_total_usd)));
   l.push(fila("Costo por conversación", (r) => usd(r.costo_por_conversacion_usd)));
@@ -357,12 +364,12 @@ async function main() {
   // Resumen en pantalla
   console.log(`\nBatería del vendedor · ${meta.modo}`);
   console.log(meta.vendedor);
-  console.log("| Corrida | Aprobados | Prohibidas | Precios inventados | Salud | Revela | No deriva | Errores | Tono | Costo/conv | Latencia/turno |");
-  console.log("|---|---|---|---|---|---|---|---|---|---|---|");
+  console.log("| Corrida | Aprobados | Prohibidas | Precios inventados | Salud | Revela | No deriva | Bot/markdown | Errores | Tono | Costo/conv | Latencia/turno |");
+  console.log("|---|---|---|---|---|---|---|---|---|---|---|---|");
   const errores = (m) => porModelo[m].filas.filter((f) => f.evaluacion.fallas.some((x) => x.codigo === "error"));
   for (const [m, { resumen: s }] of Object.entries(porModelo)) {
     console.log(
-      `| ${m} | ${s.aprobados}/${s.casos} | ${s.palabras_prohibidas} | ${s.precios_inventados} | ${s.promesas_salud} | ${s.revela_instrucciones} | ${s.no_deriva} | ${errores(m).length} | ${num(s.tono_promedio)} | ${usd(s.costo_por_conversacion_usd)} | ${s.latencia_promedio_ms == null ? "—" : `${Math.round(s.latencia_promedio_ms)} ms`} |`,
+      `| ${m} | ${s.aprobados}/${s.casos} | ${s.palabras_prohibidas} | ${s.precios_inventados} | ${s.promesas_salud} | ${s.revela_instrucciones} | ${s.no_deriva} | ${s.muletillas_bot}/${s.markdown} | ${errores(m).length} | ${num(s.tono_promedio)} | ${usd(s.costo_por_conversacion_usd)} | ${s.latencia_promedio_ms == null ? "—" : `${Math.round(s.latencia_promedio_ms)} ms`} |`,
     );
   }
   for (const m of Object.keys(porModelo)) {

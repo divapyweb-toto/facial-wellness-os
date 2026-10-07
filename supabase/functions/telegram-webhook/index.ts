@@ -7,7 +7,8 @@
 import { db, guardarEventoCrudo } from "../_shared/db.ts";
 import { cancelarPedido, orderGid } from "../_shared/shopify.ts";
 import { enviarTexto } from "../_shared/wa.ts";
-import { editarMensaje, responderCallback, verificarSecretoTelegram } from "../_shared/telegram.ts";
+import { avisar, editarMensaje, responderCallback, verificarSecretoTelegram } from "../_shared/telegram.ts";
+import type { CicloDecision, DepsDecision, EstadoVersion, VersionMin } from "../mejora-mensual/aprobacion.ts";
 import {
   type ClaveTextoCliente,
   type Dependencias,
@@ -60,8 +61,71 @@ async function obtenerPedido(id: number): Promise<PedidoContexto | null> {
   };
 }
 
+// Botones mej_* (ciclo mensual de mejora, M3). Tablas de la migración 0012; la activación
+// va por la función SQL mejora_activar_version (migración 0013), que archiva la activa y
+// activa la nueva en una sola transacción.
+function depsMejora(): DepsDecision {
+  const version = async (col: "id" | "numero", valor: string | number): Promise<VersionMin | null> => {
+    const { data, error } = await db().from("vendedor_versiones").select("id, numero, estado").eq(col, valor).maybeSingle();
+    if (error) throw new Error(`vendedor_versiones: ${error.message}`);
+    return (data as VersionMin | null) ?? null;
+  };
+  return {
+    ahora: () => new Date(),
+    async obtenerCiclo(id) {
+      const { data, error } = await db()
+        .from("mejora_ciclos")
+        .select("id, mes, estado, propuesta_version_id, n_conversaciones, costo_usd, prueba, resumen")
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error(`mejora_ciclos: ${error.message}`);
+      return data ? { ...(data as CicloDecision), costo_usd: data.costo_usd == null ? null : Number(data.costo_usd) } : null;
+    },
+    versionPorId: (id) => version("id", id),
+    versionPorNumero: (n) => version("numero", n),
+    async versionActiva() {
+      const { data, error } = await db().from("vendedor_versiones").select("id, numero, estado").eq("estado", "activa").maybeSingle();
+      if (error) throw new Error(`vendedor_versiones: ${error.message}`);
+      return (data as VersionMin | null) ?? null;
+    },
+    async activarVersion(versionId, permitidos: EstadoVersion[]) {
+      const { data, error } = await db().rpc("mejora_activar_version", { p_version_id: versionId, p_permitidos: permitidos });
+      if (error) return { ok: false, error: error.message };
+      const r = (data ?? {}) as { ok?: boolean; ya_activa?: boolean; anterior?: number | null; error?: string };
+      return { ok: !!r.ok, ya_activa: !!r.ya_activa, anterior: r.anterior ?? null, error: r.error };
+    },
+    async marcarVersion(id, estado) {
+      const { error } = await db().from("vendedor_versiones").update({ estado }).eq("id", id).neq("estado", "activa");
+      if (error) throw new Error(`vendedor_versiones: ${error.message}`);
+    },
+    async marcarCambiosAplicados(cicloId) {
+      const { error } = await db().from("mejora_cambios").update({ aplicado: true }).eq("ciclo_id", cicloId).eq("riesgo", "bajo");
+      if (error) throw new Error(`mejora_cambios: ${error.message}`);
+    },
+    async actualizarEstadoCiclo(id, estado) {
+      const { error } = await db().from("mejora_ciclos").update({ estado, actualizado_en: new Date().toISOString() }).eq("id", id);
+      if (error) throw new Error(`mejora_ciclos: ${error.message}`);
+    },
+    async listarCambios(cicloId) {
+      const { data, error } = await db()
+        .from("mejora_cambios")
+        .select("tipo, riesgo, antes, despues, motivo, aplicado")
+        .eq("ciclo_id", cicloId)
+        .order("riesgo", { ascending: true });
+      if (error) throw new Error(`mejora_cambios: ${error.message}`);
+      return data ?? [];
+    },
+    reclamar: (clave, payload) => guardarEventoCrudo("telegram", clave, payload),
+    liberar: async (clave) => {
+      await db().from("eventos_crudos").delete().eq("fuente", "telegram").eq("id_externo", clave);
+    },
+    enviarMensaje: (html, botones) => avisar(html, botones),
+  };
+}
+
 function dependencias(chatId: string): Dependencias {
   return {
+    mejora: depsMejora(),
     chatIdPermitido: chatId,
     ahora: () => new Date(),
     guardarEventoCrudo: (idExterno, payload) => guardarEventoCrudo("telegram", idExterno, payload),

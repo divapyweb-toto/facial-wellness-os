@@ -1,0 +1,59 @@
+{
+  "id": "57_regalo_pareja",
+  "titulo": "Regalo para la pareja: diagnostica, recomienda uno y pide los datos de entrega",
+  "cobertura": [
+    "regalo"
+  ],
+  "cliente": {
+    "nombre": "Belén Cabrera",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "quiero regalarle algo a mi novio para su cumple, ronca muchísimo jaja",
+    "no sé, y cuál le recomendás?",
+    "dale, el pack"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_derivar": false,
+    "debe_contener_alguno": [
+      "153.000",
+      "120.000"
+    ],
+    "no_debe_contener": [
+      "deja de roncar",
+      "dejás de roncar",
+      "elimina"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Buen regalo, Belén. ¿Ronca con la boca abierta o más por la nariz?",
+      "herramientas": []
+    },
+    {
+      "texto": "Si no sabés, el pack trae tiras para la nariz y parches para la boca: Gs 120.000 + envío Gs 33.000 = Gs 153.000.\n¿Te lo armo para regalo?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "pack"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Dale. Pasame nombre, ciudad y dirección con una referencia de dónde lo entregamos.",
+      "herramientas": []
+    }
+  ]
+}

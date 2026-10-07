@@ -39,11 +39,13 @@ type PedidoCaso = {
   courier?: string | null;
   creado_en?: string;
 };
+/** Un mensaje del caso, o una ráfaga (varios mensajes seguidos del cliente que se responden juntos). */
+export type MensajeCaso = string | string[];
 export type Caso = {
   id: string;
   cliente: { nombre: string; telefono: string | null; wa_username: string | null };
   contexto: { catalogo: Item[] | string; pedidos?: PedidoCaso[]; envio?: number; ahora?: string };
-  mensajes: string[];
+  mensajes: MensajeCaso[];
 };
 export type Comun = { envio?: number; catalogos?: Record<string, Item[]>; afirmaciones_permitidas?: string[] };
 
@@ -105,6 +107,21 @@ export function catalogoComoShopify(items: Item[]): { productos: ProductoShopify
   return { productos, ofertas };
 }
 
+/**
+ * Fichas de la semilla (por handle REAL de Shopify) → handles del catálogo de prueba, por la primera palabra
+ * ("tiras-nasales" usa la ficha de "tiras-nasales-gudair-30-unidades"). Así el prompt de la batería lleva fichas.
+ */
+export function fichasParaCatalogo(fichas: Record<string, unknown>, productos: ProductoShopify[]): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...fichas };
+  for (const p of productos) {
+    if (out[p.handle]) continue;
+    const clave = p.handle.split("-")[0];
+    const real = Object.keys(fichas).find((h) => h.split("-")[0] === clave);
+    if (real) out[p.handle] = fichas[real];
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ una conversación
 
 type Salida = { texto: string };
@@ -127,8 +144,6 @@ export async function correrCaso(caso: Caso, comun: Comun, modelo: string, semil
       ...vendedorSemilla,
       modelo,
       espera_agrupar_s: 0,
-      demora_min_s: 0,
-      demora_max_s: 0,
       tope_mensual_usd: 1e9,
       whatsapp_enrique: NUMERO_ENRIQUE_PRUEBA,
     },
@@ -136,12 +151,16 @@ export async function correrCaso(caso: Caso, comun: Comun, modelo: string, semil
     vendedor_afirmaciones: semilla.vendedor_afirmaciones ?? comun.afirmaciones_permitidas ?? [],
     vendedor_ofertas: ofertas,
     vendedor_media: media,
+    vendedor_fichas: fichasParaCatalogo((semilla.vendedor_fichas ?? {}) as Record<string, unknown>, productos),
   });
+  // Ráfagas: se espera el silencio de verdad (dormir es instantáneo) para probar la agrupación del orquestador.
+  const cfgRafaga = { ...cfg, vendedor: { ...cfg.vendedor, espera_agrupar_s: 8 } };
+  let cfgActual = cfg;
   _limpiarCacheCatalogo();
 
   const convId = `prueba-${caso.id}`;
   const cliId = `cli-${caso.id}`;
-  const estado = { conv: "ia", turnos: 0 };
+  const estado: { conv: string; turnos: number; perfil: unknown } = { conv: "ia", turnos: 0, perfil: {} };
   const historial: FilaHistorial[] = [];
   const pedidosChat: PedidoChat[] = [];
   const preciosPrevios: number[] = [];
@@ -200,8 +219,8 @@ export async function correrCaso(caso: Caso, comun: Comun, modelo: string, semil
   const ahoraMs = () => reloj;
 
   const deps: DepsOrquestador = {
-    config: () => Promise.resolve(cfg),
-    conversacion: () => Promise.resolve({ id: convId, estado: estado.conv, cliente_id: cliId, turnos_ia: estado.turnos }),
+    config: () => Promise.resolve(cfgActual),
+    conversacion: () => Promise.resolve({ id: convId, estado: estado.conv, cliente_id: cliId, turnos_ia: estado.turnos, perfil_vendedor: estado.perfil }),
     cliente: () =>
       Promise.resolve({
         id: cliId,
@@ -222,6 +241,11 @@ export async function correrCaso(caso: Caso, comun: Comun, modelo: string, semil
       estado.turnos++;
       return Promise.resolve();
     },
+    guardarPerfil: (_c, perfil) => {
+      estado.perfil = perfil;
+      return Promise.resolve();
+    },
+    aleatorio: () => 0.5,
     marcarLeidoYEscribiendo: () => Promise.resolve({ ok: true }),
     llamarModelo: (p) => llamarClaude(p),
     dormir: () => Promise.resolve(),
@@ -230,15 +254,27 @@ export async function correrCaso(caso: Caso, comun: Comun, modelo: string, semil
   };
 
   const turnos: Record<string, unknown>[] = [];
-  for (const mensaje of caso.mensajes) {
-    reloj += 60_000; // un minuto entre mensajes
-    const waId = `in-${++nMsg}`;
-    historial.push({ direccion: "in", texto: mensaje, tipo: "text", contenido: null, estado: "recibido", wa_message_id: waId });
+  for (const m of caso.mensajes) {
+    const rafaga = Array.isArray(m) ? m : [m];
+    const mensaje = rafaga.join("\n");
+    reloj += 60_000; // un minuto entre turnos
+    const ids = rafaga.map((texto) => {
+      const waId = `in-${++nMsg}`;
+      historial.push({ direccion: "in", texto, tipo: "text", contenido: null, estado: "recibido", wa_message_id: waId });
+      return waId;
+    });
+    cfgActual = rafaga.length > 1 ? cfgRafaga : cfg;
     salidas = [];
     filaTurno = null;
     const t0 = performance.now();
     try {
-      const r = await procesarTurno({ conversacion_id: convId, wa_message_id: waId, texto: mensaje }, deps);
+      // Cada mensaje de la ráfaga dispara su turno (como en producción); solo el último responde.
+      let r: Awaited<ReturnType<typeof procesarTurno>> = { accion: "omitido" };
+      const acciones: string[] = [];
+      for (let i = 0; i < ids.length; i++) {
+        r = await procesarTurno({ conversacion_id: convId, wa_message_id: ids[i], texto: rafaga[i] }, deps);
+        acciones.push(r.accion);
+      }
       const fila = filaTurno as FilaTurno | null;
       const usadas = (fila?.herramientas ?? []).map((h) => ({ nombre: h.nombre.replace(/\(sistema\)$/, ""), input: h.input, error: h.error }));
       turnos.push({
@@ -247,6 +283,7 @@ export async function correrCaso(caso: Caso, comun: Comun, modelo: string, semil
         herramientas: usadas,
         derivado: r.accion === "derivado" || !!fila?.derivado,
         accion: r.accion + (r.motivo ? `:${r.motivo}` : ""),
+        ...(ids.length > 1 ? { acciones } : {}),
         regenerado: fila?.regenerado ?? false,
         uso: fila?.uso ?? null,
         costo_usd: r.costo_usd ?? fila?.costo_usd ?? 0,
