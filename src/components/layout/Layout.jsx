@@ -2,6 +2,8 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import BusquedaGlobal from './BusquedaGlobal'
+import SelectorTienda from './SelectorTienda'
+import { useTienda } from '../../lib/tienda'
 import { useAuth } from '../../lib/AuthContext'
 import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
@@ -58,6 +60,7 @@ export default function Layout() {
   const navigate  = useNavigate()
   const location  = useLocation()
   const [masAbierto, setMasAbierto] = useState(false)
+  const tienda = useTienda()
 
   const handleSignOut = async () => {
     setMasAbierto(false)
@@ -297,7 +300,8 @@ export default function Layout() {
       ════════════════════════════════════════════ */}
       <main className="main-content">
         <div key={location.pathname} className="page-content page-enter">
-          <div className="page-enter" key={location.pathname}><Outlet /></div>
+          <SelectorTienda />
+          <div className="page-enter" key={`${location.pathname}:${tienda}`}><Outlet /></div>
         </div>
       </main>
 

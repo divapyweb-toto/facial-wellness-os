@@ -1,7 +1,7 @@
 // src/pages/dashboard/DashboardPage.jsx
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase, formatGs, formatPct } from '../../lib/supabase'
+import { supabaseTienda as supabase, formatGs, formatPct } from '../../lib/supabase'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { construirAlertasNegocio } from '../../lib/alertasNegocio'
 import DashboardHero from './DashboardHero'

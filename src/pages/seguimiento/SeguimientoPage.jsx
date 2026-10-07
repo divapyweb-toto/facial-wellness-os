@@ -15,7 +15,7 @@
 //    pendientes, no uno por pedido.
 // ═══════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { supabase, formatGs } from '../../lib/supabase'
+import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { refUtil } from '../../lib/buscadorPedidos'
 import { useToast } from '../../lib/toast'

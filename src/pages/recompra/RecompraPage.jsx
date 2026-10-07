@@ -1,7 +1,8 @@
 // src/pages/recompra/RecompraPage.jsx
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { normalizarRef } from '../../lib/referencias'
-import { supabase } from '../../lib/supabase'
+import { supabaseTienda as supabase } from '../../lib/supabase'
+import { tiendaParaEscribir } from '../../lib/tienda'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { RefreshCw, Download, Repeat, MessageCircle, Loader2 } from 'lucide-react'
@@ -162,6 +163,7 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
     try {
       const { error } = await supabase.from('recompra_log').insert([{
         telefono: r.telefono, grupo: String(r.grupo), producto_ofrecido: r.productoOfrecido,
+        tienda: tiendaParaEscribir(),
       }])
       if (error) throw error
       if (!silencioso) toast(`${r.nombre || r.telefono} marcado como contactado`, 'success')

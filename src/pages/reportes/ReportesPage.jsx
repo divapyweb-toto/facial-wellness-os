@@ -1,6 +1,6 @@
 // src/pages/reportes/ReportesPage.jsx
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { supabase, formatGs, formatPct } from '../../lib/supabase'
+import { supabaseTienda as supabase, formatGs, formatPct } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { agruparSerie } from '../../lib/periodos'
 import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat, FileText } from 'lucide-react'

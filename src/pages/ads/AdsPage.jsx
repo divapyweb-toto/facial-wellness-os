@@ -1,11 +1,12 @@
 // src/pages/ads/AdsPage.jsx
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { mesesRecientes, etiquetaMes } from '../../lib/fechas'
-import { supabase, formatGs } from '../../lib/supabase'
+import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
 import { categorizarPaP as categoriaPaP } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { familiaProducto } from '../../lib/recompra'
+import { tiendaParaEscribir } from '../../lib/tienda'
 import { calcularMetricasAds, textoVeredicto } from '../../lib/metricasAds'
 import { Megaphone, Loader2, Save, Info } from 'lucide-react'
 
@@ -167,7 +168,7 @@ export default function AdsPage() {
         let guardado = false
         let ultimoError = null
         for (const plat of CANDIDATOS_PLATAFORMA) {
-          const { error } = await supabase.from('campanas_ads').insert(filasIns.map(f => ({ ...f, plataforma: plat })))
+          const { error } = await supabase.from('campanas_ads').insert(filasIns.map(f => ({ ...f, plataforma: plat, tienda: tiendaParaEscribir() })))
           if (!error) { guardado = true; break }
           ultimoError = error
           // Si el error no es por la columna plataforma, no tiene sentido seguir probando.

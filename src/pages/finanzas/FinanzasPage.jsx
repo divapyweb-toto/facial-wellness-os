@@ -1,6 +1,7 @@
 // src/pages/finanzas/FinanzasPage.jsx
 import { useState, useEffect, useCallback } from 'react'
-import { supabase, formatGs } from '../../lib/supabase'
+import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
+import { tiendaParaEscribir } from '../../lib/tienda'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { Plus, X, DollarSign, TrendingDown, TrendingUp, BarChart3, Edit2, Trash2, Save } from 'lucide-react'
@@ -45,7 +46,7 @@ function GastoModal({ gasto, onClose, onSaved }) {
     }
     const { error } = esEdicion
       ? await supabase.from('gastos').update(payload).eq('id', gasto.id)
-      : await supabase.from('gastos').insert(payload)
+      : await supabase.from('gastos').insert({ ...payload, tienda: tiendaParaEscribir() })
     if (error) { toast('Error al guardar', 'error'); logError('guardar_gasto', error, { concepto: payload.concepto }) }
     else {
       await logAccion({

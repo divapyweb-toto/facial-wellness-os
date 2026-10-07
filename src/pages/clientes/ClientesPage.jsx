@@ -1,7 +1,7 @@
 // src/pages/clientes/ClientesPage.jsx
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { normalizarTel } from '../../lib/referencias'
-import { supabase, formatGs } from '../../lib/supabase'
+import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { Users, Search, TrendingUp, Star, ShoppingBag, X, Phone, MapPin } from 'lucide-react'
 

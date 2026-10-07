@@ -23,7 +23,7 @@
 // ═══════════════════════════════════════════════════════════
 
 import { esImporteCorrupto } from './estadosPaP'
-import { normalizarRef } from './referencias'
+import { normalizarRef, esRefVoltra } from './referencias'
 
 // Normaliza texto de encabezado: sin tildes, minúscula, sin espacios extra.
 const normHeader = (s) => String(s ?? '')
@@ -49,6 +49,7 @@ export function placeholderEntregaLucero(venta) {
   return {
     nro_guia_pap: guiaLucero(ref),
     n_referencia: ref,
+    tienda: esRefVoltra(ref) ? 'voltra' : 'fw',
     estado_pap: '',
     categoria: 'en_proceso',
     motivo: '',
@@ -232,6 +233,7 @@ export function rendicionLuceroAEntregas(parsed) {
     return {
       nro_guia_pap: guiaLucero(it.referencia),
       n_referencia: it.referencia,
+      tienda: esRefVoltra(it.referencia) ? 'voltra' : 'fw',
       estado_pap: it.estadoFinal,
       categoria: cat,
       motivo: '',

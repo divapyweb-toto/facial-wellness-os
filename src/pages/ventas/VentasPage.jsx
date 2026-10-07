@@ -1,13 +1,14 @@
 // src/pages/ventas/VentasPage.jsx
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { supabase, formatGs, estadoConfig, getEstadoConfig } from '../../lib/supabase'
+import { supabaseTienda as supabase, formatGs, estadoConfig, getEstadoConfig } from '../../lib/supabase'
 import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
 import { precioSugerido, precioUnitarioSugerido, totalLinea, avisoPrecio, proximaReferenciaWA, totalesPedido, filasDeVenta } from '../../lib/pedidos'
 import { normalizarRef, normalizarTel } from '../../lib/referencias'
+import { tiendaParaEscribir } from '../../lib/tienda'
 import { fetchAll } from '../../lib/fetchAll'
 import { logError } from '../../lib/errorLog'
 import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
@@ -234,6 +235,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
       const base = {
         ...form,
         n_referencia: ref,
+        tienda: tiendaParaEscribir(),
         // 8.5 · Único lugar del sistema que guardaba el teléfono crudo: el
         // mismo cliente aparecía dos veces según cómo se hubiera tipeado.
         cliente_telefono: normalizarTel(form.cliente_telefono) || form.cliente_telefono || '',

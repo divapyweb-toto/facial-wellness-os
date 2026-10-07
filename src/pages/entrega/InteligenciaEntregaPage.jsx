@@ -1,6 +1,6 @@
 // src/pages/entrega/InteligenciaEntregaPage.jsx
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { supabase, formatGs } from '../../lib/supabase'
+import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { getFlete } from '../../lib/config'
 import { analizarEntregas, categorizarEntrega, tasaPorMes, TASA_CRITICA, TASA_VIGILAR } from '../../lib/inteligenciaEntrega'

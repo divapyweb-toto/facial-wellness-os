@@ -81,7 +81,7 @@ export const COLS_ENTREGAS = [
   // el bruto). `neto_depositado` guarda lo que REALMENTE cae al banco por ese
   // ítem; `guia_transportadora` guarda el ID interno de Lucero (solo referencia,
   // no se usa para cruzar — eso lo hace `nro_guia_pap` vía guiaLucero()).
-  'neto_depositado', 'guia_transportadora',
+  'neto_depositado', 'guia_transportadora', 'tienda',
   // Vínculo con la venta. Antes no existía: cada parte del sistema recalculaba
   // el cruce normalizando `n_referencia` por su cuenta, en 8 archivos distintos.
   'venta_id', 'vinculo_metodo', 'vinculo_at',

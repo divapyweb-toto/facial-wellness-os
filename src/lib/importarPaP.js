@@ -16,7 +16,7 @@
 //   · Gestión aporta el detalle (mensajero, fechas, teléfono, ruta)
 // ═══════════════════════════════════════════════════════════
 import * as XLSX from 'xlsx'
-import { normalizarRef, limpiarTel } from './referencias'
+import { normalizarRef, limpiarTel, esRefVoltra } from './referencias'
 import { categorizarPaP as categorizar, importeSano, esImporteCorrupto } from './estadosPaP'
 import { costoFleteActual } from './flete'
 
@@ -116,6 +116,7 @@ export function combinar(paqData, gesData) {
     out.push({
       nro_guia_pap: guia,
       n_referencia: ref,
+      tienda: esRefVoltra(ref) ? 'voltra' : 'fw',
       estado_pap: estado,
       categoria: cat,
       motivo,

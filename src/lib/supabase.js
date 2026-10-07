@@ -3,6 +3,7 @@
 // Las encontrás en: Supabase Dashboard → Settings → API
 
 import { createClient } from '@supabase/supabase-js'
+import { getTienda } from './tienda'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'TU_SUPABASE_URL'
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'TU_SUPABASE_ANON_KEY'
@@ -15,6 +16,39 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   realtime: {
     params: { eventsPerSecond: 10 }
   }
+})
+
+// Cliente para las pantallas de MÉTRICAS: igual que `supabase`, pero cada
+// lectura (`.select`) de una tabla con columna `tienda` trae solo la tienda
+// elegida arriba (Voltra / Facial Wellness / Todas). Las escrituras no se
+// tocan. Las pantallas operativas (Despacho, importadores, Rendición) siguen
+// con `supabase` a secas: trabajan por referencia y no deben perder de vista
+// los pedidos de la otra tienda (ej. al evitar duplicados).
+const TABLAS_CON_TIENDA = new Set(['ventas', 'entregas', 'gastos', 'campanas_ads', 'recompra_log'])
+
+const conTienda = (tabla) => {
+  const base = supabase.from(tabla)
+  return new Proxy(base, {
+    get(obj, prop) {
+      if (prop === 'select') {
+        return (...args) => {
+          const q = obj.select(...args)
+          const t = getTienda()
+          return t === 'todas' ? q : q.eq('tienda', t)
+        }
+      }
+      const v = Reflect.get(obj, prop)
+      return typeof v === 'function' ? v.bind(obj) : v
+    },
+  })
+}
+
+export const supabaseTienda = new Proxy(supabase, {
+  get(obj, prop) {
+    if (prop === 'from') return (tabla) => (TABLAS_CON_TIENDA.has(tabla) ? conTienda(tabla) : obj.from(tabla))
+    const v = Reflect.get(obj, prop)
+    return typeof v === 'function' ? v.bind(obj) : v
+  },
 })
 
 // Helper: formatear guaraníes

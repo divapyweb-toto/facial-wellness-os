@@ -33,7 +33,7 @@
 //    Motivo después de "Nota:". Se extrae de ahí.
 // ═══════════════════════════════════════════════════════════
 import { esImporteCorrupto } from './estadosPaP'
-import { normalizarRef } from './referencias'
+import { normalizarRef, esRefVoltra } from './referencias'
 
 
 const norm = (s) => String(s ?? '')
@@ -205,6 +205,7 @@ export function exportLuceroAEntregas(items) {
     // tres escrituras caen en la misma fila en vez de duplicarse.
     nro_guia_pap: `L-${it.referencia}`,
     n_referencia: it.referencia,
+    tienda: esRefVoltra(it.referencia) ? 'voltra' : 'fw',
     estado_pap: it.estado,
     categoria: it.categoria,
     motivo: it.motivo || '',
