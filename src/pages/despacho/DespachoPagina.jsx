@@ -69,10 +69,9 @@ function extraerNota(notas, clave) {
   if (!notas) return ''
   for (const linea of notas.split('\n')) {
     const l = linea.trim()
-    if (l.toLowerCase().includes(clave.toLowerCase())) {
-      const i = l.indexOf(':')
-      if (i >= 0) return l.slice(i + 1).trim()
-    }
+    // Se busca la clave solo ANTES de los dos puntos: 'origen: whatsapp' no es el dato 'whatsapp'.
+    const i = l.indexOf(':')
+    if (i >= 0 && l.slice(0, i).toLowerCase().includes(clave.toLowerCase())) return l.slice(i + 1).trim()
   }
   return ''
 }
@@ -174,7 +173,9 @@ function mapearGrupoAPedidos(grupoRows) {
   const dir = extraerNota(notas, 'Dirección principal') || primero('Shipping Address1') || ''
   const refDir = extraerNota(notas, 'Referencia') || ''
   const direccion = dir ? (refDir ? `${dir} (${refDir})` : dir) : refDir
-  const telefono = limpiarTel(extraerNota(notas, 'Teléfono') || extraerNota(notas, 'whatsapp') || primero('Phone') || primero('Billing Phone') || '')
+  // El primer candidato que dé un número real (los pedidos del vendedor IA lo traen en Phone / Shipping Phone).
+  const telefono = [extraerNota(notas, 'Teléfono'), extraerNota(notas, 'whatsapp'), primero('Phone'), primero('Shipping Phone'), primero('Billing Phone')]
+    .map(limpiarTel).find(t => t.replace(/\D/g, '').length >= 9) || ''
   // Montos del CSV con tope de sanidad. Un valor imposible (archivo editado,
   // export corrupto) desbordaba el integer de Postgres y tumbaba el insert
   // ENTERO de las ventas — el mismo bug que trajo Lucero con una multa de
