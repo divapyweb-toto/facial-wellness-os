@@ -4,7 +4,7 @@
 // Por cada pedido con ENTREGADO en pedido_estados que no terminó su post-entrega:
 //   1. entregado_en = fecha real del courier (la fila del lote importado); si no se
 //      encuentra, la hora en que se importó el ENTREGADO (entregado_fuente 'importacion').
-//   2. marcarPagado en Shopify, UNA vez (pagado_marcado).
+//   2. marcarPagado en Shopify, UNA vez (pagado_marcado), solo cuando el courier lo rindió (RENDIDO).
 //   3. Conversions API, UNA vez (capi_enviado) + tag META_ENTREGA_ENVIADA.
 //      Si la entrega tiene más de 7 días, Meta rechazaría el lote: se omite (capi_omitido).
 //      En modo simulado no se cambia nada: cuando llegue el token, se envía de verdad.
@@ -27,6 +27,8 @@ export interface PedidoPendiente {
   creado_en: string | null
   entregado_en: string | null
   pagado_marcado: boolean
+  /** El courier ya rindió (pagó) este pedido: hay un RENDIDO en pedido_estados. Solo entonces se marca pagado en Shopify. */
+  rendido?: boolean
   capi_enviado: boolean
   capi_omitido: string | null
   post_entrega_intentos: number
@@ -191,8 +193,8 @@ export async function procesarPostEntrega(repo: Repo, cfg: ConfigPostEntrega): P
       }
     }
 
-    // 2. Pagado en Shopify (una vez).
-    if (!p.pagado_marcado && !cfg.simuladoShopify) {
+    // 2. Pagado en Shopify (una vez), SOLO cuando el courier rindió: entregado no es cobrado.
+    if (!p.pagado_marcado && p.rendido && !cfg.simuladoShopify) {
       try {
         const pago = await repo.marcarPagado(p.shopify_order_id)
         if (pago.ok) {

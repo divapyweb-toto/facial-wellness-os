@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --import ./tests/registrar.mjs tests/montos.test.mjs && node --import ./tests/registrar.mjs tests/archivos-reales.test.mjs && node --import ./tests/registrar.mjs tests/ruteo.test.mjs && node --import ./tests/registrar.mjs tests/pedidos-abiertos.test.mjs && node --import ./tests/registrar.mjs tests/cobranza.test.mjs && node --import ./tests/registrar.mjs tests/seguimiento-couriers.test.mjs && node --test tests/plantillas-wa.test.mjs && node --import ./tests/registrar.mjs tests/pedidos-voltra.test.mjs && node --import ./tests/registrar.mjs tests/filtro-tienda.test.mjs && node --import ./tests/registrar.mjs tests/gastos-automaticos.test.mjs && node --test tests/bandeja-wa.test.mjs && node tests/telefono-whatsapp.test.mjs",
+    "test": "node --import ./tests/registrar.mjs tests/montos.test.mjs && node --import ./tests/registrar.mjs tests/archivos-reales.test.mjs && node --import ./tests/registrar.mjs tests/ruteo.test.mjs && node --import ./tests/registrar.mjs tests/pedidos-abiertos.test.mjs && node --import ./tests/registrar.mjs tests/cobranza.test.mjs && node --import ./tests/registrar.mjs tests/seguimiento-couriers.test.mjs && node --test tests/plantillas-wa.test.mjs && node --import ./tests/registrar.mjs tests/pedidos-voltra.test.mjs && node --import ./tests/registrar.mjs tests/filtro-tienda.test.mjs && node --import ./tests/registrar.mjs tests/gastos-automaticos.test.mjs && node --test tests/bandeja-wa.test.mjs && node tests/telefono-whatsapp.test.mjs && node --import ./tests/registrar.mjs tests/preparar-shopify.test.mjs",
     "test:functions": "cd supabase/functions && deno test --allow-env --allow-read"
   },
   "dependencies": {

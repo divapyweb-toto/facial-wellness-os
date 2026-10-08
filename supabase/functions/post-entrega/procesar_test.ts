@@ -14,7 +14,7 @@ function pedido(over: Partial<PedidoPendiente> = {}): PedidoPendiente {
     shopify_order_id: 9001, nombre: '#1001', cliente_id: 'cli-1', telefono: '+595981000000', total: 129000,
     tags: [], creado_en: '2026-10-02T13:00:00Z', entregado_en: null, pagado_marcado: false, capi_enviado: false,
     capi_omitido: null, post_entrega_intentos: 0, entregado_registrado_en: '2026-10-06T12:00:00Z',
-    entregado_fuente_estado: 'courier_lucero', ...over,
+    entregado_fuente_estado: 'courier_lucero', rendido: true, ...over,
   }
 }
 
@@ -218,4 +218,25 @@ Deno.test('factura (ola 4): solo con la bandera activa; una falla no frena pagad
     assertEquals([r.pagados, r.capi_enviados, r.errores], [1, 1, 0])
     assert(r.detalle_errores.some((d) => d.includes('factura')))
   }
+})
+
+Deno.test('entregado pero NO rendido: no marca pagado (el courier todavía no pagó), el resto sigue', async () => {
+  const { repo, tabla, log } = repoMemoria([pedido({ rendido: false })])
+  const r = await procesarPostEntrega(repo, cfg())
+  const p = tabla.get(9001)!
+  assertEquals(log.pagos, 0)
+  assertEquals(p.pagado_marcado, false)
+  assertEquals(r.pagados, 0)
+  assertEquals(p.capi_enviado, true) // la señal de venta a Meta sale al entregar, no al rendir
+  assertEquals(r.errores, 0)
+})
+
+Deno.test('rendido después: en la corrida siguiente marca pagado una sola vez', async () => {
+  const { repo, tabla, log } = repoMemoria([pedido({ rendido: false })])
+  await procesarPostEntrega(repo, cfg())
+  tabla.get(9001)!.rendido = true
+  await procesarPostEntrega(repo, cfg())
+  await procesarPostEntrega(repo, cfg())
+  assertEquals(log.pagos, 1)
+  assertEquals(tabla.get(9001)!.pagado_marcado, true)
 })

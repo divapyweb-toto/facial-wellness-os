@@ -19,6 +19,7 @@ import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
 import { construirHistorialCiudades, evaluarCiudad } from '../../lib/riesgoCiudad'
 import { useToast } from '../../lib/toast'
+import { prepararEnShopify } from '../../lib/prepararShopify'
 
 // Helpers locales para el cruce ventas ⋈ entregas del historial de riesgo
 const normRefRiesgo = (ref) => {
@@ -1452,6 +1453,7 @@ export default function DespachoPagina() {
   // y su propio panel. Si todos los pedidos van por la misma, baja un solo archivo.
   const descargarExcel = () => {
     if (!paraDespacho.length) return
+    prepararEnShopify(paraDespacho, toast)
     const colapsados = colapsarPorReferencia(paraDespacho)
     const dePaP = colapsados.filter(p => (p.transportadora || 'pap') === 'pap')
     const deLucero = colapsados.filter(p => p.transportadora === 'lucero')
@@ -1470,6 +1472,7 @@ export default function DespachoPagina() {
   const descargarGuiasDoc = async () => {
     if (!paraDespacho.length) return
     try {
+      prepararEnShopify(paraDespacho, toast)
       const colapsados = colapsarPorReferencia(paraDespacho)
       const orden = { pap: 0, lucero: 1, otra: 2 }
       const ordenadas = [...colapsados].sort(
@@ -1586,6 +1589,7 @@ export default function DespachoPagina() {
 
   const descargarExcelVentas = async () => {
     if (!pedidosSeleccionados.length) { toast('Seleccioná al menos una venta', 'error'); return }
+    prepararEnShopify(pedidosSeleccionados, toast)
     const colapsados = colapsarPorReferencia(pedidosSeleccionados)
     const dePaP = colapsados.filter(p => (p.transportadora || 'pap') === 'pap')
     const deLucero = colapsados.filter(p => p.transportadora === 'lucero')
@@ -1622,6 +1626,7 @@ export default function DespachoPagina() {
   const descargarGuiasVentas = async () => {
     if (!pedidosSeleccionados.length) { toast('Seleccioná al menos una venta', 'error'); return }
     try {
+      prepararEnShopify(pedidosSeleccionados, toast)
       const colapsados = colapsarPorReferencia(pedidosSeleccionados)
       const orden = { pap: 0, lucero: 1, otra: 2 }
       const ordenadas = [...colapsados].sort(
