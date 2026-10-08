@@ -1,8 +1,11 @@
 // src/pages/bandeja/ChatPanel.jsx
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Send, Check, CheckCheck, AlertTriangle, Bot, Hand, Phone } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, Send, Bot, Hand, Phone, ChevronDown } from 'lucide-react'
 import { ventanaAbierta } from './api'
-import { nombreCliente, textoPreview } from './ListaConversaciones'
+import { nombreCliente } from './ListaConversaciones'
+import BurbujaWA from './BurbujaWA'
+import { armarLineaDeTiempo, reaccionesPorMensaje, colorAvatar } from './mensajeWA'
+import { PLANTILLAS } from './plantillas'
 
 const sinTildes = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
@@ -18,26 +21,47 @@ export function palabraProhibida(texto, lista) {
   return null
 }
 
-const hora = (iso) => new Date(iso).toLocaleTimeString('es-PY', { hour: '2-digit', minute: '2-digit' })
-const dia = (iso) => new Date(iso).toLocaleDateString('es-PY', { weekday: 'short', day: '2-digit', month: 'short' })
-
-function Tilde({ estado }) {
-  if (estado === 'leido') return <CheckCheck size={13} color="var(--accent)" aria-label="Leído" />
-  if (estado === 'entregado') return <CheckCheck size={13} aria-label="Entregado" />
-  if (estado === 'enviado') return <Check size={13} aria-label="Enviado" />
-  if (estado === 'fallido') return <AlertTriangle size={13} color="var(--red)" aria-label="Falló" />
-  return null
-}
-
-export default function ChatPanel({ conv, mensajes, cargando, prohibidas, onVolver, onTomar, onDevolver, onEnviar }) {
+export default function ChatPanel({ conv, mensajes, cargando, hayMas, cargandoMas, onMas, prohibidas, onVolver, onTomar, onDevolver, onEnviar }) {
   const [texto, setTexto] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [error, setError] = useState('')
-  const finRef = useRef(null)
+  const scrollRef = useRef(null)
+  const pegadoRef = useRef(true)
+  const convPrevRef = useRef(null)
+  const altoPrevRef = useRef(0)
+  const largoPrevRef = useRef(0)
+  const [nuevos, setNuevos] = useState(0)
   const taRef = useRef(null)
 
   useEffect(() => { setTexto(''); setError('') }, [conv?.id])
-  useEffect(() => { finRef.current?.scrollIntoView({ block: 'end' }) }, [mensajes.length, conv?.id])
+
+  // Scroll estilo WhatsApp: al abrir baja al final; si leías arriba no te mueve
+  // (avisa con un botón); al cargar mensajes viejos mantiene tu posición.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (convPrevRef.current !== conv?.id) {
+      convPrevRef.current = conv?.id; pegadoRef.current = true; setNuevos(0)
+      el.scrollTop = el.scrollHeight
+    } else if (altoPrevRef.current && el.scrollHeight > altoPrevRef.current && !pegadoRef.current && el.scrollTop < 80) {
+      el.scrollTop += el.scrollHeight - altoPrevRef.current // mensajes viejos arriba
+    } else if (pegadoRef.current) {
+      el.scrollTop = el.scrollHeight
+    } else if (mensajes.length > largoPrevRef.current && mensajes[mensajes.length - 1]?.direccion === 'in') {
+      setNuevos(n => n + 1)
+    }
+    largoPrevRef.current = mensajes.length
+    altoPrevRef.current = el.scrollHeight
+  }, [mensajes, conv?.id])
+
+  const alScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    pegadoRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+    if (pegadoRef.current) setNuevos(0)
+    if (el.scrollTop < 60 && hayMas && !cargandoMas) { altoPrevRef.current = el.scrollHeight; onMas?.() }
+  }
+  const alFinal = () => { const el = scrollRef.current; if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }) }
 
   // Autoajuste de alto del textarea.
   useEffect(() => {
@@ -47,16 +71,12 @@ export default function ChatPanel({ conv, mensajes, cargando, prohibidas, onVolv
     ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`
   }, [texto])
 
-  const grupos = useMemo(() => {
-    const out = []
-    let diaPrev = ''
-    for (const m of mensajes) {
-      const d = new Date(m.creado_en).toDateString()
-      if (d !== diaPrev) { out.push({ tipo: 'dia', id: `d-${d}`, label: dia(m.creado_en) }); diaPrev = d }
-      out.push({ tipo: 'msg', id: m.id, m })
-    }
-    return out
-  }, [mensajes])
+  const ctx = useMemo(() => ({
+    plantillas: PLANTILLAS,
+    porWamid: new Map(mensajes.filter(m => m.wa_message_id).map(m => [m.wa_message_id, m])),
+  }), [mensajes])
+  const linea = useMemo(() => armarLineaDeTiempo(mensajes, ctx), [mensajes, ctx])
+  const reacciones = useMemo(() => reaccionesPorMensaje(mensajes), [mensajes])
 
   if (!conv) {
     return (
@@ -105,6 +125,7 @@ export default function ChatPanel({ conv, mensajes, cargando, prohibidas, onVolv
         <button className="btn btn-ghost btn-icon bandeja-volver" onClick={onVolver} aria-label="Volver a la lista">
           <ArrowLeft size={20} />
         </button>
+        <div className="bandeja-avatar" style={{ background: colorAvatar(nombreCliente(conv)) }}>{(nombreCliente(conv).replace(/^[@+]/, '')[0] || '?').toUpperCase()}</div>
         <div className="bandeja-chat-titulo">
           <div className="nombre">{nombreCliente(conv)}</div>
           <div className="sub">
@@ -122,23 +143,22 @@ export default function ChatPanel({ conv, mensajes, cargando, prohibidas, onVolv
           : <button className="btn btn-primary btn-sm" onClick={onTomar}><Hand size={14} /> Tomar chat</button>}
       </header>
 
-      <div className="bandeja-mensajes">
-        {cargando && <div className="skeleton skeleton-line" style={{ width: '40%' }} />}
-        {!cargando && mensajes.length === 0 && (
-          <div className="empty-state"><p className="empty-state-desc">Sin mensajes en esta conversación.</p></div>
+      <div className="bandeja-mensajes-caja">
+        <div className="bandeja-mensajes" ref={scrollRef} onScroll={alScroll}>
+          {cargandoMas && <div className="wa-cargando-mas">Cargando mensajes anteriores…</div>}
+          {cargando && !mensajes.length && <div className="wa-cargando-mas">Abriendo chat…</div>}
+          {!cargando && mensajes.length === 0 && (
+            <div className="wa-sistema">Sin mensajes en esta conversación.</div>
+          )}
+          {linea.map(g => g.tipo === 'dia'
+            ? <div key={g.id} className="wa-dia"><span>{g.label}</span></div>
+            : <BurbujaWA key={g.id} item={g} reacciones={reacciones[g.v.wamid]} />)}
+        </div>
+        {nuevos > 0 && (
+          <button className="wa-bajar" onClick={alFinal} aria-label="Ir al último mensaje">
+            <ChevronDown size={20} /><span>{nuevos}</span>
+          </button>
         )}
-        {grupos.map(g => g.tipo === 'dia'
-          ? <div key={g.id} className="bandeja-dia">{g.label}</div>
-          : (
-            <div key={g.id} className={`burbuja ${g.m.direccion} ${g.m.estado === 'fallido' ? 'fallido' : ''}`}>
-              {g.m.texto ? g.m.texto : <span className="burbuja-tipo">{textoPreview({ ...g.m, direccion: 'in' })}</span>}
-              <div className="burbuja-pie">
-                {hora(g.m.creado_en)}
-                {g.m.direccion === 'out' && <Tilde estado={g.m.estado} />}
-              </div>
-            </div>
-          ))}
-        <div ref={finRef} />
       </div>
 
       {!abierta && (

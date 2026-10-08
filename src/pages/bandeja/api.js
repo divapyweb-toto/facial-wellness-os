@@ -26,7 +26,7 @@ export async function cargarUltimosMensajes(ids) {
   if (!ids.length) return {}
   const { data, error } = await supabase
     .from('wa_mensajes')
-    .select('id, conversacion_id, direccion, tipo, texto, estado, creado_en')
+    .select('id, conversacion_id, direccion, tipo, texto, contenido, estado, creado_en')
     .in('conversacion_id', ids)
     .order('creado_en', { ascending: false })
     .limit(1000)
@@ -36,13 +36,17 @@ export async function cargarUltimosMensajes(ids) {
   return ult
 }
 
-export async function cargarMensajes(conversacionId) {
-  const { data, error } = await supabase
-    .from('wa_mensajes')
-    .select('id, conversacion_id, direccion, tipo, texto, contenido, estado, error, creado_en')
+const COLS_MSG = 'id, conversacion_id, direccion, tipo, texto, contenido, estado, error, creado_en, wa_message_id'
+export const PAGINA_MENSAJES = 100
+
+// Los últimos `limite` mensajes (o los anteriores a `antes`), en orden cronológico.
+export async function cargarMensajes(conversacionId, { antes = null, limite = PAGINA_MENSAJES } = {}) {
+  let q = supabase.from('wa_mensajes').select(COLS_MSG)
     .eq('conversacion_id', conversacionId)
     .order('creado_en', { ascending: false })
-    .limit(300)
+    .limit(limite)
+  if (antes) q = q.lt('creado_en', antes)
+  const { data, error } = await q
   if (error) throw error
   return (data || []).reverse()
 }

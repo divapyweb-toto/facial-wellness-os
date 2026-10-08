@@ -1,6 +1,8 @@
 // src/pages/bandeja/ListaConversaciones.jsx
 import { Search, Bot, User, MessageCircle } from 'lucide-react'
 import { ventanaAbierta } from './api'
+import { textoVistaPrevia, colorAvatar } from './mensajeWA'
+import { PLANTILLAS } from './plantillas'
 
 export const FILTROS = [
   { id: 'todas', label: 'Todas' },
@@ -27,9 +29,7 @@ export function horaCorta(iso) {
 export function textoPreview(m) {
   if (!m) return 'Sin mensajes todavía'
   const pref = m.direccion === 'out' ? 'Vos: ' : ''
-  if (m.texto) return pref + m.texto
-  const tipos = { audio: '🎤 Audio', image: '📷 Imagen', video: '🎬 Video', document: '📄 Documento', location: '📍 Ubicación', sticker: 'Sticker', button: 'Botón', interactive: 'Botón', template: 'Plantilla' }
-  return pref + (tipos[m.tipo] || `[${m.tipo || 'mensaje'}]`)
+  return pref + (textoVistaPrevia(m, { plantillas: PLANTILLAS }) || (m.texto || `[${m.tipo || 'mensaje'}]`))
 }
 
 const inicial = (s) => (String(s || '?').replace(/^[@+]/, '').trim()[0] || '?').toUpperCase()
@@ -83,7 +83,7 @@ export default function ListaConversaciones({ conversaciones, ultimos, filtro, s
               className={`bandeja-item ${activaId === c.id ? 'activo' : ''}`}
               onClick={() => onElegir(c.id)}
             >
-              <div className="bandeja-avatar">{inicial(nombre)}</div>
+              <div className="bandeja-avatar" style={{ background: colorAvatar(nombre) }}>{inicial(nombre)}</div>
               <div className="bandeja-item-body">
                 <div className="bandeja-item-fila">
                   <span className="bandeja-item-nombre">{nombre}</span>

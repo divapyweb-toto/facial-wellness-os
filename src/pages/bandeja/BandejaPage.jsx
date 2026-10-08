@@ -13,7 +13,7 @@ import { useToast } from '../../lib/toast'
 import ListaConversaciones from './ListaConversaciones'
 import ChatPanel from './ChatPanel'
 import {
-  cargarConversaciones, cargarUltimosMensajes, cargarMensajes, cargarPalabrasProhibidas,
+  cargarConversaciones, cargarUltimosMensajes, cargarMensajes, cargarPalabrasProhibidas, PAGINA_MENSAJES,
   tomarConversacion, devolverAIA, enviarMensajeManual, suscribirBandeja,
 } from './api'
 import './bandeja.css'
@@ -34,6 +34,10 @@ export default function BandejaPage() {
   const [activaId, setActivaId] = useState(null)
   const [mensajes, setMensajes] = useState([])
   const [cargandoChat, setCargandoChat] = useState(false)
+  const [hayMas, setHayMas] = useState(false)
+  const [cargandoMas, setCargandoMas] = useState(false)
+  const [pendientes, setPendientes] = useState([]) // enviados a la vista, aún sin confirmar
+  const cacheChats = useRef(new Map()) // conversación → mensajes: reabrir un chat es instantáneo
   const [prohibidas, setProhibidas] = useState([])
 
   const activaRef = useRef(null)
@@ -71,17 +75,52 @@ export default function BandejaPage() {
     cargarPalabrasProhibidas().then(setProhibidas).catch(() => {})
   }, [cargar])
 
-  // Mensajes del chat abierto.
+  // Mensajes del chat abierto: lo guardado se muestra al instante y se refresca de fondo.
   useEffect(() => {
     if (!activaId) { setMensajes([]); return }
     let vivo = true
-    setCargandoChat(true)
+    const previo = cacheChats.current.get(activaId)
+    setMensajes(previo || [])
+    setHayMas(previo ? previo.length >= PAGINA_MENSAJES : false)
+    setCargandoChat(!previo)
     cargarMensajes(activaId)
-      .then(m => { if (vivo) setMensajes(m) })
+      .then(m => {
+        if (!vivo) return
+        // Conserva lo que Realtime haya sumado mientras tanto.
+        setMensajes(ms => {
+          const ids = new Set(m.map(x => x.id))
+          const extra = ms.filter(x => !ids.has(x.id) && (!m.length || x.creado_en > m[0].creado_en))
+          return [...m, ...extra]
+        })
+        setHayMas(m.length >= PAGINA_MENSAJES)
+      })
       .catch(e => avisar(`No se pudo abrir el chat: ${e?.message || 'error'}`, 'error'))
       .finally(() => { if (vivo) setCargandoChat(false) })
     return () => { vivo = false }
   }, [activaId, avisar])
+
+  useEffect(() => {
+    if (activaId && mensajes.length) cacheChats.current.set(activaId, mensajes.slice(-400))
+  }, [activaId, mensajes])
+
+  const cargarMas = useCallback(async () => {
+    const id = activaRef.current
+    if (!id || cargandoMas || !hayMas) return
+    const primero = mensajes[0]
+    if (!primero) return
+    setCargandoMas(true)
+    try {
+      const viejos = await cargarMensajes(id, { antes: primero.creado_en })
+      if (activaRef.current !== id) return
+      setMensajes(ms => {
+        const ids = new Set(ms.map(x => x.id))
+        return [...viejos.filter(x => !ids.has(x.id)), ...ms]
+      })
+      setHayMas(viejos.length >= PAGINA_MENSAJES)
+    } catch (e) {
+      avisar(`No se pudieron cargar los mensajes anteriores: ${e?.message || 'error'}`, 'error')
+    } finally { setCargandoMas(false) }
+  }, [cargandoMas, hayMas, mensajes, avisar])
 
   // Tiempo real.
   useEffect(() => {
@@ -100,6 +139,9 @@ export default function BandejaPage() {
           if (!convsRef.current.some(c => c.id === m.conversacion_id)) cargar()
         } else if (eventType === 'UPDATE') {
           setUltimos(u => (u[m.conversacion_id]?.id === m.id ? { ...u, [m.conversacion_id]: { ...u[m.conversacion_id], ...m } } : u))
+        }
+        if (eventType === 'INSERT' && m.direccion === 'out') {
+          setPendientes(ps => { const i = ps.findIndex(p => p.conversacion_id === m.conversacion_id && p.texto === m.texto); return i === -1 ? ps : ps.filter((_, j) => j !== i) })
         }
         if (m.conversacion_id === activaRef.current) {
           setMensajes(ms => {
@@ -165,9 +207,23 @@ export default function BandejaPage() {
     if (!activa) return
     // Responder a mano implica tomar el chat: si no, la IA contestaría encima.
     if (activa.estado !== 'humano') await tomar()
-    await enviarMensajeManual(activa.id, texto)
-    // El mensaje aparece solo por Realtime cuando la función lo guarda.
+    // Burbuja al instante con el reloj; se reemplaza por la real cuando llega.
+    const falso = { id: `pend-${Date.now()}`, conversacion_id: activa.id, direccion: 'out', tipo: 'text', texto, contenido: { text: { body: texto } }, estado: 'pendiente', creado_en: new Date().toISOString() }
+    setPendientes(ps => [...ps, falso])
+    try {
+      await enviarMensajeManual(activa.id, texto)
+    } catch (e) {
+      setPendientes(ps => ps.filter(p => p.id !== falso.id))
+      throw e
+    }
+    // Red de seguridad: si Realtime no trae el mensaje, no queda el reloj para siempre.
+    setTimeout(() => setPendientes(ps => ps.filter(p => p.id !== falso.id)), 20000)
   }
+
+  const mensajesVista = useMemo(
+    () => (pendientes.length ? [...mensajes, ...pendientes.filter(p => p.conversacion_id === activaId)] : mensajes),
+    [mensajes, pendientes, activaId],
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -204,8 +260,11 @@ export default function BandejaPage() {
           />
           <ChatPanel
             conv={activa}
-            mensajes={mensajes}
+            mensajes={mensajesVista}
             cargando={cargandoChat}
+            hayMas={hayMas}
+            cargandoMas={cargandoMas}
+            onMas={cargarMas}
             prohibidas={prohibidas}
             onVolver={() => setActivaId(null)}
             onTomar={tomar}
