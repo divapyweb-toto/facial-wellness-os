@@ -1,9 +1,12 @@
 // Lógica del webhook de WhatsApp (sin I/O directo: todo entra por `Deps`).
 // Dueño: subagente B (ola 1). El I/O real está en index.ts.
 
+import { detectarLinkMapas, type LinkMapas, textoLinkMapas } from "../_shared/link_mapas.ts";
 import { enlaceWaMe } from "../_shared/telegram_formato.ts";
 import { datosFormularioPedido, parsearContacto, parsearFlow, parsearUbicacion } from "../_shared/wa_interactivos.ts";
 import { aTextoPlano, textoDeEntrante } from "../_shared/vendedor/interactivos.ts";
+import { esDerivacionDeVenta } from "../_shared/vendedor/herramientas.ts";
+import { CFG_VENDEDOR_DEFAULT } from "../_shared/vendedor/tipos.ts";
 import { esPedidoDeBaja, PLANTILLAS_RECOMPRA } from "../recompra/calendario.ts";
 
 // ---------- tipos ----------
@@ -23,6 +26,10 @@ export type MensajeMeta = {
   type: string;
   text?: { body?: string };
   audio?: { id?: string; mime_type?: string; voice?: boolean };
+  image?: { id?: string; mime_type?: string; caption?: string };
+  sticker?: { id?: string; mime_type?: string; animated?: boolean };
+  video?: { id?: string; mime_type?: string; caption?: string };
+  document?: { id?: string; mime_type?: string; filename?: string; caption?: string };
   button?: { payload?: string; text?: string };
   interactive?: {
     type?: string;
@@ -64,6 +71,7 @@ export type Pedido = {
   courier?: string | null;
   creado_en?: string | null;
   raw?: Record<string, unknown> | null;
+  total?: number | string | null;
 };
 
 export type AccionConf = "conf_si" | "conf_corregir" | "conf_cancelar";
@@ -113,6 +121,8 @@ export interface Deps {
   pasarAlVendedor?(d: EntradaVendedor): Promise<void>;
   /** Transcribe el audio ya copiado a Storage (_shared/transcripcion.ts, G2). */
   transcribirAudio?(ruta: string, mime: string | null): Promise<Transcripcion>;
+  /** Sigue el link corto de Google Maps y saca coordenadas/lugar (_shared/link_mapas.ts). */
+  resolverLinkMapas?(url: string): Promise<LinkMapas>;
   /** Guarda el teléfono que el cliente compartió con el botón REQUEST_CONTACT_INFO (si no tenía). */
   guardarTelefonoCliente?(clienteId: string, telefono: string): Promise<void>;
   // ---- integración olas 3-4. Opcionales: sin ellas, los botones mk_* y la baja solo avisan a Enrique. ----
@@ -124,7 +134,28 @@ export interface Deps {
   ofrecerCobroQR?(orderId: number): Promise<{ ok: true; texto: string } | { ok: false; motivo: string }>;
   /** cliente_id del mensaje saliente (para el 131050 que llega en el estado 'failed'). */
   clienteDeMensaje?(waMessageId: string): Promise<string | null>;
+  /**
+   * Señales de que Enrique (o una derivación dura) tiene el chat desde `desdeISO` (ver motivoParaNoRetomar).
+   * Sin esto, un chat en 'humano' nunca vuelve solo a la IA (comportamiento de la ola 1).
+   */
+  actividadHumana?(d: { conversacionId: string; clienteId: string; desdeISO: string }): Promise<ActividadHumana>;
+  /** Copia una imagen o PDF de Meta a Storage wa-media (comprobante de pago anticipado). Sin esto, solo va el media id. */
+  copiarMedia?(mediaId: string, ruta: string): Promise<{ ok: boolean; ruta?: string; mime?: string; error?: string }>;
+  /** Copia a Storage wa-media la imagen, el sticker, el video o el documento que manda el cliente, para poder verlo en la Bandeja (la URL de Meta vence a los 5 min). Aparte de copiarMedia: eso es solo para comprobantes. */
+  copiarMediaChat?(mediaId: string, ruta: string): Promise<{ ok: boolean; ruta?: string; mime?: string; error?: string }>;
 }
+
+/** Lo que pasó en el chat en las últimas `retomar_humano_h` horas que indica que Enrique lo está atendiendo. */
+export type ActividadHumana = {
+  /** Mensajes que Enrique mandó desde el número de la tienda (bandeja → wa-enviar-manual, marcados origen 'manual'). */
+  salidasManuales: number;
+  /** Tocó "Le escribo yo" en Telegram por un pedido de este cliente (tomó el chat explícitamente). */
+  escribo: boolean;
+  /** Motivos de derivar_a_enrique del vendedor IA (vendedor_turnos). */
+  derivaciones: string[];
+  /** Mensajes entrantes del período (para ver botones que pasan el chat a humano: conf_*, ayuda, ne_direccion, seg_problema). */
+  entrantes: MensajeMeta[];
+};
 
 export type OfertaEnviada = { plantilla: string; variables: unknown };
 
@@ -276,9 +307,15 @@ export function leerBotonPostventa(m: MensajeMeta): { accion: AccionBoton; id: s
  * Botones de las plantillas de recompra (voltra_mk_*): `<accion>:<shopify_order_id>` (0 = sin pedido).
  * Si la plantilla salió sin payload, Meta manda el texto del botón: "No quiero ofertas" también es baja.
  */
-export function leerBotonMarketing(m: MensajeMeta, palabrasBaja?: string[]): { accion: AccionMk; orderId: string | null } | null {
+export function leerBotonMarketing(
+  m: MensajeMeta,
+  palabrasBaja?: string[],
+): { accion: AccionMk; orderId: string | null; producto?: string } | null {
   const r = /^(mk_si|mk_luego|mk_pack|mk_una|mk_quiero|mk_baja)(?::(\d+))?$/.exec(idDeBoton(m));
   if (r) return { accion: r[1] as AccionMk, orderId: r[2] && r[2] !== "0" ? r[2] : null };
+  // 07-10: campañas enviadas por fuera de la cola (recompra FW): el producto va en el botón, `mk_si:p-<handle>`.
+  const p = /^(mk_si|mk_luego|mk_pack|mk_una|mk_quiero|mk_baja):p-([a-z0-9-]{2,80})$/.exec(idDeBoton(m));
+  if (p) return { accion: p[1] as AccionMk, orderId: null, producto: p[2] };
   if (m.type === "button" && m.button?.text && esPedidoDeBaja(m.button.text, palabrasBaja)) {
     return { accion: "mk_baja", orderId: null };
   }
@@ -299,7 +336,30 @@ function precioGs(x: unknown): string {
  * Lo que recibe el vendedor cuando el cliente acepta una oferta de recompra: qué tocó y qué oferta era
  * (variables del envío según PLANTILLAS_RECOMPRA), para que arme el pedido con crear_pedido_cod.
  */
-export function contextoOfertaAceptada(accion: AccionMk, oferta: OfertaEnviada | null): string {
+const RE_AUTOMATICA = [
+  /gracias por (comunicarte|comunicarse|contactarnos|escribirnos|tu mensaje|su mensaje)/u,
+  /(te|le|les) (responder[eé]mos|contestar[eé]mos|atender[eé]mos)/u,
+  /(me|nos) comunic(o|amos|ar[eé]) (a la brevedad|en breve|lo antes posible|pronto)/u,
+  /(en este momento|ahora mismo) no (puedo|podemos|estoy|estamos)/u,
+  /(fuera de|nuestro) horario de atenci[oó]n/u,
+  /respuesta autom[aá]tica|mensaje autom[aá]tico/u,
+  /si es (algo )?urgente,? (por favor )?(ll[aá]m|comunic)/u,
+  /le saluda .{2,60}(asesor|atenci[oó]n|equipo)/u,
+];
+
+/** ¿Es un mensaje automático de bienvenida/ausencia del WhatsApp Business del cliente? (conservador: necesita 1 señal fuerte y algo de largo) */
+export function esRespuestaAutomatica(texto: string): boolean {
+  const t = (texto ?? "").toLowerCase();
+  if (t.length < 40) return false;
+  return RE_AUTOMATICA.some((re) => re.test(t));
+}
+
+/** "tiras-nasales-gudair-30-unidades" → "tiras nasales" (para el contexto del vendedor). */
+export function productoDeHandle(handle: string): string {
+  return handle.replace(/-(gudair|de-acero-inoxidable|\d+-unidades|\d+-ml|3-niveles)\b/g, "").replace(/-/g, " ").trim();
+}
+
+export function contextoOfertaAceptada(accion: AccionMk, oferta: OfertaEnviada | null, producto?: string): string {
   const boton = TITULO_MK[accion] ?? accion;
   const def = oferta ? PLANTILLAS_RECOMPRA[oferta.plantilla] : undefined;
   let v: Record<string, unknown> = {};
@@ -313,6 +373,7 @@ export function contextoOfertaAceptada(accion: AccionMk, oferta: OfertaEnviada |
   else if (oferta?.plantilla === "voltra_mk_cruzada") que = `quiere ${v.producto_afin ?? "el producto ofrecido"}${precio(v.precio)}`;
   else if (oferta?.plantilla === "voltra_mk_lanzamiento") que = `quiere ${v.producto_nuevo ?? "el producto nuevo"}${precio(v.precio_cliente)}`;
   else if (def) que = `quiere ${v.oferta ?? "la oferta"} de ${v.producto ?? "lo que compró"}${precio(v.precio)}`;
+  else if (producto) que = `quiere otra bolsa de ${productoDeHandle(producto)} (handle ${producto}; el precio sale del catálogo, ofrecé también el ×2)`;
   else que = "aceptó una oferta de recompra, pero no encontré cuál: preguntale qué quiere";
   return `[oferta aceptada] Tocó "${boton}" en el mensaje de recompra: ${que}. ` +
     "Armá el pedido con crear_pedido_cod (mostrá el resumen y pedí confirmación); si faltan datos de entrega, pedilos.";
@@ -565,6 +626,17 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
     return;
   }
 
+  // Bandeja: guarda lo que el cliente manda (foto, sticker, video, documento) para poder mostrarlo.
+  // Si falla, el chat sigue igual: no se corta la conversación por no poder copiar un archivo.
+  const mediaChat = mediaDeChat(m);
+  if (mediaChat && deps.copiarMediaChat) {
+    const ruta = `media/${cliente.id}/${m.id}.${EXTENSION_CHAT[mediaChat.mime.split(";")[0].trim().toLowerCase()] ?? "bin"}`;
+    const c = await deps.copiarMediaChat(mediaChat.id, ruta)
+      .catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; ruta?: string; mime?: string; error?: string }));
+    await deps.completarContenidoMensaje(m.id, c.ok ? { storage_path: c.ruta ?? ruta, mime: c.mime ?? mediaChat.mime } : { storage_error: c.error ?? "no se pudo copiar" })
+      .catch(() => {});
+  }
+
   const ctx: Ctx = { deps, m, clienteId: cliente.id, conv, telefono, destino: telefono ?? userId!, nombreWa: contacto?.profile?.name ?? cliente.nombre ?? null };
 
   const boton = leerBotonConfirmacion(m);
@@ -583,7 +655,7 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
   const palabrasBaja = Array.isArray(recompra?.palabras_baja) ? recompra!.palabras_baja as string[] : undefined;
   const mk = leerBotonMarketing(m, palabrasBaja);
   if (mk) {
-    await aplicarBotonMarketing(ctx, mk.accion, mk.orderId);
+    await aplicarBotonMarketing(ctx, mk.accion, mk.orderId, mk.producto);
     return;
   }
   if (m.type === "text" && m.text?.body && esPedidoDeBaja(m.text.body, palabrasBaja)) {
@@ -623,17 +695,88 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
     }
   }
 
+  // Pago anticipado: imagen o PDF de un cliente al que se le ofreció pagar por transferencia = comprobante.
+  // Si no aplica, devuelve false y el mensaje sigue el camino de siempre (vendedor IA).
+  if (await aplicarComprobantePago(ctx)) return;
+
+  // Chat en 'humano' que nadie atiende en el número de la tienda: vuelve a la IA (regla en debeRetomarHumano).
+  let estado = conv.estado;
+  if (estado === "humano" && m.type === "text" && m.text?.body && deps.pasarAlVendedor && await debeRetomarHumano(conv.id, cliente.id, deps)) {
+    await deps.actualizarConversacion(conv.id, { estado: "ia" });
+    estado = "ia";
+  }
+
   // Ola 2: el resto de los mensajes de una conversación en 'ia' va al vendedor con IA.
-  if (conv.estado === "ia" && deps.pasarAlVendedor) {
+  if (estado === "ia" && deps.pasarAlVendedor) {
     const contacto = parsearContacto(m);
     if (contacto?.esPedidoDeContacto && contacto.telefonoE164 && !telefono && deps.guardarTelefonoCliente) {
       const tel = deps.normalizarTelefono(contacto.telefonoE164);
       if (tel) await deps.guardarTelefonoCliente(cliente.id, tel).catch((e) => console.error("guardar teléfono:", e));
     }
-    const texto = textoParaVendedor(m);
+    let texto = textoParaVendedor(m);
     if (!texto) return;
+    // 07-10: los mensajes automáticos del WhatsApp Business del cliente ("Gracias por comunicarte…", "me comunico a
+    // la brevedad") no se contestan: quedan guardados y el vendedor no gasta ni responde algo raro.
+    if (m.type === "text" && esRespuestaAutomatica(texto)) return;
+    // 07-10: link de Google Maps pegado como texto → coordenadas y lugar, igual que el pin de WhatsApp.
+    const link = m.type === "text" ? detectarLinkMapas(texto) : null;
+    if (link && deps.resolverLinkMapas) {
+      const l = await deps.resolverLinkMapas(link).catch(() => null);
+      if (l) {
+        texto = `${texto}\n${textoLinkMapas(l)}`;
+        await deps.completarContenidoMensaje(m.id, { texto_vendedor: texto }).catch(() => {});
+      }
+    }
     if (m.type !== "text") await deps.completarContenidoMensaje(m.id, { texto_vendedor: texto });
     await deps.pasarAlVendedor({ conversacion_id: conv.id, cliente_id: cliente.id, wa_message_id: m.id, texto });
+  }
+}
+
+// ---------- retomar un chat en 'humano' ----------
+
+export const RETOMAR_HUMANO_H_DEFAULT = CFG_VENDEDOR_DEFAULT.retomar_humano_h ?? 3;
+const POSTVENTA_A_HUMANO = new Set(["ayuda", "ne_direccion", "seg_problema"]);
+
+/** ¿Este mensaje entrante es un botón que pasa el chat a humano (confirmación o postventa)? */
+export function botonPasaAHumano(m: MensajeMeta): boolean {
+  if (leerBotonConfirmacion(m)) return true;
+  const p = leerBotonPostventa(m);
+  return !!p && POSTVENTA_A_HUMANO.has(p.accion);
+}
+
+/**
+ * Por qué NO se retoma un chat en 'humano' (null = se puede retomar). Mira solo las últimas N horas:
+ * Enrique tocó "Le escribo yo", le escribió al cliente desde la bandeja, hubo una derivación dura del vendedor
+ * (reclamo, salud, devolución, enojo, otro, fallas del sistema) o el cliente tocó un botón que pasa a humano.
+ * Las derivaciones de venta (mayorista, pide_persona…) no frenan: esas ya no pasan el chat a 'humano'.
+ */
+export function motivoParaNoRetomar(a: ActividadHumana): string | null {
+  if (a.escribo) return "enrique_tomo_el_chat";
+  if (a.salidasManuales > 0) return "enrique_escribio";
+  const dura = a.derivaciones.find((mo) => !esDerivacionDeVenta(mo));
+  if (dura) return `derivacion:${dura}`;
+  if (a.entrantes.some(botonPasaAHumano)) return "boton_a_humano";
+  return null;
+}
+
+/**
+ * Regla para retomar (el botón de derivación lleva al WhatsApp personal de Enrique, así que en el número de la
+ * tienda un chat en 'humano' puede quedar sin nadie): si en las últimas config_wa.vendedor.retomar_humano_h
+ * horas (default 3; 0 = nunca) no hubo ninguna señal de que Enrique lo tenga (motivoParaNoRetomar), el chat
+ * vuelve a 'ia' y el mensaje pasa al vendedor. Sin la dependencia actividadHumana o si la consulta falla, no se retoma.
+ */
+export async function debeRetomarHumano(conversacionId: string, clienteId: string, deps: Deps): Promise<boolean> {
+  if (!deps.actividadHumana) return false;
+  const v = await deps.config("vendedor") as { retomar_humano_h?: unknown } | null;
+  const h = typeof v?.retomar_humano_h === "number" && Number.isFinite(v.retomar_humano_h) ? v.retomar_humano_h : RETOMAR_HUMANO_H_DEFAULT;
+  if (h <= 0) return false;
+  const desdeISO = new Date(deps.ahora().getTime() - h * 3600_000).toISOString();
+  try {
+    const a = await deps.actividadHumana({ conversacionId, clienteId, desdeISO });
+    return motivoParaNoRetomar(a) === null;
+  } catch (e) {
+    console.error("retomar chat en humano: no pude leer la actividad, lo dejo en humano:", e instanceof Error ? e.message : e);
+    return false;
   }
 }
 
@@ -753,8 +896,18 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
   const envio = await deps.enviarTexto(ctx.destino, texto, { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
   if (!envio.ok) fallas.push(`respuesta al cliente: ${envio.error}`);
 
+  // Pago anticipado por transferencia (decisión del 07-10). Con la bandera prendida reemplaza la oferta QR:
+  // al cliente le llega un solo ofrecimiento de pago.
+  const pa = accion === "conf_si" ? await leerCfgPagoAnticipado(deps) : null;
+  const lineasPago: string[] = [];
+  if (pa?.activo) {
+    const r = await ofrecerPagoAnticipado(ctx, pedido, orderId, objetivo, tags, pa);
+    if (r.falla) fallas.push(r.falla);
+    if (r.enviada) lineasPago.push(`💸 Se le ofreció pagar ahora por transferencia (Gs ${r.total}).`);
+  }
+
   // Ola 4: oferta de pago por QR después de confirmar, solo con config_wa['ola4.qr'].activo.
-  if (accion === "conf_si" && deps.ofrecerCobroQR) {
+  if (accion === "conf_si" && !pa?.activo && deps.ofrecerCobroQR) {
     const qr = await deps.config("ola4.qr") as { activo?: unknown } | null;
     if (qr?.activo === true) {
       try {
@@ -780,7 +933,171 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
     : accion === "conf_cancelar"
     ? [[{ texto: "Cancelar pedido", callback: `cancelar:${orderId}` }]]
     : undefined;
-  await deps.avisar([titulo, ...fallas.map((f) => `Falla: ${f}`)].join("\n"), botones);
+  await deps.avisar([titulo, ...lineasPago, ...fallas.map((f) => `Falla: ${f}`)].join("\n"), botones);
+}
+
+// ---------- pago anticipado por transferencia (decisión del dueño, 07-10) ----------
+// Después de "Confirmar", se le ofrece al cliente pagar ahora por transferencia para que su pedido salga primero.
+// Honesto: sin urgencia inventada; si no paga, sigue contra entrega como siempre. Config: config_wa['pago_anticipado']
+// (supabase/seed_pago_anticipado.sql). Enrique verifica cada comprobante en ueno antes de despachar.
+
+export const TAG_OFERTA_PAGO = "OFERTA_PAGO_ANTICIPADO";
+export const TAG_COMPROBANTE_PAGO = "PAGO_ANTICIPADO_COMPROBANTE";
+export const TAG_PRIORIDAD = "PRIORIDAD";
+/** Tags que dicen que el pedido ya está pagado o con comprobante: no se vuelve a ofrecer. */
+const TAGS_YA_PAGADO = ["PAGADO_QR"];
+
+export const PAGO_ANTICIPADO_DEFAULT = {
+  texto: "📦 ¡Tu pedido {pedido} ya está en preparación!\n\n¿Querés recibirlo antes? Priorizamos tu envío si lo pagás ahora por transferencia:\n\n💳 ueno bank · Caja de ahorro 6193162880\nVOLTRA E.A.S. UNIPERSONAL · RUC 80177762-3\nTotal: Gs {total}\n\nMandanos el comprobante por acá. Si no, pagás al recibir como siempre.\n\nGracias por confiar en nosotros 🙌",
+  texto_recibido: "Recibido, gracias. Lo verificamos y tu pedido sale en el primer despacho.",
+  dias_comprobante: 7,
+};
+
+type CfgPagoAnticipado = { activo: boolean; texto: string; texto_recibido: string; dias_comprobante: number };
+
+async function leerCfgPagoAnticipado(deps: Deps): Promise<CfgPagoAnticipado> {
+  const c = await deps.config("pago_anticipado") as Record<string, unknown> | null;
+  const txt = (v: unknown, d: string) => (typeof v === "string" && v.trim() ? v : d);
+  const dias = Number(c?.dias_comprobante);
+  return {
+    activo: c?.activo === true,
+    texto: txt(c?.texto, PAGO_ANTICIPADO_DEFAULT.texto),
+    texto_recibido: txt(c?.texto_recibido, PAGO_ANTICIPADO_DEFAULT.texto_recibido),
+    dias_comprobante: Number.isFinite(dias) && dias > 0 ? dias : PAGO_ANTICIPADO_DEFAULT.dias_comprobante,
+  };
+}
+
+/** true si el pedido ya tiene un tag PAGO_ANTICIPADO_* o está pagado por QR. */
+export function pedidoYaPagado(tags: string[] | null | undefined): boolean {
+  return (tags ?? []).some((t) => t.startsWith("PAGO_ANTICIPADO_") || TAGS_YA_PAGADO.includes(t));
+}
+
+function totalGs(p: Pedido): string | null {
+  const n = Math.round(Number(p.total));
+  return Number.isFinite(n) && n > 0 ? precioGs(n) : null;
+}
+
+/** Manda la oferta y deja el tag OFERTA_PAGO_ANTICIPADO (DB + Shopify) solo si el mensaje salió. */
+async function ofrecerPagoAnticipado(
+  ctx: Ctx,
+  pedido: Pedido,
+  orderId: string,
+  estado: string,
+  tags: string[],
+  cfg: CfgPagoAnticipado,
+): Promise<{ enviada: boolean; total?: string; falla?: string }> {
+  const { deps } = ctx;
+  if (pedidoYaPagado(tags) || tags.includes(TAG_OFERTA_PAGO)) return { enviada: false };
+  const total = totalGs(pedido);
+  if (!total) return { enviada: false, falla: "oferta de pago anticipado: el pedido no tiene total, no la mandé" };
+  const texto = renderizar(cfg.texto, {
+    nombre: primerNombre(nombreDePedido(pedido), ctx.nombreWa),
+    total,
+    pedido: pedido.nombre ?? `#${orderId}`,
+  });
+  const e = await deps.enviarTexto(ctx.destino, texto, { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
+  if (!e.ok) return { enviada: false, falla: `oferta de pago anticipado: ${e.error}` };
+  await deps.actualizarPedido(orderId, { estado_confirmacion: estado, tags: [...tags, TAG_OFERTA_PAGO] });
+  try {
+    const r = await deps.agregarTags(`gid://shopify/Order/${orderId}`, [TAG_OFERTA_PAGO]) as { ok?: boolean; error?: string } | undefined;
+    if (r?.ok === false) return { enviada: true, total, falla: `tag ${TAG_OFERTA_PAGO} en Shopify: ${r.error}` };
+  } catch (err) {
+    return { enviada: true, total, falla: `tag ${TAG_OFERTA_PAGO} en Shopify: ${err instanceof Error ? err.message : err}` };
+  }
+  return { enviada: true, total };
+}
+
+/** Imagen, o documento PDF/imagen: lo que puede ser un comprobante de transferencia. */
+export function mediaDeComprobante(m: MensajeMeta): { id: string; mime: string } | null {
+  if (m.type === "image" && m.image?.id) return { id: m.image.id, mime: m.image.mime_type ?? "image/jpeg" };
+  if (m.type === "document" && m.document?.id) {
+    const mime = (m.document.mime_type ?? "").toLowerCase();
+    if (mime === "application/pdf" || mime.startsWith("image/")) return { id: m.document.id, mime };
+  }
+  return null;
+}
+
+/** Archivo del cliente que la Bandeja puede mostrar: imagen, sticker, video o documento. */
+export function mediaDeChat(m: MensajeMeta): { id: string; mime: string } | null {
+  if (m.type === "image" && m.image?.id) return { id: m.image.id, mime: m.image.mime_type ?? "image/jpeg" };
+  if (m.type === "sticker" && m.sticker?.id) return { id: m.sticker.id, mime: m.sticker.mime_type ?? "image/webp" };
+  if (m.type === "video" && m.video?.id) return { id: m.video.id, mime: m.video.mime_type ?? "video/mp4" };
+  if (m.type === "document" && m.document?.id) return { id: m.document.id, mime: m.document.mime_type ?? "application/octet-stream" };
+  return null;
+}
+
+const EXTENSION_CHAT: Record<string, string> = {
+  "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif",
+  "video/mp4": "mp4", "video/3gpp": "3gp", "application/pdf": "pdf",
+};
+
+const EXTENSION: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" };
+
+/**
+ * Comprobante de pago anticipado: imagen o PDF de un cliente con un pedido confirmado que recibió la oferta
+ * (tag OFERTA_PAGO_ANTICIPADO), sin comprobante previo y de los últimos `dias_comprobante` días (default 7).
+ * Tags PAGO_ANTICIPADO_COMPROBANTE + PRIORIDAD (DB + Shopify), respuesta al cliente y aviso a Enrique.
+ * Con el chat en 'humano' que Enrique atiende (mismo criterio que debeRetomarHumano) no se le responde al cliente.
+ * Devuelve false si no aplica: el mensaje sigue el flujo normal.
+ */
+export async function aplicarComprobantePago(ctx: Ctx): Promise<boolean> {
+  const { deps, m } = ctx;
+  const media = mediaDeComprobante(m);
+  if (!media) return false;
+  // No depende de `activo`: si la bandera se apagó después de ofrecer, el comprobante igual se registra.
+  const cfg = await leerCfgPagoAnticipado(deps);
+  const desde = new Date(deps.ahora().getTime() - cfg.dias_comprobante * 86_400_000).toISOString();
+  const confirmados = await deps.pedidosPorEstado(ctx.clienteId, ctx.telefono, "confirmado", desde);
+  const p = confirmados.find((x) => (x.tags ?? []).includes(TAG_OFERTA_PAGO) && !(x.tags ?? []).includes(TAG_COMPROBANTE_PAGO));
+  if (!p) return false;
+
+  const orderId = String(p.shopify_order_id);
+  const etiqueta = p.nombre ?? `#${orderId}`;
+  const total = totalGs(p) ?? "?";
+  const fallas: string[] = [];
+
+  // 1) Base de datos y Shopify.
+  const nuevos = [TAG_COMPROBANTE_PAGO, TAG_PRIORIDAD];
+  const tags = [...(p.tags ?? []), ...nuevos].filter((t, i, a) => a.indexOf(t) === i);
+  await deps.actualizarPedido(orderId, { estado_confirmacion: p.estado_confirmacion, tags });
+  try {
+    const r = await deps.agregarTags(`gid://shopify/Order/${orderId}`, nuevos) as { ok?: boolean; error?: string } | undefined;
+    if (r?.ok === false) fallas.push(`tags Shopify: ${r.error}`);
+  } catch (e) {
+    fallas.push(`tags Shopify: ${e instanceof Error ? e.message : e}`);
+  }
+
+  // 2) Copia del comprobante a Storage (la URL de Meta vence), para que Enrique lo vea desde la bandeja.
+  let ruta: string | null = null;
+  if (deps.copiarMedia) {
+    const destino = `comprobantes/${ctx.clienteId}/${m.id}.${EXTENSION[media.mime.split(";")[0].trim()] ?? "bin"}`;
+    const c = await deps.copiarMedia(media.id, destino).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; ruta?: string; error?: string }));
+    if (c.ok) ruta = c.ruta ?? destino;
+    else fallas.push(`copia del comprobante: ${c.error}`);
+  }
+  await deps.completarContenidoMensaje(m.id, {
+    comprobante_pago_anticipado: orderId,
+    ...(ruta ? { storage_path: ruta } : {}),
+  });
+
+  // 3) Respuesta al cliente, salvo que Enrique tenga el chat.
+  const responder = ctx.conv.estado !== "humano" || await debeRetomarHumano(ctx.conv.id, ctx.clienteId, deps);
+  if (responder) {
+    await deps.marcarLeidoYEscribiendo(m.id).catch(() => {});
+    const texto = renderizar(cfg.texto_recibido, { nombre: primerNombre(nombreDePedido(p), ctx.nombreWa), pedido: etiqueta, total });
+    const e = await deps.enviarTexto(ctx.destino, texto, { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
+    if (!e.ok) fallas.push(`respuesta al cliente: ${e.error}`);
+  }
+
+  // 4) Aviso a Enrique (no hay helper para reenviar el archivo a Telegram: va la ruta en Storage y el media id).
+  const lineas = [
+    `💸 ${etiqueta}: el cliente mandó comprobante de pago anticipado (Gs ${total}). Verificalo en ueno y despachalo primero.`,
+    ruta ? `Comprobante: Storage wa-media/${ruta}` : `Comprobante: media de WhatsApp ${media.id} (wamid ${m.id})`,
+  ];
+  if (!responder) lineas.push("El chat está con vos: no le respondí al cliente.");
+  lineas.push(...fallas.map((f) => `Falla: ${f}`));
+  await deps.avisar(lineas.join("\n"), [[{ texto: "Le escribo yo", callback: `escribo:${orderId}` }]]);
+  return true;
 }
 
 // ---------- botones post-venta (plantillas de F) y consentimiento del día 0 ----------
@@ -909,7 +1226,7 @@ export async function aplicarBaja(ctx: Ctx, origen: "boton" | "chat"): Promise<v
  * conversación sigue en 'ia' y el vendedor recibe qué oferta aceptó (arma el pedido con crear_pedido_cod).
  * Si Enrique tiene el chat ('humano'), no se le saca: le llega el aviso con la oferta.
  */
-export async function aplicarBotonMarketing(ctx: Ctx, accion: AccionMk, orderId: string | null): Promise<void> {
+export async function aplicarBotonMarketing(ctx: Ctx, accion: AccionMk, orderId: string | null, producto?: string): Promise<void> {
   const { deps } = ctx;
   if (accion === "mk_baja") return aplicarBaja(ctx, "boton");
   const opts = { clienteId: ctx.clienteId, conversacionId: ctx.conv.id };
@@ -920,7 +1237,7 @@ export async function aplicarBotonMarketing(ctx: Ctx, accion: AccionMk, orderId:
     return;
   }
   const oferta = deps.ofertaMarketing ? await deps.ofertaMarketing(ctx.clienteId, orderId) : null;
-  const texto = contextoOfertaAceptada(accion, oferta);
+  const texto = contextoOfertaAceptada(accion, oferta, producto);
   await deps.completarContenidoMensaje(ctx.m.id, { texto_vendedor: texto });
   if (ctx.conv.estado === "humano" || !deps.pasarAlVendedor) {
     await deps.avisar(`🛒 ${ctx.nombreWa ?? "Cliente"}${ctx.telefono ? ` (${ctx.telefono})` : ""} aceptó una oferta de recompra. ${texto}`);

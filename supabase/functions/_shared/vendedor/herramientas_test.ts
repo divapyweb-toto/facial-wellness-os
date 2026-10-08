@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
 import {
+  inputOrderCreate,
   _limpiarCacheCatalogo,
   derivarAEnrique,
   ejecutarHerramienta,
@@ -151,10 +152,41 @@ Deno.test("derivar_a_enrique: chat a humano, botón wa.me con el resumen y aviso
   assertEquals(i.type, "cta_url");
   assertEquals(i.action.parameters.display_text, "Hablar con Enrique");
   assert(i.action.parameters.url.startsWith("https://wa.me/595990000000?text="));
-  assert(decodeURIComponent(i.action.parameters.url).includes("Le llegó la caja abierta"));
+  // El cliente manda una frase en su voz; el resumen interno va solo a Telegram (07-10).
+  const prellenado = decodeURIComponent(i.action.parameters.url);
+  assert(prellenado.includes("Tengo un problema con mi pedido. (pedido #1050)"), prellenado);
+  assert(!prellenado.includes("Le llegó la caja abierta"));
   const callbacks = (reg.avisos[0].botones as Array<Array<{ callback?: string }>>).flat().map((b) => b.callback).filter(Boolean);
   assertEquals(callbacks, ["reponer:5550001", "escribo:5550001", "cancelar:5550001"]);
   assert(reg.avisos[0].texto.includes("Le llegó la caja abierta"));
+});
+
+Deno.test("derivar_a_enrique por venta (mayorista, pide_persona…): botón y aviso igual, pero el chat sigue en 'ia'", async () => {
+  for (const motivo of ["mayorista", "pide_persona", "sin_avance", "falla_herramienta", "direccion_dudosa", "audio_confuso"]) {
+    const { deps, reg } = depsPrueba();
+    const r = await ejecutarHerramienta("derivar_a_enrique", { motivo, resumen: "Pregunta precio por 10 unidades." }, ctxPrueba(), deps);
+    assertEquals(reg.humano, [], motivo);
+    assert(r.terminal && r.derivado, "el turno actual termina (ya salió el botón)");
+    assertEquals(r.resultado.sigue_ia, true);
+    assertEquals(
+      r.resultado.nota,
+      "Ya le mandé el botón. Si el cliente sigue escribiendo, seguí atendiéndolo normal (por ejemplo, si al final quiere 1 a 3 unidades, vendéselas).",
+    );
+    assertEquals((reg.interactivos[0].interactive as { type: string }).type, "cta_url");
+    assert(reg.avisos[0].texto.includes("El vendedor sigue atendiendo si el cliente vuelve a escribir."));
+    assertFalse(reg.avisos[0].texto.includes("pasó a humano"));
+  }
+});
+
+Deno.test("derivar_a_enrique por reclamo, salud, devolución, enojo u otro: el chat pasa a 'humano' (sigue_ia false)", async () => {
+  for (const motivo of ["reclamo", "salud", "devolucion", "enojo", "otro", "tope_turnos"]) {
+    const { deps, reg } = depsPrueba();
+    const r = await derivarAEnrique({ motivo, resumen: "Le llegó la caja abierta." }, ctxPrueba(), deps);
+    assertEquals(reg.humano, ["11111111-1111-4111-8111-111111111111"], motivo);
+    assertEquals(r.resultado.sigue_ia, false);
+    assertEquals(r.resultado.nota, "No escribas nada más.");
+    assert(reg.avisos[0].texto.includes("El chat pasó a humano"));
+  }
 });
 
 Deno.test("derivar_a_enrique sin número configurado: texto sin botón y aviso de lo que falta", async () => {
@@ -166,7 +198,7 @@ Deno.test("derivar_a_enrique sin número configurado: texto sin botón y aviso d
   assert(reg.avisos[0].texto.includes("Falta config_wa.vendedor.whatsapp_enrique"));
 });
 
-Deno.test("interactivos: el texto del modelo pasa por el filtro; carrusel con precios del catálogo", async () => {
+Deno.test("interactivos: el texto del modelo pasa por el filtro; lista vertical con precios del catálogo", async () => {
   _limpiarCacheCatalogo();
   const { deps, reg } = depsPrueba();
   const bloqueado = await ejecutarHerramienta("pedir_ubicacion", { texto: "Mandame tu ubicación, tiene garantía" }, ctxPrueba(), deps);
@@ -177,9 +209,12 @@ Deno.test("interactivos: el texto del modelo pasa por el filtro; carrusel con pr
   assertEquals(reg.interactivos[0].interactive.type, "location_request_message");
   const car = await ejecutarHerramienta("enviar_opciones", { handle: "tiras-prueba", texto: "Elegí cuántas querés" }, ctxPrueba(), deps);
   assert(car.terminal);
-  const cards = (reg.interactivos[1].interactive as { action: { cards: Array<{ body: { text: string } }> } }).action.cards;
-  assertEquals(cards.length, 3);
-  assert(cards[1].body.text.includes("Gs 125.000"));
+  // 07-10: lista vertical (foto + detalle + 3 botones apilados) en lugar del carrusel.
+  const lista = reg.interactivos[1].interactive as { type: string; header: { type: string }; body: { text: string }; action: { buttons: Array<{ reply: { title: string } }> } };
+  assertEquals(lista.type, "button");
+  assertEquals(lista.header.type, "image");
+  assertEquals(lista.action.buttons.map((b) => b.reply.title), ["1 unidad", "2 unidades", "3 unidades"]);
+  assert(lista.body.text.includes("*2 unidades* · Gs 158.000 (ahorrás Gs 33.000)"), lista.body.text);
   const sinOfertas = await ejecutarHerramienta("enviar_opciones", { handle: "raspador-prueba", texto: "Elegí" }, ctxPrueba(), deps);
   assert(sinOfertas.esError);
 });
@@ -235,4 +270,22 @@ Deno.test("registrar_perfil: valida y descarta valores fuera de la lista", async
   const r = await ejecutarHerramienta("registrar_perfil", { necesidad: "boca_seca", perfil: "inventado", nota: "es para el marido" }, ctxPrueba(), deps);
   assertEquals(r.resultado, { ok: true, perfil: { necesidad: "boca_seca", nota: "es para el marido" } });
   assertFalse(r.esError);
+});
+
+Deno.test("inputOrderCreate: la factura va como atributo del pedido (la lee la función de factura), sin factura no", () => {
+  const base = { nombre: "Ana Benítez", telefono: "+595981000000", ciudad: "CDE", direccion: "Calle 1", referencia: null, ubicacion: null, lineas: [], envio: 33000, total: 112000 };
+  const con = inputOrderCreate({ ...base, factura: "4012344-3 Ana Benítez" } as never, ctxPrueba()) as { order: { customAttributes: { key: string; value: string }[] } };
+  assert(con.order.customAttributes.some((a) => a.key === "factura" && a.value === "4012344-3 Ana Benítez"));
+  const sin = inputOrderCreate({ ...base, factura: null } as never, ctxPrueba()) as { order: { customAttributes: { key: string }[] } };
+  assertFalse(sin.order.customAttributes.some((a) => a.key === "factura"));
+});
+
+Deno.test("derivar_a_enrique por motivo del sistema: el cliente nunca ve el texto interno (turnos de IA)", async () => {
+  const { deps, reg } = depsPrueba();
+  await derivarAEnrique({ motivo: "tope_turnos", resumen: "La conversación llegó a 20 turnos de IA sin cerrarse." }, ctxPrueba(), deps);
+  const i = reg.interactivos[0].interactive as { action: { parameters: { url: string } } };
+  const prellenado = decodeURIComponent(i.action.parameters.url);
+  assert(prellenado.includes("Quiero hacer una consulta."), prellenado);
+  assertFalse(/IA|turnos/.test(prellenado));
+  assert(reg.avisos[0].texto.includes("20 turnos"));
 });

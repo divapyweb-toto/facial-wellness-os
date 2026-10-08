@@ -42,7 +42,8 @@ const deps: Deps = {
     const { error } = await db().from("wa_conversaciones").update({ estado: "humano", asignado_a: "enrique" }).eq("id", id);
     if (error) throw new Error(`tomar conversación: ${error.message}`);
   },
-  enviarTexto: (to, texto, op) => enviarTexto(to, texto, op),
+  // origen 'manual': wa-webhook no le devuelve a la IA un chat que Enrique atendió hace poco.
+  enviarTexto: (to, texto, op) => enviarTexto(to, texto, { ...op, origen: "manual" }),
 };
 
 Deno.serve(async (req) => {

@@ -1,7 +1,7 @@
 // _shared/vendedor/ritmo.ts · Dueño: G1 (vendedor)
 // Ritmo humano "sano": cuánto tarda en responder (tiempo de leer el mensaje del cliente + tiempo de escribir la
-// respuesta, con variación aleatoria, entre un mínimo y un máximo; de noche un poco más lento) y cómo partir un
-// mensaje largo en 2 burbujas como haría una persona. Los parámetros viven en config_wa.vendedor_ritmo
+// respuesta, con variación aleatoria, entre un mínimo y un máximo; de noche un poco más lento) y cómo partir la
+// respuesta en burbujas como haría una persona (cada línea un mensaje, máximo 3). Los parámetros viven en config_wa.vendedor_ritmo
 // (supabase/seed_vendedor.sql); acá solo están los valores por defecto si falta la clave.
 // Puro: el azar y la hora entran por parámetro.
 import { partesAsuncion } from "../horario.ts";
@@ -26,9 +26,9 @@ export type CfgRitmo = {
   noche_hasta_hora: number;
   factor_noche: number;
   max_noche_s: number;
-  /** Respuestas más largas que esto (caracteres) se parten en 2 burbujas. */
+  /** Una respuesta de una sola línea más larga que esto (caracteres) se parte en 2 burbujas. */
   partir_desde_caracteres: number;
-  /** Pausa antes de la segunda burbuja (se calcula con el tiempo de escribir y se acota a este rango). */
+  /** Pausa antes de cada burbuja después de la primera (tiempo de escribirla, acotado a este rango). */
   pausa_burbuja_min_s: number;
   pausa_burbuja_max_s: number;
   /** El indicador "escribiendo…" de WhatsApp dura ~25 s: se renueva cada tanto en demoras largas. */
@@ -86,22 +86,30 @@ export function calcularDemoraMs(p: { textoCliente: string; textoRespuesta: stri
   return Math.round(acotar(ms, r.min_s * 1000, max * 1000));
 }
 
-/** Pausa antes de la segunda burbuja: el tiempo de escribirla, ± variación, acotado. */
+/** Pausa antes de cada burbuja después de la primera: el tiempo de escribirla, ± variación, acotado. */
 export function pausaBurbujaMs(texto: string, ritmo: CfgRitmo, azar: number): number {
   const ms = variar(texto.length * ritmo.escribir_ms_por_caracter, ritmo.variacion, azar);
   return Math.round(acotar(ms, ritmo.pausa_burbuja_min_s * 1000, ritmo.pausa_burbuja_max_s * 1000));
 }
 
+/** Máximo de burbujas por respuesta (el prompt le pide al modelo lo mismo: una idea por línea, hasta 3). */
+export const MAX_BURBUJAS = 3;
+
 /**
- * Parte una respuesta en 1 o 2 burbujas como haría una persona: si es corta va entera; si es larga, la última
- * línea (normalmente la pregunta) va sola. Una sola línea larga se corta en la última oración. Nunca más de 2.
+ * Parte una respuesta en burbujas como haría una persona:
+ * - Si el modelo escribió saltos de línea, cada línea no vacía es una burbuja (corta o larga), hasta
+ *   `MAX_BURBUJAS`; si hay más líneas, las sobrantes se juntan en la última.
+ * - Una sola línea: si es corta va entera; si pasa `desde` caracteres, se corta en la última oración (2 burbujas).
  */
 export function partirEnBurbujas(texto: string, desde: number): string[] {
   const t = (texto ?? "").trim();
   if (!t) return [];
-  if (t.length <= desde) return [t];
   const lineas = t.split(/\n/).map((l) => l.trim()).filter(Boolean);
-  if (lineas.length >= 2) return [lineas.slice(0, -1).join("\n"), lineas[lineas.length - 1]];
+  if (lineas.length >= 2) {
+    if (lineas.length <= MAX_BURBUJAS) return lineas;
+    return [...lineas.slice(0, MAX_BURBUJAS - 1), lineas.slice(MAX_BURBUJAS - 1).join("\n")];
+  }
+  if (t.length <= desde) return [t];
   // Una línea: corte en el último fin de oración que deje dos partes con contenido.
   const cortes = [...t.matchAll(/[.!?…]\s+(?=[¿¡A-ZÁÉÍÓÚÑ0-9])/gu)].map((m) => m.index! + m[0].length);
   const corte = cortes.reverse().find((i) => i >= 15 && t.length - i >= 8);

@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
-import { fusionarPerfil, marcasDeRespuesta, mismoPerfil, normalizarPerfil, preguntaQueTeFrena, preguntaSiEsBot, textoPerfil } from "./perfil.ts";
+import { esRechazo, fusionarPerfil, marcasDeRespuesta, mismoPerfil, normalizarPerfil, preguntaQueTeFrena, preguntaSiEsBot, textoPerfil } from "./perfil.ts";
 
 Deno.test("perfil: normaliza lo que viene de la base o del modelo y descarta lo raro", () => {
   assertEquals(normalizarPerfil(null), {});
@@ -45,4 +45,35 @@ Deno.test("honestidad: detecta la pregunta directa '¿sos un bot / una persona?'
   for (const t of ["quiero hablar con una persona de verdad", "mi marido es una persona que ronca", "cuánto sale?", "es para mi esposo"]) {
     assertFalse(preguntaSiEsBot(t), t);
   }
+});
+
+Deno.test("perfil: producto y cantidad elegidos sobreviven aunque el historial corte", () => {
+  assertEquals(normalizarPerfil({ producto: "  tiras   nasales ", cantidad: 2 }), { producto: "tiras nasales", cantidad: 2 });
+  assertEquals(normalizarPerfil({ producto: "x".repeat(99), cantidad: 50 }).cantidad, undefined);
+  assertEquals(fusionarPerfil({ producto: "tiras nasales", cantidad: 1, ofrecido_x2: true }, { perfil: "precio" }).producto, "tiras nasales");
+  assertFalse(mismoPerfil({ producto: "tiras nasales" }, { producto: "parches bucales" }));
+  assert(textoPerfil({ producto: "tiras nasales", cantidad: 1 }).includes("PRODUCTO ELEGIDO: tiras nasales x1. No le vuelvas a preguntar"));
+  assert(textoPerfil({}).includes("anotalo con registrar_perfil (producto y cantidad)"));
+});
+
+Deno.test("rechazo: 'no me interesa' / 'no gracias' sí; 'por ahora no' o 'no quiero que ronque' no", () => {
+  for (const t of ["No gracias", "no, gracias!", "no me interesa", "No estoy interesada", "ya no quiero", "no quiero", "No, no lo necesito", "dejá de escribirme", "ya compré en otro lado"]) {
+    assert(esRechazo(t), t);
+  }
+  for (const t of ["por ahora no", "después te aviso", "no quiero que mi marido siga roncando, cuánto sale?", "no sé", "no", "cuánto sale?", ""]) {
+    assertFalse(esRechazo(t), t);
+  }
+});
+
+Deno.test("perfil: rechazo y marcas de seguimiento sobreviven; el modelo no puede tocar el contador", () => {
+  const base = normalizarPerfil({ rechazo: true, seguimientos: 2, ultimo_seguimiento_en: "2026-10-07T12:00:00.000Z", producto: "tiras" });
+  assertEquals(base, { rechazo: true, seguimientos: 2, ultimo_seguimiento_en: "2026-10-07T12:00:00.000Z", producto: "tiras" });
+  assertEquals(normalizarPerfil({ seguimientos: 0, ultimo_seguimiento_en: "x", rechazo: "si" }), {});
+  assertEquals(normalizarPerfil({ rechazo: true, seguimientos: 0, ultimo_seguimiento_en: "2026-10-07T12:00:00.000Z" }, "modelo"), { rechazo: true });
+  assertEquals(normalizarPerfil({ seguimientos: 5 }, "modelo"), {});
+  const f = fusionarPerfil(base, normalizarPerfil({ perfil: "precio" }, "modelo"));
+  assertEquals([f.rechazo, f.seguimientos, f.ultimo_seguimiento_en], [true, 2, "2026-10-07T12:00:00.000Z"]);
+  assertFalse(mismoPerfil({}, { rechazo: true }));
+  assertFalse(mismoPerfil({ seguimientos: 1 }, { seguimientos: 2 }));
+  assert(textoPerfil({ rechazo: true }).includes("EL CLIENTE YA DIJO QUE NO"));
 });

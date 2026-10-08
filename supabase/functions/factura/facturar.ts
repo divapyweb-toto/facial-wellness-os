@@ -31,7 +31,7 @@ export const CONFIG_OLA4_FACTURA_DEFECTO: ConfigOla4Factura = {
   ...CONFIG_FACTURA_DEFECTO,
   activo: false,
   numero_inicial: 1,
-  claves_datos_fiscales: ["factura", "ruc", "datos de factura", "ruc y razon social"],
+  claves_datos_fiscales: ["factura", "ruc", "datos de factura", "ruc y razon social", "razon social", "razón social"],
   maximo_intentos: 3,
   tolerancia_gs: 1,
   tag_pagado_qr: "PAGADO_QR",

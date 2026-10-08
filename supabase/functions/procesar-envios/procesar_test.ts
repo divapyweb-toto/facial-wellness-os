@@ -289,7 +289,7 @@ Deno.test("el catálogo coincide con los JSON de supabase/plantillas (botones, p
     assertEquals(def.vars.length, p._notas.variables.length, p.name);
     assertEquals(p.language, "es");
   }
-  assertEquals(Object.keys(PLANTILLAS).length, 11);
+  assertEquals(Object.keys(PLANTILLAS).length, 13); // + voltra_confirmacion_pedido_v2 y v3 (07-10)
 });
 
 Deno.test("armarParametros: objeto con claves numéricas", () => {

@@ -195,7 +195,14 @@ export const depsOrquestadorReales: DepsOrquestador = {
     }
     falla("conversación", r.error);
     const data = r.data as { id: string; estado: string; cliente_id: string; turnos_ia: number | null; perfil_vendedor?: unknown } | null;
-    return data ? { ...data, turnos_ia: Number(data.turnos_ia ?? 0) } : null;
+    if (!data) return null;
+    // 07-10: el tope de turnos cuenta solo las respuestas de las últimas 24 h. turnos_ia es acumulado de por
+    // vida y un cliente que volvía días después (o la prueba de Enrique) chocaba el tope y el chat se callaba.
+    const desde = new Date(Date.now() - 24 * 3_600_000).toISOString();
+    const c = await db().from("vendedor_turnos").select("id", { count: "exact", head: true })
+      .eq("conversacion_id", id).eq("accion", "respondido").gte("creado_en", desde);
+    const recientes = c.error ? Number(data.turnos_ia ?? 0) : (c.count ?? 0);
+    return { ...data, turnos_ia: recientes };
   },
 
   async guardarPerfil(conversacionId, perfil) {

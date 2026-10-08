@@ -98,12 +98,16 @@ export function tieneMarkdown(texto: string): string | null {
 const RE_SALUDO_VACIO =
   /^(?:hola+|holis|buenas|buen dia|buenos dias|buenas tardes|buenas noches|que tal|hey)(?:[ ,]+[a-zñ]+){0,2}(?: (?:como (?:estas|esta|andas|te va)|que tal))?$/u;
 
-/** La primera línea es solo un saludo ("¡Hola!", "Hola Ana 👋", "Buenas, ¿cómo estás?"): no engancha. */
+/**
+ * Toda la respuesta es solo un saludo ("¡Hola!", "Buenas, ¿cómo estás?"): no avanza la charla.
+ * Un saludo corto seguido de otra línea ("Buenas!\n¿Qué producto viste?") sí vale: así escribe Enrique
+ * (prueba en vivo 07-10: bloquear el saludo en la primera línea forzaba aperturas raras y derivaba un "Hola").
+ */
 export function primeraLineaSaludoVacio(texto: string): boolean {
-  const primera = (texto ?? "").trim().split(/\n/)[0] ?? "";
-  const t = normalizar(primera).replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, " ").replace(/[¡!¿?.,;:…]+/g, " ")
-    .replace(/\s+/g, " ").trim();
-  return !!t && RE_SALUDO_VACIO.test(t);
+  const lineas = (texto ?? "").trim().split(/\n/).map((l) =>
+    normalizar(l).replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, " ").replace(/[¡!¿?.,;:…]+/g, " ").replace(/\s+/g, " ").trim()
+  ).filter(Boolean);
+  return lineas.length > 0 && lineas.every((l) => RE_SALUDO_VACIO.test(l));
 }
 
 /** Frases que arrancan con "¡" (al inicio del texto o después de . ! ? o salto de línea). */

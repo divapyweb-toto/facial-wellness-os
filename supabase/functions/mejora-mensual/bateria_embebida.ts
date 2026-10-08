@@ -514,7 +514,8 @@ export const CASOS_BATERIA = [
         "consultar_catalogo"
       ],
       "debe_contener_alguno": [
-        "125.000"
+        "125.000",
+        "158.000"
       ]
     },
     "referencia": [
@@ -2446,11 +2447,13 @@ export const CASOS_BATERIA = [
         "rebaja"
       ],
       "debe_contener_alguno": [
-        "125.000"
+        "125.000",
+        "158.000"
       ],
       "max_una_vez": [
         "125.000",
-        "que te frena"
+        "que te frena",
+        "158.000"
       ]
     },
     "referencia": [
@@ -2907,6 +2910,229 @@ export const CASOS_BATERIA = [
     "referencia": [
       {
         "texto": "Jaja buenísimo. ¿Lo buscás para dormir mejor o para el aliento?",
+        "herramientas": []
+      }
+    ]
+  },
+  {
+    "id": "61_solo_hola",
+    "titulo": "Solo saluda: saludo corto y pregunta qué producto vio, sin adivinar el problema",
+    "cobertura": [
+      "saludo"
+    ],
+    "cliente": {
+      "nombre": "Diego Ortiz",
+      "telefono": "+595981000000",
+      "wa_username": null
+    },
+    "contexto": {
+      "catalogo": "base",
+      "pedidos": []
+    },
+    "mensajes": [
+      "Hola"
+    ],
+    "expectativas": {
+      "max_lineas": 2,
+      "una_pregunta": true,
+      "max_caracteres": 90,
+      "no_debe_contener": [
+        "ronc",
+        "pareja",
+        "en qué puedo ayudarte"
+      ],
+      "debe_derivar": false
+    },
+    "referencia": [
+      {
+        "texto": "Buenas!\n¿Qué producto viste?",
+        "herramientas": []
+      }
+    ]
+  },
+  {
+    "id": "62_que_productos_hay",
+    "titulo": "Pregunta qué hay: productos en una línea con precio, sin explicar cada uno",
+    "cobertura": [
+      "catalogo",
+      "precio_primero"
+    ],
+    "cliente": {
+      "nombre": "Diego Ortiz",
+      "telefono": "+595981000000",
+      "wa_username": null
+    },
+    "contexto": {
+      "catalogo": "base",
+      "pedidos": []
+    },
+    "mensajes": [
+      "Hola",
+      "Que productos hay"
+    ],
+    "expectativas": {
+      "max_lineas": 3,
+      "una_pregunta": true,
+      "max_caracteres": 260,
+      "debe_usar_herramienta": [
+        "consultar_catalogo"
+      ],
+      "debe_contener_alguno": [
+        "79.000",
+        "112.000"
+      ],
+      "no_debe_contener": [
+        "ronc"
+      ],
+      "debe_derivar": false
+    },
+    "referencia": [
+      {
+        "texto": "Buenas!\n¿Qué producto viste?",
+        "herramientas": []
+      },
+      {
+        "texto": "Tiras nasales, parches bucales y raspador a 79.000 cada uno, y el pack a 120.000.\nEl envío es 33.000 y pagás al recibir.\n¿Cuál te interesa?",
+        "herramientas": [
+          {
+            "nombre": "consultar_catalogo",
+            "input": {
+              "busqueda": ""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "63_deportista_no_entiende",
+    "titulo": "Deportista confundido: precio de entrada, explicación simple, sin repetir el ×2",
+    "cobertura": [
+      "precio_primero",
+      "confundido"
+    ],
+    "cliente": {
+      "nombre": "Diego Ortiz",
+      "telefono": "+595981000000",
+      "wa_username": null
+    },
+    "contexto": {
+      "catalogo": "base",
+      "pedidos": []
+    },
+    "mensajes": [
+      "soy deportista, no se que hay",
+      "como es",
+      "no entiendo muy bien",
+      "y cuanto cuesta?"
+    ],
+    "expectativas": {
+      "max_lineas": 3,
+      "una_pregunta": true,
+      "max_caracteres": 220,
+      "debe_usar_herramienta": [
+        "consultar_catalogo"
+      ],
+      "debe_contener_alguno": [
+        "112.000"
+      ],
+      "max_una_vez": [
+        "125.000"
+      ],
+      "debe_derivar": false
+    },
+    "referencia": [
+      {
+        "texto": "Para entrenar van bien las tiras nasales, abren la nariz para que entre más aire.\nSale 112.000 con envío, pagás al recibir.\n¿Te paso el video de cómo se usa?",
+        "herramientas": [
+          {
+            "nombre": "consultar_catalogo",
+            "input": {
+              "busqueda": "tiras"
+            }
+          }
+        ]
+      },
+      {
+        "texto": "Te pegás una arriba de la nariz antes de entrenar o dormir.\n¿Querés que te mande el video?",
+        "herramientas": []
+      },
+      {
+        "texto": "Es una tira que te abre la nariz para respirar mejor.\nNada más que eso.",
+        "herramientas": []
+      },
+      {
+        "texto": "112.000 con envío, pagás cuando te llega.\n¿Te armo 1 o aprovechás 2 por 158.000?",
+        "herramientas": [
+          {
+            "nombre": "consultar_catalogo",
+            "input": {
+              "busqueda": "tiras"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "64_mayorista_despues_quiere_1",
+    "titulo": "Pregunta mayorista, se deriva, y cuando dice 'quiero 1' el vendedor sigue y pide los datos",
+    "cobertura": [
+      "mayorista",
+      "derivacion_suave"
+    ],
+    "cliente": {
+      "nombre": "Diego Ortiz",
+      "telefono": "+595981000000",
+      "wa_username": null
+    },
+    "contexto": {
+      "catalogo": "base",
+      "pedidos": []
+    },
+    "mensajes": [
+      "cuanto las tiras nasales?",
+      "y si quiero 10 hay precio mayorista?",
+      "quiero 1 mejor"
+    ],
+    "expectativas": {
+      "max_lineas": 3,
+      "debe_usar_herramienta": [
+        "consultar_catalogo"
+      ],
+      "debe_contener_alguno": [
+        "nombre",
+        "dirección",
+        "direccion",
+        "ciudad"
+      ]
+    },
+    "referencia": [
+      {
+        "texto": "Las tiras salen 112.000 con envío, pagás al recibir.\n¿Te armo 1 o aprovechás 2 por 125.000?",
+        "herramientas": [
+          {
+            "nombre": "consultar_catalogo",
+            "input": {
+              "busqueda": "tiras"
+            }
+          }
+        ]
+      },
+      {
+        "texto": "Para 10 te paso con Enrique que ve precio especial.",
+        "herramientas": [
+          {
+            "nombre": "derivar_a_enrique",
+            "input": {
+              "motivo": "mayorista",
+              "resumen": "Quiere 10 tiras nasales, pregunta precio mayorista"
+            }
+          }
+        ]
+      },
+      {
+        "texto": "Dale!\nPasame nomás tu nombre, ciudad y dirección con referencia.",
         "herramientas": []
       }
     ]

@@ -155,3 +155,13 @@ Deno.test("marcarLeidoYEscribiendo: status read + typing_indicator", async () =>
   assertEquals(registros.length, 0);
   _configurarWA();
 });
+
+Deno.test("enviarTexto con origen 'manual': queda en contenido.origen del registro y NO viaja a Meta", async () => {
+  const { llamadas, registros } = simular();
+  await enviarTexto("+595981000000", "Hola, soy Enrique.", { clienteId: "cli-1", conversacionId: "conv-1", origen: "manual" });
+  assertEquals((registros[0].contenido as Record<string, unknown>).origen, "manual");
+  assertFalse("origen" in llamadas[0].body);
+  await enviarTexto("+595981000000", "Automático.");
+  assertFalse("origen" in (registros[1].contenido as Record<string, unknown>));
+  _configurarWA();
+});

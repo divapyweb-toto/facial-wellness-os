@@ -1,11 +1,27 @@
 // Ola 2 (G1): paso de mensajes de conversaciones en 'ia' al vendedor con IA. Datos inventados (repo público).
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { type Deps, type EntradaVendedor, type Pedido, procesarMensaje, textoParaVendedor, type Transcripcion } from "./procesar.ts";
+import {
+  type ActividadHumana,
+  type Deps,
+  type EntradaVendedor,
+  motivoParaNoRetomar,
+  type Pedido,
+  procesarMensaje,
+  textoParaVendedor,
+  type Transcripcion,
+} from "./procesar.ts";
 
 const TEL = "595981000000";
 const contacto = { profile: { name: "Ana Prueba" }, wa_id: TEL, user_id: "PY.1234567890123" };
 
-function mock(op: { estado?: string; pedidos?: Pedido[]; transcripcion?: Transcripcion | Error; conVendedor?: boolean } = {}) {
+function mock(op: {
+  estado?: string;
+  pedidos?: Pedido[];
+  transcripcion?: Transcripcion | Error;
+  conVendedor?: boolean;
+  actividad?: Partial<ActividadHumana> | Error;
+  cfgVendedor?: Record<string, unknown>;
+} = {}) {
   const st = {
     pasados: [] as EntradaVendedor[],
     contenidos: new Map<string, Record<string, unknown>>(),
@@ -13,16 +29,18 @@ function mock(op: { estado?: string; pedidos?: Pedido[]; transcripcion?: Transcr
     enviados: [] as string[],
     avisos: [] as string[],
     transcritos: [] as string[],
+    cambiosConv: [] as Record<string, unknown>[],
+    consultasActividad: [] as { conversacionId: string; clienteId: string; desdeISO: string }[],
   };
   const pedidos = op.pedidos ?? [];
   const deps: Deps = {
     ahora: () => new Date("2026-10-06T15:00:00Z"),
-    config: () => Promise.resolve(null),
+    config: (clave) => Promise.resolve(clave === "vendedor" ? op.cfgVendedor ?? null : null),
     guardarEventoCrudo: () => Promise.resolve(true),
     marcarEventoProcesado: () => Promise.resolve(),
     upsertCliente: () => Promise.resolve({ id: "cli-1", nombre: "Ana Prueba" }),
     conversacionActiva: () => Promise.resolve({ id: "conv-1", estado: op.estado ?? "ia" }),
-    actualizarConversacion: () => Promise.resolve(),
+    actualizarConversacion: (_id, c) => (c.estado && st.cambiosConv.push(c), Promise.resolve()),
     insertarMensajeEntrante: () => Promise.resolve(true),
     completarContenidoMensaje: (id, extra) => (st.contenidos.set(id, { ...(st.contenidos.get(id) ?? {}), ...extra }), Promise.resolve()),
     estadoMensaje: () => Promise.resolve(undefined),
@@ -52,6 +70,14 @@ function mock(op: { estado?: string; pedidos?: Pedido[]; transcripcion?: Transcr
       return op.transcripcion instanceof Error ? Promise.reject(op.transcripcion) : Promise.resolve(op.transcripcion ?? { ok: true, texto: "pasame na el precio", confianza: 0.9 });
     };
     deps.guardarTelefonoCliente = (c, t) => (st.telefonos.push([c, t]), Promise.resolve());
+  }
+  if (op.actividad !== undefined) {
+    const a = op.actividad;
+    deps.actividadHumana = (d) => {
+      st.consultasActividad.push(d);
+      if (a instanceof Error) return Promise.reject(a);
+      return Promise.resolve({ salidasManuales: 0, escribo: false, derivaciones: [], entrantes: [], ...a });
+    };
   }
   return { deps, st };
 }
@@ -133,4 +159,68 @@ Deno.test("vendedor: los botones propios del vendedor (vend_conf) pasan con id p
   const a = mock();
   await procesarMensaje({ ...base, type: "interactive", interactive: { type: "button_reply", button_reply: { id: "vend_conf:pc-1", title: "Confirmar" } } }, contacto, a.deps);
   assertEquals(a.st.pasados[0].texto, "[botón] Confirmar (vend_conf:pc-1)");
+});
+
+// ---------- chat en 'humano' que nadie atiende ----------
+
+const texto = (body: string) => ({ ...base, type: "text", text: { body } });
+
+Deno.test("retomar: chat en 'humano' sin señales de Enrique en 3 h → vuelve a 'ia' y el mensaje pasa al vendedor", async () => {
+  const a = mock({ estado: "humano", actividad: {} });
+  await procesarMensaje(texto("Quiero 1"), contacto, a.deps);
+  assertEquals(a.st.cambiosConv, [{ estado: "ia" }]);
+  assertEquals(a.st.pasados.map((p) => p.texto), ["Quiero 1"]);
+  assertEquals(a.st.consultasActividad, [{ conversacionId: "conv-1", clienteId: "cli-1", desdeISO: "2026-10-06T12:00:00.000Z" }]);
+});
+
+Deno.test("retomar: la derivación de venta (mayorista) no frena; la dura (reclamo) sí", async () => {
+  const venta = mock({ estado: "humano", actividad: { derivaciones: ["mayorista", "pide_persona"] } });
+  await procesarMensaje(texto("Mejor"), contacto, venta.deps);
+  assertEquals(venta.st.pasados.length, 1);
+  const dura = mock({ estado: "humano", actividad: { derivaciones: ["mayorista", "reclamo"] } });
+  await procesarMensaje(texto("hola?"), contacto, dura.deps);
+  assertEquals(dura.st.pasados.length, 0);
+  assertEquals(dura.st.cambiosConv, []);
+});
+
+Deno.test("retomar: NO si Enrique escribió desde la bandeja o tocó 'Le escribo yo' en las últimas N horas", async () => {
+  const manual = mock({ estado: "humano", actividad: { salidasManuales: 1 } });
+  await procesarMensaje(texto("dale"), contacto, manual.deps);
+  assertEquals(manual.st.pasados.length, 0);
+  assertEquals(manual.st.cambiosConv, []);
+  const escribo = mock({ estado: "humano", actividad: { escribo: true } });
+  await procesarMensaje(texto("dale"), contacto, escribo.deps);
+  assertEquals(escribo.st.pasados.length, 0);
+});
+
+Deno.test("retomar: NO si el cliente tocó un botón que pasa a humano (ayuda, corregir) en el período", async () => {
+  const ayuda = { ...base, id: "wamid.B1", type: "interactive", interactive: { type: "button_reply", button_reply: { id: "ayuda:5550001", title: "Necesito ayuda" } } };
+  const a = mock({ estado: "humano", actividad: { entrantes: [ayuda] } });
+  await procesarMensaje(texto("hola"), contacto, a.deps);
+  assertEquals(a.st.pasados.length, 0);
+  const corregir = { ...base, type: "button", button: { payload: "conf_corregir:5550001", text: "Corregir" } };
+  assertEquals(motivoParaNoRetomar({ salidasManuales: 0, escribo: false, derivaciones: [], entrantes: [corregir] }), "boton_a_humano");
+  const bien = { ...base, type: "interactive", interactive: { type: "button_reply", button_reply: { id: "seg_bien:5550001", title: "Todo bien" } } };
+  assertEquals(motivoParaNoRetomar({ salidasManuales: 0, escribo: false, derivaciones: [], entrantes: [bien] }), null);
+});
+
+Deno.test("retomar: horas desde config_wa.vendedor.retomar_humano_h; 0 = nunca; sin la dependencia o si falla, no retoma", async () => {
+  const cinco = mock({ estado: "humano", actividad: {}, cfgVendedor: { retomar_humano_h: 5 } });
+  await procesarMensaje(texto("hola"), contacto, cinco.deps);
+  assertEquals(cinco.st.consultasActividad[0].desdeISO, "2026-10-06T10:00:00.000Z");
+  const nunca = mock({ estado: "humano", actividad: {}, cfgVendedor: { retomar_humano_h: 0 } });
+  await procesarMensaje(texto("hola"), contacto, nunca.deps);
+  assertEquals(nunca.st.pasados.length, 0);
+  assertEquals(nunca.st.consultasActividad.length, 0);
+  const falla = mock({ estado: "humano", actividad: new Error("db caída") });
+  await procesarMensaje(texto("hola"), contacto, falla.deps);
+  assertEquals(falla.st.pasados.length, 0);
+  assertEquals(falla.st.cambiosConv, []);
+});
+
+Deno.test("retomar: solo mensajes de texto; un audio en 'humano' sigue sin pasar", async () => {
+  const a = mock({ estado: "humano", actividad: {} });
+  await procesarMensaje({ ...base, type: "audio", audio: { id: "MEDIA1" } }, contacto, a.deps);
+  assertEquals(a.st.pasados.length, 0);
+  assertEquals(a.st.consultasActividad.length, 0);
 });

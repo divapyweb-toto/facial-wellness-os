@@ -98,7 +98,7 @@ Deno.test("transcribirAudio: errores HTTP, JSON roto y red", async () => {
   assertEquals(e4.confianzaBaja, true);
 });
 
-Deno.test("transcribirAudio: simulado sin clave o con modoSimulado, determinista y sin fetch", async () => {
+Deno.test("transcribirAudio: con modoSimulado es determinista; sin clave FALLA (no inventa texto), y nunca llama a la red", async () => {
   let llamado = false;
   const nunca: typeof fetch = () => {
     llamado = true;
@@ -106,10 +106,14 @@ Deno.test("transcribirAudio: simulado sin clave o con modoSimulado, determinista
   };
   const a = await transcribirAudio(AUDIO, "audio/ogg", { apiKey: null, modoSimulado: false, fetch: nunca });
   const b = await transcribirAudio(AUDIO, "audio/ogg", { apiKey: "k", modoSimulado: true, fetch: nunca });
-  assertEquals(a.simulado, true);
-  assertEquals(a.ok, true);
-  assertEquals(a.texto, b.texto);
-  assertEquals(a.confianzaBaja, false);
+  const c = await transcribirAudio(AUDIO, "audio/ogg", { apiKey: "k", modoSimulado: true, fetch: nunca });
+  assertEquals(a.ok, false);
+  assertEquals(a.error, "sin_clave_transcripcion");
+  assertEquals(a.texto, "");
+  assertEquals(b.simulado, true);
+  assertEquals(b.ok, true);
+  assertEquals(b.texto, c.texto);
+  assertEquals(b.confianzaBaja, false);
   assertEquals(llamado, false);
 });
 

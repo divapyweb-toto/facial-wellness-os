@@ -109,8 +109,10 @@ Deno.test("filtro: markdown (negrita doble, viñetas, listas, títulos, enlaces)
 });
 
 Deno.test("filtro: saludo vacío como primera línea y '¡' al inicio de cada frase", () => {
-  assert(motivosDe("¡Hola!\n¿Buscás algo para dormir?").includes("saludo_vacio"));
-  assert(motivosDe("Hola Ana 👋\n¿Es para vos?").includes("saludo_vacio"));
+  assertFalse(motivosDe("¡Hola!\n¿Buscás algo para dormir?").includes("saludo_vacio"));
+  assertFalse(motivosDe("Buenas!\n¿Qué producto viste?").includes("saludo_vacio"));
+  assert(motivosDe("Hola Ana 👋").includes("saludo_vacio"));
+  assert(motivosDe("Holaa\nBuenas").includes("saludo_vacio"));
   assert(motivosDe("Buenas, ¿cómo estás?").includes("saludo_vacio"));
   assertFalse(motivosDe("Hola Ana, te llega en 2 a 5 días hábiles. ¿Es para vos?").includes("saludo_vacio"));
   assertFalse(motivosDe("Hola. Las tiras abren la nariz.").includes("saludo_vacio"));

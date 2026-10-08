@@ -6,7 +6,7 @@
 //   formatos: OGG y OPUS soportados → el audio de WhatsApp (audio/ogg; codecs=opus) va tal cual.
 //   respuesta: {language_code, language_probability, text, words[{text, type, logprob}], audio_duration_secs}
 //   precio: USD 0,22 por hora + keyterms USD 0,05 por hora (20 %).
-// Sin ELEVENLABS_API_KEY o con MODO_SIMULADO=1 usa un simulador determinista (simulado: true).
+// Con MODO_SIMULADO=1 usa un simulador determinista (simulado: true). Sin ELEVENLABS_API_KEY falla (no inventa texto).
 // Nota: el guaraní no está entre los idiomas de Scribe; el jopara se transcribe como español.
 // Costo: si config_wa.transcripcion.usd_por_hora existe, se usa como tarifa total por hora
 // (ya incluye keyterms); si no, TARIFAS_SCRIBE_POR_DEFECTO. Prioridad: opciones.tarifas > config > defecto.
@@ -184,7 +184,10 @@ export async function transcribirAudio(
 
   const apiKey = opciones.apiKey !== undefined ? opciones.apiKey : leerEnv("ELEVENLABS_API_KEY");
   const simulado = opciones.modoSimulado ?? leerEnv("MODO_SIMULADO") === "1";
-  if (simulado || !apiKey) return simular(bytes, umbral);
+  if (simulado) return simular(bytes, umbral);
+  // 07-10: sin clave en producción NO se simula (el simulador inventaba frases y el bot le respondía eso a un
+  // cliente real). Falla y el vendedor le pide que lo escriba.
+  if (!apiKey) return fallo("sin_clave_transcripcion");
 
   const palabras = limpiarPalabrasClave(opciones.palabrasClave ?? PALABRAS_CLAVE_POR_DEFECTO);
   const form = new FormData();

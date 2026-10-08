@@ -34,6 +34,11 @@ export type CfgVendedor = {
   flow_id?: string | null;
   flow_pantalla?: string | null;
   max_caracteres?: number;
+  /**
+   * Horas sin señales de Enrique (bandeja, "Le escribo yo", derivación dura) tras las cuales un chat en 'humano'
+   * vuelve a la IA cuando el cliente escribe (wa-webhook/procesar.ts → debeRetomarHumano). 0 = nunca.
+   */
+  retomar_humano_h?: number;
 };
 
 export const CFG_VENDEDOR_DEFAULT: CfgVendedor = {
@@ -55,6 +60,7 @@ export const CFG_VENDEDOR_DEFAULT: CfgVendedor = {
   flow_id: null,
   flow_pantalla: "PEDIDO",
   max_caracteres: 500,
+  retomar_humano_h: 3,
 };
 
 export type EnvioVendedor = { costo_gs: number; plazo: string; texto?: string };

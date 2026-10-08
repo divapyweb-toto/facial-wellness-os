@@ -133,7 +133,7 @@ Deno.test("turno: precio inventado dos veces → no se manda y deriva a Enrique"
   assertEquals(r.accion, "derivado");
   assertEquals(r.motivo, "filtro");
   assertFalse(e.reg.textos.some((t) => t.texto.includes("70.000")));
-  assertEquals(e.reg.humano, [CONV]);
+  assertEquals(e.reg.humano, []); // falla del sistema: el chat sigue en 'ia' y se reintenta si el cliente vuelve a escribir
   assertEquals(e.reg.interactivos[0].interactive.type, "cta_url");
   assert(e.reg.avisos[0].texto.includes("no pasó el filtro"));
   assert(e.turnos[0].derivado);
@@ -171,7 +171,7 @@ Deno.test("turno: API caída → deriva a Enrique", async () => {
   const r = await procesarTurno(ENTRADA, e.deps);
   assertEquals(r.accion, "derivado");
   assertEquals(r.motivo, "falla_ia");
-  assertEquals(e.reg.humano, [CONV]);
+  assertEquals(e.reg.humano, []); // API caída: no se calla el chat, el próximo mensaje se reintenta
   assert(e.reg.avisos[0].texto.includes("La IA no respondió"));
 });
 
@@ -292,6 +292,25 @@ Deno.test("derivación que no es de salud → sin frase del médico (con y sin t
   const b = cuerpo(con.reg.interactivos[0].interactive);
   assertEquals(b, "Dale, te paso con Enrique.\nTocá el botón y le llega tu caso ya escrito.");
   assertFalse(b.includes("médico"));
+});
+
+Deno.test("derivación por mayorista: el turno termina con el botón, el chat sigue en 'ia' y el próximo mensaje se atiende", async () => {
+  const e = escenario((_p, n) =>
+    n === 1
+      ? textoYHerramienta("Para 10 o más te paso con Enrique.", "derivar_a_enrique", { motivo: "mayorista", resumen: "Pregunta precio por 10" })
+      : texto("Dale, te armo 1. ¿A qué ciudad te lo mando?")
+  );
+  // La conversación refleja lo que haya hecho pasarAHumano.
+  e.deps.conversacion = (id) =>
+    Promise.resolve({ id, estado: e.reg.humano.length ? "humano" : "ia", cliente_id: CLIENTE, turnos_ia: 0, perfil_vendedor: {} });
+  const r1 = await procesarTurno({ ...ENTRADA, texto: "si quiero 10?" }, e.deps);
+  assertEquals(r1.accion, "derivado");
+  assertEquals(e.reg.humano, []);
+  assertEquals(e.reg.textos.length, 0, "en el turno de la derivación no hay texto extra");
+  assertEquals((e.turnos[0].herramientas[0].resultado as { sigue_ia: boolean }).sigue_ia, true);
+  const r2 = await procesarTurno({ ...ENTRADA, texto: "Quiero 1" }, e.deps);
+  assertEquals(r2.accion, "respondido");
+  assertEquals(e.reg.textos.map((t) => t.texto), ["Dale, te armo 1. ¿A qué ciudad te lo mando?"]);
 });
 
 Deno.test("derivación por salud con texto que el filtro rechaza → ese texto no se manda, la frase y el botón sí", async () => {
@@ -480,6 +499,16 @@ Deno.test("ritmo: respuesta larga → 2 burbujas (la pregunta sola), con 'escrib
   assert(e.leidos.length >= 3, "marca leído y 'escribiendo…' antes de cada burbuja");
 });
 
+Deno.test("ritmo: 3 líneas cortas del modelo → 3 burbujas, cada una con su pausa y 'escribiendo…'", async () => {
+  const t = "Dale Ana.\nLas tiras abren la nariz.\n¿Es para vos?";
+  const e = escenario(() => texto(t), { azar: 0.5 });
+  await procesarTurno({ ...ENTRADA, texto: "para qué sirven?" }, e.deps);
+  assertEquals(e.reg.textos.map((x) => x.texto), ["Dale Ana.", "Las tiras abren la nariz.", "¿Es para vos?"]);
+  assertEquals(e.esperas.length, 3, "demora inicial + una pausa antes de cada burbuja extra");
+  for (const p of e.esperas.slice(1)) assert(p >= 1500 && p <= 7000, String(e.esperas));
+  assertEquals(e.turnos[0].respuesta, t);
+});
+
 Deno.test("ritmo: espera 8 s de silencio; si el cliente escribe mientras 'escribe', no manda y responde el turno nuevo", async () => {
   const cfg = configPrueba({ vendedor: { espera_agrupar_s: 8, whatsapp_enrique: null } });
   const e = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { cfg, ultimos: ["wamid.IN1", "wamid.IN2"] });
@@ -502,4 +531,68 @@ Deno.test("ritmo: de noche (Asunción) tarda más que de día con el mismo mensa
   await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, noche.deps);
   assert(noche.esperas[0] > dia.esperas[0], `${noche.esperas[0]} vs ${dia.esperas[0]}`);
   assertEquals(noche.reg.textos.length, 1, "de noche responde igual");
+});
+
+Deno.test("rechazo: 'no me interesa' del cliente queda marcado en el perfil (seguimiento-chat no le vuelve a escribir)", async () => {
+  const e = escenario(() => texto("Dale, cualquier cosa me escribís por acá."));
+  const r = await procesarTurno({ ...ENTRADA, texto: "no me interesa, gracias" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(e.perfiles.at(-1)?.rechazo, true);
+});
+
+Deno.test("rechazo: registrar_perfil con rechazo:true lo marca; seguimientos del modelo se ignoran", async () => {
+  const e = escenario(() => ({
+    contenido: [
+      { type: "text", text: "Entiendo, cualquier cosa me escribís por acá." },
+      { type: "tool_use", id: "tu_rp", name: "registrar_perfil", input: { rechazo: true, seguimientos: 0 } },
+    ],
+    stop_reason: "tool_use",
+    uso: { ...USO_CERO, entrada: 100, salida: 20 },
+    costo_usd: 0.0002,
+    simulado: false,
+    modelo: "claude-haiku-4-5-20251001",
+  }), { perfil: { seguimientos: 1, ultimo_seguimiento_en: "2026-10-06T12:00:00.000Z" } });
+  await procesarTurno({ ...ENTRADA, texto: "mmm lo voy a pensar" }, e.deps);
+  const p = e.perfiles.at(-1)!;
+  assertEquals([p.rechazo, p.seguimientos, p.ultimo_seguimiento_en], [true, 1, "2026-10-06T12:00:00.000Z"]);
+});
+
+Deno.test("seguimiento: no marca leído, no espera para agrupar ni usa respuestas fijas; registra 'seguimiento'", async () => {
+  const e = escenario(() => texto("¿Pudiste ver lo de las tiras? Te las puedo preparar hoy."), {
+    cfg: configPrueba({ vendedor: { modelo: "claude-haiku-4-5-20251001", espera_agrupar_s: 8, whatsapp_enrique: "595990000000" } }),
+    historial: [
+      { direccion: "in", texto: "precio?", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" },
+      { direccion: "out", texto: "Salen Gs 79.000. ¿Te las preparo?", tipo: "text", contenido: {}, estado: "leido", wa_message_id: "wamid.OUT1" },
+    ],
+  });
+  const r = await procesarTurno({ conversacion_id: CONV, wa_message_id: "seguimiento:1:x", texto: "[seguimiento 1]", origen: "seguimiento" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(e.leidos, []);
+  assertFalse(e.esperas.includes(8000), "no espera los 8 s de agrupar");
+  assertEquals(e.turnos[0].accion, "seguimiento");
+  assertEquals(e.pedidos[0].mensajes.at(-1), { role: "user", content: "[seguimiento 1]" });
+});
+
+Deno.test("seguimiento: tope de turnos o de gasto → omitido sin derivar ni registrar", async () => {
+  const s = { conversacion_id: CONV, wa_message_id: "seguimiento:2:x", texto: "[seguimiento 2]", origen: "seguimiento" as const };
+  const a = escenario(() => texto("x"), { turnos: 99 });
+  assertEquals(await procesarTurno(s, a.deps), { accion: "omitido", motivo: "tope_turnos", costo_usd: 0 });
+  const b = escenario(() => texto("x"), { gasto: 999 });
+  assertEquals(await procesarTurno(s, b.deps), { accion: "omitido", motivo: "tope_gasto", costo_usd: 0 });
+  for (const e of [a, b]) {
+    assertEquals(e.turnos, []);
+    assertEquals(e.reg.textos, []);
+    assertEquals(e.reg.interactivos, []);
+    assertEquals(e.reg.humano, []);
+    assertEquals(e.pedidos, []);
+  }
+});
+
+Deno.test("seguimiento: error de envío no avisa por turno (avisa la corrida)", async () => {
+  const e = escenario(() => texto("¿Te las preparo hoy?"));
+  e.deps.herramientas = { ...e.deps.herramientas, enviarTexto: () => Promise.resolve({ ok: false, error: "131047" }) };
+  const r = await procesarTurno({ conversacion_id: CONV, wa_message_id: "seguimiento:1:x", texto: "[seguimiento 1]", origen: "seguimiento" }, e.deps);
+  assertEquals(r.accion, "error_envio");
+  assertEquals(e.reg.avisos, []);
+  assertEquals(e.turnos[0].accion, "seguimiento_error_envio:131047");
 });

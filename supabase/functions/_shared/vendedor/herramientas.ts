@@ -8,13 +8,13 @@
 //     un sí claro del cliente en el mensaje actual o el botón Confirmar; se usan los datos del resumen guardado,
 //     no lo que el modelo reescriba.
 //   - Todo texto que el modelo pone dentro de un interactivo pasa por el mismo filtro que su respuesta.
+import { normalizarRuc } from "../facturacion.ts";
 import type { Herramienta } from "../claude.ts";
 import {
   botonesSiNo,
-  carruselOpciones,
+  listaVertical,
   flowFormulario,
   pedirContacto,
-  type Tarjeta,
   ubicacionRequest,
 } from "../wa_interactivos.ts";
 import { enlaceWaMe, formatoChatNecesitaEnrique, formatoPedidoNuevo } from "../telegram_formato.ts";
@@ -74,6 +74,19 @@ const MOTIVOS = [
 ] as const;
 export type MotivoDerivacion = typeof MOTIVOS[number] | "falla_ia" | "tope_gasto" | "tope_turnos" | "filtro";
 
+/**
+ * Derivación "suave" (motivos de venta): el cliente recibe el botón y Enrique el aviso, pero el chat sigue en
+ * 'ia'. El botón lleva al WhatsApp personal de Enrique, así que en el número de la tienda nadie atendería un
+ * chat en 'humano': si el cliente vuelve a escribir acá (p. ej. "quiero 1" después de preguntar por 10), el
+ * vendedor sigue. Reclamo, salud, devolución, enojo, otro y los motivos del sistema pasan a 'humano'.
+ */
+export const MOTIVOS_VENTA: ReadonlySet<string> = new Set([
+  "mayorista", "pide_persona", "sin_avance", "falla_herramienta", "direccion_dudosa", "audio_confuso",
+  // Fallas del propio sistema: si el cliente vuelve a escribir, se reintenta en vez de dejarlo sin respuesta.
+  "filtro", "falla_ia",
+]);
+export const esDerivacionDeVenta = (motivo: string): boolean => MOTIVOS_VENTA.has(motivo);
+
 const MOTIVO_LEGIBLE: Record<string, string> = {
   salud: "Consulta de salud",
   reclamo: "Reclamo (paso 3 o más)",
@@ -91,6 +104,19 @@ const MOTIVO_LEGIBLE: Record<string, string> = {
   tope_turnos: "La conversación pasó el límite de turnos de IA",
   filtro: "La respuesta de la IA no pasó el filtro dos veces",
 };
+
+// 07-10: lo que el cliente le manda a Enrique con el botón va en voz del cliente. El resumen interno
+// (y los motivos del sistema: tope de turnos, filtro, IA caída) va solo al aviso de Telegram.
+const MENSAJE_CLIENTE: Record<string, string> = {
+  mayorista: "Quiero consultar precio por cantidad.",
+  salud: "Tengo una consulta antes de comprar.",
+  reclamo: "Tengo un problema con mi pedido.",
+  devolucion: "Tengo un problema con mi pedido.",
+  enojo: "Tengo un problema con mi pedido.",
+  pide_persona: "Quiero hablar con vos.",
+  direccion_dudosa: "Quiero coordinar la dirección de entrega.",
+};
+const MENSAJE_CLIENTE_DEFAULT = "Quiero hacer una consulta.";
 
 export const HERRAMIENTAS: Herramienta[] = [
   {
@@ -128,7 +154,10 @@ export const HERRAMIENTAS: Herramienta[] = [
             required: ["handle", "cantidad"],
           },
         },
-        factura: { type: "string", description: "RUC y razón social si pide factura (opcional)" },
+        factura: {
+          type: "string",
+          description: "Solo si el cliente QUIERE factura: RUC con guion y razón social, ej. \"4012344-3 Carlos Benítez\". Si no quiere o no contestó, no lo mandes.",
+        },
       },
       required: ["confirmar"],
     },
@@ -136,7 +165,7 @@ export const HERRAMIENTAS: Herramienta[] = [
   {
     name: "derivar_a_enrique",
     description:
-      "Pasa la conversación a Enrique: el cliente recibe un botón para hablarle con el resumen ya escrito y Enrique recibe el mismo resumen por Telegram. El texto que escribas junto con esta llamada va arriba del botón (en salud: \"Eso te conviene consultarlo con tu médico.\"). Después no escribas nada más.",
+      "Pasa el caso a Enrique: el cliente recibe un botón para hablarle con el resumen ya escrito y Enrique recibe el mismo resumen por Telegram. El texto que escribas junto con esta llamada va arriba del botón (en salud: \"Eso te conviene consultarlo con tu médico.\"). En este turno no escribas nada más. Si devuelve sigue_ia=true (motivos de venta: mayorista, pide_persona, sin_avance, falla_herramienta, direccion_dudosa, audio_confuso) y el cliente vuelve a escribir, seguí atendiéndolo normal.",
     input_schema: {
       type: "object",
       properties: {
@@ -182,13 +211,19 @@ export const HERRAMIENTAS: Herramienta[] = [
   {
     name: "registrar_perfil",
     description:
-      "Anota qué le pasa al cliente y cómo encararlo, para no volver a preguntarlo en los próximos mensajes. Llamala en la MISMA respuesta en la que le escribís al cliente (no devuelve nada que tengas que esperar). Solo cuando detectás algo nuevo.",
+      "Anota qué le pasa al cliente, cómo encararlo y qué producto y cantidad eligió, para no volver a preguntarlo en los próximos mensajes. Llamala en la MISMA respuesta en la que le escribís al cliente (no devuelve nada que tengas que esperar). Solo cuando detectás algo nuevo.",
     input_schema: {
       type: "object",
       properties: {
         necesidad: { type: "string", enum: [...NECESIDADES] },
         perfil: { type: "string", enum: [...PERFILES] },
         nota: { type: "string", description: "Dato corto útil para después, sin datos personales sensibles (máx. 120 caracteres)." },
+        producto: { type: "string", description: "Producto que eligió o por el que pregunta, como figura en el catálogo (ej. \"tiras nasales\")." },
+        cantidad: { type: "integer", minimum: 1, maximum: 10, description: "Cantidad que eligió." },
+        rechazo: {
+          type: "boolean",
+          description: "true solo si el cliente dijo claramente que no quiere comprar (\"no me interesa\", \"no gracias\"). No le vamos a volver a escribir por nuestra cuenta.",
+        },
       },
     },
   },
@@ -445,6 +480,8 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
       customAttributes: [
         { key: "origen", value: "whatsapp" },
         { key: "conversacion_id", value: ctx.conversacionId },
+        // La función de factura lee los atributos del pedido (claves_datos_fiscales), no la nota (07-10).
+        ...(d.factura ? [{ key: "factura", value: d.factura }] : []),
       ],
     },
     options: { inventoryBehaviour: "DECREMENT_OBEYING_POLICY", sendReceipt: false, sendFulfillmentReceipt: false },
@@ -534,6 +571,13 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
       avisos.push(`No se programó la confirmación: ${e instanceof Error ? e.message : e}`);
     }
   } else avisos.push("Shopify no devolvió el pedido completo: la confirmación la programa el webhook o la conciliación.");
+  if (d.factura) {
+    const m = /([\d.]{3,12}\s*-\s*\d)/.exec(d.factura);
+    const ruc = m ? normalizarRuc(m[1]) : null;
+    avisos.push(ruc
+      ? `🧾 Pide factura electrónica: ${d.factura}. Se factura recién cuando esté cobrado (entregado o transferencia verificada), nunca antes. Si la automática está apagada, emitila a mano en ese momento.`
+      : `🧾 Pide factura pero el RUC no es válido ("${d.factura}"). Pedile el dato correcto antes de facturar.`);
+  }
   if (typeof r.total === "number" && Math.round(r.total) !== Math.round(d.total)) {
     avisos.push(`Ojo: Shopify calculó Gs ${gs(r.total)} y el chat le dijo Gs ${gs(d.total)}.`);
   }
@@ -597,7 +641,8 @@ export async function derivarAEnrique(
   ctx: CtxTurno,
   deps: DepsHerramientas,
 ): Promise<ResultadoHerramienta> {
-  await deps.pasarAHumano(ctx.conversacionId);
+  const sigueIa = esDerivacionDeVenta(input.motivo);
+  if (!sigueIa) await deps.pasarAHumano(ctx.conversacionId);
   let orderId: number | null = Number.isFinite(Number(input.shopify_order_id)) && input.shopify_order_id ? Number(input.shopify_order_id) : null;
   let nombrePedido: string | null = null;
   try {
@@ -615,7 +660,7 @@ export async function derivarAEnrique(
   const numero = ctx.cfg.vendedor.whatsapp_enrique;
   const mensajeEnrique = texto(t, "mensaje_a_enrique", TEXTOS_DEFAULT.mensaje_a_enrique, {
     nombre: nombre || "cliente de Voltra",
-    resumen: `${resumen}${nombrePedido ? ` (pedido ${nombrePedido})` : ""}`,
+    resumen: `${MENSAJE_CLIENTE[input.motivo] ?? MENSAJE_CLIENTE_DEFAULT}${nombrePedido ? ` (pedido ${nombrePedido})` : ""}`,
   });
   const url = numero ? enlaceWaMe(numero, mensajeEnrique) : null;
   const textoCliente = textoClienteDerivacion({ motivo: input.motivo, textoModelo: input.texto_previo, conBoton: !!url, textos: t });
@@ -631,12 +676,25 @@ export async function derivarAEnrique(
     cliente: { nombre: ctx.nombreCliente, telefono: ctx.telefono, wa_user_id: ctx.waUserId },
     ofrecerReponer: input.motivo === "reclamo",
   });
-  const extra: string[] = ["El chat pasó a humano: el vendedor IA ya no responde."];
+  const extra: string[] = [
+    sigueIa ? "El vendedor sigue atendiendo si el cliente vuelve a escribir." : "El chat pasó a humano: el vendedor IA ya no responde.",
+  ];
   if (!rCliente.ok) extra.push(`No pude avisarle al cliente: ${rCliente.error}`);
   if (!numero) extra.push("Falta config_wa.vendedor.whatsapp_enrique: el cliente no recibió el botón para escribirte.");
   const rTg = await deps.avisar([aviso.texto, ...extra.map((e) => `• ${escapar(e)}`)].join("\n"), aviso.botones);
   return {
-    resultado: { ok: true, derivado: true, aviso_cliente: rCliente.ok, aviso_telegram: rTg.ok, texto_cliente: textoCliente, nota: "No escribas nada más." },
+    resultado: {
+      ok: true,
+      derivado: true,
+      sigue_ia: sigueIa,
+      aviso_cliente: rCliente.ok,
+      aviso_telegram: rTg.ok,
+      texto_cliente: textoCliente,
+      nota: sigueIa
+        ? "Ya le mandé el botón. Si el cliente sigue escribiendo, seguí atendiéndolo normal (por ejemplo, si al final quiere 1 a 3 unidades, vendéselas)."
+        : "No escribas nada más.",
+    },
+    // Termina solo este turno (el botón ya salió); en 'ia' el próximo mensaje del cliente se atiende normal.
     terminal: true,
     derivado: true,
   };
@@ -703,17 +761,19 @@ async function enviarOpciones(input: Record<string, unknown>, ctx: CtxTurno, dep
   if (!prod) return error(`producto_desconocido:${input.handle}`);
   if (!prod.imagen?.startsWith("https://")) return error("producto_sin_foto: ofrecé las cantidades por texto.");
   if (!prod.ofertas.length) return error("sin_ofertas_por_cantidad: ofrecé solo ×1.");
-  const tarjetas: Tarjeta[] = [
+  const envio = ctx.cfg.envio.costo_gs;
+  const opciones = [
     { cantidad: 1, precio: prod.precio },
     ...prod.ofertas.map((o) => ({ cantidad: o.cantidad, precio: o.precio })),
-  ].slice(0, 10).map((o) => ({
-    imagenUrl: prod.imagen!,
-    titulo: `×${o.cantidad} · Gs ${gs(o.precio)}`,
-    cuerpo: `+ envío Gs ${gs(ctx.cfg.envio.costo_gs)} = Gs ${gs(o.precio + ctx.cfg.envio.costo_gs)}`,
-    botonId: `vend_cant:${prod.handle}:${o.cantidad}`,
-    botonTexto: `Quiero ×${o.cantidad}`,
-  }));
-  return await enviarInteractivoRevisado(input, ctx, deps, (t) => carruselOpciones(t, tarjetas));
+  ].slice(0, 3);
+  const nombre = (n: number) => n === 1 ? "1 unidad" : `${n} unidades`;
+  const lineas = opciones.map((o) => {
+    const ahorro = o.cantidad * prod.precio - o.precio;
+    return `*${nombre(o.cantidad)}* · Gs ${gs(o.precio + envio)}${ahorro > 0 ? ` (ahorrás Gs ${gs(ahorro)})` : ""}`;
+  });
+  const botones = opciones.map((o) => ({ id: `vend_cant:${prod.handle}:${o.cantidad}`, titulo: nombre(o.cantidad) }));
+  return await enviarInteractivoRevisado(input, ctx, deps, (t) =>
+    listaVertical(`${t}\n\n${lineas.join("\n")}\nEnvío incluido, pagás al recibir.`, prod.imagen!, botones));
 }
 
 /** Datos del turno que no vienen en el input de la herramienta (los pone el orquestador). */
@@ -737,7 +797,7 @@ export const EJECUTORES: Record<string, Ejecutor> = {
     }, c, d),
   enviar_media: enviarMediaHerr,
   // El orquestador guarda el perfil en la conversación (wa_conversaciones.perfil_vendedor); acá solo se valida.
-  registrar_perfil: (i) => Promise.resolve({ resultado: { ok: true, perfil: normalizarPerfil(i) } }),
+  registrar_perfil: (i) => Promise.resolve({ resultado: { ok: true, perfil: normalizarPerfil(i, "modelo") } }),
   pedir_ubicacion: (i, c, d) => enviarInteractivoRevisado(i, c, d, (t) => ubicacionRequest(t)),
   enviar_formulario: (i, c, d) => {
     const flowId = c.cfg.vendedor.flow_id;

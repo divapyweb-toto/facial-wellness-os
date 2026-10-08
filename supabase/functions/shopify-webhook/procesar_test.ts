@@ -197,12 +197,12 @@ Deno.test("pedido Releasit nuevo → cliente con teléfono normalizado, pedido y
 
   assertEquals([...f.envios.keys()].sort(), ["canc:5550001", "conf:5550001", "rec:5550001", "ret:5550001"]);
   const t = (k: string) => new Date(f.envios.get(k)!.enviar_desde).getTime() - AHORA.getTime();
-  assertEquals(t("conf:5550001"), 2 * 60_000);
+  assertEquals(t("conf:5550001"), 0); // sin espera: sale al instante (07-10)
   assertEquals(t("rec:5550001"), 4 * 3_600_000);
   assertEquals(t("ret:5550001"), 48 * 3_600_000);
   assertEquals(t("canc:5550001"), 72 * 3_600_000);
   const conf = f.envios.get("conf:5550001")!;
-  assertEquals(conf.plantilla, "voltra_confirmacion_pedido");
+  assertEquals(conf.plantilla, "voltra_confirmacion_pedido_v3");
   assertEquals(conf.categoria, "utilidad");
   assertEquals(conf.variables.nombre, "Ana Prueba");
   assertEquals(conf.variables.productos, "1 Tiras nasales");
@@ -345,4 +345,24 @@ Deno.test("con el normalizarTelefonoPY real de _shared/telefono.ts", async () =>
   await procesarPedido(normalizarDesdeWebhook("orders/create", pedidoRest()), f.deps);
   assertEquals(f.pedidos.get(5550001)!.telefono, "+595981000000");
   assertEquals(f.envios.size, 4);
+});
+
+Deno.test("confirmación al instante: dispara procesar-envios, salvo el pedido de prueba del despliegue (PRUEBA_E2E)", async () => {
+  for (const [tags, esperado] of [["releasit_cod_form", 1], ["PRUEBA_E2E", 0]] as const) {
+    let disparos = 0;
+    const deps: Deps = {
+      normalizarTelefono: (x) => x ? "+595981000000" : null,
+      ahora: () => new Date("2026-10-07T12:00:00Z"),
+      leerConfigConfirmacion: () => Promise.resolve({ recordatorio_h: 1, retener_h: 48, cancelar_h: 72 }),
+      buscarPedido: () => Promise.resolve(null),
+      upsertCliente: () => Promise.resolve("cli-1"),
+      upsertPedido: () => Promise.resolve(),
+      programarEnvios: () => Promise.resolve(),
+      cancelarEnviosPendientes: () => Promise.resolve(),
+      dispararEnvios: () => (disparos++, Promise.resolve()),
+    };
+    const ped = normalizarDesdeWebhook("orders/create", { id: 5550002, name: "#1003", phone: "0981000000", tags, line_items: [{ title: "T", quantity: 1, price: "79000" }], total_price: "112000", shipping_address: { first_name: "Ana", address1: "Calle 1", city: "CDE", phone: "0981000000" } });
+    await procesarPedido(ped, deps);
+    assertEquals(disparos, esperado, tags);
+  }
 });

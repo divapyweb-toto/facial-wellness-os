@@ -108,11 +108,28 @@ const CONF = [
   { prefijo: "conf_cancelar", titulo: "Cancelar" },
 ];
 const AYUDA = [{ prefijo: "ayuda", titulo: "Necesito ayuda" }];
+// 07-10: confirmación con el formato de Facial Wellness (supabase/plantillas/voltra_confirmacion_pedido_v2.json).
+const CONF_V2 = [
+  { prefijo: "conf_si", titulo: "Confirmar pedido" },
+  { prefijo: "conf_cancelar", titulo: "Cancelar pedido" },
+  { prefijo: "ayuda", titulo: "Necesito ayuda" },
+];
 
 export const PLANTILLAS: Record<string, DefPlantilla> = {
   voltra_confirmacion_pedido: {
     vars: ["nombre", "productos", "total", "direccion", "ciudad"],
     botones: CONF,
+    soloPendiente: true,
+  },
+  voltra_confirmacion_pedido_v2: {
+    vars: ["pedido", "nombre", "productos", "total", "direccion", "ciudad"],
+    botones: CONF_V2,
+    soloPendiente: true,
+  },
+  // 07-10: igual que la v2 con las etiquetas en negrita.
+  voltra_confirmacion_pedido_v3: {
+    vars: ["pedido", "nombre", "productos", "total", "direccion", "ciudad"],
+    botones: CONF_V2,
     soloPendiente: true,
   },
   voltra_recordatorio_confirmacion: { vars: ["nombre", "productos"], botones: CONF, soloPendiente: true },

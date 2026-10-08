@@ -52,6 +52,21 @@ export function depsReales(): Deps {
       if (error) throw new Error(`programarEnvios: ${error.message}`);
     },
 
+    async dispararEnvios() {
+      // Misma puerta que el cron: JWT del proyecto (anon) para la entrada + llave propia x-cron-secret.
+      const url = Deno.env.get("SUPABASE_URL"), anon = Deno.env.get("SUPABASE_ANON_KEY"), secreto = Deno.env.get("CRON_SECRET");
+      if (!url || !anon || !secreto) return;
+      const p = fetch(`${url}/functions/v1/procesar-envios`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${anon}`, "x-cron-secret": secreto },
+        body: JSON.stringify({ origen: "shopify-webhook" }),
+      }).then(() => {}).catch((e) => console.warn("dispararEnvios:", e instanceof Error ? e.message : e));
+      // Sin frenar la respuesta a Shopify: la función sigue viva hasta que termine el envío.
+      const rt = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
+      if (rt) rt.waitUntil(p);
+      else await p;
+    },
+
     async cancelarEnviosPendientes(id) {
       const { error } = await sb.from("envios_programados")
         .update({ estado: "cancelado" }).eq("shopify_order_id", id).eq("estado", "pendiente");

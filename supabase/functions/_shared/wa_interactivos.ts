@@ -128,6 +128,28 @@ export function carruselOpciones(texto: string, tarjetas: Tarjeta[]): Interactiv
 }
 
 /** Botón nativo "compartir mi número" (para clientes que llegaron con nombre de usuario, sin teléfono). */
+/**
+ * Opciones en vertical (07-10): foto arriba, el detalle en el texto y hasta 3 botones apilados.
+ * Reemplaza al carrusel, que en el celular cortaba las tarjetas y obligaba a deslizar.
+ */
+export function listaVertical(texto: string, imagenUrl: string, opciones: { id: string; titulo: string }[]): Interactivo {
+  exigirTexto(texto, LIMITE_CUERPO, "cuerpo");
+  if (!/^https:\/\/\S+$/.test(imagenUrl)) throw new ErrorInteractivo("imagen_url_invalida");
+  if (!Array.isArray(opciones) || opciones.length < 1 || opciones.length > 3) throw new ErrorInteractivo("opciones_1_a_3");
+  const ids = new Set<string>();
+  for (const o of opciones) {
+    exigirBoton(o.id, o.titulo);
+    if (ids.has(o.id)) throw new ErrorInteractivo(`id_boton_repetido:${o.id}`);
+    ids.add(o.id);
+  }
+  return {
+    type: "button",
+    header: { type: "image", image: { link: imagenUrl } },
+    body: { text: texto },
+    action: { buttons: opciones.map((o) => ({ type: "reply", reply: { id: o.id, title: o.titulo } })) },
+  };
+}
+
 export function pedirContacto(texto: string): Interactivo {
   exigirTexto(texto, LIMITE_CUERPO, "cuerpo");
   return { type: "request_contact_info", body: { text: texto }, action: { name: "request_contact_info" } };

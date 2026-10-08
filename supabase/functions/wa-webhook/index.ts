@@ -10,9 +10,10 @@ import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { descargarMedia, enviarBotones, enviarTexto, marcarLeidoYEscribiendo, verificarFirmaMeta } from "../_shared/wa.ts";
 import { transcribirAudio } from "../_shared/transcripcion.ts";
+import { resolverLinkMapas } from "../_shared/link_mapas.ts";
 import { registrarBaja } from "../recompra/baja.ts";
 import { ofrecerCobroQR } from "../pago-qr-webhook/io.ts";
-import { type Deps, manejarRequest, type Pedido } from "./procesar.ts";
+import { type Deps, manejarRequest, type MensajeMeta, type Pedido } from "./procesar.ts";
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
 
@@ -20,6 +21,14 @@ const FUENTE = "whatsapp" as const;
 
 function falla(contexto: string, error: { message: string } | null): void {
   if (error) throw new Error(`${contexto}: ${error.message}`);
+}
+
+/** Descarga un archivo de Meta (la URL vence a los 5 min) y lo sube a Storage wa-media. */
+async function copiarAStorage(mediaId: string, ruta: string): Promise<{ ok: boolean; ruta?: string; mime?: string; error?: string }> {
+  const m = await descargarMedia(mediaId);
+  if (!m.ok) return { ok: false, error: m.error };
+  const { error } = await db().storage.from("wa-media").upload(ruta, m.bytes, { contentType: m.mime, upsert: true });
+  return error ? { ok: false, error: error.message } : { ok: true, ruta, mime: m.mime };
 }
 
 const configCache = new Map<string, { valor: unknown; hasta: number }>();
@@ -118,12 +127,7 @@ export const depsReales: Deps = {
     falla("actualizar mensaje", error);
   },
 
-  async copiarAudio(mediaId, ruta) {
-    const m = await descargarMedia(mediaId);
-    if (!m.ok) return { ok: false, error: m.error };
-    const { error } = await db().storage.from("wa-media").upload(ruta, m.bytes, { contentType: m.mime, upsert: true });
-    return error ? { ok: false, error: error.message } : { ok: true, ruta, mime: m.mime };
-  },
+  copiarAudio: (mediaId, ruta) => copiarAStorage(mediaId, ruta),
 
   async buscarPedido(orderId) {
     const { data, error } = await db().from("shopify_pedidos").select("*").eq("shopify_order_id", orderId).maybeSingle();
@@ -203,6 +207,8 @@ export const depsReales: Deps = {
     return Promise.resolve();
   },
 
+  resolverLinkMapas: (url) => resolverLinkMapas(url),
+
   async transcribirAudio(ruta, mime) {
     const { data, error } = await db().storage.from("wa-media").download(ruta);
     if (error || !data) return { ok: false, texto: "", error: `descarga: ${error?.message ?? "sin datos"}` };
@@ -233,6 +239,49 @@ export const depsReales: Deps = {
     const r = await ofrecerCobroQR(orderId);
     return r.ok ? { ok: true, texto: r.texto } : { ok: false, motivo: r.motivo };
   },
+
+  // Señales de que Enrique atiende el chat (wa-webhook/procesar.ts → motivoParaNoRetomar).
+  async actividadHumana({ conversacionId, clienteId, desdeISO }) {
+    const [manuales, turnos, entrantes, escribos] = await Promise.all([
+      db().from("wa_mensajes").select("id", { count: "exact", head: true }).eq("conversacion_id", conversacionId)
+        .eq("direccion", "out").eq("contenido->>origen", "manual").gte("creado_en", desdeISO),
+      db().from("vendedor_turnos").select("herramientas").eq("conversacion_id", conversacionId).eq("derivado", true)
+        .gte("creado_en", desdeISO).limit(50),
+      db().from("wa_mensajes").select("contenido").eq("conversacion_id", conversacionId).eq("direccion", "in")
+        .in("tipo", ["button", "interactive"]).gte("creado_en", desdeISO).limit(50),
+      db().from("eventos_crudos").select("id_externo").eq("fuente", "telegram").like("id_externo", "accion:escribo:%")
+        .gte("recibido_en", desdeISO).limit(100),
+    ]);
+    falla("salidas manuales", manuales.error);
+    falla("turnos derivados", turnos.error);
+    falla("entrantes con botón", entrantes.error);
+    falla("botones escribo", escribos.error);
+    const derivaciones: string[] = [];
+    for (const t of turnos.data ?? []) {
+      for (const h of (Array.isArray(t.herramientas) ? t.herramientas : []) as Array<{ nombre?: string; input?: { motivo?: unknown } }>) {
+        if (String(h?.nombre ?? "").startsWith("derivar_a_enrique")) derivaciones.push(String(h?.input?.motivo ?? "otro"));
+      }
+    }
+    // "Le escribo yo" va por pedido (accion:escribo:<shopify_order_id>): cuenta si el pedido es de este cliente.
+    const ids = (escribos.data ?? []).map((e) => Number(String(e.id_externo).split(":")[2])).filter((n) => Number.isFinite(n) && n > 0);
+    let escribo = false;
+    if (ids.length) {
+      const { count, error } = await db().from("shopify_pedidos").select("shopify_order_id", { count: "exact", head: true })
+        .in("shopify_order_id", ids).eq("cliente_id", clienteId);
+      falla("pedidos de los botones escribo", error);
+      escribo = (count ?? 0) > 0;
+    }
+    return {
+      salidasManuales: manuales.count ?? 0,
+      escribo,
+      derivaciones,
+      entrantes: (entrantes.data ?? []).map((f) => f.contenido as MensajeMeta).filter(Boolean),
+    };
+  },
+
+  // Pago anticipado: comprobante (imagen o PDF) a Storage wa-media/comprobantes/...
+  copiarMedia: (mediaId, ruta) => copiarAStorage(mediaId, ruta),
+  copiarMediaChat: (mediaId, ruta) => copiarAStorage(mediaId, ruta),
 
   async clienteDeMensaje(waMessageId) {
     const { data, error } = await db().from("wa_mensajes").select("cliente_id").eq("wa_message_id", waMessageId).maybeSingle();

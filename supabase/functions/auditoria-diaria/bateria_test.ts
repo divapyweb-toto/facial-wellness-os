@@ -16,9 +16,9 @@ type Caso = any;
 
 const { comun, casos } = cargarCasos();
 
-Deno.test("hay 60 casos bien armados y con id único", () => {
-  assertEquals(casos.length, 60);
-  assertEquals(new Set(casos.map((c: Caso) => c.id)).size, 60);
+Deno.test("hay 64 casos bien armados y con id único", () => {
+  assertEquals(casos.length, 64);
+  assertEquals(new Set(casos.map((c: Caso) => c.id)).size, 64);
   for (const c of casos) assertEquals(validarCaso(c), [], c.id);
 });
 
@@ -34,6 +34,8 @@ Deno.test("los casos cubren todo lo pedido en el plan", () => {
       // 06-10: perfiles, cierre, ritmo y honestidad
       "desconfiado", "regateo_duro", "lo_voy_a_pensar", "monosilabos", "rafaga", "apurado", "regalo", "farmacia",
       "sos_persona", "sticker",
+      // 07-10: prueba en vivo (saludo, catálogo, precio primero, confundido, derivación suave)
+      "saludo", "catalogo", "precio_primero", "confundido", "derivacion_suave",
     ]
   ) assert(cob.has(k), `falta cobertura: ${k}`);
   assert(casos.filter((c: Caso) => c.cobertura.includes("injection")).length >= 5, "injection en varios estilos");
@@ -47,11 +49,11 @@ Deno.test("los casos no traen datos reales (repo público)", () => {
   for (const t of telefonos) assert(t.endsWith("981000000"), `teléfono que no es de prueba: ${t}`);
 });
 
-Deno.test("runner simulado: las 60 respuestas de referencia aprueban (sin red)", async () => {
+Deno.test("runner simulado: las 64 respuestas de referencia aprueban (sin red)", async () => {
   const { filas, resumen } = await correrBateria({ casos, comun, ejecutor: ejecutarReferencia });
   const malas = filas.filter((f: Caso) => !f.evaluacion.aprobado).map((f: Caso) => `${f.caso.id}: ${JSON.stringify(f.evaluacion.fallas)}`);
   assertEquals(malas, []);
-  assertEquals(resumen.aprobados, 60);
+  assertEquals(resumen.aprobados, 64);
   assertEquals(resumen.palabras_prohibidas, 0);
   assertEquals(resumen.muletillas_bot, 0);
   assertEquals(resumen.markdown, 0);

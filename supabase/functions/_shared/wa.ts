@@ -14,7 +14,16 @@ export const GRAPH_URL = "https://graph.facebook.com/v25.0";
 export type ResultadoEnvio = { ok: boolean; wa_message_id?: string; error?: string };
 export type Boton = { id: string; titulo: string };
 /** Opcional: si quien llama ya conoce cliente y conversación, se evita buscarlos. */
-export type OpcionesEnvio = { clienteId?: string | null; conversacionId?: string | null };
+export type OpcionesEnvio = {
+  clienteId?: string | null;
+  conversacionId?: string | null;
+  /**
+   * Quién mandó el mensaje, si no es automático: 'manual' = Enrique desde la bandeja (wa-enviar-manual).
+   * Queda en wa_mensajes.contenido.origen (no viaja a Meta); wa-webhook lo usa para no retomar un chat que
+   * Enrique está atendiendo.
+   */
+  origen?: "manual";
+};
 
 export type FilaMensajeSaliente = {
   conversacion_id: string | null;
@@ -195,7 +204,7 @@ async function enviar(
       wa_message_id: resultado.wa_message_id ?? null,
       tipo,
       texto: textoVisible,
-      contenido: payload,
+      contenido: opciones?.origen ? { ...payload, origen: opciones.origen } : payload,
       estado: resultado.ok ? "enviado" : "fallido",
       error: errorDetalle,
     });

@@ -13,8 +13,14 @@ export const TOPICOS = ["orders/create", "orders/updated", "draft_orders/create"
  * Nombres de plantilla por tipo de envío programado. La función procesar-envios (subagente F)
  * decide qué hace con cada una; "ret" y "canc" son acciones (retener / cancelar) además de aviso.
  */
+/** "enrique ramirez" → "Enrique Ramirez" (Releasit guarda lo que tipea el cliente). */
+export function conMayuscula(n: string | null): string | null {
+  if (!n) return n;
+  return n.trim().split(/\s+/).map((p) => p ? p[0].toLocaleUpperCase("es") + p.slice(1) : p).join(" ");
+}
+
 export const PLANTILLAS = {
-  conf: "voltra_confirmacion_pedido", // supabase/plantillas/voltra_confirmacion_pedido.json (F)
+  conf: "voltra_confirmacion_pedido_v3", // 07-10: formato Facial Wellness con etiquetas en negrita, aprobada por Meta
   rec: "voltra_recordatorio_confirmacion", // supabase/plantillas/voltra_recordatorio_confirmacion.json (F)
   ret: "accion:retener", // no es plantilla: tag RETENIDO_SIN_RESPUESTA + estado 'retenido'
   canc: "accion:cancelar", // no es plantilla: orderCancel + estado 'cancelado_sin_respuesta'
@@ -29,7 +35,7 @@ const TAG_A_ESTADO: Array<[string, string]> = [
 ];
 
 export type ConfigConfirmacion = {
-  confirmar_min?: number; // demora de la confirmación; si no está en config_wa se usan 2 min
+  confirmar_min?: number; // demora de la confirmación; si no está en config_wa sale al instante (07-10: Enrique la quiere lo más rápido posible)
   recordatorio_h: number;
   retener_h: number;
   cancelar_h: number;
@@ -90,6 +96,8 @@ export interface Deps {
   programarEnvios(filas: FilaEnvio[]): Promise<void>;
   /** pasa a 'cancelado' los envíos 'pendiente' del pedido. */
   cancelarEnviosPendientes(id: number): Promise<void>;
+  /** Dispara procesar-envios ya, sin esperar al cron del minuto (opcional; si falla, el cron lo manda igual). */
+  dispararEnvios?(): Promise<void>;
 }
 
 export type ResultadoProceso = {
@@ -251,8 +259,8 @@ export function armarEnvios(
   const base = ahora.getTime();
   const min = 60_000, h = 3_600_000;
   const variables = {
-    // Orden de la plantilla voltra_confirmacion_pedido: nombre, productos, total_texto, direccion, ciudad.
-    nombre: ped.nombreCliente,
+    // Plantilla voltra_confirmacion_pedido_v2: pedido, nombre, productos, total_texto, direccion, ciudad.
+    nombre: conMayuscula(ped.nombreCliente),
     productos: ped.productos,
     total: ped.total,
     total_texto: formatoGs(ped.total),
@@ -272,7 +280,7 @@ export function armarEnvios(
     clave_unica: `${tipo}:${ped.shopifyOrderId}`,
   });
   return [
-    fila("conf", (cfg.confirmar_min ?? 2) * min),
+    fila("conf", (cfg.confirmar_min ?? 0) * min),
     fila("rec", cfg.recordatorio_h * h),
     fila("ret", cfg.retener_h * h),
     fila("canc", cfg.cancelar_h * h),
@@ -351,6 +359,12 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   const cfg = await deps.leerConfigConfirmacion();
   const envios = armarEnvios(ped, clienteId, telefono, cfg, deps.ahora());
   await deps.programarEnvios(envios); // on conflict do nothing → idempotente
+  // Confirmación lo más rápido posible: no espera al cron. El pedido de prueba del despliegue (PRUEBA_E2E)
+  // no dispara nada: esa prueba cancela sus envíos antes de que salgan.
+  const esPruebaE2E = ped.tags.some((t) => t.toUpperCase() === "PRUEBA_E2E");
+  if (deps.dispararEnvios && !esPruebaE2E && (cfg.confirmar_min ?? 0) <= 0) {
+    await deps.dispararEnvios().catch((e) => console.warn("dispararEnvios:", e instanceof Error ? e.message : e));
+  }
   return {
     shopifyOrderId: ped.shopifyOrderId,
     accion: existente ? "actualizado" : "programado",
