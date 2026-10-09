@@ -5,6 +5,7 @@ import { armarGastosAutomaticos, cargarGastosAutomaticos, diaLocal } from '../..
 import { cargarTasas } from '../../lib/tipoCambio'
 import { getGastosAutomaticosConfig } from '../../lib/config'
 import { getTienda } from '../../lib/tienda'
+import CostoPorAnuncio from './CostoPorAnuncio'
 import { fetchAll } from '../../lib/fetchAll'
 import { agruparSerie } from '../../lib/periodos'
 import { FileBarChart2, Download, Loader2, ArrowUpRight, ArrowDownRight, Minus, AlertTriangle, MapPin, Truck, Calendar, Repeat, FileText } from 'lucide-react'
@@ -1286,6 +1287,11 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               </div>
             </div>
           </div>
+
+          {/* Costo por anuncio (Voltra): gasto real de Meta por anuncio ÷ pedidos y entregados */}
+          {getTienda() !== 'fw' && datos?.periodo && (
+            <CostoPorAnuncio inicio={datos.periodo.inicio} fin={datos.periodo.fin} />
+          )}
 
           {/* Campañas ads */}
           {datos.campanas.length > 0 && (
