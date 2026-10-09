@@ -47,6 +47,8 @@ export interface Pedido {
   tags: string[];
   total: number | null;
   raw: unknown;
+  /** shopify_pedidos.estado_envio (lo escribe importar-courier). */
+  estado_envio?: string | null;
 }
 
 export interface Contexto {
@@ -135,6 +137,9 @@ export const PLANTILLAS: Record<string, DefPlantilla> = {
   voltra_recordatorio_confirmacion: { vars: ["nombre", "productos"], botones: CONF, soloPendiente: true },
   voltra_pedido_despachado: { vars: ["nombre", "productos", "courier", "plazo", "total"], botones: AYUDA },
   voltra_entrega_hoy: { vars: ["nombre", "total"], botones: AYUDA },
+  // 09-10: recordatorio de entrega del interior y pedido de dirección escrita (pedidos con solo el pin).
+  voltra_entrega_proxima: { vars: ["nombre", "total"], botones: AYUDA },
+  voltra_completar_direccion: { vars: ["nombre", "pedido"], botones: [] },
   voltra_no_entregado: {
     vars: ["nombre", "productos"],
     botones: [
@@ -163,8 +168,27 @@ export const esPlantillaMarketing = (nombre: string) => nombre.startsWith("voltr
 export const AVISOS_ENVIO_CON_HORARIO = new Set([
   "voltra_pedido_despachado",
   "voltra_entrega_hoy",
+  "voltra_entrega_proxima",
   "voltra_no_entregado",
 ]);
+
+/** 09-10: avisos previos a la entrega ("ya salió", "hoy te llega", "ya está por llegar"). */
+export const AVISOS_PREVIOS_ENTREGA = new Set([
+  "voltra_pedido_despachado",
+  "voltra_entrega_hoy",
+  "voltra_entrega_proxima",
+]);
+
+/** 09-10: estados de _shared/tipos.ts EstadoEnvio en los que el paquete ya no está en camino al cliente. */
+export const ESTADOS_ENVIO_TERMINALES = new Set([
+  "ENTREGADO",
+  "NO_ENTREGADO_RESCATABLE",
+  "NO_ENTREGADO",
+  "CANCELADO",
+  "RENDIDO",
+]);
+
+export const envioTerminal = (estado: string | null | undefined) => !!estado && ESTADOS_ENVIO_TERMINALES.has(estado);
 
 /** Acepta el nombre con o sin prefijo "voltra_". */
 export function nombrePlantilla(p: string): string {
@@ -341,6 +365,10 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
       return { accion: "cancelar", motivo: `pedido_${estadoPedido}` };
     }
   }
+  // 09-10: no avisar "hoy te llega" si el courier ya lo entregó o lo devolvió.
+  if (AVISOS_PREVIOS_ENTREGA.has(nombre) && envioTerminal(ctx.pedido?.estado_envio)) {
+    return { accion: "cancelar", motivo: `envio_${ctx.pedido?.estado_envio}` };
+  }
 
   const to = ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? null;
   if (!to) return { accion: "fallar", motivo: "cliente_sin_telefono" };
@@ -413,6 +441,8 @@ export interface CambioEnvio {
   intentos?: number;
   enviar_desde?: string;
   ultimo_error?: string | null;
+  /** Requiere la columna envios_programados.wa_message_id (index.ts la omite si no existe). */
+  wa_message_id?: string;
 }
 
 /** Meta: el usuario dejó de recibir mensajes de marketing de la empresa. */
@@ -470,6 +500,8 @@ export interface Deps {
     orderId: number,
     variables: { nombre: string | null; productos: string | null },
   ): Promise<{ plantilla: string; idioma: string; componentes: unknown[] } | null>;
+  /** Pausa entre reintentos del update tras un envío OK (los tests la pasan instantánea). */
+  esperar?(ms: number): Promise<void>;
 }
 
 export type Opciones = { clienteId?: string | null; conversacionId?: string | null };
@@ -583,9 +615,37 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
         : await d.enviarTexto(dec.to, dec.texto, op);
       if (!res.ok) return aplicarError(e, res.error ?? "error_desconocido", d, r, pedidoTxt);
       r.enviados++;
-      return d.actualizarEnvio(e.id, { estado: "enviado", intentos: (e.intentos ?? 0) + 1, ultimo_error: null });
+      return marcarEnviado(e, res.wa_message_id, d, pedidoTxt);
     }
   }
+}
+
+/** Esperas antes de cada reintento del update (2 reintentos). */
+export const ESPERAS_MARCAR_MS = [500, 2000];
+
+/**
+ * 09-10: el WhatsApp ya salió. Si el update falla se reintenta; si sigue fallando NO se tira la excepción
+ * (el catch del lote lo reprogramaría y el cliente recibiría el mensaje dos veces): se avisa por Telegram.
+ */
+async function marcarEnviado(e: Envio, waId: string | undefined, d: Deps, pedidoTxt: string): Promise<void> {
+  const cambio: CambioEnvio = { estado: "enviado", intentos: (e.intentos ?? 0) + 1, ultimo_error: null };
+  if (waId) cambio.wa_message_id = waId;
+  const esperar = d.esperar ?? ((ms: number) => new Promise<void>((ok) => setTimeout(ok, ms)));
+  let ultimo: unknown = null;
+  for (let i = 0; i <= ESPERAS_MARCAR_MS.length; i++) {
+    if (i > 0) await esperar(ESPERAS_MARCAR_MS[i - 1]);
+    try {
+      return await d.actualizarEnvio(e.id, cambio);
+    } catch (err) {
+      ultimo = err;
+    }
+  }
+  const msg = ultimo instanceof Error ? ultimo.message : String(ultimo);
+  console.error(`marcarEnviado ${e.id} (wa ${waId ?? "?"}):`, msg);
+  await d.avisar(
+    `WhatsApp enviado pero no se pudo marcar en la base: ${d.escapar(nombrePlantilla(e.plantilla))} · pedido ${pedidoTxt} ` +
+      `(envío ${d.escapar(e.id)}). Puede repetirse en 10 min.\n${d.escapar(msg)}`,
+  ).catch(() => {});
 }
 
 async function aplicarError(e: Envio, error: string, d: Deps, r: Resumen, pedidoTxt: string): Promise<void> {

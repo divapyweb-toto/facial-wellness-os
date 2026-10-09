@@ -232,3 +232,29 @@ Deno.test('correrSeguimiento: sin guías no consulta ni avisa', async () => {
   assertEquals(r.consultadas, 0)
   assertEquals(log.lotes.length + log.avisos.length, 0)
 })
+
+Deno.test('correrSeguimiento: guarda de a tandas; si se corta, lo ya consultado queda guardado y lo cortado sin marcar', async () => {
+  const ns = ['1', '2', '3', '4', '5', '6', '7']
+  const gs = ns.map((n) => guia({ nro_guia_pap: `L-VT-900${n}`, n_referencia: `VT-900${n}`, envio_id: `9000${n}` }))
+  const paginas = Object.fromEntries(ns.map((n) => [`9000${n}`, EN_CAMINO.replaceAll('VT-9002', `VT-900${n}`)]))
+  const pedidos = ns.map((n) => pedido({ shopify_order_id: 5000 + Number(n), nombre: `#900${n}` }))
+
+  // Corrida completa: 2 tandas (5 + 2), resumen del pipeline sumado.
+  const a = depsPrueba(gs, paginas, pedidos)
+  const r = await correrSeguimiento(a.deps)
+  assertEquals(a.log.lotes.map((l) => l.length), [5, 2])
+  assertEquals(r.pipeline?.procesadas, 7)
+  assertEquals(r.entregas_actualizadas, 7)
+  assertEquals(a.log.marcadas.length, 7)
+
+  // Corrida cortada antes de la guía 7 (simula el límite de tiempo de la Edge Function).
+  const b = depsPrueba(gs, paginas, pedidos.map((p) => ({ ...p, estado_envio: null })))
+  let esperas = 0
+  b.deps.esperar = () => (++esperas === 6 ? Promise.reject(new Error('corte')) : Promise.resolve())
+  let cortada = false
+  await correrSeguimiento(b.deps).catch(() => (cortada = true))
+  assert(cortada)
+  assertEquals(b.log.lotes.map((l) => l.length), [5])
+  assertEquals(b.estados.length, 5)
+  assertEquals(b.log.marcadas.map((m) => m.guia), gs.slice(0, 5).map((g) => g.nro_guia_pap))
+})

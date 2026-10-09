@@ -118,3 +118,36 @@ export async function procesarPagoQR(
 export function textoOfertaQR(cfg: ConfigOla4QR, url: string): string {
   return cfg.texto_oferta.replace("{url}", url);
 }
+
+export interface DepsEventoQR {
+  guardarEvento(): Promise<boolean>;
+  procesar(): Promise<unknown>;
+  marcarProcesado(error: string | null): Promise<void>;
+  /** Borra la marca del evento para que el reintento del proveedor no quede como "repetido". */
+  borrarEvento(): Promise<void>;
+  avisar(textoHtml: string): Promise<unknown>;
+  escapar(s: unknown): string;
+}
+
+/**
+ * Orquesta un webhook ya verificado. Sin bandera: ola4.qr solo frena CREAR cobros (ofrecerCobroQR);
+ * el pago de un cobro existente se registra siempre (si no, se cobra dos veces).
+ * Si procesar falla: se borra la marca, aviso a Telegram y status 500 → el proveedor reintenta.
+ */
+export async function atenderEventoQR(
+  d: DepsEventoQR,
+  idEvento: string,
+): Promise<{ status: number; cuerpo: Record<string, unknown> }> {
+  const nuevo = await d.guardarEvento();
+  if (!nuevo) return { status: 200, cuerpo: { ok: true, repetido: true } };
+  try {
+    await d.procesar();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await d.borrarEvento().catch(() => d.marcarProcesado(msg).catch(() => {}));
+    await Promise.resolve(d.avisar(`<b>Pago QR: falló el registro</b> · evento ${d.escapar(idEvento)}\n${d.escapar(msg)}\nSe pidió reintento al proveedor.`)).catch(() => {});
+    return { status: 500, cuerpo: { ok: false, error: "procesar" } };
+  }
+  await d.marcarProcesado(null).catch(() => {});
+  return { status: 200, cuerpo: { ok: true } };
+}

@@ -64,6 +64,8 @@ export interface Deps {
   upsert(filas: FilaGasto[]): Promise<number>;
   /** Opcional: gasto por anuncio. Si falta (o falla), el gasto por conjunto se guarda igual. */
   upsertAnuncios?(filas: FilaAnuncio[]): Promise<number>;
+  /** GET act_<id>?fields=currency. Si no es PYG, esa cuenta se frena (el gasto se guarda como guaraníes). */
+  monedaCuenta?(cuentaId: string): Promise<string>;
 }
 
 // ---------- fechas (Paraguay, UTC-3 fijo) ----------
@@ -220,6 +222,8 @@ export interface ResumenCuenta {
   filas: number;
   gasto_total: number;
   sin_mapear: { fecha: string; adset: string; campana: string; gasto: number }[];
+  /** Cuenta frenada sin escribir nada (p. ej. moneda distinta de PYG). */
+  error?: string;
 }
 
 export async function traerInsights(deps: Deps, url: string, maxPaginas = 50): Promise<FilaInsight[]> {
@@ -247,7 +251,20 @@ export async function sincronizar(
 
   // Primero se lee TODO de Meta (todas las cuentas); recién después se escribe.
   const lotes: { cuenta: Cuenta; filas: FilaGasto[]; resumen: ResumenCuenta }[] = [];
+  const frenadas = new Set<string>();
   for (const cuenta of cuentas) {
+    if (deps.monedaCuenta) {
+      const moneda = (await deps.monedaCuenta(cuenta.id)).toUpperCase();
+      if (moneda !== "PYG") {
+        // No se convierte: se frena esta cuenta y se avisa (el resto sigue).
+        frenadas.add(cuenta.id);
+        lotes.push({ cuenta, filas: [], resumen: {
+          cuenta: cuenta.id, tienda: cuenta.tienda, desde: r.since, hasta: r.until, filas: 0, gasto_total: 0, sin_mapear: [],
+          error: `la cuenta act_${cuenta.id} está en ${moneda || "moneda desconocida"}, no en PYG: no se guardó su gasto`,
+        } });
+        continue;
+      }
+    }
     const crudas = await traerInsights(deps, urlInsights(cuenta.id, r));
     const existentes = await deps.leerExistentes(cuenta.tienda, r.since, r.until);
     const previo = new Map(existentes.map((e) => [`${e.fecha}|${e.adset_id}`, e.producto_id]));
@@ -281,6 +298,7 @@ export async function sincronizar(
   const anuncios: { cuenta: string; filas: number; error?: string }[] = [];
   if (deps.upsertAnuncios) {
     for (const cuenta of cuentas) {
+      if (frenadas.has(cuenta.id)) continue;
       try {
         const crudas = await traerInsights(deps, urlInsightsAnuncios(cuenta.id, r)) as unknown as Array<Record<string, unknown>>;
         const filas = filasAnuncio(crudas, cuenta.tienda);

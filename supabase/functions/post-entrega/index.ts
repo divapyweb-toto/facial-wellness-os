@@ -58,6 +58,9 @@ function repoSupabase(pe: CfgPE): Repo {
     async pendientes(limite, maxIntentos) {
       const { data, error } = await s.from('post_entrega_pendientes').select('*')
         .lt('post_entrega_intentos', maxIntentos)
+        // Rotación: primero los nunca procesados y los procesados hace más tiempo (con CAPI simulada
+        // los viejos siguen en la vista y, ordenando solo por fecha de entrega, tapaban a los nuevos).
+        .order('post_entrega_procesado_en', { ascending: true, nullsFirst: true })
         .order('entregado_registrado_en', { ascending: true }).limit(limite)
       if (error) throw new Error(`post_entrega_pendientes: ${error.message}`)
       return (data ?? []) as PedidoPendiente[]

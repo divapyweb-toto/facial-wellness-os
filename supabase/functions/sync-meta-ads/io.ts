@@ -9,6 +9,7 @@ import {
   CUENTAS_DEFECTO,
   type Deps,
   DIAS_DEFECTO,
+  GRAPH_BASE,
   type Existente,
   type FilaGasto,
   type PaginaInsights,
@@ -47,6 +48,10 @@ export function depsReales(token = tokenMeta()): Deps {
       const cuerpo = await r.json().catch(() => ({}));
       if (!r.ok || (cuerpo as { error?: unknown }).error) throw new Error(errorMeta(r.status, cuerpo));
       return cuerpo as PaginaInsights;
+    },
+    async monedaCuenta(cuentaId) {
+      const c = await this.traerPagina(`${GRAPH_BASE}/act_${cuentaId}?fields=currency`) as unknown as { currency?: string };
+      return String(c.currency ?? "");
     },
     async leerProductos() {
       const { data, error } = await s.from("productos")

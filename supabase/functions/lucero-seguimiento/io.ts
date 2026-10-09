@@ -67,6 +67,13 @@ export function repoCourier(): Repo {
       if (error) throw new Error(`buscar por teléfono: ${error.message}`)
       return (data ?? []).map(aPedido)
     },
+    async avisoPendiente(orderId, estado) {
+      // Estado guardado pero cuyo aviso no salió (falla anterior): se reintenta en vez de contarlo como repetido.
+      const { data, error } = await s.from('pedido_estados').select('notificado')
+        .eq('shopify_order_id', orderId).eq('estado', estado).maybeSingle()
+      if (error) throw new Error(`pedido_estados: ${error.message}`)
+      return data?.notificado === false
+    },
     async insertarEstado(orderId, estado, fuente) {
       const { data, error } = await s.from('pedido_estados')
         .upsert({ shopify_order_id: orderId, estado, fuente }, { onConflict: 'shopify_order_id,estado', ignoreDuplicates: true })

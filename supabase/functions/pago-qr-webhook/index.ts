@@ -1,13 +1,13 @@
 // pago-qr-webhook · recibe las notificaciones de pago del proveedor QR (AdamsPay / arnipay / simulador).
 // Necesita verify_jwt = false en supabase/config.toml (el proveedor no manda JWT de Supabase): la
 // autenticación es la firma del proveedor, que se verifica ANTES de leer o guardar nada.
-// Orden: firma → bandera → guardar crudo (descarta repetidos) → 200 rápido → procesar con waitUntil.
+// Orden: firma → guardar crudo (descarta repetidos) → procesar → 200 (o 500 + marca borrada si falla).
 
 import { verificarWebhookQR } from "../_shared/pago_qr.ts";
-import { procesarPagoQR } from "./procesar.ts";
-import { depsReales, guardarEventoQR, leerConfigQR, marcarEventoProcesado } from "./io.ts";
-
-declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
+import { avisar } from "../_shared/telegram.ts";
+import { escaparHtml } from "../_shared/telegram_formato.ts";
+import { atenderEventoQR, procesarPagoQR } from "./procesar.ts";
+import { borrarEventoQR, depsReales, guardarEventoQR, leerConfigQR, marcarEventoProcesado } from "./io.ts";
 
 /** Rutas con las que el proveedor pudo firmar (Supabase puede quitar el prefijo /functions/v1). */
 export function urisCandidatas(url: string): string[] {
@@ -28,15 +28,18 @@ Deno.serve(async (req) => {
   }
   try {
     const cfg = await leerConfigQR();
-    if (!cfg.activo) return Response.json({ ok: true, ignorado: "bandera_apagada" });
-    const nuevo = await guardarEventoQR(v.proveedor, v.evento.id_evento, JSON.parse(raw));
-    if (!nuevo) return Response.json({ ok: true, repetido: true });
-    const tarea = procesarPagoQR(v.proveedor, v.evento, cfg, depsReales)
-      .then(() => marcarEventoProcesado(v.proveedor!, v.evento!.id_evento, null))
-      .catch((e) => marcarEventoProcesado(v.proveedor!, v.evento!.id_evento, e instanceof Error ? e.message : String(e)));
-    if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(tarea);
-    else await tarea;
-    return Response.json({ ok: true });
+    // La bandera NO se mira acá: solo frena crear cobros nuevos. Se procesa en línea (no waitUntil)
+    // para poder devolver 500 si falla y que el proveedor reintente.
+    const prov = v.proveedor, ev = v.evento;
+    const r = await atenderEventoQR({
+      guardarEvento: () => guardarEventoQR(prov, ev.id_evento, JSON.parse(raw)),
+      procesar: () => procesarPagoQR(prov, ev, cfg, depsReales),
+      marcarProcesado: (err) => marcarEventoProcesado(prov, ev.id_evento, err),
+      borrarEvento: () => borrarEventoQR(prov, ev.id_evento),
+      avisar: (t) => avisar(t),
+      escapar: escaparHtml,
+    }, ev.id_evento);
+    return Response.json(r.cuerpo, { status: r.status });
   } catch (e) {
     console.error("pago-qr-webhook:", e);
     return Response.json({ ok: false, error: "interno" }, { status: 500 });

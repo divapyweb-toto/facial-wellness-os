@@ -162,3 +162,17 @@ Deno.test("gasto por anuncio: filas válidas, sin gasto 0 y una por fecha+anunci
   assertEquals(f[0].ad_nombre, "VID PRUEBA 1");
   assert(urlInsightsAnuncios("123", { since: "2026-10-01", until: "2026-10-07" }).includes("level=ad"));
 });
+
+Deno.test("cuenta que no está en PYG: se frena sin escribir y con error claro; las demás siguen", async () => {
+  const { deps, escritas } = depsFalsas({ inicio: { data: [{ adset_id: "1", adset_name: "Tira nasal", campaign_name: "C", spend: "5000", date_start: "2026-10-05" }] } });
+  deps.monedaCuenta = (id) => Promise.resolve(id === "111" ? "USD" : "PYG");
+  const r = await sincronizar(deps, {
+    cuentas: [{ id: "111", tienda: "fw" }, { id: "222", tienda: "voltra" }],
+    ahora: new Date("2026-10-09T15:00:00Z"),
+  });
+  assertEquals(r.cuentas[0].filas, 0);
+  assertEquals(r.cuentas[0].error?.includes("USD"), true);
+  assertEquals(r.cuentas[1].error, undefined);
+  assertEquals(escritas.length, 1);
+  assertEquals(escritas[0].every((f) => f.tienda === "voltra"), true);
+});

@@ -1,11 +1,54 @@
 // I/O real (Supabase) para procesarPedido. Lo comparten shopify-webhook y shopify-conciliar.
-import { db } from "../_shared/db.ts";
+import { db, guardarEventoCrudo } from "../_shared/db.ts";
 import { normalizarTelefonoPY } from "../_shared/telefono.ts";
+import { configLead, enviarEventoLead } from "../_shared/meta_capi.ts";
+import { type DepsLeadMeta, notificarLeadMeta } from "./lead_meta.ts";
 import type { ConfigConfirmacion, Deps } from "./procesar.ts";
 
-export function depsReales(): Deps {
+/** I/O real del evento temprano a Meta (lead_meta.ts). */
+export function depsLeadMetaReales(): DepsLeadMeta {
   const sb = db();
   return {
+    config: () => configLead(),
+    ahora: () => new Date(),
+    async origenAnuncio(clienteId, desde, hasta) {
+      // Mismo criterio que post-entrega: último mensaje entrante del cliente con referral.ctwa_clid.
+      const { data, error } = await sb.from("wa_mensajes").select("contenido")
+        .eq("cliente_id", clienteId).eq("direccion", "in")
+        .not("contenido->referral->>ctwa_clid", "is", null)
+        .gte("creado_en", desde).lte("creado_en", hasta)
+        .order("creado_en", { ascending: false }).limit(1);
+      if (error) throw new Error(`wa_mensajes: ${error.message}`);
+      const ref = data?.[0]?.contenido?.referral;
+      return ref?.ctwa_clid ? { ctwa_clid: String(ref.ctwa_clid) } : null;
+    },
+    reservar: (idExterno, payload) => guardarEventoCrudo("shopify", idExterno, payload),
+    async registrar(idExterno, error) {
+      const r = await sb.from("eventos_crudos").update({ procesado_en: new Date().toISOString(), error })
+        .eq("fuente", "shopify").eq("id_externo", idExterno);
+      if (r.error) throw new Error(`eventos_crudos: ${r.error.message}`);
+    },
+    enviar: (e, cfg) => enviarEventoLead(e, cfg, { timeoutMs: 5000 }),
+  };
+}
+
+/** `leadMeta`: solo shopify-webhook manda el evento temprano a Meta (shopify-conciliar no). */
+export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
+  const sb = db();
+  return {
+    ...(opciones.leadMeta
+      ? {
+        notificarPedidoMeta(p: Parameters<NonNullable<Deps["notificarPedidoMeta"]>>[0]) {
+          const t = notificarLeadMeta(p, depsLeadMetaReales())
+            .then((r) => console.log("meta_lead", p.shopifyOrderId, JSON.stringify(r)))
+            .catch((e) => console.warn("meta_lead:", e instanceof Error ? e.message : e));
+          // Sin frenar nada: la función sigue viva hasta que termine el envío.
+          const rt = (globalThis as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime;
+          if (rt) rt.waitUntil(t);
+          return t;
+        },
+      }
+      : {}),
     normalizarTelefono: normalizarTelefonoPY,
     ahora: () => new Date(),
 
@@ -21,7 +64,7 @@ export function depsReales(): Deps {
 
     async buscarPedido(id) {
       const { data, error } = await sb.from("shopify_pedidos")
-        .select("estado_confirmacion, es_borrador").eq("shopify_order_id", id).maybeSingle();
+        .select("estado_confirmacion, es_borrador, estado_envio").eq("shopify_order_id", id).maybeSingle();
       if (error) throw new Error(`buscarPedido: ${error.message}`);
       return data ?? null;
     },
@@ -67,9 +110,21 @@ export function depsReales(): Deps {
       else await p;
     },
 
-    async cancelarEnviosPendientes(id) {
-      const { error } = await sb.from("envios_programados")
-        .update({ estado: "cancelado" }).eq("shopify_order_id", id).eq("estado", "pendiente");
+    async courierDePedido(nombrePedido) {
+      const n = String(nombrePedido ?? "").replace(/\D/g, "");
+      if (!n) return null;
+      const { data, error } = await sb.from("ventas").select("transportadora").eq("n_referencia", `VT-${n}`)
+        .is("deleted_at", null).limit(1).maybeSingle();
+      if (error) throw new Error(`ventas: ${error.message}`);
+      return (data?.transportadora as string | undefined) ?? null;
+    },
+
+    async cancelarEnviosPendientes(id, opts) {
+      // Los avisos de envío (courier:…, "ya salió" / "hoy te llega") no son de la confirmación: solo se cancelan
+      // si el pedido se canceló.
+      let q = sb.from("envios_programados").update({ estado: "cancelado" }).eq("shopify_order_id", id).eq("estado", "pendiente");
+      if (!opts?.incluirAvisos) q = q.not("clave_unica", "like", "courier:%");
+      const { error } = await q;
       if (error) throw new Error(`cancelarEnviosPendientes: ${error.message}`);
     },
   };

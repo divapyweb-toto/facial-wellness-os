@@ -82,8 +82,10 @@ function dbFalsa() {
       for (const f of filas) if (!envios.has(f.clave_unica)) envios.set(f.clave_unica, { ...f, estado: "pendiente" });
       return Promise.resolve();
     },
-    cancelarEnviosPendientes: (id) => {
-      for (const e of envios.values()) if (e.shopify_order_id === id && e.estado === "pendiente") e.estado = "cancelado";
+    cancelarEnviosPendientes: (id, opts) => {
+      for (const e of envios.values()) {
+        if (e.shopify_order_id === id && e.estado === "pendiente" && (opts?.incluirAvisos || !e.clave_unica.startsWith("courier:"))) e.estado = "cancelado";
+      }
       return Promise.resolve();
     },
   };
@@ -364,5 +366,112 @@ Deno.test("confirmación al instante: dispara procesar-envios, salvo el pedido d
     const ped = normalizarDesdeWebhook("orders/create", { id: 5550002, name: "#1003", phone: "0981000000", tags, line_items: [{ title: "T", quantity: 1, price: "79000" }], total_price: "112000", shipping_address: { first_name: "Ana", address1: "Calle 1", city: "CDE", phone: "0981000000" } });
     await procesarPedido(ped, deps);
     assertEquals(disparos, esperado, tags);
+  }
+});
+
+Deno.test("evento temprano a Meta: solo pedido nuevo, no cancelado, no PRUEBA_E2E, con cliente; no se espera", async () => {
+  const casos: Array<[string, Record<string, unknown>, number]> = [
+    ["nuevo", {}, 1],
+    ["prueba e2e", { tags: "PRUEBA_E2E" }, 0],
+    ["cancelado", { cancelled_at: "2026-10-06T12:00:00-03:00" }, 0],
+    ["sin teléfono", { shipping_address: { first_name: "Ana", city: "CDE" } }, 0],
+  ];
+  for (const [nombre, extra, esperado] of casos) {
+    const f = dbFalsa();
+    const llamadas: unknown[] = [];
+    // Promesa que nunca resuelve: si procesarPedido la esperara, el test se colgaría.
+    f.deps.notificarPedidoMeta = (p) => (llamadas.push(p), new Promise(() => {}));
+    await procesarPedido(normalizarDesdeWebhook("orders/create", pedidoRest(extra)), f.deps);
+    assertEquals(llamadas.length, esperado, nombre);
+    if (esperado) {
+      assertEquals(llamadas[0], { shopifyOrderId: 5550001, clienteId: "c1", total: 129000, creadoEn: "2026-10-06T11:59:00-03:00" });
+      // orders/updated del mismo pedido (ya existe): no se repite.
+      await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest()), f.deps);
+      assertEquals(llamadas.length, 1);
+    }
+  }
+  // Borrador: nunca.
+  const b = dbFalsa();
+  let n = 0;
+  b.deps.notificarPedidoMeta = () => (n++, Promise.resolve());
+  await procesarPedido(normalizarDesdeWebhook("draft_orders/create", pedidoRest()), b.deps);
+  assertEquals(n, 0);
+  // Si la función tira, el webhook sigue igual.
+  const t = dbFalsa();
+  t.deps.notificarPedidoMeta = () => {
+    throw new Error("boom");
+  };
+  const r = await procesarPedido(normalizarDesdeWebhook("orders/create", pedidoRest()), t.deps);
+  assertEquals(r.accion, "programado");
+});
+
+Deno.test("marcado PREPARADO en Shopify (confirmado) → un aviso 'ya salió' con courier y plazo por ciudad; no se repite ni se cancela", async () => {
+  const f = dbFalsa();
+  f.deps.courierDePedido = () => Promise.resolve("lucero");
+  await procesarPedido(normalizarDesdeWebhook("orders/create", pedidoRest()), f.deps);
+  const preparado = pedidoRest({ tags: "CONFIRMADO", fulfillment_status: "fulfilled" });
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", preparado), f.deps);
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", { ...preparado, tags: "CONFIRMADO, VIP" }), f.deps);
+  const aviso = f.envios.get("courier:5550001:DESPACHADO")!;
+  assertEquals(aviso.plantilla, "voltra_pedido_despachado");
+  assertEquals(aviso.estado, "pendiente");
+  assertEquals(aviso.variables, { nombre: "Ana", productos: "1 Tiras nasales", courier: "Lucero del Este", plazo: "hoy mismo o en 24 h", total: formatoGs(129000) });
+  assertEquals([...f.envios.keys()].filter((k) => k.endsWith(":DESPACHADO")).length, 1);
+});
+
+Deno.test("sin preparar, cancelado o prueba E2E → no hay aviso 'ya salió'", async () => {
+  for (const extra of [{}, { fulfillment_status: "fulfilled", cancelled_at: "2026-10-06T12:00:00-03:00" }, { fulfillment_status: "fulfilled", tags: "PRUEBA_E2E" }]) {
+    const f = dbFalsa();
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest(extra)), f.deps);
+    assertEquals([...f.envios.keys()].filter((k) => k.startsWith("courier:")).length, 0, JSON.stringify(extra));
+  }
+});
+
+Deno.test("recordatorio de entrega en todas las ciudades: CDE +2 h, Asunción/Central día siguiente 8:00, interior 2.º día 8:00", async () => {
+  const casos = [
+    ["Ciudad del Este", "voltra_entrega_proxima", "2026-10-06T17:00:00.000Z"], // AHORA 15:00 UTC + 2 h
+    ["Asunción", "voltra_entrega_hoy", "2026-10-07T11:00:00.000Z"],
+    ["Luque", "voltra_entrega_hoy", "2026-10-07T11:00:00.000Z"],
+    ["Encarnación", "voltra_entrega_proxima", "2026-10-08T11:00:00.000Z"],
+  ] as const;
+  for (const [ciudad, plantilla, cuando] of casos) {
+    const f = dbFalsa();
+    const p = pedidoRest({ tags: "CONFIRMADO", fulfillment_status: "fulfilled", shipping_address: { ...pedidoRest().shipping_address, city: ciudad } });
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", p), f.deps);
+    const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+    assertEquals([r.plantilla, r.enviar_desde], [plantilla, cuando], ciudad);
+    assertEquals(r.variables, { nombre: "Ana", total: formatoGs(129000) });
+  }
+});
+
+Deno.test("pedido cancelado después de despachado: el 'hoy te llega' pendiente se cancela", async () => {
+  const f = dbFalsa();
+  const p = pedidoRest({ tags: "CONFIRMADO", fulfillment_status: "fulfilled", shipping_address: { ...pedidoRest().shipping_address, city: "Asunción" } });
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", p), f.deps);
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", { ...p, cancelled_at: "2026-10-06T13:00:00-03:00" }), f.deps);
+  assertEquals(f.envios.get("courier:5550001:ENTREGA_HOY")!.estado, "cancelado");
+});
+
+Deno.test("fin de semana: despachado el sábado → 'ya salió' el lunes 8:00 y recordatorio contado desde el lunes", async () => {
+  const f = dbFalsa();
+  f.deps.ahora = () => new Date("2026-10-10T15:00:00.000Z"); // sábado 12:00 en Asunción
+  const p = pedidoRest({ tags: "CONFIRMADO", fulfillment_status: "fulfilled", shipping_address: { ...pedidoRest().shipping_address, city: "Asunción" } });
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", p), f.deps);
+  assertEquals(f.envios.get("courier:5550001:DESPACHADO")!.enviar_desde, "2026-10-12T11:00:00.000Z");
+  assertEquals(f.envios.get("courier:5550001:ENTREGA_HOY")!.enviar_desde, "2026-10-13T11:00:00.000Z");
+});
+
+Deno.test("09-10: pedido ya ENTREGADO/NO_ENTREGADO por el courier → no se programan 'ya salió' ni 'hoy te llega'", async () => {
+  for (const estado_envio of ["ENTREGADO", "NO_ENTREGADO"]) {
+    const f = dbFalsa();
+    await procesarPedido(normalizarDesdeWebhook("orders/create", pedidoRest()), f.deps);
+    const buscar = f.deps.buscarPedido;
+    f.deps.buscarPedido = async (id) => {
+      const p = await buscar(id);
+      return p ? { ...p, estado_envio } : null;
+    };
+    const p = pedidoRest({ tags: "CONFIRMADO", fulfillment_status: "fulfilled" });
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", p), f.deps);
+    assertEquals([...f.envios.keys()].filter((k) => k.startsWith("courier:")).length, 0, estado_envio);
   }
 });

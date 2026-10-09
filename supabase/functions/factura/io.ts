@@ -55,7 +55,9 @@ export async function envioSeguimientoParaPedido(
 ): Promise<{ plantilla: string; idioma: string; componentes: unknown[] } | null> {
   if (!(await sifenActivo())) return null;
   const { data } = await db().from("facturas").select("estado,kude_path,numero_completo,kude_enviado_en")
-    .eq("shopify_order_id", orderId).eq("tipo_documento", 1).maybeSingle();
+    .eq("shopify_order_id", orderId).eq("tipo_documento", 1)
+    // Puede haber una de prueba ('test') y la real ('prod'): se toma la real primero.
+    .order("ambiente", { ascending: true }).limit(1).maybeSingle();
   if (!data || data.estado !== "aprobada" || !data.kude_path || !data.numero_completo || data.kude_enviado_en) return null;
   return armarSeguimientoConFactura({
     orderId,

@@ -48,6 +48,8 @@ function repoMemoria(pedidos: PedidoImport[]) {
       return Promise.resolve(true)
     },
     marcarNotificado: (id, e) => { log.notificados.push(`${id}:${e}`); return Promise.resolve() },
+    avisoPendiente: (id, e) =>
+      Promise.resolve(estados.has(`${id}:${e}`) && !log.notificados.includes(`${id}:${e}`)),
     actualizarEstadoEnvio: (id, e) => {
       log.estadoEnvio.push(`${id}:${e}`)
       const p = pedidos.find((x) => x.shopify_order_id === id)
@@ -226,4 +228,42 @@ Deno.test('numeroDesdeReferencia: VT- siempre es de esta tienda, aunque la confi
   assertEquals(numeroDesdeReferencia('VT-1004', []), { numero: '1004', otraTienda: false })
   assertEquals(numeroDesdeReferencia('vt 1004', ['FW-']), { numero: '1004', otraTienda: false })
   assertEquals(numeroDesdeReferencia('FW-2071', []), { numero: null, otraTienda: true })
+})
+
+Deno.test('falla después de insertar el estado → la próxima importación manda el aviso una sola vez', async () => {
+  const { repo, log } = repoMemoria([pedido()])
+  const original = repo.actualizarEstadoEnvio
+  let fallar = true
+  repo.actualizarEstadoEnvio = (id, e, c) => fallar ? Promise.reject(new Error('caída simulada')) : original(id, e, c)
+  const filas = [{ referencia: 'VT-1001', estado_crudo: 'en_camino', telefono: '0981000000' }]
+  const r1 = await procesarFilas('lucero', filas, repo, cfg)
+  assertEquals(r1.errores.length, 1)
+  assertEquals(log.envios.length, 0)
+  fallar = false
+  const r2 = await procesarFilas('lucero', filas, repo, cfg)
+  assertEquals([r2.repetidas, r2.avisos_programados, log.envios.length], [0, 1, 1])
+  const r3 = await procesarFilas('lucero', filas, repo, cfg)
+  assertEquals([r3.repetidas, r3.avisos_programados, log.envios.length], [1, 0, 1])
+})
+
+Deno.test('aviso programado pero marcarNotificado falló → reintento no duplica y queda notificado', async () => {
+  const { repo, log } = repoMemoria([pedido()])
+  const original = repo.marcarNotificado
+  let fallar = true
+  repo.marcarNotificado = (id, e) => fallar ? Promise.reject(new Error('caída simulada')) : original(id, e)
+  const filas = [{ referencia: 'VT-1001', estado_crudo: 'en_camino', telefono: '0981000000' }]
+  await procesarFilas('lucero', filas, repo, cfg)
+  fallar = false
+  const r2 = await procesarFilas('lucero', filas, repo, cfg)
+  assertEquals([r2.avisos_programados, log.envios.length], [0, 1])
+  assertEquals(log.notificados, ['9001:DESPACHADO'])
+})
+
+Deno.test('fallido y después rescatable → un solo "no entregado" por pedido', async () => {
+  const { repo, log } = repoMemoria([pedido()])
+  await procesarFilas('lucero', [{ referencia: 'VT-1001', estado_crudo: 'Fallido' }], repo, cfg)
+  const r = await procesarFilas('pap', [{ referencia: '1001', estado_crudo: 'Devolucion en proceso' }], repo, cfg)
+  assertEquals(r.avisos_programados, 0)
+  assertEquals(log.envios.filter((e) => e.plantilla === 'voltra_no_entregado').length, 1)
+  assert(log.notificados.includes('9001:NO_ENTREGADO_RESCATABLE'))
 })

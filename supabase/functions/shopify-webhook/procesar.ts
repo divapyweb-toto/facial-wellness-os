@@ -2,7 +2,9 @@
 // Todo el I/O (base de datos, reloj, normalizador de teléfono) entra por `Deps`,
 // así los tests no tocan Supabase ni Shopify.
 
+import { inicioDespacho, plazoPorCiudad } from "../_shared/plazo_zona.ts";
 import { verificarHmacShopify } from "../_shared/shopify.ts";
+import { envioTerminal } from "../procesar-envios/procesar.ts";
 
 export const TAG_BORRADOR_RELEASIT = "abandoned_checkout_releasit_cod_form";
 
@@ -81,7 +83,7 @@ export type FilaEnvio = {
   clave_unica: string;
 };
 
-export type PedidoExistente = { estado_confirmacion: string; es_borrador: boolean } | null;
+export type PedidoExistente = { estado_confirmacion: string; es_borrador: boolean; estado_envio?: string | null } | null;
 
 export interface Deps {
   normalizarTelefono(x: string): string | null;
@@ -94,10 +96,18 @@ export interface Deps {
   upsertPedido(p: FilaPedido): Promise<void>;
   /** insert ... on conflict (clave_unica) do nothing. */
   programarEnvios(filas: FilaEnvio[]): Promise<void>;
-  /** pasa a 'cancelado' los envíos 'pendiente' del pedido. */
-  cancelarEnviosPendientes(id: number): Promise<void>;
+  /** pasa a 'cancelado' los envíos 'pendiente' del pedido; los avisos de envío (courier:…) solo con `incluirAvisos`. */
+  cancelarEnviosPendientes(id: number, opts?: { incluirAvisos?: boolean }): Promise<void>;
   /** Dispara procesar-envios ya, sin esperar al cron del minuto (opcional; si falla, el cron lo manda igual). */
   dispararEnvios?(): Promise<void>;
+  /**
+   * Pedido nuevo → evento temprano a Meta si el cliente vino de un anuncio de WhatsApp (lead_meta.ts).
+   * Fire-and-forget: procesarPedido NO lo espera (io.ts lo deja vivo con EdgeRuntime.waitUntil). Opcional: solo
+   * lo pasa shopify-webhook (la conciliación horaria no lo manda).
+   */
+  notificarPedidoMeta?(p: { shopifyOrderId: number; clienteId: string; total: number | null; creadoEn: string | null }): Promise<unknown>;
+  /** Transportadora que se le asignó en Despacho (ventas.transportadora: 'lucero' | 'pap' | …), o null. Opcional (08-10). */
+  courierDePedido?(nombrePedido: string | null): Promise<string | null>;
 }
 
 export type ResultadoProceso = {
@@ -287,6 +297,63 @@ export function armarEnvios(
   ];
 }
 
+/** El pedido figura como preparado (fulfilled) en Shopify: REST (webhook) o GraphQL (conciliación). */
+export function estaPreparado(raw: unknown): boolean {
+  const r = obj(raw);
+  return s(r.fulfillment_status)?.toLowerCase() === "fulfilled" || s(r.displayFulfillmentStatus)?.toUpperCase() === "FULFILLED";
+}
+
+const NOMBRE_COURIER: Record<string, string> = { lucero: "Lucero del Este", pap: "Punto a Punto" };
+
+export function armarAvisoPreparado(ped: PedidoNormalizado, clienteId: string, courier: string | null, ahora: Date): FilaEnvio {
+  const c = courier?.toLowerCase() ?? "";
+  const plazo = plazoPorCiudad(ped.ciudad) ?? (c === "lucero" ? "1 a 3 días hábiles" : "2 a 5 días hábiles");
+  return {
+    cliente_id: clienteId,
+    shopify_order_id: ped.shopifyOrderId,
+    plantilla: "voltra_pedido_despachado",
+    // Plantilla: Hola {{nombre}}, tu pedido de Voltra ({{productos}}) ya salió con {{courier}}. Te llega en {{plazo}}…{{total}}
+    variables: {
+      nombre: conMayuscula(ped.nombreCliente?.trim().split(/\s+/)[0] ?? null),
+      productos: ped.productos,
+      courier: NOMBRE_COURIER[c] ?? "nuestro courier",
+      plazo,
+      total: formatoGs(ped.total),
+    },
+    categoria: "utilidad",
+    // Fin de semana: sale el lunes, y el "ya salió" también (09-10).
+    enviar_desde: inicioDespacho(ahora).toISOString(),
+    clave_unica: `courier:${ped.shopifyOrderId}:DESPACHADO`,
+  };
+}
+
+/**
+ * 09-10: un aviso más después del "ya salió", para bajar los "no estaba / no tenía la plata". Todas las ciudades,
+ * contando desde el despacho (fin de semana → lunes 8:00):
+ * - CDE y alrededores (hoy o mañana): "ya está por llegar" (voltra_entrega_proxima) 2 h después del despacho.
+ * - Asunción y Central: "hoy te llega" (voltra_entrega_hoy) a las 8:00 de Asunción del día siguiente.
+ * - Interior (no se sabe el día exacto): "ya está por llegar" a las 8:00 del segundo día.
+ */
+export function armarRecordatorioEntrega(ped: PedidoNormalizado, clienteId: string, ahoraReal: Date): FilaEnvio | null {
+  const ahora = inicioDespacho(ahoraReal);
+  const plazo = plazoPorCiudad(ped.ciudad);
+  // 8:00 de Asunción (UTC−3) = 11:00 UTC, `dias` días después.
+  const local = new Date(ahora.getTime() - 3 * 3_600_000);
+  const alas8 = (dias: number) => new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + dias, 11, 0, 0));
+  const cde = plazo === "hoy mismo o en 24 h";
+  const metro = plazo === "24 a 48 h" || plazo === "24 a 72 h";
+  const enviar = cde ? new Date(ahora.getTime() + 2 * 3_600_000) : metro ? alas8(1) : alas8(2);
+  return {
+    cliente_id: clienteId,
+    shopify_order_id: ped.shopifyOrderId,
+    plantilla: metro ? "voltra_entrega_hoy" : "voltra_entrega_proxima",
+    variables: { nombre: conMayuscula(ped.nombreCliente?.trim().split(/\s+/)[0] ?? null), total: formatoGs(ped.total) },
+    categoria: "utilidad",
+    enviar_desde: enviar.toISOString(),
+    clave_unica: `courier:${ped.shopifyOrderId}:ENTREGA_HOY`,
+  };
+}
+
 /**
  * Mismo camino para webhook y conciliación.
  * - Borrador: guarda cliente (si hay teléfono) y pedido con es_borrador=true; no programa nada.
@@ -329,12 +396,33 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   // Un pedido cancelado en Shopify sin tag no cambia estado_confirmacion: solo frena los envíos.
   if (estadoTag && estadoTag !== existente?.estado_confirmacion) fila.estado_confirmacion = estadoTag;
   await deps.upsertPedido(fila);
+  const esPruebaE2E = ped.tags.some((t) => t.toUpperCase() === "PRUEBA_E2E");
+
+  // Pedido nuevo: señal temprana a Meta (sin esperar; un error acá nunca frena el webhook).
+  if (!existente && !ped.cancelado && !esPruebaE2E && clienteId && deps.notificarPedidoMeta) {
+    try {
+      deps.notificarPedidoMeta({ shopifyOrderId: ped.shopifyOrderId, clienteId, total: ped.total, creadoEn: ped.creadoEn })
+        ?.catch?.((e) => console.warn("notificarPedidoMeta:", e instanceof Error ? e.message : e));
+    } catch (e) {
+      console.warn("notificarPedidoMeta:", e instanceof Error ? e.message : e);
+    }
+  }
+
+  // 08-10: marcado como PREPARADO en Shopify (fulfillment) → aviso "tu pedido ya salió" (voltra_pedido_despachado).
+  // Misma clave que usa importar-courier para DESPACHADO: si después se importa el reporte del courier, no se repite.
+  // 09-10: si el courier ya lo entregó o devolvió (estado_envio terminal), no se programan avisos de entrega.
+  if (!ped.cancelado && !esPruebaE2E && clienteId && estaPreparado(ped.raw) && !envioTerminal(existente?.estado_envio)) {
+    const courier = deps.courierDePedido ? await deps.courierDePedido(ped.nombre).catch(() => null) : null;
+    const recordatorio = armarRecordatorioEntrega(ped, clienteId, deps.ahora());
+    await deps.programarEnvios([armarAvisoPreparado(ped, clienteId, courier, deps.ahora()), ...(recordatorio ? [recordatorio] : [])]);
+    if (deps.dispararEnvios) await deps.dispararEnvios().catch((e) => console.warn("dispararEnvios:", e instanceof Error ? e.message : e));
+  }
 
   const estadoFinal = fila.estado_confirmacion ?? existente?.estado_confirmacion ?? "pendiente";
   const frenar = ped.cancelado || estadoFinal !== "pendiente";
 
   if (frenar) {
-    if (existente) await deps.cancelarEnviosPendientes(ped.shopifyOrderId);
+    if (existente) await deps.cancelarEnviosPendientes(ped.shopifyOrderId, { incluirAvisos: ped.cancelado });
     return {
       shopifyOrderId: ped.shopifyOrderId,
       accion: "actualizado",
@@ -361,7 +449,6 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   await deps.programarEnvios(envios); // on conflict do nothing → idempotente
   // Confirmación lo más rápido posible: no espera al cron. El pedido de prueba del despliegue (PRUEBA_E2E)
   // no dispara nada: esa prueba cancela sus envíos antes de que salgan.
-  const esPruebaE2E = ped.tags.some((t) => t.toUpperCase() === "PRUEBA_E2E");
   if (deps.dispararEnvios && !esPruebaE2E && (cfg.confirmar_min ?? 0) <= 0) {
     await deps.dispararEnvios().catch((e) => console.warn("dispararEnvios:", e instanceof Error ? e.message : e));
   }

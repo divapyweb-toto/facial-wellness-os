@@ -10,6 +10,7 @@ import {
   type Contexto,
   decidir,
   type Deps,
+  ESPERAS_MARCAR_MS,
   type Envio,
   formatearGs,
   type Horario,
@@ -22,6 +23,8 @@ import pConf from "../../plantillas/voltra_confirmacion_pedido.json" with { type
 import pRec from "../../plantillas/voltra_recordatorio_confirmacion.json" with { type: "json" };
 import pDesp from "../../plantillas/voltra_pedido_despachado.json" with { type: "json" };
 import pHoy from "../../plantillas/voltra_entrega_hoy.json" with { type: "json" };
+import pProx from "../../plantillas/voltra_entrega_proxima.json" with { type: "json" };
+import pDir from "../../plantillas/voltra_completar_direccion.json" with { type: "json" };
 import pNo from "../../plantillas/voltra_no_entregado.json" with { type: "json" };
 import pSeg from "../../plantillas/voltra_seguimiento_entrega.json" with { type: "json" };
 import pRecup from "../../plantillas/voltra_recuperar_borrador.json" with { type: "json" };
@@ -279,7 +282,7 @@ Deno.test("formato de guaraníes y config desde config_wa", () => {
 });
 
 Deno.test("el catálogo coincide con los JSON de supabase/plantillas (botones, payloads, variables)", () => {
-  for (const p of [pConf, pRec, pDesp, pHoy, pNo, pSeg, pRecup, pMkRep, pMkPack, pMkCru, pMkLan]) {
+  for (const p of [pConf, pRec, pDesp, pHoy, pProx, pDir, pNo, pSeg, pRecup, pMkRep, pMkPack, pMkCru, pMkLan]) {
     const def = PLANTILLAS[p.name];
     assert(def, p.name);
     const botones = (p.components as { type: string; buttons?: { text: string }[] }[])
@@ -289,7 +292,7 @@ Deno.test("el catálogo coincide con los JSON de supabase/plantillas (botones, p
     assertEquals(def.vars.length, p._notas.variables.length, p.name);
     assertEquals(p.language, "es");
   }
-  assertEquals(Object.keys(PLANTILLAS).length, 13); // + voltra_confirmacion_pedido_v2 y v3 (07-10)
+  assertEquals(Object.keys(PLANTILLAS).length, 15); // + v2 y v3 (07-10), entrega_proxima y completar_direccion (09-10)
 });
 
 Deno.test("armarParametros: objeto con claves numéricas", () => {
@@ -530,4 +533,63 @@ Deno.test("seguimiento con factura: solo con ola4.factura activo; si devuelve pl
   // config_wa['ola4.factura'] llega a la config.
   assertEquals(configDesdeFilas([{ clave: "ola4.factura", valor: { activo: true } }]).facturaActiva, true);
   assertEquals(configDesdeFilas([]).facturaActiva, false);
+});
+
+// ─── 09-10: avisos de entrega con el envío ya terminado y fallas al marcar enviado ───
+
+Deno.test("09-10: 'hoy te llega' / 'ya salió' se cancelan si el pedido ya está ENTREGADO, NO_ENTREGADO, etc.", () => {
+  const conEstado = (estado_envio: string | null) => {
+    const c = ctx({}, "confirmado");
+    return { ...c, pedido: { ...c.pedido!, estado_envio } };
+  };
+  const hoy = envio({ plantilla: "voltra_entrega_hoy", clave_unica: "courier:1001:ENTREGA_HOY", variables: ["Ana", "129.000"] });
+  const prox = envio({ plantilla: "voltra_entrega_proxima", clave_unica: "courier:1001:ENTREGA_HOY", variables: ["Ana", "129.000"] });
+  for (const est of ["ENTREGADO", "NO_ENTREGADO", "NO_ENTREGADO_RESCATABLE", "CANCELADO", "RENDIDO"]) {
+    for (const e of [hoy, prox]) {
+      assertEquals(decidir(e, conEstado(est), cfg(), AHORA, horario), { accion: "cancelar", motivo: `envio_${est}` });
+    }
+  }
+  // En camino o sin estado: sale normal.
+  for (const est of [null, "DESPACHADO", "EN_PREPARACION", "INTENTO_FALLIDO"]) {
+    assertEquals(decidir(hoy, conEstado(est), cfg(), AHORA, horario).accion, "plantilla", String(est));
+  }
+  // El "no entregado" y el seguimiento los dispara justamente el estado terminal: no se cancelan.
+  const noEnt = envio({ plantilla: "voltra_no_entregado", clave_unica: "x", variables: ["Ana", "2 Tiras nasales"] });
+  assertEquals(decidir(noEnt, conEstado("NO_ENTREGADO"), cfg(), AHORA, horario).accion, "plantilla");
+  const seg = envio({ plantilla: "voltra_seguimiento_entrega", clave_unica: "y", variables: ["Ana", "2 Tiras nasales"] });
+  assertEquals(decidir(seg, conEstado("ENTREGADO"), cfg(), AHORA, horario).accion, "plantilla");
+});
+
+Deno.test("09-10: WhatsApp OK y el update falla → reintenta, guarda wa_message_id y no reprograma", async () => {
+  // Falla 1 vez y después anda.
+  {
+    const { d, log } = fakes([envio()], { e1: ctx() }, () => ({ ok: true }));
+    let fallas = 1;
+    const esperas: number[] = [];
+    d.esperar = (ms) => (esperas.push(ms), Promise.resolve());
+    d.actualizarEnvio = (id, c) => {
+      if (fallas-- > 0) return Promise.reject(new Error("timeout"));
+      log.cambios.push([id, c]);
+      return Promise.resolve();
+    };
+    const r = await procesarLote(d);
+    assertEquals([r.enviados, r.reintentos, r.fallidos], [1, 0, 0]);
+    assertEquals(log.cambios, [["e1", { estado: "enviado", intentos: 1, ultimo_error: null, wa_message_id: "wamid.x" }]]);
+    assertEquals(esperas, [ESPERAS_MARCAR_MS[0]]);
+    assertEquals(log.avisos.length, 0);
+  }
+  // Falla siempre: 3 intentos, nunca se pide reprogramar (pendiente), avisa por Telegram.
+  {
+    const { d, log } = fakes([envio()], { e1: ctx() }, () => ({ ok: true }));
+    let llamadas = 0;
+    const cambios: unknown[] = [];
+    d.esperar = () => Promise.resolve();
+    d.actualizarEnvio = (_id, c) => (llamadas++, cambios.push(c), Promise.reject(new Error("base caída")));
+    const r = await procesarLote(d);
+    assertEquals(llamadas, ESPERAS_MARCAR_MS.length + 1);
+    assert(cambios.every((c) => (c as { estado: string }).estado === "enviado"));
+    assertEquals([r.enviados, r.reintentos, r.fallidos], [1, 0, 0]);
+    assertEquals(log.enviados.length, 1);
+    assertMatch(log.avisos[0], /no se pudo marcar/);
+  }
 });

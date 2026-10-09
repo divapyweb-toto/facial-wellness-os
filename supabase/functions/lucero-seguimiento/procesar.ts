@@ -218,6 +218,24 @@ export interface ResumenSeguimiento {
   motivos: string[]
 }
 
+/** Guías que se consultan antes de guardar sus estados (tanda chica: poco que perder si se corta). */
+export const TANDA = 5
+
+/** Suma los resúmenes del pipeline de cada tanda en uno solo. */
+export function sumarResumen(a: Resumen, b: Resumen): Resumen {
+  return {
+    procesadas: a.procesadas + b.procesadas,
+    avisos_programados: a.avisos_programados + b.avisos_programados,
+    sin_pedido: a.sin_pedido + b.sin_pedido,
+    repetidas: a.repetidas + b.repetidas,
+    estado_no_reconocido: a.estado_no_reconocido + b.estado_no_reconocido,
+    estados_no_reconocidos: [...new Set([...a.estados_no_reconocidos, ...b.estados_no_reconocidos])],
+    otra_tienda: a.otra_tienda + b.otra_tienda,
+    cancelados_cliente: a.cancelados_cliente + b.cancelados_cliente,
+    errores: [...a.errores, ...b.errores],
+  }
+}
+
 export async function correrSeguimiento(deps: Deps, cfgIn: Partial<ConfigSeguimiento> = {}): Promise<ResumenSeguimiento> {
   const cfg = normalizarConfig(cfgIn)
   const r: ResumenSeguimiento = {
@@ -228,8 +246,31 @@ export async function correrSeguimiento(deps: Deps, cfgIn: Partial<ConfigSeguimi
   const motivos = new Set<string>()
   const guias = (await deps.guiasAbiertas(cfg.tope)).slice(0, cfg.tope)
   r.candidatas = guias.length
-  const filas: FilaCourier[] = []
-  const actualizar: { guia: GuiaAbierta; cambios: CambiosEntrega }[] = []
+  // Se guarda de a TANDA guías: si la Edge Function se corta por tiempo, lo ya consultado no se pierde.
+  // marcarConsultada va DESPUÉS de guardar: una guía cortada a mitad de tanda sigue primera en la cola.
+  // Reprocesar una guía no duplica avisos (pedido_estados es idempotente por pedido+estado).
+  let filas: FilaCourier[] = []
+  let actualizar: { guia: GuiaAbierta; cambios: CambiosEntrega }[] = []
+  let marcas: { nro: string; error: string | null }[] = []
+  const volcar = async () => {
+    // Pipeline común primero (pedido_estados → post-entrega), después la tabla de entregas.
+    if (filas.length) {
+      await deps.guardarLote(filas)
+      const res = await deps.procesarFilas(filas)
+      r.pipeline = r.pipeline ? sumarResumen(r.pipeline, res) : res
+    }
+    for (const { guia, cambios } of actualizar) {
+      try {
+        if (await deps.actualizarEntrega(guia.nro_guia_pap, cambios)) r.entregas_actualizadas++
+      } catch (e) {
+        motivos.add(`entregas:${String((e as Error)?.message ?? e).slice(0, 80)}`)
+      }
+    }
+    for (const m of marcas) await deps.marcarConsultada(m.nro, m.error)
+    filas = []
+    actualizar = []
+    marcas = []
+  }
 
   for (let i = 0; i < guias.length; i++) {
     const g = guias[i]
@@ -269,21 +310,10 @@ export async function correrSeguimiento(deps: Deps, cfgIn: Partial<ConfigSeguimi
       error = `error_red:${(e as Error)?.message ?? String(e)}`.slice(0, 200)
     }
     if (error) motivos.add(error.split(':').slice(0, 2).join(':'))
-    await deps.marcarConsultada(g.nro_guia_pap, error)
+    marcas.push({ nro: g.nro_guia_pap, error })
+    if (marcas.length >= TANDA) await volcar()
   }
-
-  // Pipeline común primero (pedido_estados → post-entrega), después la tabla de entregas.
-  if (filas.length) {
-    await deps.guardarLote(filas)
-    r.pipeline = await deps.procesarFilas(filas)
-  }
-  for (const { guia, cambios } of actualizar) {
-    try {
-      if (await deps.actualizarEntrega(guia.nro_guia_pap, cambios)) r.entregas_actualizadas++
-    } catch (e) {
-      motivos.add(`entregas:${String((e as Error)?.message ?? e).slice(0, 80)}`)
-    }
-  }
+  await volcar()
 
   r.motivos = [...motivos]
   const fallas = r.sin_parsear + r.error_red + r.no_encontrado + r.referencia_distinta

@@ -57,7 +57,7 @@ async function contexto(e: Envio): Promise<Contexto> {
       ? sb.from("wa_clientes").select("telefono,wa_user_id,nombre").eq("id", e.cliente_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     e.shopify_order_id != null
-      ? sb.from("shopify_pedidos").select("shopify_order_id,nombre,estado_confirmacion,tags,total,raw")
+      ? sb.from("shopify_pedidos").select("shopify_order_id,nombre,estado_confirmacion,tags,total,raw,estado_envio")
         .eq("shopify_order_id", e.shopify_order_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     e.cliente_id
@@ -81,7 +81,12 @@ async function contexto(e: Envio): Promise<Contexto> {
 }
 
 async function actualizarEnvio(id: string, cambio: CambioEnvio): Promise<void> {
-  const { error } = await db().from("envios_programados").update(cambio).eq("id", id);
+  let { error } = await db().from("envios_programados").update(cambio).eq("id", id);
+  // 09-10: mientras no exista la columna wa_message_id, se guarda el resto igual.
+  if (error && cambio.wa_message_id && /wa_message_id/.test(error.message)) {
+    const { wa_message_id: _, ...resto } = cambio;
+    ({ error } = await db().from("envios_programados").update(resto).eq("id", id));
+  }
   if (error) throw new Error(`actualizarEnvio: ${error.message}`);
 }
 

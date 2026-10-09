@@ -56,6 +56,9 @@ export interface Repo {
   buscarPedidosPorTelefono(telefonoE164: string): Promise<PedidoImport[]>
   /** true si se insertó; false si ese (pedido, estado) ya existía. */
   insertarEstado(orderId: number, estado: EstadoEnvio, fuente: string): Promise<boolean>
+  /** true si ese (pedido, estado) ya existe con notificado=false (el aviso quedó a medias).
+   *  Opcional: un Repo sin este método no reintenta (comportamiento anterior). */
+  avisoPendiente?(orderId: number, estado: EstadoEnvio): Promise<boolean>
   marcarNotificado(orderId: number, estado: EstadoEnvio): Promise<void>
   actualizarEstadoEnvio(orderId: number, estado: EstadoEnvio, courier: Courier): Promise<void>
   /** true si se programó; false si la clave_unica ya existía. */
@@ -279,7 +282,10 @@ export function armarEnvio(
     variables,
     categoria: 'utilidad',
     enviar_desde: enviarDesde,
-    clave_unica: `courier:${pedido.shopify_order_id}:${estado}`,
+    // Fallido y rescatable usan la misma plantilla: una sola clave por pedido
+    // para no mandar dos "no entregado". Se reusa la clave de INTENTO_FALLIDO
+    // para que las filas ya programadas sigan bloqueando el duplicado.
+    clave_unica: `courier:${pedido.shopify_order_id}:${estado === 'NO_ENTREGADO_RESCATABLE' ? 'INTENTO_FALLIDO' : estado}`,
   }
 }
 
@@ -365,9 +371,16 @@ export async function procesarFilas(
 
       for (const est of estados) {
         const nuevo = await repo.insertarEstado(pedido.shopify_order_id, est, fuente)
-        if (!nuevo) { r.repetidas++; continue }
-
         const tardio = estadoActual != null && TERMINALES.has(estadoActual) && !TERMINALES.has(est)
+        if (!nuevo) {
+          // Si la importación anterior falló después de insertar el estado, el
+          // aviso quedó sin salir (notificado=false): se reintenta. La clave_unica
+          // de envios_programados impide mandarlo dos veces.
+          const reintentar = !cancelado && !tardio && !!pedido.cliente_id && !!PLANTILLA_POR_ESTADO[est] &&
+            !!repo.avisoPendiente && await repo.avisoPendiente(pedido.shopify_order_id, est)
+          if (!reintentar) { r.repetidas++; continue }
+        }
+
         if (!tardio && est !== 'RENDIDO') {
           await repo.actualizarEstadoEnvio(pedido.shopify_order_id, est, courier)
           estadoActual = est
@@ -399,10 +412,9 @@ export async function procesarFilas(
               'pedido_sin_cliente')
             continue
           }
-          if (await repo.programarEnvio(envio)) {
-            r.avisos_programados++
-            await repo.marcarNotificado(pedido.shopify_order_id, est)
-          }
+          if (await repo.programarEnvio(envio)) r.avisos_programados++
+          // También si la clave ya existía: el aviso ya está en cola, no queda pendiente.
+          await repo.marcarNotificado(pedido.shopify_order_id, est)
         }
       }
     } catch (e) {

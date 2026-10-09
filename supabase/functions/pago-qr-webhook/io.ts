@@ -28,6 +28,12 @@ export async function marcarEventoProcesado(proveedor: string, idEvento: string,
     .eq("proveedor", proveedor).eq("id_evento", idEvento);
 }
 
+/** Borra la marca del evento (procesar falló) para que el reintento del proveedor se procese. */
+export async function borrarEventoQR(proveedor: string, idEvento: string): Promise<void> {
+  const { error } = await db().from("cobros_qr_eventos").delete().eq("proveedor", proveedor).eq("id_evento", idEvento);
+  if (error) throw new Error(`borrarEventoQR: ${error.message}`);
+}
+
 export const depsReales: DepsPagoQR = {
   buscarCobro: async (proveedor, idExterno) => {
     const { data, error } = await db().from("cobros_qr").select("id,shopify_order_id,proveedor,estado,monto,id_externo")
@@ -72,8 +78,12 @@ export async function ofrecerCobroQR(orderId: number): Promise<
   const cfg = await leerConfigQR();
   if (!cfg.activo) return { ok: false, motivo: "bandera_apagada" };
   const sb = db();
+  const ahoraIso = new Date().toISOString();
+  // Pagado siempre cuenta; un 'pendiente' solo se reutiliza si no venció (vence_en > ahora).
   const { data: previo } = await sb.from("cobros_qr").select("url,estado,simulado")
-    .eq("shopify_order_id", orderId).in("estado", ["pendiente", "pagado"]).limit(1).maybeSingle();
+    .eq("shopify_order_id", orderId)
+    .or(`estado.eq.pagado,and(estado.eq.pendiente,or(vence_en.is.null,vence_en.gt.${ahoraIso}))`)
+    .order("estado", { ascending: true }).limit(1).maybeSingle(); // 'pagado' antes que 'pendiente'
   if (previo?.estado === "pagado") return { ok: false, motivo: "ya_pagado" };
   if (previo?.url) {
     return { ok: true, url: previo.url as string, texto: textoOfertaQR(cfg, previo.url as string), simulado: !!previo.simulado, reutilizado: true };
@@ -81,6 +91,9 @@ export async function ofrecerCobroQR(orderId: number): Promise<
   const { data: ped } = await sb.from("shopify_pedidos").select("nombre,total,estado_confirmacion").eq("shopify_order_id", orderId).maybeSingle();
   if (!ped) return { ok: false, motivo: "sin_pedido" };
   if (!Number(ped.total)) return { ok: false, motivo: "sin_total" };
+  // El vencido pasa a 'vencido' para liberar el índice único de 'pendiente' por pedido.
+  await sb.from("cobros_qr").update({ estado: "vencido" })
+    .eq("shopify_order_id", orderId).eq("estado", "pendiente").lte("vence_en", ahoraIso);
   const r = await crearCobroQR(
     { shopify_order_id: orderId, nombre: ped.nombre as string | null, total: Number(ped.total) },
     { validezHoras: cfg.validez_horas, etiqueta: cfg.etiqueta.replace("{pedido}", String(ped.nombre ?? orderId)) },

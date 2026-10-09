@@ -79,6 +79,12 @@ function repoSupabase(): Repo {
       if (error) throw new Error(`pedido_estados: ${error.message}`)
       return Array.isArray(data) && data.length > 0
     },
+    async avisoPendiente(orderId, estado) {
+      const { data, error } = await s.from('pedido_estados').select('notificado')
+        .eq('shopify_order_id', orderId).eq('estado', estado).maybeSingle()
+      if (error) throw new Error(`pedido_estados: ${error.message}`)
+      return data?.notificado === false
+    },
     async marcarNotificado(orderId, estado) {
       const { error } = await s.from('pedido_estados').update({ notificado: true })
         .eq('shopify_order_id', orderId).eq('estado', estado)

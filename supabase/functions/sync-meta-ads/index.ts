@@ -14,6 +14,10 @@ Deno.serve(conServiceRole(async () => {
     if (!cfg.activo) return Response.json({ ok: true, omitido: "config_wa.sync_meta_ads.activo = false" });
     const r = await sincronizar(depsReales(), { cuentas: cfg.cuentas, dias: cfg.dias });
     console.log("sync-meta-ads", JSON.stringify(r));
+    const frenadas = r.cuentas.filter((c) => c.error);
+    if (frenadas.length) {
+      await avisar(`<b>Sync gasto Meta Ads: cuenta frenada</b>\n${frenadas.map((c) => escaparHtml(c.error)).join("\n")}`).catch(() => {});
+    }
     return Response.json(r);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

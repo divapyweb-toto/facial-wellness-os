@@ -10,6 +10,7 @@ import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { enviarPlantilla } from "../_shared/wa.ts";
 import { partesAsuncion } from "../_shared/horario.ts";
+import { horarioAvisos, puedeMandarKude } from "./horario_kude.ts";
 import type { DatosEmisor, TipoDE } from "../_shared/sifen/tipos.ts";
 import { codigoSeguridadAleatorio, fechaSifen, type PedidoSifen } from "../_shared/sifen/desde_pedido.ts";
 import { type ConfigSifen, configSifen, type DepsCola, type FilaFactura, facturarPedido, procesarCola, type ResultadoItem } from "../_shared/sifen/cola.ts";
@@ -105,6 +106,8 @@ export async function depsReales(cfg: ConfigSifen): Promise<DepsCola> {
   const sb = db();
   const e = await construirEmisor(cfg);
   const fila = (x: unknown) => x as FilaFactura;
+  const { data: ha } = await sb.from("config_wa").select("valor").eq("clave", "horario_avisos_envio").maybeSingle();
+  const horario = horarioAvisos(ha?.valor);
   return {
     ahora: () => new Date(),
     aleatorio: Math.random,
@@ -123,7 +126,9 @@ export async function depsReales(cfg: ConfigSifen): Promise<DepsCola> {
       if (error) throw new Error(`pedidos entregados: ${error.message}`);
       const ids = (data ?? []).map((p) => Number(p.shopify_order_id));
       if (!ids.length) return [];
-      const { data: ya, error: e2 } = await sb.from("facturas").select("shopify_order_id").eq("tipo_documento", 1).in("shopify_order_id", ids);
+      // Solo cuenta la factura del MISMO ambiente: una de prueba (test) no tapa la real (prod).
+      const { data: ya, error: e2 } = await sb.from("facturas").select("shopify_order_id").eq("tipo_documento", 1)
+        .eq("ambiente", e.ambiente).in("shopify_order_id", ids);
       if (e2) throw new Error(`facturas existentes: ${e2.message}`);
       const con = new Set((ya ?? []).map((f) => Number(f.shopify_order_id)));
       const rend = await rendidosDe(ids);
@@ -161,7 +166,8 @@ export async function depsReales(cfg: ConfigSifen): Promise<DepsCola> {
       return data ? fila(data) : null;
     },
     async facturaDePedido(orderId) {
-      const { data, error } = await sb.from("facturas").select("*").eq("shopify_order_id", orderId).eq("tipo_documento", 1).maybeSingle();
+      const { data, error } = await sb.from("facturas").select("*").eq("shopify_order_id", orderId).eq("tipo_documento", 1)
+        .eq("ambiente", e.ambiente).maybeSingle();
       if (error) throw new Error(`facturaDePedido: ${error.message}`);
       return data ? fila(data) : null;
     },
@@ -207,7 +213,11 @@ export async function depsReales(cfg: ConfigSifen): Promise<DepsCola> {
       if (up.error) throw new Error(`storage: ${up.error.message}`);
       return ruta;
     },
-    enviarKude: (f, ped) => enviarKudeWhatsApp(f, ped, cfg.plantilla_factura),
+    // Fuera de horario no sale: devuelve error y la cola lo reprograma para una corrida posterior.
+    enviarKude: async (f, ped) =>
+      puedeMandarKude(new Date(), horario)
+        ? await enviarKudeWhatsApp(f, ped, cfg.plantilla_factura)
+        : { ok: false, error: "fuera de horario de avisos; sale en una corrida posterior" },
     avisar: (t) => avisar(t),
     escapar: escaparHtml,
   };

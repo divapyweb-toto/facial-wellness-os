@@ -69,3 +69,43 @@ Deno.test("si falla la tag en Shopify, igual queda pagado y el aviso lo dice", a
   assertEquals(c!.estado, "pagado");
   assertEquals(log.avisos[0].includes("No se pudo poner la tag"), true);
 });
+
+// ── atenderEventoQR (webhook ya verificado) ──
+import { atenderEventoQR, type DepsEventoQR } from "./procesar.ts";
+
+function depsEvento(nuevo: boolean, falla: boolean) {
+  const log = { procesado: 0, marcas: [] as (string | null)[], borrado: 0, avisos: [] as string[] };
+  const d: DepsEventoQR = {
+    guardarEvento: () => Promise.resolve(nuevo),
+    procesar: () => { log.procesado++; return falla ? Promise.reject(new Error("db caída")) : Promise.resolve(); },
+    marcarProcesado: (e) => { log.marcas.push(e); return Promise.resolve(); },
+    borrarEvento: () => { log.borrado++; return Promise.resolve(); },
+    avisar: (t) => { log.avisos.push(t); return Promise.resolve(); },
+    escapar: (s) => String(s),
+  };
+  return { d, log };
+}
+
+Deno.test("evento nuevo se procesa aunque la bandera esté apagada (no depende de ola4.qr)", async () => {
+  const { d, log } = depsEvento(true, false);
+  const r = await atenderEventoQR(d, "e1");
+  assertEquals(r.status, 200);
+  assertEquals(log.procesado, 1);
+  assertEquals(log.marcas, [null]);
+});
+
+Deno.test("evento repetido no se procesa", async () => {
+  const { d, log } = depsEvento(false, false);
+  const r = await atenderEventoQR(d, "e1");
+  assertEquals(r.cuerpo.repetido, true);
+  assertEquals(log.procesado, 0);
+});
+
+Deno.test("si procesar falla: borra la marca, avisa y devuelve 500 para que el proveedor reintente", async () => {
+  const { d, log } = depsEvento(true, true);
+  const r = await atenderEventoQR(d, "e1");
+  assertEquals(r.status, 500);
+  assertEquals(log.borrado, 1);
+  assertEquals(log.avisos.length, 1);
+  assertEquals(log.marcas, []);
+});
