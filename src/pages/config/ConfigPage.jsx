@@ -384,10 +384,21 @@ function ReglasNegocio() {
           <label className="form-label">Gastos fijos mensuales</label>
           <textarea className="form-textarea" rows={4} value={form.gastos_fijos_voltra}
             onChange={e => set('gastos_fijos_voltra', e.target.value)}
-            placeholder={'Shopify: 180000\nSupabase: 25 usd'} />
+            placeholder={'Shopify: 39 usd\nReleasit COD: 11.49 usd\nSupabase: 25 usd\nClaude (suscripción): … usd\nDominio: …'} />
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
             Una línea por gasto: nombre, dos puntos y el monto por mes (guaraníes, o "usd"). Se prorratean según el período del reporte.
           </span>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.6 }}>
+            Ejemplos de lo que conviene anotar (poné el monto que figura en tu factura de cada uno):
+            <pre style={{ margin: '4px 0 0', padding: '6px 10px', background: 'var(--bg-card-raised)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, whiteSpace: 'pre-wrap' }}>
+{`Shopify: 39 usd
+Releasit COD: 11.49 usd
+Supabase: 25 usd
+Claude (suscripción): … usd
+Dominio: …`}
+            </pre>
+            No anotes acá Meta Ads, WhatsApp API, Claude API ni ElevenLabs: esos se suman solos (con lo facturado por el proveedor cuando está, o estimado por el sistema).
+          </div>
         </div>
       </div>
 

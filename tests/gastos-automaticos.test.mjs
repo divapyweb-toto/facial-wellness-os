@@ -1,4 +1,4 @@
-import { armarGastosAutomaticos, parsearGastosFijos } from '../src/lib/gastosAutomaticos.js'
+import { armarGastosAutomaticos, parsearGastosFijos, cargarGastosAutomaticos } from '../src/lib/gastosAutomaticos.js'
 import { tasaDelDia, cargarTasas, traerTasaOnline } from '../src/lib/tipoCambio.js'
 
 let fallas = 0
@@ -51,6 +51,44 @@ ok(tasaDelDia(tasas, '2026-10-10') === 7100 && tasaDelDia(tasas, '2026-10-01') =
 ok(tasaDelDia(new Map(), '2026-10-07', 0) === 0, 'sin ninguna cotización ni respaldo: 0 (se avisa, no se inventa)')
 r = armarGastosAutomaticos({ waMensajes: [{ costo_usd: 2, creado_en: '2026-10-07T12:00:00Z' }], tasas: new Map(), usdPyg: 0, tienda: 'voltra' })
 ok(r.faltaTipoCambio && r.whatsappGs === 0 && r.usdSinConvertir === 2, 'sin cambio posible queda en dólares y avisa')
+
+console.log('\n── real (facturado) vs estimado, por día ──')
+{
+  const t = new Map([['2026-10-05', 7000]])
+  // Estimado: Claude 1 US$ el 05-10 y 2 US$ el 06-10 (mediodía en Paraguay = 15:00 UTC).
+  const turnosE = [{ costo_usd: 1, simulado: false, creado_en: '2026-10-05T15:00:00Z' }, { costo_usd: 2, simulado: false, creado_en: '2026-10-06T15:00:00Z' }]
+  const waE = [{ costo_usd: 0.5, creado_en: '2026-10-05T15:00:00Z' }]
+  const reales = [
+    { fecha: '2026-10-05', proveedor: 'claude', concepto: 'sonnet', monto_usd: 3 },
+    { fecha: '2026-10-05', proveedor: 'claude', concepto: 'haiku', monto_usd: 0.5 },
+    { fecha: '2026-10-05', proveedor: 'elevenlabs', concepto: '', monto_usd: 4 },
+  ]
+  r = armarGastosAutomaticos({ turnosIA: turnosE, waMensajes: waE, gastosReales: reales, tasas: t, tienda: 'voltra' })
+  ok(Math.abs(r.claudeUsd - 5.5) < 1e-9, `día con real → usa el real (3,5) y NO suma su estimado; día sin real → estimado (2) — dio ${r.claudeUsd}`)
+  ok(r.claudeGs === 38500 && r.origen.claude.realGs === 24500 && r.origen.claude.estimadoGs === 14000, 'separa cuánto fue real y cuánto estimado')
+  ok(r.origen.claude.tipo === 'mixto' && r.origen.claude.diasReales === 1 && r.origen.claude.diasEstimados === 1, 'mezcla en el período: marca "parte real / parte estimado"')
+  ok(r.origen.whatsapp.tipo === 'estimado' && r.whatsappGs === 3500, 'WhatsApp sin dato real sigue estimado')
+  ok(r.elevenlabsUsd === 4 && r.elevenlabsGs === 28000 && r.origen.elevenlabs.tipo === 'real', 'ElevenLabs solo real')
+  ok(r.totalGs === 38500 + 3500 + 28000, `el total suma los tres proveedores — dio ${r.totalGs}`)
+  r = armarGastosAutomaticos({ turnosIA: [turnosE[0]], gastosReales: [reales[0]], tasas: t, tienda: 'voltra' })
+  ok(r.origen.claude.tipo === 'real' && r.claudeUsd === 3, 'todo el período con real → "real"')
+  r = armarGastosAutomaticos({ gastosReales: [{ fecha: '2026-10-05', proveedor: 'claude', concepto: '', monto_usd: 0 }], turnosIA: [turnosE[0]], tasas: t, tienda: 'voltra' })
+  ok(r.claudeUsd === 0 && r.origen.claude.tipo === 'real', 'un día con real en cero (sin consumo) no vuelve al estimado')
+  r = armarGastosAutomaticos({ gastosReales: reales, turnosIA: turnosE, tasas: t, tienda: 'fw' })
+  ok(r.totalGs === 0 && r.elevenlabsGs === 0, 'Facial Wellness no ve gastos de proveedores de Voltra')
+  r = armarGastosAutomaticos({ gastosReales: [{ fecha: '2026-10-05', proveedor: 'elevenlabs', concepto: '', monto_usd: 1 }], tasas: new Map(), usdPyg: 0, tienda: 'voltra' })
+  ok(r.faltaTipoCambio && r.usdSinConvertir === 1 && r.elevenlabsGs === 0, 'lo real sin cambio posible también espera y avisa')
+  const sinTabla = armarGastosAutomaticos({ turnosIA: turnosE, waMensajes: waE, tasas: t, tienda: 'voltra' })
+  const conVacia = armarGastosAutomaticos({ turnosIA: turnosE, waMensajes: waE, gastosReales: [], tasas: t, tienda: 'voltra' })
+  ok(sinTabla.totalGs === 24500 && conVacia.totalGs === sinTabla.totalGs && sinTabla.origen.claude.tipo === 'estimado', 'sin tabla de reales → igual que antes (todo estimado)')
+}
+const fallaTabla = (tabla) => ({ from: (t) => {
+  const q = { select: () => q, gte: () => q, lte: () => q, not: () => q,
+    limit: async () => t === tabla ? { data: null, error: { message: 'relation does not exist' } } : { data: [], error: null } }
+  return q
+} })
+const cargado = await cargarGastosAutomaticos(fallaTabla('gastos_proveedor_diario'), { inicio: '2026-10-01', fin: '2026-10-09' })
+ok(Array.isArray(cargado.gastosReales) && cargado.gastosReales.length === 0 && Array.isArray(cargado.turnosIA), 'si la tabla no existe la carga no revienta y sigue como hoy')
 
 console.log('\n── cargarTasas: tabla, memoria y fuente pública ──')
 const guardado = []

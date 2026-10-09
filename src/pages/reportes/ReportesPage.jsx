@@ -44,6 +44,21 @@ function Delta({ actual, anterior, invertido = false }) {
   )
 }
 
+// Marca debajo de WhatsApp / Claude / ElevenLabs en el desglose: de dónde sale
+// el monto. Real = lo que facturó el proveedor; estimado = lo que calcula el sistema.
+function MarcaOrigen({ o }) {
+  if (!o || o.tipo === 'sin-datos') return null
+  const base = { display: 'block', fontSize: 11, marginTop: 2 }
+  if (o.tipo === 'real') return <span style={{ ...base, color: 'var(--green)' }}>✓ Real (facturado por el proveedor)</span>
+  if (o.tipo === 'estimado') return <span style={{ ...base, color: 'var(--text-muted)' }}>≈ Estimado por el sistema</span>
+  return (
+    <span style={{ ...base, color: 'var(--text-muted)' }}>
+      Parte real, parte estimada: <span style={{ color: 'var(--green)' }}>{formatGs(o.realGs)} real ({o.diasReales} {o.diasReales === 1 ? 'día' : 'días'})</span>
+      {' · '}{formatGs(o.estimadoGs)} estimado ({o.diasEstimados} {o.diasEstimados === 1 ? 'día' : 'días'})
+    </span>
+  )
+}
+
 export default function ReportesPage() {
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
   // Excluir mayoristas del reporte. Va en TRUE por defecto a propósito: los
@@ -104,7 +119,8 @@ export default function ReportesPage() {
     // Cada gasto en dólares se convierte con el cambio de SU día (no uno solo).
     const hoyAuto = new Date().toISOString().slice(0, 10)
     const fechaTasaFijos = fin < hoyAuto ? fin : hoyAuto
-    const diasUsd = [...rawAuto.waMensajes, ...rawAuto.turnosIA, ...rawAuto.ciclosMejora].map(r => diaLocal(r.creado_en)).concat(fechaTasaFijos)
+    const diasUsd = [...rawAuto.waMensajes, ...rawAuto.turnosIA, ...rawAuto.ciclosMejora].map(r => diaLocal(r.creado_en))
+      .concat(rawAuto.gastosReales.map(r => String(r.fecha).slice(0, 10)), fechaTasaFijos)
     const { tasas } = await cargarTasas(supabaseCrudo, diasUsd)
     const auto = armarGastosAutomaticos({
       ...rawAuto, productos, tasas, fechaTasaFijos,
@@ -910,7 +926,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
           )}
           {datos.auto.faltaTipoCambio && (
             <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(234,179,8,0.1)', border: '1px solid var(--yellow)', fontSize: 12.5, color: 'var(--text-secondary)' }}>
-              ⚠️ Falta el tipo de cambio: WhatsApp API y Claude API (US$ {datos.auto.usdSinConvertir.toFixed(2)}) <strong>no están sumados</strong> a la utilidad. No se pudo obtener la cotización: cargá un tipo de cambio de respaldo en Config → Gastos automáticos.
+              ⚠️ Falta el tipo de cambio: WhatsApp API, Claude API y ElevenLabs (US$ {datos.auto.usdSinConvertir.toFixed(2)}) <strong>no están sumados</strong> a la utilidad. No se pudo obtener la cotización: cargá un tipo de cambio de respaldo en Config → Gastos automáticos.
             </div>
           )}
           {datos.auto.rangoTasa && (
@@ -928,14 +944,18 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
                 { l: 'Costo de mercadería vendida (entregadas)', v: datos.costoMercaderiaVendida, signo: '−' },
                 { l: `Flete de envíos (${datos.entregados + datos.devueltos} resueltos)`, v: datos.fleteFirme, signo: '−' },
                 { l: 'Gasto en Meta Ads', v: datos.totalGastoAds, signo: '−' },
-                { l: `WhatsApp API (US$ ${datos.auto.waUsd.toFixed(2)})`, v: datos.auto.whatsappGs, signo: '−' },
-                { l: `Claude API (US$ ${datos.auto.claudeUsd.toFixed(2)})`, v: datos.auto.claudeGs, signo: '−' },
+                { l: `WhatsApp API (US$ ${datos.auto.waUsd.toFixed(2)})`, v: datos.auto.whatsappGs, signo: '−', origen: datos.auto.origen?.whatsapp },
+                { l: `Claude API (US$ ${datos.auto.claudeUsd.toFixed(2)})`, v: datos.auto.claudeGs, signo: '−', origen: datos.auto.origen?.claude },
+                { l: `ElevenLabs (US$ ${(datos.auto.elevenlabsUsd || 0).toFixed(2)})`, v: datos.auto.elevenlabsGs || 0, signo: '−', origen: datos.auto.origen?.elevenlabs },
                 ...datos.auto.fijos.map(f => ({ l: `${f.concepto} (fijo, prorrateado)`, v: f.gs, signo: '−' })),
                 { l: 'Otros gastos del mes', v: datos.totalGastos, signo: '−' },
               ].filter(r => r.v !== undefined && r.v !== 0).map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: 13 }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>{r.l}</span>
-                  <span style={{ fontWeight: 600, color: r.signo === '−' ? 'var(--red)' : 'var(--text-primary)' }}>{r.signo} {formatGs(r.v)}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    {r.l}
+                    {r.origen && <MarcaOrigen o={r.origen} />}
+                  </span>
+                  <span style={{ fontWeight: 600, color: r.signo === '−' ? 'var(--red)' : 'var(--text-primary)', whiteSpace: 'nowrap' }}>{r.signo} {formatGs(r.v)}</span>
                 </div>
               ))}
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0 10px', fontSize: 14 }}>
