@@ -82,6 +82,8 @@ function extraerNota(notas, clave) {
 function clasificarEstado(tags, cancelledAt) {
   const t = (tags || '').toLowerCase()
   if (t.includes('cancelado') || cancelledAt) return 'cancelado'
+  // 09-10: retira en persona o le faltan datos de entrega → no va al courier aunque esté confirmado.
+  if (t.includes('retiro_en_casa') || t.includes('faltan_datos')) return 'pending'
   if (t.includes('confirmado')) return 'confirmado'
   if (t.includes('ayuda') || t.includes('help')) return 'ayuda'
   if (t.includes('confirmation pending') || t.includes('pending')) return 'pending'
@@ -91,7 +93,7 @@ function clasificarEstado(tags, cancelledAt) {
 const ESTADO_CONFIG = {
   confirmado: { label: '✅ Confirmado', color: 'var(--green)', despachar: true },
   ayuda:      { label: '💬 Ayuda',      color: 'var(--purple)', despachar: true },
-  pending:    { label: '⚠ Pendiente',   color: 'var(--yellow)', despachar: false },
+  pending:    { label: '⏳ Sin confirmar — no despachar', color: 'var(--yellow)', despachar: false },
   cancelado:  { label: '❌ Cancelado',  color: 'var(--red)',    despachar: false },
 }
 
@@ -160,7 +162,13 @@ function mapearGrupoAPedidos(grupoRows) {
   }
   const notas = primero('Note Attributes')
   const estado = clasificarEstado(primero('Tags'), primero('Cancelled at'))
-  const cfg = ESTADO_CONFIG[estado]
+  // 09-10: el motivo a la vista, para no mandar al courier algo que no va (sigue contando como 'pending').
+  const tagsTxt = String(primero('Tags') || '').toLowerCase()
+  const cfg = estado === 'pending' && tagsTxt.includes('retiro_en_casa')
+    ? { ...ESTADO_CONFIG.pending, label: '🏠 Retira en persona — no despachar', color: 'var(--purple)' }
+    : estado === 'pending' && tagsTxt.includes('faltan_datos')
+      ? { ...ESTADO_CONFIG.pending, label: '📍 Faltan datos — no despachar' }
+      : ESTADO_CONFIG[estado]
   const fecha = (primero('Created at') || '').split(' ')[0] || hoyLocal()
   // Voltra (Vendor = VOLTRA PARAGUAY): Shopify numera igual en cualquier tienda,
   // así que el #1003 de Voltra es 'VT-1003' y no puede chocar con el 1003 de FW.
