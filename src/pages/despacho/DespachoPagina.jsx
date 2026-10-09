@@ -164,7 +164,13 @@ function mapearGrupoAPedidos(grupoRows) {
   const estado = clasificarEstado(primero('Tags'), primero('Cancelled at'))
   // 09-10: el motivo a la vista, para no mandar al courier algo que no va (sigue contando como 'pending').
   const tagsTxt = String(primero('Tags') || '').toLowerCase()
-  const cfg = estado === 'pending' && tagsTxt.includes('retiro_en_casa')
+  // 09-10: pago anticipado. Pagado en Shopify (botón "Verifiqué el pago" de Telegram o a mano) → sale como YA PAGADO.
+  // Comprobante recibido pero sin verificar → no se despacha hasta verificarlo (ni cobro doble ni envío sin cobrar).
+  const pagadoShopify = String(primero('Financial Status') || '').toLowerCase() === 'paid' || tagsTxt.includes('pago_verificado')
+  const comprobanteSinVerificar = !pagadoShopify && tagsTxt.includes('pago_anticipado_comprobante')
+  const cfg = estado === 'confirmado' && comprobanteSinVerificar
+    ? { ...ESTADO_CONFIG.pending, label: '💳 Mandó comprobante: verificá el pago en ueno antes de despachar', color: 'var(--purple)' }
+    : estado === 'pending' && tagsTxt.includes('retiro_en_casa')
     ? { ...ESTADO_CONFIG.pending, label: '🏠 Retira en persona — no despachar', color: 'var(--purple)' }
     : estado === 'pending' && tagsTxt.includes('faltan_datos')
       ? { ...ESTADO_CONFIG.pending, label: '📍 Faltan datos — no despachar' }
@@ -256,7 +262,7 @@ function mapearGrupoAPedidos(grupoRows) {
     n_referencia: ref, tienda, origenWhatsApp, cliente_nombre: nombre, ciudad, departamento, direccion,
     referencia_dir: refDir,          // separada: Lucero la pide en su propia columna
     telefono, producto_nombre: it.producto_nombre, cantidad: it.cantidad,
-    total: totales[i], fecha, estado_releasit: estado,
+    total: totales[i], fecha, estado_releasit: estado, pagadoShopify,
     cfg, cobranzaOk, despachar, faltantes,
     transportadora,                  // 'pap' | 'lucero' | 'otra' — editable después en la UI
     motivoTransportadora: sugerencia.motivo,
@@ -1079,7 +1085,8 @@ export default function DespachoPagina() {
         bloqueadoPorCiudad,
         despachar: despacharBase && !bloqueadoPorRiesgo && !bloqueadoPorCiudad && !sinFleteOtra,
         forzado: forzados.has(p.n_referencia),
-        prepago: prepagos.has(p.n_referencia),
+        // Pagado en Shopify → prepago por defecto; tocar el botón lo invierte (el Set guarda los cambios a mano).
+        prepago: p.pagadoShopify ? !prepagos.has(p.n_referencia) : prepagos.has(p.n_referencia),
         transportadora,
         transpManual: !!transpOverride[p.n_referencia],
         // Si la transportadora elegida no cubre la ciudad, tarifa queda null y
