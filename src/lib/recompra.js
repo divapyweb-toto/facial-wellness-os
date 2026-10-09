@@ -1,4 +1,5 @@
 import { getVentanasRecompra } from './config'
+import { getTienda } from './tienda'
 // src/lib/recompra.js
 // ═══════════════════════════════════════════════════════════
 // MOTOR DE SEGMENTACIÓN DE RECOMPRA / CROSS-SELL
@@ -40,15 +41,41 @@ const NOMBRE = {
   bebird:  'Bebird Pro',
 }
 
-// Link directo al producto en la tienda (con variante), por familia.
+// Link directo al producto, por tienda y familia. Cada tienda tiene su
+// dominio y sus handles: un cliente de Voltra no puede recibir un link de
+// Facial Wellness. Familia sin producto en esa tienda → portada.
+export const DOMINIO_TIENDA = {
+  fw: 'https://facialwellnesspy.com',
+  voltra: 'https://voltraparaguay.com',
+}
 const URL_PRODUCTO = {
-  nasal:   'https://facialwellnesspy.com/products/tiras-nasales-30-unidades?variant=46259804930199',
-  parche:  'https://facialwellnesspy.com/products/parches-bucales-30-unidades?variant=46259804536983',
-  lengua:  'https://facialwellnesspy.com/products/raspador-de-lengua-facial-wellness-higiene-bucal-avanzada?variant=46521995952279',
-  jaw:     'https://facialwellnesspy.com/products/ejercitadores-de-mandibula-pack-3-jawflex-pro?variant=46295196336279',
-  botella: 'https://facialwellnesspy.com/products/gudair-botella-flexible-flow-500-%F0%9F%92%A7?variant=46892729270423',
-  gudair:  'https://facialwellnesspy.com/products/pack-gudair-tira-nasal-parche-bucal-30-unidades-c-u?variant=46259805061271',
-  bebird:  'https://facialwellnesspy.com/products/bebird-pro%E2%84%A2-limpieza-de-oidos-con-camara-hd-en-tiempo-real?variant=46462553129111',
+  fw: {
+    nasal:   'https://facialwellnesspy.com/products/tiras-nasales-30-unidades?variant=46259804930199',
+    parche:  'https://facialwellnesspy.com/products/parches-bucales-30-unidades?variant=46259804536983',
+    lengua:  'https://facialwellnesspy.com/products/raspador-de-lengua-facial-wellness-higiene-bucal-avanzada?variant=46521995952279',
+    jaw:     'https://facialwellnesspy.com/products/ejercitadores-de-mandibula-pack-3-jawflex-pro?variant=46295196336279',
+    botella: 'https://facialwellnesspy.com/products/gudair-botella-flexible-flow-500-%F0%9F%92%A7?variant=46892729270423',
+    gudair:  'https://facialwellnesspy.com/products/pack-gudair-tira-nasal-parche-bucal-30-unidades-c-u?variant=46259805061271',
+    bebird:  'https://facialwellnesspy.com/products/bebird-pro%E2%84%A2-limpieza-de-oidos-con-camara-hd-en-tiempo-real?variant=46462553129111',
+  },
+  // Handles leídos de la Admin API de Shopify de Voltra el 09-10-2026
+  // (todos ACTIVE). Bebird no está en Voltra → portada.
+  voltra: {
+    nasal:   'https://voltraparaguay.com/products/tiras-nasales-gudair-30-unidades',
+    parche:  'https://voltraparaguay.com/products/parches-bucales-gudair-30-unidades',
+    lengua:  'https://voltraparaguay.com/products/raspador-de-lengua-de-acero-inoxidable',
+    jaw:     'https://voltraparaguay.com/products/ejercitador-de-mandibula-3-niveles',
+    botella: 'https://voltraparaguay.com/products/botella-flexible-gudair-500-ml',
+    gudair:  'https://voltraparaguay.com/products/pack-gudair-tiras-nasales-parches-bucales',
+  },
+}
+
+// 'todas' no es una tienda: se usa Voltra, la tienda activa.
+export const tiendaReal = (t) => (t === 'fw' || t === 'voltra' ? t : 'voltra')
+
+export function urlProducto(familia, tienda = getTienda()) {
+  const t = tiendaReal(tienda)
+  return URL_PRODUCTO[t][familia] || `${DOMINIO_TIENDA[t]}/`
 }
 
 // Clasifica cualquier nombre de producto en su familia.
@@ -67,9 +94,23 @@ export function familiaProducto(nombre) {
   return null
 }
 
-function diasDesde(hoy, fecha) {
+// Día calendario en Paraguay (YYYY-MM-DD). Una fecha sola ('2026-10-01') ya
+// es un día de Paraguay; un timestamp se pasa a la hora de Asunción.
+const FMT_PY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion', year: 'numeric', month: '2-digit', day: '2-digit' })
+export function diaPY(fecha) {
+  if (typeof fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) return fecha
+  const d = fecha instanceof Date ? fecha : new Date(fecha)
+  return Number.isNaN(d.getTime()) ? null : FMT_PY.format(d)
+}
+
+// Días entre dos días de Paraguay. Antes se restaba contra la medianoche UTC:
+// de noche (21:00 PY en adelante) cada cliente sumaba un día de más.
+export function diasDesde(hoy, fecha) {
   if (!fecha) return null
-  return Math.floor((hoy.getTime() - new Date(fecha).getTime()) / 86400000)
+  const a = diaPY(hoy), b = diaPY(fecha)
+  if (!a || !b) return null
+  const utc = (s) => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10))
+  return Math.round((utc(a) - utc(b)) / 86400000)
 }
 
 function ofertaTexto(familiaOfrecida, esReposicion) {
@@ -81,8 +122,9 @@ function ofertaTexto(familiaOfrecida, esReposicion) {
 // lineas: [{ telefono, nombre, familia, cantidad, fechaEntrega }]  (una por línea de venta entregada)
 // excluidos: Set<string> de teléfonos contactados hace < 25 días (cooldown)
 // hoy: Date  (inyectable para testear)
+// tienda: tienda elegida arriba; si la línea trae su `tienda`, manda esa.
 // → { g1, g2, g3 }  cada uno: [{ nombre, telefono, productoComprado, diasDesdeEntrega, grupo, ofertaSugerida }]
-export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date()) {
+export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(), { tienda = getTienda() } = {}) {
   const { diasReposicion, diasCrosssell } = getVentanasRecompra()
   // Agrupar por teléfono. Saltar: sin teléfono, excluidos, producto no clasificable.
   const porCliente = new Map()
@@ -99,6 +141,10 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
 
   for (const [tel, { nombre, lineas: ls }] of porCliente) {
     const compro = new Set(ls.map(l => l.familia))
+    // Tienda del cliente: la de su pedido más reciente (si viene), si no la elegida.
+    const ultima = ls.filter(l => l.tienda).sort((a, b) => String(b.fechaEntrega || '').localeCompare(String(a.fechaEntrega || '')))[0]
+    const tiendaCli = tiendaReal(ultima?.tienda || tienda)
+    const url = (fam) => urlProducto(fam, tiendaCli)
     const tieneGudair = compro.has('gudair')
 
     // ── Holdings de consumibles (para G1) ──
@@ -130,11 +176,11 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
         ? vencidos.reduce((a, b) => new Date(vencido[a].fechaEntrega) <= new Date(vencido[b].fechaEntrega) ? a : b)
         : vencidos[0]
       g1.push({
-        nombre, telefono: tel,
+        nombre, telefono: tel, tienda: tiendaCli,
         productoComprado: NOMBRE[elegido],
         productoOfrecido: NOMBRE[elegido],
         familiaOfrecida: elegido,
-        urlOfrecido: URL_PRODUCTO[elegido],
+        urlOfrecido: url(elegido),
         diasDesdeEntrega: vencido[elegido].dias,
         grupo: 1,
         ofertaSugerida: ofertaTexto(elegido, true),
@@ -154,11 +200,11 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
       const d = diasDesde(hoy, reciente.fechaEntrega)
       if (d != null && d >= diasCrosssell) {
         g2.push({
-          nombre, telefono: tel,
+          nombre, telefono: tel, tienda: tiendaCli,
           productoComprado: NOMBRE[famComprado],
           productoOfrecido: NOMBRE[famFalta],
           familiaOfrecida: famFalta,
-          urlOfrecido: URL_PRODUCTO[famFalta],
+          urlOfrecido: url(famFalta),
           diasDesdeEntrega: d,
           grupo: 2,
           ofertaSugerida: ofertaTexto(famFalta, false),
@@ -176,11 +222,11 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
     if (candidatos.length) {
       const elegido = candidatos.reduce((a, b) => a.d <= b.d ? a : b) // más reciente
       g3.push({
-        nombre, telefono: tel,
+        nombre, telefono: tel, tienda: tiendaCli,
         productoComprado: NOMBRE[elegido.familia],
         productoOfrecido: NOMBRE[CROSSSELL_MAP[elegido.familia]],
         familiaOfrecida: CROSSSELL_MAP[elegido.familia],
-        urlOfrecido: URL_PRODUCTO[CROSSSELL_MAP[elegido.familia]],
+        urlOfrecido: url(CROSSSELL_MAP[elegido.familia]),
         diasDesdeEntrega: elegido.d,
         grupo: 3,
         ofertaSugerida: ofertaTexto(CROSSSELL_MAP[elegido.familia], false),

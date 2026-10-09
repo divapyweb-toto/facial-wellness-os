@@ -4,6 +4,14 @@
 // que SheetJS no hace: color de pestañas, escala de colores condicional, etc.
 
 import ExcelJS from 'exceljs'
+import { getTienda } from './tienda'
+
+// Nombre del archivo según la tienda elegida (antes siempre decía FacialWellness).
+const NOMBRE_TIENDA = { voltra: 'Voltra', fw: 'FacialWellness', todas: 'Todas' }
+export function nombreArchivoRecompra(tienda = getTienda(), d = new Date()) {
+  const p = n => String(n).padStart(2, '0')
+  return `Recompra_${NOMBRE_TIENDA[tienda] || 'Voltra'}_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.xlsx`
+}
 
 const GRUPOS_META = {
   g1: { num: '1', tab: '1 · Reponer',     color: 'FF3B86C9', nombre: 'Reponer consumible' },
@@ -105,8 +113,7 @@ export async function generarExcelRecompra(segmentado) {
   // writeBuffer → Blob → descarga (camino navegador)
   const buffer = await wb.xlsx.writeBuffer()
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-  const d = new Date()
-  const nombre = `Recompra_FacialWellness_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}.xlsx`
+  const nombre = nombreArchivoRecompra()
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

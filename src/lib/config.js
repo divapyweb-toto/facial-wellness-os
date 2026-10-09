@@ -78,14 +78,48 @@ let estadoCarga = { hecho: false, desdeDB: 0, error: null }
 export const getEstadoConfig = () => ({ ...estadoCarga })
 
 // Convierte el texto guardado al tipo del default (número o string).
-function coerce(clave, valor) {
+export function coerce(clave, valor) {
   if (valor == null) return DEFAULTS[clave]
   const def = DEFAULTS[clave]
   if (typeof def === 'number') {
+    // Vacío → default. Number('') da 0: un umbral vacío bloqueaba a todos.
+    if (String(valor).trim() === '') return def
     const n = Number(valor)
     return Number.isFinite(n) ? n : def
   }
   return String(valor)
+}
+
+// Rangos válidos de los campos numéricos de Config. Se chequean antes de
+// guardar: un valor fuera de rango (ej. 0 fallos) cambia el negocio en silencio.
+const RANGOS = {
+  riesgo_bloqueo_fallos: { min: 1, nombre: 'Bloquear desde (fallos)' },
+  riesgo_bloqueo_tasa: { min: 0, max: 1, nombre: 'Tasa de bloqueo' },
+  riesgo_tasa: { min: 0, max: 1, nombre: 'Tasa de riesgo' },
+  recompra_dias_reposicion: { min: 1, nombre: 'Reponer consumible cada' },
+  recompra_dias_crosssell: { min: 1, nombre: 'Ofrecer producto nuevo desde' },
+  recompra_dias_cooldown: { min: 1, nombre: 'No repetir contacto por' },
+  seguimiento_pap_dias_cerca: { min: 1, nombre: 'Días para reclamar (cerca)' },
+  seguimiento_pap_dias_lejos: { min: 1, nombre: 'Días para reclamar (interior)' },
+  flete_pap: { min: 0, nombre: 'Flete PaP' },
+  envio_cliente: { min: 0, nombre: 'Envío al cliente' },
+  usd_pyg: { min: 0, nombre: 'Tipo de cambio de respaldo' },
+}
+
+// Devuelve la lista de errores (vacía = se puede guardar). Solo mira las
+// claves presentes en `valores`.
+export function validarReglas(valores) {
+  const errores = []
+  for (const [clave, valor] of Object.entries(valores || {})) {
+    if (typeof DEFAULTS[clave] !== 'number') continue
+    const r = RANGOS[clave] || { min: 0, nombre: clave }
+    const txt = String(valor ?? '').trim()
+    const n = Number(txt)
+    if (txt === '' || !Number.isFinite(n)) { errores.push(`${r.nombre}: no puede quedar vacío`); continue }
+    if (r.min != null && n < r.min) errores.push(`${r.nombre}: mínimo ${r.min}`)
+    if (r.max != null && n > r.max) errores.push(`${r.nombre}: máximo ${r.max}`)
+  }
+  return errores
 }
 
 // Carga la config desde Supabase al caché. Llamar una vez al iniciar la app.

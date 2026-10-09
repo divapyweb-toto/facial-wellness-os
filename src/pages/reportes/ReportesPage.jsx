@@ -1,7 +1,9 @@
 // src/pages/reportes/ReportesPage.jsx
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { supabaseTienda as supabase, supabase as supabaseCrudo, formatGs, formatPct } from '../../lib/supabase'
-import { armarGastosAutomaticos, cargarGastosAutomaticos, diaLocal } from '../../lib/gastosAutomaticos'
+import { armarGastosAutomaticos, cargarGastosAutomaticos, diaLocal, claveCampanaManual, gastosSinDobleAds } from '../../lib/gastosAutomaticos'
+import { contarPedidos, categoriaVenta } from '../../lib/contribucion'
+import { useToast } from '../../lib/toast'
 import { cargarTasas } from '../../lib/tipoCambio'
 import { getGastosAutomaticosConfig } from '../../lib/config'
 import { getTienda } from '../../lib/tienda'
@@ -62,7 +64,10 @@ function MarcaOrigen({ o }) {
 }
 
 export default function ReportesPage() {
-  const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
+  const { toast } = useToast()
+  // Mes de Paraguay. Con toISOString (UTC), el último día del mes después de
+  // las 21:00 abría el mes siguiente (vacío).
+  const [mes, setMes] = useState(() => hoyLocal().slice(0, 7))
   // Excluir mayoristas del reporte. Va en TRUE por defecto a propósito: los
   // números con los que se deciden precios y campañas (ticket promedio, CPA,
   // mix ×1/×2/×3) se distorsionan con un pedido de 20 unidades que no vino de
@@ -75,6 +80,8 @@ export default function ReportesPage() {
 
   const cargarDatos = useCallback(async () => {
     setLoading(true)
+    // try/finally: si una consulta falla, antes el spinner quedaba para siempre.
+    try {
     // Rango del mes elegido y del mes anterior (para comparar)
     const [year, month] = mes.split('-').map(Number)
     const inicio = `${mes}-01`
@@ -103,8 +110,8 @@ export default function ReportesPage() {
       // reintenta sin ella y el filtro simplemente no se aplica.
       fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, cantidad, ciudad, cliente_telefono, transportadora, pago_anticipado, es_mayorista').is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin).order('fecha'))
         .catch(() => fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, costo_prod, costo_envio, producto_nombre, cantidad, ciudad, cliente_telefono, transportadora, pago_anticipado').is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin).order('fecha'))),
-      fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta, es_mayorista').is('deleted_at', null).gte('fecha', inicioPrev).lte('fecha', finPrev))
-        .catch(() => fetchAll(() => supabase.from('ventas').select('fecha, total, estado, ganancia_neta').is('deleted_at', null).gte('fecha', inicioPrev).lte('fecha', finPrev))),
+      fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta, es_mayorista').is('deleted_at', null).gte('fecha', inicioPrev).lte('fecha', finPrev))
+        .catch(() => fetchAll(() => supabase.from('ventas').select('n_referencia, fecha, total, estado, ganancia_neta').is('deleted_at', null).gte('fecha', inicioPrev).lte('fecha', finPrev))),
       fetchAll(() => supabase.from('gastos').select('fecha, monto, categoria, concepto').is('deleted_at', null).gte('fecha', inicio).lte('fecha', fin)),
       fetchAll(() => supabase.from('campanas_ads').select('*').gte('mes', inicio.slice(0, 7)).lte('mes', fin.slice(0, 7))),
       fetchAll(() => supabase.from('productos').select('id, nombre, costo_unit, activo').eq('activo', true)),
@@ -126,7 +133,8 @@ export default function ReportesPage() {
     const { tasas } = await cargarTasas(supabaseCrudo, diasUsd)
     const auto = armarGastosAutomaticos({
       ...rawAuto, productos, tasas, fechaTasaFijos,
-      mesesConCampanas: new Set((campanas || []).filter(c => Number(c.gasto) > 0).map(c => c.mes)),
+      // Clave tienda+mes: en "Todas", una campaña manual de FW no descarta el Meta sincronizado de Voltra.
+      mesesConCampanas: new Set((campanas || []).filter(c => Number(c.gasto) > 0).map(c => claveCampanaManual(c.tienda, c.mes))),
       tienda: getTienda(), usdPyg: cfgAuto.usdPyg, gastosFijosTexto: cfgAuto.gastosFijosTexto,
       fraccionMes: Math.min(1, diasPeriodoAuto / diasMesAuto),
     })
@@ -142,6 +150,7 @@ export default function ReportesPage() {
     const ventasPrev = sinMayoristas ? (ventasPrevCrudas || []).filter(v => !esMayorista(v)) : (ventasPrevCrudas || [])
 
     const entregadas = (ventas || []).filter(v => v.estado === 'entregado')
+    const pedMes = contarPedidos(ventas || [], categoriaVenta)
     const pendientes = (ventas || []).filter(v => v.estado === 'pendiente')
     const devueltas = (ventas || []).filter(v => v.estado === 'devuelto')
 
@@ -162,19 +171,23 @@ export default function ReportesPage() {
         ingresos: 0, cobrado: 0, cogs: 0, flete: 0, unidades: 0,
       }
       const p = porProducto[k]
-      p.ventas++
+      ;(p._lineas || (p._lineas = [])).push(v)
       // El flete se paga por todo lo RESUELTO (entregado o devuelto).
       if (v.estado === 'entregado' || v.estado === 'devuelto') p.flete += (v.costo_envio || 0)
       if (v.estado === 'entregado') {
-        p.entregados++
         p.cobrado += (v.total || 0)
         p.cogs += (v.costo_prod || 0)
         p.unidades += (v.cantidad || 1)
         p.ingresos += (v.ganancia_neta || 0)
-      } else if (v.estado === 'devuelto') {
-        p.devueltos++
-        // La mercadería devuelta vuelve al stock: su COGS no se pierde.
-      } else p.enTransito++
+      }
+      // La mercadería devuelta vuelve al stock: su COGS no se pierde.
+    })
+    // Conteos por PEDIDO (no por línea): un pedido con 2 líneas del mismo
+    // producto contaba 2 entregas. La plata de arriba sigue por línea.
+    Object.values(porProducto).forEach(p => {
+      const c = contarPedidos(p._lineas, categoriaVenta)
+      p.ventas = c.total; p.entregados = c.entregados; p.devueltos = c.devueltos; p.enTransito = c.enProceso
+      delete p._lineas
     })
     const porProductoArr = Object.values(porProducto).map(p => {
       const res = p.entregados + p.devueltos
@@ -207,26 +220,27 @@ export default function ReportesPage() {
       }
     }
 
-    const totalGastos = (gastos || []).reduce((s, g) => s + g.monto, 0)
     // Publicidad cargada a mano en Campañas + Meta diario de los meses que no tienen Campañas.
     const totalGastoAds = (campanas || []).reduce((s, c) => s + c.gasto, 0) + auto.metaTotal
+    // Protección anti-doble: ¿hay gasto de "Publicidad" en Gastos Y también ads (Campañas o Meta sync)?
+    // Si pasa, se resta SOLO el ads (es el dato de Meta) y el de Publicidad queda
+    // afuera de la utilidad; el aviso se mantiene para que lo borres.
+    const { totalGastos, gastoPublicidad: gastoPublicidadRep, posibleDoble: posibleDobleAdsRep } = gastosSinDobleAds(gastos, totalGastoAds)
 
     // ── Comparativa con mes anterior ──
     const entregadasPrev = (ventasPrev || []).filter(v => v.estado === 'entregado')
+    // Por pedido, igual que el mes actual (si no, la comparación mezcla criterios).
+    const pedPrev = contarPedidos(ventasPrev || [], categoriaVenta)
     const comparativa = {
       ventasBrutas: entregadasPrev.reduce((s, v) => s + v.total, 0),
       ingresosNetos: entregadasPrev.reduce((s, v) => s + (v.ganancia_neta || 0), 0),
-      paquetes: (ventasPrev || []).length,
-      entregados: entregadasPrev.length,
-      devueltos: (ventasPrev || []).filter(v => v.estado === 'devuelto').length,
+      paquetes: pedPrev.total,
+      entregados: pedPrev.entregados,
+      devueltos: pedPrev.devueltos,
       // Tasa sobre RESUELTOS (entregados + devueltos), no sobre el total: los
       // paquetes en tránsito todavía no fallaron, contarlos como fracaso
       // subestima la tasa sistemáticamente.
-      tasaEntrega: (() => {
-        const dev = (ventasPrev || []).filter(v => v.estado === 'devuelto').length
-        const res = entregadasPrev.length + dev
-        return res ? (entregadasPrev.length / res) * 100 : 0
-      })(),
+      tasaEntrega: pedPrev.resueltos ? (pedPrev.entregados / pedPrev.resueltos) * 100 : 0,
     }
 
     // ── Cobranza (de entregas del mes) ──
@@ -255,15 +269,15 @@ export default function ReportesPage() {
     }
 
     // ── Ciudades ──
-    const ciudadMap = {}
+    // Conteos por PEDIDO (no por línea).
+    const ciudadLineas = {}
     ;(ventas || []).forEach(v => {
       const c = (v.ciudad || 'Sin ciudad').trim()
-      if (!ciudadMap[c]) ciudadMap[c] = { ciudad: c, pedidos: 0, entregados: 0, devueltos: 0 }
-      ciudadMap[c].pedidos++
-      if (v.estado === 'entregado') ciudadMap[c].entregados++
-      if (v.estado === 'devuelto') ciudadMap[c].devueltos++
+      ;(ciudadLineas[c] || (ciudadLineas[c] = [])).push(v)
     })
-    const ciudades = Object.values(ciudadMap).map(c => {
+    const ciudades = Object.entries(ciudadLineas).map(([ciudad, ls]) => {
+      const k = contarPedidos(ls, categoriaVenta)
+      const c = { ciudad, pedidos: k.total, entregados: k.entregados, devueltos: k.devueltos }
       const res = c.entregados + c.devueltos
       return { ...c, tasaEntrega: res ? Math.round(c.entregados / res * 100) : 0, tasaDevolucion: res ? Math.round(c.devueltos / res * 100) : 0 }
     }).filter(c => c.pedidos >= 2).sort((a, b) => b.pedidos - a.pedidos)
@@ -332,10 +346,8 @@ export default function ReportesPage() {
     const costoMercaderiaVendida = cogsEntregadas               // costo de lo entregado/vendido
     // Ganancia = cobrado − flete − costo mercadería − gastos − gasto en ads (Meta).
     // El ads viene del módulo Campañas y también es plata que sale.
+    // totalGastos ya viene SIN el gasto de "Publicidad" si hay ads (anti-doble, ver arriba).
     const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida - totalGastoAds - auto.totalGs
-    // Protección anti-doble: ¿hay gasto de "Publicidad" en Gastos Y también ads en Campañas?
-    const gastoPublicidadRep = (gastos || []).filter(g => /public|ads|meta|marketing/i.test(g.categoria || '')).reduce((s, g) => s + (g.monto || 0), 0)
-    const posibleDobleAdsRep = totalGastoAds > 0 && gastoPublicidadRep > 0
 
     // ── Detalle de Meta Ads por producto (recalculado igual que la página Campañas) ──
     // campanas_ads solo guarda { mes, nombre(familia), gasto }; CPA/ROAS/ganancia se calculan al vuelo.
@@ -350,8 +362,10 @@ export default function ReportesPage() {
       if (!vs.length && !gasto) return null
       return { familia: fam, label, ...calcularMetricasAds(gasto, vs, estadoPaPRep) }
     }).filter(Boolean)
-    const ventasConFamilia = (ventas || []).filter(v => familiaProducto(v.producto_nombre))
-    const adsTotal = { label: 'TOTAL', ...calcularMetricasAds(totalGastoAds, ventasConFamilia, estadoPaPRep) }
+    // TOTAL: todo el gasto contra TODAS las ventas de la tienda. Antes iba contra
+    // las ventas de familias de FW solamente (los productos de Voltra dan
+    // familia null) y salía ROAS 0 / "pierde" falso.
+    const adsTotal = { label: 'TOTAL', ...calcularMetricasAds(totalGastoAds, ventas || [], estadoPaPRep) }
 
     // ── Desglose por transportadora ──
     // Hasta ahora todo el reporte asumía PaP: los fletes de Lucero y de "Otra"
@@ -364,17 +378,23 @@ export default function ReportesPage() {
       if (!transpMap[t]) transpMap[t] = {
         id: t, label: LABEL_TRANSP[t] || t,
         enviados: 0, entregados: 0, devueltos: 0, pendientes: 0,
-        cobrado: 0, flete: 0, fleteFirme: 0, prepagos: 0,
+        cobrado: 0, flete: 0, fleteFirme: 0, prepagos: 0, _lineas: [],
       }
       const r = transpMap[t]
-      r.enviados++
-      if (v.pago_anticipado) r.prepagos++
+      r._lineas.push(v)
       r.flete += (v.costo_envio || 0)
       if (v.estado === 'entregado') {
-        r.entregados++; r.cobrado += (v.total || 0); r.fleteFirme += (v.costo_envio || 0)
+        r.cobrado += (v.total || 0); r.fleteFirme += (v.costo_envio || 0)
       } else if (v.estado === 'devuelto') {
-        r.devueltos++; r.fleteFirme += (v.costo_envio || 0)   // el flete se paga igual
-      } else r.pendientes++
+        r.fleteFirme += (v.costo_envio || 0)   // el flete se paga igual
+      }
+    })
+    // Conteos por PEDIDO (la plata de arriba sigue por línea).
+    Object.values(transpMap).forEach(r => {
+      const k = contarPedidos(r._lineas, categoriaVenta)
+      r.enviados = k.total; r.entregados = k.entregados; r.devueltos = k.devueltos; r.pendientes = k.enProceso
+      r.prepagos = contarPedidos(r._lineas.filter(v => v.pago_anticipado), categoriaVenta).total
+      delete r._lineas
     })
     const porTransportadora = Object.values(transpMap).map(r => ({
       ...r,
@@ -420,11 +440,12 @@ export default function ReportesPage() {
       fleteEntregadas, fletePendientes, fleteDevoluciones, fleteFirme, fleteTotal,
       // Margen = ingreso neto de entregadas / ventas brutas
       margenPct: ventasBrutasCalc ? (ingresosNetosCalc / ventasBrutasCalc) * 100 : 0,
-      paquetesEnviados: (ventas || []).length,
+      // Conteos por PEDIDO (un pedido de 2 líneas cuenta 1).
+      paquetesEnviados: pedMes.total,
       porTransportadora, duelo, diasComparados,
-      entregados: entregadas.length, devueltos: devueltas.length, pendientesCount: pendientes.length,
+      entregados: pedMes.entregados, devueltos: pedMes.devueltos, pendientesCount: pedMes.porCat.pendiente || 0,
       // Misma corrección que arriba: denominador = resueltos, no total enviado.
-      tasaEntrega: (entregadas.length + devueltas.length) ? (entregadas.length / (entregadas.length + devueltas.length)) * 100 : 0,
+      tasaEntrega: pedMes.resueltos ? (pedMes.entregados / pedMes.resueltos) * 100 : 0,
       utilidadNeta: utilidadNetaCalc,
       posibleDobleAds: posibleDobleAdsRep,
       porProducto: porProductoArr,
@@ -435,12 +456,18 @@ export default function ReportesPage() {
       ventas: ventas || [],
       comparativa, cobranza, ciudades, porDiaSemana, motivos,
       clientesUnicos, recompradores, alertas,
+      gastoPublicidadExcluido: posibleDobleAdsRep ? gastoPublicidadRep : 0,
     })
-    setLoading(false)
+    } catch (e) {
+      console.error('[reportes] no se pudo generar:', e)
+      toast('No se pudo generar el reporte: ' + (e?.message || 'error de conexión') + '. Probá de nuevo.', 'error')
+    } finally {
+      setLoading(false)
+    }
     // `sinMayoristas` TIENE que estar acá. Sin él, useCallback congela el
     // valor de la primera vez (true) y el filtro no se puede apagar nunca,
     // por más que destildes y vuelvas a generar.
-  }, [mes, sinMayoristas])
+  }, [mes, sinMayoristas, toast])
 
   // Al cambiar el filtro se regenera solo, pero SOLO si ya había un reporte en
   // pantalla: si no, abrir Reportes dispararía una carga pesada sin pedirla.
@@ -749,7 +776,7 @@ ${motivoFilas.length ? tabla(['Motivo', 'Cantidad'], motivoFilas) : '<p>Sin devo
 
 <h2>7. Meta Ads — detalle por producto</h2>
 ${adsFilas.length ? tabla(['Producto', 'Gasto', 'Pedidos', 'Entreg.', 'CPA/entrega', 'ROAS real', 'Cobrado', 'Ganancia neta', 'Veredicto'], adsFilas) : '<p>Sin campañas cargadas en el período.</p>'}
-<div class="formula">CPA/entrega = gasto ÷ entregados (costo por cliente que paga). ROAS real = cobrado ÷ gasto (sobre lo cobrado, no lo facturado). Ganancia neta = cobrado − gasto ads − costo producto entregado − flete. Gasto total en ads: ${gs(d.totalGastoAds)}.${d.posibleDobleAds ? ' ⚠ Hay gasto categoría publicidad en Gastos Y ads en Campañas el mismo mes: posible doble conteo.' : ''}</div>
+<div class="formula">CPA/entrega = gasto ÷ entregados (costo por cliente que paga). ROAS real = cobrado ÷ gasto (sobre lo cobrado, no lo facturado). Ganancia neta = cobrado − gasto ads − costo producto entregado − flete. Gasto total en ads: ${gs(d.totalGastoAds)}.${d.posibleDobleAds ? ` ⚠ Hay gasto categoría publicidad en Gastos Y ads el mismo mes: se restó solo el ads; quedaron afuera ${gs(d.gastoPublicidadExcluido || 0)} de Publicidad.` : ''}</div>
 
 <h2>8. Gastos operativos — detalle</h2>
 ${gastoCatFilas.length ? tabla(['Categoría', 'Monto', '% del total'], gastoCatFilas) : '<p>Sin gastos operativos cargados en el período.</p>'}
@@ -797,7 +824,8 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
 
   const mesesDisponibles = []
   for (let i = 0; i < 12; i++) {
-    const d = new Date(); d.setMonth(d.getMonth() - i)
+    // Día 1 a propósito: con setMonth sobre el 31, "septiembre" saltaba a octubre.
+    const hoyD = new Date(); const d = new Date(hoyD.getFullYear(), hoyD.getMonth() - i, 1)
     mesesDisponibles.push({
       value: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
       label: d.toLocaleDateString('es-PY', { month: 'long', year: 'numeric' }),
@@ -923,7 +951,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
           {/* Desglose de utilidad (P&L) */}
           {datos.posibleDobleAds && (
             <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(234,179,8,0.1)', border: '1px solid var(--yellow)', fontSize: 12.5, color: 'var(--text-secondary)' }}>
-              ⚠️ Tenés Meta Ads cargado en Campañas <strong>y</strong> un gasto de "Publicidad" este período. Se está restando dos veces. Borrá el gasto de Publicidad — el ads ya se cuenta desde Campañas.
+              ⚠️ Tenés Meta Ads (Campañas o sincronizado) <strong>y</strong> un gasto de "Publicidad" este período. Para no restarlo dos veces, la utilidad usa solo el de Meta Ads y deja afuera {formatGs(datos.gastoPublicidadExcluido)} de Publicidad. Borrá ese gasto para que quede limpio.
             </div>
           )}
           {datos.auto.faltaTipoCambio && (

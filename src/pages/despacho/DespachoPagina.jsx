@@ -420,6 +420,9 @@ function parsearPedidoManual(bloque, catalogo, nRef) {
     prepago: true,
     notas: ci ? `CI/RUC: ${ci}` : '',
     origenManual: true,
+    // Desde oct-2026 FW no tiene campañas: lo que entra por WhatsApp es de
+    // Voltra. Sin esto, filaVentaDePedido lo guardaba como 'fw'.
+    tienda: 'voltra',
   }
 }
 
@@ -783,7 +786,42 @@ function ventaAPedido(v) {
     motivoTransportadora: sug.motivo,
     bloqueadoPorProducto: !!sug.bloqueadoPorProducto,
     costo_envio: v.costo_envio ?? sug.tarifa,
+    // Sin esto, una venta ya pagada salía como "efectivo a cobrar" en la
+    // cabecera y la guía, y el courier le cobraba de nuevo al cliente.
+    prepago: !!v.pago_anticipado,
+    tienda: v.tienda || undefined,
   }
+}
+
+// Columnas de "Desde Ventas". Las extra (prepago, transportadora, flete,
+// tienda) van aparte: si alguna no existiera en la base, se reintenta sin
+// ellas en vez de dejar la pantalla vacía.
+const COLS_VENTAS_PEND_BASE = 'id, n_referencia, fecha, cliente_nombre, cliente_telefono, cliente_direccion, ciudad, producto_nombre, cantidad, total, estado_releasit'
+const COLS_VENTAS_PEND_EXTRA = 'pago_anticipado, transportadora, costo_envio, tienda'
+const esErrorColumnaFaltante = (e) => /column .* does not exist|Could not find the .* column|42703/i.test(`${e?.message || ''} ${e?.code || ''}`)
+
+// 'otra' no tiene tarifario: si no se tipeó el flete se guardaba 0 y la
+// ganancia del pedido quedaba inflada. Sin flete > 0, no se despacha.
+const faltaFleteOtra = (transportadora, costoManual) =>
+  transportadora === 'otra' && !(parseInt(costoManual) > 0)
+
+// Un pedido multiproducto trae N filas con la misma referencia. pedidos_releasit
+// tiene n_referencia único: dos filas iguales en el mismo upsert hacen que
+// Postgres rechace el lote ENTERO. Se combinan sumando el total.
+function deduplicarHistorico(registros) {
+  const porRef = new Map()
+  for (const r of registros) {
+    const k = String(r.n_referencia)
+    if (!porRef.has(k)) porRef.set(k, { ...r })
+    else { const acc = porRef.get(k); acc.total = (acc.total || 0) + (r.total || 0) }
+  }
+  return [...porRef.values()]
+}
+
+// Próximo número WA- a partir de la referencia más alta (o null si no hay).
+function siguienteNumeroWA(refMax) {
+  const n = parseInt(String(refMax || '').replace(/^WA-/i, ''), 10)
+  return isNaN(n) ? 1 : n + 1
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -932,6 +970,7 @@ export default function DespachoPagina() {
   const [selVentas, setSelVentas] = useState(new Set())
   const [cargVentas, setCargVentas] = useState(false)
   const [trayendoVoltra, setTrayendoVoltra] = useState(false)
+  const trayendoVoltraRef = useRef(false)   // candado: el estado tarda un render, el ref no
   const [busqVentas, setBusqVentas] = useState('')
 
   // ── Memos CSV ──────────────────────────────────────────
@@ -1020,15 +1059,17 @@ export default function DespachoPagina() {
       const evCiudad = evaluarCiudad(historialCiudad, p.ciudad, transportadora)
       const ciudadOk = ciudadHabilitada.has(p.n_referencia)
       const bloqueadoPorCiudad = evCiudad.nivel === 'bloqueado' && !ciudadOk
+      const sinFleteOtra = faltaFleteOtra(transportadora, costoOtraManual[p.n_referencia])
       return {
         ...p,
+        faltantes: sinFleteOtra ? [...(p.faltantes || []), 'flete de otra transportadora'] : p.faltantes,
         riesgo: ev,
         riesgoHabilitado: habilitado,
         bloqueadoPorRiesgo,
         riesgoCiudad: evCiudad,
         ciudadHabilitada: ciudadOk,
         bloqueadoPorCiudad,
-        despachar: despacharBase && !bloqueadoPorRiesgo && !bloqueadoPorCiudad,
+        despachar: despacharBase && !bloqueadoPorRiesgo && !bloqueadoPorCiudad && !sinFleteOtra,
         forzado: forzados.has(p.n_referencia),
         prepago: prepagos.has(p.n_referencia),
         transportadora,
@@ -1129,20 +1170,22 @@ export default function DespachoPagina() {
     }
     setProcesandoManual(true)
     try {
-      const { data: catalogo } = await supabase
+      // Sin catálogo los precios y productos salían en 0 sin aviso: se corta.
+      const { data: catalogo, error: errCat } = await supabase
         .from('productos').select('id, nombre, costo_unit, grupo_envio, precio_1u, precio_2u, precio_3u')
         .eq('activo', true)
+      if (errCat) throw new Error('no se pudo leer el catálogo (' + errCat.message + ')')
 
       // Próximo número de la serie WA-: se toma el mayor ya usado en toda la
       // base (no solo lo que está en pantalla) para no repetir nunca, ni
-      // siquiera entre sesiones distintas.
-      const { data: existentes } = await supabase
-        .from('ventas').select('n_referencia').ilike('n_referencia', 'WA-%')
-      let siguiente = 1
-      for (const v of (existentes || [])) {
-        const n = parseInt(String(v.n_referencia).replace(/^WA-/i, ''), 10)
-        if (!isNaN(n) && n >= siguiente) siguiente = n + 1
-      }
+      // siquiera entre sesiones distintas. Se pide solo el máximo: traer todas
+      // cortaba en 1.000 filas y podía repetir números. El orden es de texto,
+      // vale mientras la serie use 4 dígitos (WA-0001…WA-9999).
+      const { data: maxWA, error: errWA } = await supabase
+        .from('ventas').select('n_referencia').like('n_referencia', 'WA-%')
+        .order('n_referencia', { ascending: false }).limit(1)
+      if (errWA) throw new Error('no se pudo leer la serie WA- (' + errWA.message + ')')
+      let siguiente = siguienteNumeroWA(maxWA?.[0]?.n_referencia)
 
       const pedidos = bloques.map(bloque => {
         const nRef = `WA-${String(siguiente).padStart(4, '0')}`
@@ -1238,7 +1281,9 @@ export default function DespachoPagina() {
     try {
       const [ents, vts] = await Promise.all([
         fetchAllSafe(() => supabase.from('entregas').select('n_referencia, ciudad, estado_pap, motivo'), { columnaOrden: 'nro_guia_pap' }),
-        fetchAllSafe(() => supabase.from('ventas').select('n_referencia, transportadora').is('deleted_at', null), { columnaOrden: 'n_referencia' }),
+        // Se pagina por id (único): n_referencia se repite en pedidos
+        // multiproducto y paginar por ella puede saltear o repetir filas.
+        fetchAllSafe(() => supabase.from('ventas').select('n_referencia, transportadora').is('deleted_at', null), { columnaOrden: 'id' }),
       ])
       const listaEnt = (ents?.data ?? ents) || []
       const listaVta = (vts?.data ?? vts) || []
@@ -1313,7 +1358,7 @@ export default function DespachoPagina() {
     setCargando(true)
     let ok = 0, fail = 0
     try {
-      const histRegistros = todos
+      const histRegistros = deduplicarHistorico(todos
         .filter(p => p.n_referencia)
         .map(p => ({
           n_referencia: p.n_referencia,
@@ -1323,13 +1368,15 @@ export default function DespachoPagina() {
           total: p.total,
           producto: getTipo(p.producto_nombre),
           ciudad: p.ciudad,
-        }))
+        })))
       const { error: errHist } = await supabase
         .from('pedidos_releasit')
         .upsert(histRegistros, { onConflict: 'n_referencia' })
-      if (errHist) console.warn('Histórico Releasit no guardado:', errHist.message)
+      if (errHist) throw errHist
     } catch (e) {
+      // No bloquea la carga de ventas, pero se avisa: antes fallaba en silencio.
       console.warn('Histórico Releasit no guardado:', e?.message)
+      toast('Histórico Releasit no guardado: ' + (e?.message || ''), 'error')
     }
 
     const refs = paraDespacho.map(p => p.n_referencia).filter(Boolean)
@@ -1339,14 +1386,22 @@ export default function DespachoPagina() {
     // "duplicada" de la primera y se perdería. Contando, además, un CSV viejo
     // (de antes de este fix) que solo cargó la primera línea se puede volver
     // a subir para recuperar la línea que faltaba, sin duplicar la que ya está.
+    // Si este chequeo falla NO se sigue: cargar "sin filtro" duplicaba ventas
+    // y descontaba stock dos veces. Las borradas no cuentan como existentes.
     let countExistentePorRef = new Map()
     try {
-      const { data } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs)
+      const { data, error } = await supabase.from('ventas').select('n_referencia')
+        .in('n_referencia', refs).is('deleted_at', null)
+      if (error) throw error
       ;(data || []).forEach(d => {
         const r = String(d.n_referencia)
         countExistentePorRef.set(r, (countExistentePorRef.get(r) || 0) + 1)
       })
-    } catch (e) { /* continuar sin filtro */ }
+    } catch (e) {
+      setCargando(false)
+      toast('No se pudo verificar duplicados, no se cargó nada: ' + (e?.message || ''), 'error')
+      return
+    }
 
     // Set simple derivado del conteo — para el chequeo de "esta ref ya existe"
     // (marcar prepago en ventas ya cargadas), que no necesita el conteo fino.
@@ -1384,13 +1439,21 @@ export default function DespachoPagina() {
       return
     }
 
+    // Sin catálogo las ventas se guardaban con costo_prod 0 (ganancia inflada):
+    // se corta la carga y se avisa.
     let catalogo = []
     try {
-      const { data } = await supabase.from('productos').select('id, nombre, costo_unit').eq('activo', true)
+      const { data, error } = await supabase.from('productos').select('id, nombre, costo_unit').eq('activo', true)
+      if (error) throw error
       catalogo = data || []
-    } catch (e) { /* sin catálogo, costo_prod=0 */ }
+    } catch (e) {
+      setCargando(false)
+      toast('No se pudo leer el catálogo, no se cargó nada: ' + (e?.message || ''), 'error')
+      return
+    }
 
     const ventasArr = nuevas.map(p => filaVentaDePedido(p, catalogo))
+    const insertadas = []   // solo las filas que la base aceptó (para los placeholders de Lucero)
     for (let i = 0; i < ventasArr.length; i += 50) {
       let chunk = ventasArr.slice(i, i + 50)
       let { error } = await supabase.from('ventas').insert(chunk)
@@ -1403,7 +1466,7 @@ export default function DespachoPagina() {
         ;({ error } = await supabase.from('ventas').insert(chunk))
       }
       if (error) fail += chunk.length
-      else ok += chunk.length
+      else { ok += chunk.length; insertadas.push(...chunk) }
     }
 
     // ── Placeholder en `entregas` para cada venta de Lucero ──
@@ -1412,7 +1475,9 @@ export default function DespachoPagina() {
     // invisible (no aparece en Entregas, tasa de entrega, nada) hasta que por
     // fin aparece en un archivo de rendición semanas después.
     // Best-effort: si falla, no bloquea el despacho — ventas ya se guardó bien.
-    const deLuceroNuevas = ventasArr.filter(v => v.transportadora === 'lucero')
+    // Solo para ventas que SÍ se guardaron: si un lote falló, un placeholder
+    // sin venta dejaba un envío fantasma "en camino" en Entregas.
+    const deLuceroNuevas = insertadas.filter(v => v.transportadora === 'lucero')
     if (deLuceroNuevas.length) {
       try {
         // Un pedido de varios productos genera varias filas de venta con la
@@ -1436,11 +1501,13 @@ export default function DespachoPagina() {
         }
         const placeholders = [...porRef.values()].map(placeholderEntregaLucero)
         for (let i = 0; i < placeholders.length; i += 50) {
-          await supabase.from('entregas')
+          const { error: errPh } = await supabase.from('entregas')
             .upsert(placeholders.slice(i, i + 50), { onConflict: 'nro_guia_pap' })
+          if (errPh) throw errPh   // supabase no tira excepción: hay que mirar error
         }
       } catch (e) {
         console.warn('No se pudo crear el placeholder de Lucero en entregas:', e?.message)
+        toast('Ventas cargadas, pero no se creó el seguimiento de Lucero: ' + (e?.message || ''), 'error')
       }
     }
     setResultado({ ok, fail, duplicados })
@@ -1494,11 +1561,18 @@ export default function DespachoPagina() {
   const fetchVentasPendientes = async () => {
     setCargVentas(true)
     try {
-      const { data, error } = await fetchAllSafe(() => supabase
+      // Se excluyen las ventas borradas (antes salían en la lista y en las guías).
+      const consulta = (cols) => fetchAllSafe(() => supabase
         .from('ventas')
-        .select('id, n_referencia, fecha, cliente_nombre, cliente_telefono, cliente_direccion, ciudad, producto_nombre, cantidad, total, estado_releasit')
+        .select(cols)
         .eq('estado', 'pendiente')
+        .is('deleted_at', null)
         .order('fecha', { ascending: false }))
+      let { data, error } = await consulta(`${COLS_VENTAS_PEND_BASE}, ${COLS_VENTAS_PEND_EXTRA}`)
+      if (error && esErrorColumnaFaltante(error)) {
+        console.warn('Desde Ventas: falta alguna columna extra, se reintenta sin ellas:', error.message)
+        ;({ data, error } = await consulta(COLS_VENTAS_PEND_BASE))
+      }
       if (error) throw error
       setVentasPend(data || [])
       setSelVentas(new Set())
@@ -1515,6 +1589,10 @@ export default function DespachoPagina() {
   // el mismo resultado y no se duplican: el pedido #1003 es 'VT-1003' en las dos,
   // y lo que ya existe en ventas con esa referencia se saltea.
   const traerPedidosVoltra = async ({ silencioso = false } = {}) => {
+    // Dos corridas en paralelo (entrar a Ventas + botón) leían "ya existe"
+    // antes de que la otra insertara, y cargaban el mismo pedido dos veces.
+    if (trayendoVoltraRef.current) return
+    trayendoVoltraRef.current = true
     setTrayendoVoltra(true)
     try {
       const desde = new Date(Date.now() - 90 * 86400000).toISOString()
@@ -1537,7 +1615,9 @@ export default function DespachoPagina() {
 
       const refs = [...new Set(listos.map(p => p.n_referencia))]
       const cuenta = new Map()
-      const { data: ya } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs).is('deleted_at', null)
+      const { data: ya, error: errYa } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs).is('deleted_at', null)
+      // Sin saber qué ya existe, insertar duplicaría ventas: se aborta.
+      if (errYa) throw errYa
       ;(ya || []).forEach(d => cuenta.set(String(d.n_referencia), (cuenta.get(String(d.n_referencia)) || 0) + 1))
       const vistas = new Map()
       const nuevas = []
@@ -1549,7 +1629,9 @@ export default function DespachoPagina() {
       }
       if (!nuevas.length) { if (!silencioso) toast('Todos los pedidos de Voltra ya están en Ventas', 'info'); return }
 
-      const { data: catalogo } = await supabase.from('productos').select('id, nombre, costo_unit').eq('activo', true)
+      // Sin catálogo se guardaría costo_prod 0: se aborta.
+      const { data: catalogo, error: errCat } = await supabase.from('productos').select('id, nombre, costo_unit').eq('activo', true)
+      if (errCat) throw errCat
       let filasVenta = nuevas.map(p => filaVentaDePedido(p, catalogo || []))
       let { error: errIns } = await supabase.from('ventas').insert(filasVenta)
       if (errIns && /Could not find the '(\w+)' column/.test(errIns.message || '')) {
@@ -1563,7 +1645,7 @@ export default function DespachoPagina() {
       fetchVentasPendientes()
     } catch (e) {
       toast('No se pudieron traer los pedidos de Voltra: ' + (e.message || ''), 'error')
-    } finally { setTrayendoVoltra(false) }
+    } finally { trayendoVoltraRef.current = false; setTrayendoVoltra(false) }
   }
 
   const irAVentas = () => {
@@ -1602,18 +1684,25 @@ export default function DespachoPagina() {
     if (deLucero.length) {
       try {
         const claves = deLucero.map(p => guiaLucero(p.n_referencia))
-        const { data: existentes } = await supabase.from('entregas')
+        const { data: existentes, error: errEx } = await supabase.from('entregas')
           .select('nro_guia_pap').in('nro_guia_pap', claves)
+        // Si no se sabe cuáles existen, un upsert podría devolver a "en camino"
+        // un envío ya rendido: mejor no crear nada.
+        if (errEx) throw errEx
         const yaExisten = new Set((existentes || []).map(e => e.nro_guia_pap))
         const faltantes = deLucero.filter(p => !yaExisten.has(guiaLucero(p.n_referencia)))
         if (faltantes.length) {
           const placeholders = faltantes.map(placeholderEntregaLucero)
           for (let i = 0; i < placeholders.length; i += 50) {
-            await supabase.from('entregas')
+            const { error: errPh } = await supabase.from('entregas')
               .upsert(placeholders.slice(i, i + 50), { onConflict: 'nro_guia_pap' })
+            if (errPh) throw errPh
           }
         }
-      } catch (e) { console.warn('No se pudo backfillear placeholder de Lucero:', e?.message) }
+      } catch (e) {
+        console.warn('No se pudo backfillear placeholder de Lucero:', e?.message)
+        toast('No se creó el seguimiento de Lucero: ' + (e?.message || ''), 'error')
+      }
     }
     const partes = []
     if (dePaP.length) partes.push(`${dePaP.length} PAP`)

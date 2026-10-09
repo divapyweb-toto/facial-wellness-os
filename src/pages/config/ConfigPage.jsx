@@ -5,7 +5,7 @@ import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2, SlidersHorizontal } from 'lucide-react'
-import { getConfig, guardarConfigLote, cargarConfig, getEnvioCliente, getFlete, DEFAULTS, getEstadoConfig } from '../../lib/config'
+import { getConfig, guardarConfigLote, cargarConfig, getEnvioCliente, getFlete, DEFAULTS, getEstadoConfig, validarReglas } from '../../lib/config'
 import { TARIFAS_LUCERO_INFO, VELOCIDADES_LUCERO, claveCiudadLucero } from '../../lib/transportadoras'
 
 // ─── Modal producto ───────────────────────────────────────
@@ -248,6 +248,29 @@ function UsuarioModal({ onClose, onSaved }) {
 // ─── Config Page ──────────────────────────────────────────
 // Reglas del negocio editables: flete, umbrales de riesgo, ventanas de recompra,
 // datos de pago. Todo lo que antes estaba fijo en el código.
+// Campo de Reglas del negocio. Va FUERA de ReglasNegocio: declarado adentro,
+// React lo veía como un componente nuevo en cada tecla, remontaba el input y
+// se perdía el foco.
+function Campo({ clave, label, sufijo, ayuda, form, set, setNum, restaurar }) {
+  return (
+    <div className="form-group">
+      <label className="form-label">{label}</label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input className="form-input" value={form[clave]}
+          onChange={e => (typeof DEFAULTS[clave] === 'number' ? setNum(clave, e.target.value) : set(clave, e.target.value))}
+          style={{ maxWidth: 200 }} />
+        {sufijo && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{sufijo}</span>}
+        {String(form[clave]) !== String(DEFAULTS[clave]) && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => restaurar(clave)} title={`Volver a ${DEFAULTS[clave]}`}>
+            ↺ {DEFAULTS[clave]}
+          </button>
+        )}
+      </div>
+      {ayuda && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{ayuda}</span>}
+    </div>
+  )
+}
+
 function ReglasNegocio() {
   const { toast } = useToast()
   const [form, setForm] = useState(() => {
@@ -257,6 +280,10 @@ function ReglasNegocio() {
   })
   const [guardando, setGuardando] = useState(false)
   const [estadoCfg, setEstadoCfg] = useState(getEstadoConfig())
+  // Valores tal como se leyeron de la base: se guarda solo lo que cambió, así
+  // no se pisan claves que otro editó (tarifario Lucero, alias…).
+  const [base, setBase] = useState(null)
+  const listo = !!base && !estadoCfg.error
 
   // Recargar la config al entrar y RECIÉN AHÍ armar el formulario. Sin esto
   // hay una carrera: si la base contesta después de montar la página, el form
@@ -266,12 +293,12 @@ function ReglasNegocio() {
     let vivo = true
     cargarConfig().then(() => {
       if (!vivo) return
-      setEstadoCfg(getEstadoConfig())
-      setForm(() => {
-        const f = {}
-        for (const k of Object.keys(DEFAULTS)) f[k] = String(getConfig(k))
-        return f
-      })
+      const estado = getEstadoConfig()
+      setEstadoCfg(estado)
+      const f = {}
+      for (const k of Object.keys(DEFAULTS)) f[k] = String(getConfig(k))
+      setForm(f)
+      if (!estado.error) setBase(f)
     })
     return () => { vivo = false }
   }, [])
@@ -280,11 +307,21 @@ function ReglasNegocio() {
   const setNum = (k, v) => setForm(f => ({ ...f, [k]: v.replace(/[^\d.]/g, '') }))
 
   const guardar = async () => {
+    if (!listo) return
+    // Solo las claves que cambiaron. Si la base no tenía nada guardado, todas.
+    const cambios = {}
+    for (const k of Object.keys(DEFAULTS)) {
+      if (estadoCfg.desdeDB === 0 || String(form[k]) !== String(base[k])) cambios[k] = form[k]
+    }
+    if (!Object.keys(cambios).length) { toast('No hay cambios para guardar', 'info'); return }
+    const errores = validarReglas(cambios)
+    if (errores.length) { toast('Revisá: ' + errores.join(' · '), 'error'); return }
     setGuardando(true)
     try {
-      await guardarConfigLote(form)
+      await guardarConfigLote(cambios)
       await cargarConfig()
       setEstadoCfg(getEstadoConfig())
+      setBase({ ...base, ...cambios })
       toast('Reglas guardadas — ya se aplican en todo el sistema', 'success')
     } catch (e) {
       toast('Error al guardar: ' + e.message, 'error')
@@ -326,23 +363,7 @@ function ReglasNegocio() {
     setNuevaCiudad({ ciudad: '', precio: '', vel: 'programada' })
   }
 
-  const Campo = ({ clave, label, sufijo, ayuda }) => (
-    <div className="form-group">
-      <label className="form-label">{label}</label>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <input className="form-input" value={form[clave]}
-          onChange={e => (typeof DEFAULTS[clave] === 'number' ? setNum(clave, e.target.value) : set(clave, e.target.value))}
-          style={{ maxWidth: 200 }} />
-        {sufijo && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{sufijo}</span>}
-        {String(form[clave]) !== String(DEFAULTS[clave]) && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => restaurar(clave)} title={`Volver a ${DEFAULTS[clave]}`}>
-            ↺ {DEFAULTS[clave]}
-          </button>
-        )}
-      </div>
-      {ayuda && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{ayuda}</span>}
-    </div>
-  )
+  const pc = { form, set, setNum, restaurar } // props de <Campo>
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 640 }}>
@@ -369,7 +390,7 @@ function ReglasNegocio() {
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           Tarifa de Punto a Punto. Se usa como respaldo cuando una venta no tiene su propio costo, y en reportes.
         </p>
-        <Campo clave="flete_pap" label="Flete PaP" sufijo="Gs. por paquete"
+        <Campo {...pc} clave="flete_pap" label="Flete PaP" sufijo="Gs. por paquete"
           ayuda="El día que PaP cambie la tarifa, la cambiás acá y listo — sin tocar código." />
       </div>
 
@@ -378,7 +399,7 @@ function ReglasNegocio() {
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           Reportes suma solos: Meta Ads diario, WhatsApp API y Claude API (los dos últimos el sistema los registra en dólares).
         </p>
-        <Campo clave="usd_pyg" label="Tipo de cambio de respaldo" sufijo="Gs. por 1 USD"
+        <Campo {...pc} clave="usd_pyg" label="Tipo de cambio de respaldo" sufijo="Gs. por 1 USD"
           ayuda="Cada gasto en dólares se convierte solo con el cambio de su día. Este valor se usa únicamente si no se puede obtener la cotización de ese día." />
         <div className="form-group" style={{ marginTop: 10 }}>
           <label className="form-label">Gastos fijos mensuales</label>
@@ -409,9 +430,9 @@ Dominio: …`}
           cada pedido se arman solos — esto es solo el texto alrededor.
         </p>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
-          <Campo clave="seguimiento_pap_dias_cerca" label="Días para reclamar (Asunción/Central/local)" sufijo="días"
+          <Campo {...pc} clave="seguimiento_pap_dias_cerca" label="Días para reclamar (Asunción/Central/local)" sufijo="días"
             ayuda="Ciudad cercana sin moverse este tiempo ya es rara." />
-          <Campo clave="seguimiento_pap_dias_lejos" label="Días para reclamar (interior)" sufijo="días"
+          <Campo {...pc} clave="seguimiento_pap_dias_lejos" label="Días para reclamar (interior)" sufijo="días"
             ayuda="El interior tarda más por logística normal, no por negligencia." />
         </div>
         <div className="form-group" style={{ marginBottom: 14 }}>
@@ -513,10 +534,10 @@ Dominio: …`}
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           Cuándo un cliente se bloquea o se marca en riesgo en Despacho.
         </p>
-        <Campo clave="riesgo_bloqueo_fallos" label="Bloquear desde (fallos)" sufijo="o más fallos"
+        <Campo {...pc} clave="riesgo_bloqueo_fallos" label="Bloquear desde (fallos)" sufijo="o más fallos"
           ayuda="Junto con la tasa de abajo. Ej: 2 fallos y 50%+ → bloqueado." />
-        <Campo clave="riesgo_bloqueo_tasa" label="Tasa de bloqueo" sufijo="(0.5 = 50%)" />
-        <Campo clave="riesgo_tasa" label="Tasa de riesgo (aviso)" sufijo="(0.34 = 34%)"
+        <Campo {...pc} clave="riesgo_bloqueo_tasa" label="Tasa de bloqueo" sufijo="(0.5 = 50%)" />
+        <Campo {...pc} clave="riesgo_tasa" label="Tasa de riesgo (aviso)" sufijo="(0.34 = 34%)"
           ayuda="Con al menos 1 fallo y esta tasa → se marca 'conviene prepago'." />
       </div>
 
@@ -525,10 +546,10 @@ Dominio: …`}
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           Cada cuánto un cliente entra en la lista de recompra.
         </p>
-        <Campo clave="recompra_dias_reposicion" label="Reponer consumible cada" sufijo="días (× cantidad)"
+        <Campo {...pc} clave="recompra_dias_reposicion" label="Reponer consumible cada" sufijo="días (× cantidad)"
           ayuda="Un consumible se ofrece a los N días × unidades compradas." />
-        <Campo clave="recompra_dias_crosssell" label="Ofrecer producto nuevo desde" sufijo="días" />
-        <Campo clave="recompra_dias_cooldown" label="No repetir contacto por" sufijo="días"
+        <Campo {...pc} clave="recompra_dias_crosssell" label="Ofrecer producto nuevo desde" sufijo="días" />
+        <Campo {...pc} clave="recompra_dias_cooldown" label="No repetir contacto por" sufijo="días"
           ayuda="Tras marcar 'contactado', el cliente no reaparece por este tiempo." />
       </div>
 
@@ -537,13 +558,14 @@ Dominio: …`}
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           Lo que aparece en el mensaje de recompra cuando pedís pago anticipado.
         </p>
-        <Campo clave="pago_alias" label="Alias transferencia" />
-        <Campo clave="pago_alias_titular" label="Titular / CI" />
-        <Campo clave="pago_tigo" label="Número Giros Tigo" />
+        <Campo {...pc} clave="pago_alias" label="Alias transferencia" />
+        <Campo {...pc} clave="pago_alias_titular" label="Titular / CI" />
+        <Campo {...pc} clave="pago_tigo" label="Número Giros Tigo" />
       </div>
 
       <div style={{ position: 'sticky', bottom: 0, display: 'flex', justifyContent: 'flex-end', padding: '12px 0' }}>
-        <button className="btn btn-primary" onClick={guardar} disabled={guardando}>
+        <button className="btn btn-primary" onClick={guardar} disabled={guardando || !listo}
+          title={listo ? undefined : 'Esperá a que se lean los valores guardados'}>
           <Save size={14} /> {guardando ? 'Guardando…' : 'Guardar reglas'}
         </button>
       </div>
@@ -570,21 +592,32 @@ export default function ConfigPage() {
 
   const cargar = useCallback(async () => {
     setLoading(true)
-    const [{ data: p }, { data: mp }, { data: me }, { data: pr }] = await Promise.all([
-      supabase.from('productos').select('*').order('nombre'),
-      supabase.from('metodos_pago').select('*').order('nombre'),
-      supabase.from('metodos_envio').select('*').order('nombre'),
-      supabase.from('profiles').select('*').order('nombre'),
-    ])
-    setProductos(p || [])
-    setMetodosPago(mp || [])
-    setMetodosEnvio(me || [])
-    setProfiles(pr || [])
-    setLoading(false)
-  }, [])
+    try {
+      const res = await Promise.all([
+        supabase.from('productos').select('*').order('nombre'),
+        supabase.from('metodos_pago').select('*').order('nombre'),
+        supabase.from('metodos_envio').select('*').order('nombre'),
+        supabase.from('profiles').select('*').order('nombre'),
+      ])
+      // Antes el error se ignoraba y las tablas quedaban vacías sin aviso.
+      const err = res.find(r => r.error)?.error
+      if (err) toast('Error al cargar la configuración: ' + err.message, 'error')
+      const [{ data: p }, { data: mp }, { data: me }, { data: pr }] = res
+      setProductos(p || [])
+      setMetodosPago(mp || [])
+      setMetodosEnvio(me || [])
+      setProfiles(pr || [])
+    } catch (e) {
+      toast('Error al cargar la configuración: ' + (e?.message || 'error'), 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [toast])
 
   const toggleActivo = async (tabla, id, actual) => {
-    await supabase.from(tabla).update({ activo: !actual }).eq('id', id)
+    const { error } = await supabase.from(tabla).update({ activo: !actual }).eq('id', id)
+    // Sin chequear el error mostraba "Activado" aunque no se hubiera guardado.
+    if (error) { toast('No se pudo cambiar: ' + error.message, 'error'); return }
     toast(`${actual ? 'Desactivado' : 'Activado'}`, 'success')
     cargar()
   }

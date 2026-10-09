@@ -21,6 +21,7 @@
 // cambiar de transportadora, que es la decisión correcta.
 // ═══════════════════════════════════════════════════════════
 import { normalizarCiudadPaP } from './cobranzaPaP'
+import { normalizarRef } from './referencias'
 
 // Muestra mínima de envíos RESUELTOS (entregados + devueltos) para poder juzgar
 // una ciudad. Con menos que esto, la ciudad va siempre en 'ok' (sin datos).
@@ -135,8 +136,8 @@ export function evaluarCiudad(historial, ciudad, transportadora = null) {
 
 // ─── Tasa de entrega por transportadora (global, para KPIs) ──
 // Devuelve { pap: {resueltos, entregados, devueltos, tasa}, lucero: {...}, total: {...} }
+// transpPorRef: { [normalizarRef(ref)]: 'pap' | 'lucero' }
 export function tasaPorTransportadora(entregas, transpPorRef = {}) {
-  const norm = (r) => String(r || '').replace(/[^0-9]/g, '')
   const acc = {}
   const sumar = (k, cat) => {
     if (!acc[k]) acc[k] = { resueltos: 0, entregados: 0, devueltos: 0 }
@@ -146,7 +147,9 @@ export function tasaPorTransportadora(entregas, transpPorRef = {}) {
   ;(entregas || []).forEach(e => {
     const cat = e.categoria
     if (cat !== 'entregado' && cat !== 'devuelto') return
-    const t = transpPorRef[norm(e.n_referencia)] || 'pap'
+    // Primero lo que dice la entrega; respaldo: la venta, cruzada con
+    // normalizarRef (solo dígitos hacía chocar VT-1003 con el 1003 de FW).
+    const t = e.transportadora || transpPorRef[normalizarRef(e.n_referencia)] || 'pap'
     sumar(t, cat)
     sumar('total', cat)
   })

@@ -33,7 +33,10 @@ export default function ChatPanel({ conv, mensajes, cargando, hayMas, cargandoMa
   const [nuevos, setNuevos] = useState(0)
   const taRef = useRef(null)
 
-  useEffect(() => { setTexto(''); setError('') }, [conv?.id])
+  // Conversación actual, para que un envío que termina tarde no toque el chat nuevo.
+  const convIdRef = useRef(conv?.id)
+  convIdRef.current = conv?.id
+  useEffect(() => { setTexto(''); setError(''); setEnviando(false) }, [conv?.id])
 
   // Scroll estilo WhatsApp: al abrir baja al final; si leías arriba no te mueve
   // (avisa con un botón); al cargar mensajes viejos mantiene tu posición.
@@ -98,14 +101,16 @@ export default function ChatPanel({ conv, mensajes, cargando, hayMas, cargandoMa
 
   async function enviar() {
     if (!puedeEnviar) return
+    const convEnvio = conv.id
+    const sigue = () => convIdRef.current === convEnvio // ¿seguís en el mismo chat?
     setEnviando(true); setError('')
     try {
       await onEnviar(texto.trim())
-      setTexto('')
+      if (sigue()) setTexto('') // si cambiaste de chat, no borra el borrador del otro
     } catch (e) {
-      setError(e?.message || 'No se pudo enviar. Probá de nuevo.')
+      if (sigue()) setError(e?.message || 'No se pudo enviar. Probá de nuevo.')
     } finally {
-      setEnviando(false)
+      if (sigue()) setEnviando(false)
     }
   }
 

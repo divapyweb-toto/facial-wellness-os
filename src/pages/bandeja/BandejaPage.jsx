@@ -16,6 +16,7 @@ import {
   cargarConversaciones, cargarUltimosMensajes, cargarMensajes, cargarPalabrasProhibidas, PAGINA_MENSAJES,
   tomarConversacion, devolverAIA, enviarMensajeManual, suscribirBandeja,
 } from './api'
+import { mensajesDeConv, fusionarMensajes } from './cacheChat'
 import './bandeja.css'
 
 const sinTildes = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
@@ -39,6 +40,7 @@ export default function BandejaPage() {
   const [pendientes, setPendientes] = useState([]) // enviados a la vista, aún sin confirmar
   const cacheChats = useRef(new Map()) // conversación → mensajes: reabrir un chat es instantáneo
   const [prohibidas, setProhibidas] = useState([])
+  const [recarga, setRecarga] = useState(0) // sube → se vuelven a pedir los mensajes del chat abierto
 
   const activaRef = useRef(null)
   activaRef.current = activaId
@@ -86,22 +88,36 @@ export default function BandejaPage() {
     cargarMensajes(activaId)
       .then(m => {
         if (!vivo) return
-        // Conserva lo que Realtime haya sumado mientras tanto.
-        setMensajes(ms => {
-          const ids = new Set(m.map(x => x.id))
-          const extra = ms.filter(x => !ids.has(x.id) && (!m.length || x.creado_en > m[0].creado_en))
-          return [...m, ...extra]
-        })
+        // Conserva lo que Realtime haya sumado mientras tanto (solo de este chat).
+        setMensajes(ms => fusionarMensajes(m, ms, activaId))
         setHayMas(m.length >= PAGINA_MENSAJES)
       })
       .catch(e => avisar(`No se pudo abrir el chat: ${e?.message || 'error'}`, 'error'))
       .finally(() => { if (vivo) setCargandoChat(false) })
     return () => { vivo = false }
-  }, [activaId, avisar])
+  }, [activaId, avisar, recarga])
 
+  // Caché: solo mensajes de la conversación activa (al cambiar de chat, la
+  // lista del render intermedio todavía es la del chat anterior).
   useEffect(() => {
-    if (activaId && mensajes.length) cacheChats.current.set(activaId, mensajes.slice(-400))
+    const propios = mensajesDeConv(activaId, mensajes)
+    if (propios.length) cacheChats.current.set(activaId, propios.slice(-400))
   }, [activaId, mensajes])
+
+  // Lo que pasó con la pestaña suspendida o el canal caído no llega por
+  // Realtime: al volver, se recargan la lista y el chat abierto.
+  const ultimoRefresco = useRef(0)
+  const refrescar = useCallback(() => {
+    if (Date.now() - ultimoRefresco.current < 5000) return
+    ultimoRefresco.current = Date.now()
+    cargar()
+    setRecarga(n => n + 1)
+  }, [cargar])
+  useEffect(() => {
+    const alVolver = () => { if (document.visibilityState === 'visible') refrescar() }
+    document.addEventListener('visibilitychange', alVolver)
+    return () => document.removeEventListener('visibilitychange', alVolver)
+  }, [refrescar])
 
   const cargarMas = useCallback(async () => {
     const id = activaRef.current
@@ -151,9 +167,10 @@ export default function BandejaPage() {
           })
         }
       },
+      onReconectar: refrescar,
     })
     return cortar
-  }, [cargar])
+  }, [cargar, refrescar])
 
   // Orden: el último movimiento (mensaje o entrada) arriba.
   const ordenadas = useMemo(() => {

@@ -28,9 +28,13 @@ export const FLETE_RESPALDO = costoFleteActual()
 
 // Costo de flete de un paquete/venta: su costo_envio real, o el respaldo.
 // Acepta tanto `costo_envio` (como viene de la BD) como `costoEnvio` (camel).
+// El respaldo es SOLO para "sin dato" (null/undefined). Un 0 es un dato real:
+// las líneas secundarias de un pedido multiproducto van en 0 (una caja, un
+// solo flete). Antes el 0 caía al respaldo y un pedido de 2 líneas pagaba
+// flete doble en el Dashboard (58.000 en vez de 29.000).
 export function fleteDe(p) {
   const c = p?.costo_envio ?? p?.costoEnvio
-  return (c != null && c > 0) ? c : costoFleteActual()
+  return c == null ? costoFleteActual() : (Number(c) || 0)
 }
 
 // Suma el flete de una lista de paquetes, cada uno con SU propio costo.

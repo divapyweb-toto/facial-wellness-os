@@ -696,6 +696,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tab { padding: 7px 12px; border-radius: 5px; font-size: 12.5px; font-weight: 500; color: var(--text-secondary); cursor: pointer; border: none; background: none; transition: all var(--t-base) ease; white-space: nowrap; }
 .tab:hover { color: var(--text-primary); }
 .tab.active { background: var(--bg-card); color: var(--text-primary); box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+/* Móvil: las pestañas desbordaban a 375 px; se deslizan de costado. */
+@media (max-width: 768px) { .tabs { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; scrollbar-width: none; } }
 
 /* ─── Empty State ─────────────────────────────────────── */
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 56px 20px; text-align: center; gap: 10px; }

@@ -20,11 +20,49 @@ import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { interpretarEscaneo } from '../../lib/barcode'
 import { beep } from '../../lib/beep'
+import { hoyLocal } from '../../lib/fechas'
+import { getTienda } from '../../lib/tienda'
 import { ScanLine, CheckCircle, AlertTriangle, X, Truck, Clock, ListChecks } from 'lucide-react'
 
 const DIAS_OLVIDADO = 3
 const fmtGs = (n) => `Gs. ${Number(n || 0).toLocaleString('es-PY')}`
-const diasDesde = (f) => (f ? Math.floor((Date.now() - new Date(f).getTime()) / 86400000) : null)
+// Días calendario en hora de Paraguay: con new Date('2026-10-08') (UTC) un
+// pedido de hoy podía contar como de ayer y la alerta de olvidados se adelantaba.
+export function diasDesde(f, hoy = hoyLocal()) {
+  if (!f) return null
+  const aUTC = (s) => { const [y, m, d] = String(s).slice(0, 10).split('-').map(Number); return Date.UTC(y, m - 1, d) }
+  const n = Math.round((aUTC(hoy) - aUTC(f)) / 86400000)
+  return isNaN(n) ? null : n
+}
+
+// Un pedido de 2 productos son 2 filas con la MISMA referencia: el índice
+// guarda la lista entera, para marcar todas al escanear la única guía.
+export function indexarPorRef(ventas) {
+  const m = {}
+  for (const v of ventas) {
+    const k = interpretarEscaneo(v.n_referencia).ref
+    if (k) { if (!m[k]) m[k] = []; m[k].push(v) }
+  }
+  return m
+}
+
+// Lo que el recolector cuenta son CAJAS: una por referencia, no por fila.
+export const contarPaquetes = (filas) => new Set(filas.map(f => f.n_referencia || `_id_${f.id}`)).size
+
+// Filtro por courier y por tienda (la del selector global). Sin transportadora
+// guardada se asume PaP, igual que al cargar la venta; sin tienda, 'fw'
+// (valor por defecto de la base).
+export function filtrarSalida(ventas, { transportadora = 'todas', tienda = 'todas' } = {}) {
+  return ventas.filter(v =>
+    (transportadora === 'todas' || (v.transportadora || 'pap') === transportadora) &&
+    (tienda === 'todas' || (v.tienda || 'fw') === tienda))
+}
+
+const COLS_BASE = 'id, n_referencia, cliente_nombre, ciudad, producto_nombre, cantidad, total, estado, fecha, despachado_at'
+const FILTROS_TRANSP = [
+  { id: 'todas', label: 'Todas' }, { id: 'pap', label: 'PaP' },
+  { id: 'lucero', label: 'Lucero' }, { id: 'otra', label: 'Otra' },
+]
 
 export default function ModalSalida({ onClose, onConfirmado }) {
   const { toast } = useToast()
@@ -35,15 +73,22 @@ export default function ModalSalida({ onClose, onConfirmado }) {
   const [valor, setValor] = useState('')
   const [tanda, setTanda] = useState([])
   const [ultimo, setUltimo] = useState(null)
+  const [filtroTransp, setFiltroTransp] = useState('todas')
+  const tienda = getTienda()
 
   const cargar = useCallback(async () => {
     setLoading(true)
     try {
       // Paginado: si se cortara en 1.000, una guía escaneada podría "no encontrarse"
-      const data = await fetchAll(() => supabase
-        .from('ventas')
-        .select('id, n_referencia, cliente_nombre, ciudad, producto_nombre, cantidad, total, estado, fecha, despachado_at')
-        .is('deleted_at', null))
+      // transportadora y tienda permiten filtrar; si la base no las tuviera,
+      // se reintenta sin ellas (todo cae en PaP / sin filtro de tienda).
+      const traer = (cols) => fetchAll(() => supabase.from('ventas').select(cols).is('deleted_at', null))
+      let data
+      try { data = await traer(`${COLS_BASE}, transportadora, tienda`) }
+      catch (e) {
+        if (!/does not exist|Could not find|42703/i.test(`${e?.message} ${e?.code}`)) throw e
+        data = await traer(COLS_BASE)
+      }
       setVentas(data || [])
     } catch (e) {
       toast('Error cargando pedidos: ' + e.message, 'error')
@@ -64,20 +109,21 @@ export default function ModalSalida({ onClose, onConfirmado }) {
     return () => clearInterval(t)
   }, [confirmando])
 
-  const idxRef = useMemo(() => {
-    const m = {}
-    for (const v of ventas) {
-      const k = interpretarEscaneo(v.n_referencia).ref
-      if (k) m[k] = v
-    }
-    return m
-  }, [ventas])
+  const idxRef = useMemo(() => indexarPorRef(ventas), [ventas])
 
-  // Pendientes que todavía no salieron del depósito
+  // Pendientes que todavía no salieron del depósito, del courier y la tienda
+  // elegidos: así "Marcar todos" no mezcla la pila de PaP con la de Lucero.
   const esperados = useMemo(
-    () => ventas.filter(v => v.estado === 'pendiente' && !v.despachado_at),
-    [ventas]
+    () => filtrarSalida(ventas, { transportadora: filtroTransp, tienda })
+      .filter(v => v.estado === 'pendiente' && !v.despachado_at),
+    [ventas, filtroTransp, tienda]
   )
+  // Couriers distintos entre los pendientes visibles (para no mezclar en "Marcar todos")
+  const couriersEsperados = useMemo(
+    () => new Set(esperados.map(v => v.transportadora || 'pap')).size,
+    [esperados]
+  )
+  const paquetesEsperados = useMemo(() => contarPaquetes(esperados), [esperados])
   // Cargados hace rato y nunca despachados: plata dormida
   const olvidados = useMemo(
     () => esperados.filter(v => (diasDesde(v.fecha) ?? 0) >= DIAS_OLVIDADO),
@@ -90,36 +136,48 @@ export default function ModalSalida({ onClose, onConfirmado }) {
     const { ref } = interpretarEscaneo(bruto)
     if (!ref) return
 
-    const venta = idxRef[ref]
+    const filas = idxRef[ref] || []
+    const venta = filas[0]
     if (!venta) {
       beep(false)
       setUltimo({ tipo: 'error', titulo: 'No encontrado', detalle: `"${bruto}" no coincide con ninguna venta cargada.` })
       return
     }
-    if (venta.despachado_at) {
+    const sinSalir = filas.filter(f => !f.despachado_at)
+    if (!sinSalir.length) {
       beep(false)
       const f = new Date(venta.despachado_at).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })
       setUltimo({ tipo: 'error', titulo: 'Ya fue despachado', detalle: `#${venta.n_referencia} salió el ${f}.` })
       return
     }
-    if (tandaIds.has(venta.id)) {
+    // Una guía = un paquete = todas sus líneas (antes solo se marcaba una).
+    const nuevas = sinSalir.filter(f => !tandaIds.has(f.id))
+    if (!nuevas.length) {
       beep(false)
       setUltimo({ tipo: 'warn', titulo: 'Repetido en esta tanda', detalle: `#${venta.n_referencia} ya está en la lista.` })
       return
     }
 
-    const raro = venta.estado !== 'pendiente'
+    const raro = nuevas.some(f => f.estado !== 'pendiente')
+    // Escaneado de un courier distinto al filtro elegido: se agrega igual
+    // (la caja ya está en la mano), pero se avisa.
+    const otroCourier = filtroTransp !== 'todas' && (venta.transportadora || 'pap') !== filtroTransp
     beep(true)
-    setTanda(prev => [{ ...venta, _raro: raro }, ...prev])
+    setTanda(prev => [...nuevas.map(f => ({ ...f, _raro: f.estado !== 'pendiente' })), ...prev])
+    const productos = nuevas.map(f => `${f.producto_nombre} ×${f.cantidad || 1}`).join(' + ')
     setUltimo({
-      tipo: raro ? 'warn' : 'ok',
-      titulo: raro ? `Figura como ${venta.estado.toUpperCase()}` : 'Listo para salir',
-      detalle: `#${venta.n_referencia} · ${venta.producto_nombre} ×${venta.cantidad || 1} · ${venta.ciudad || '—'}${raro ? ' — revisá el estado' : ''}`,
+      tipo: raro || otroCourier ? 'warn' : 'ok',
+      titulo: raro
+        ? `Figura como ${String(nuevas.find(f => f.estado !== 'pendiente').estado).toUpperCase()}`
+        : otroCourier ? `Es de ${(venta.transportadora || 'pap').toUpperCase()}, no de ${filtroTransp.toUpperCase()}` : 'Listo para salir',
+      detalle: `#${venta.n_referencia} · ${productos} · ${venta.ciudad || '—'}${raro ? ' — revisá el estado' : ''}`,
     })
   }
 
   const onSubmit = (e) => { e.preventDefault(); procesar(valor); setValor('') }
-  const quitar = (id) => setTanda(prev => prev.filter(t => t.id !== id))
+  // Se quita el paquete entero (todas las líneas de esa referencia)
+  const mismaCaja = (a, b) => (a.n_referencia ? a.n_referencia === b.n_referencia : a.id === b.id)
+  const quitar = (fila) => setTanda(prev => prev.filter(t => !mismaCaja(t, fila)))
 
   // ── Modo manual (por si te olvidaste de escanear y ya despachaste) ──
   const [modoManual, setModoManual] = useState(false)
@@ -133,15 +191,18 @@ export default function ModalSalida({ onClose, onConfirmado }) {
     if (!nuevos.length) return
     setTanda(prev => [...nuevos, ...prev])
     beep(true)
-    setUltimo({ tipo: 'ok', titulo: `${nuevos.length} agregados a la tanda`, detalle: 'Todos los pendientes quedaron listos para confirmar la salida.' })
+    const nPaq = contarPaquetes(nuevos)
+    setUltimo({ tipo: 'ok', titulo: `${nPaq} paquete${nPaq === 1 ? '' : 's'} agregado${nPaq === 1 ? '' : 's'} a la tanda`, detalle: 'Todos los pendientes quedaron listos para confirmar la salida.' })
   }
 
   // Agrega o quita un pedido puntual de la tanda (para seleccionar 1 por 1)
   const toggleManual = (venta) => {
     if (tandaIds.has(venta.id)) {
-      quitar(venta.id)
+      quitar(venta)
     } else {
-      setTanda(prev => [{ ...venta, _raro: venta.estado !== 'pendiente' }, ...prev])
+      // Entra la caja completa: todas las líneas pendientes de esa referencia
+      const lineas = esperados.filter(v => mismaCaja(v, venta) && !tandaIds.has(v.id))
+      setTanda(prev => [...lineas.map(v => ({ ...v, _raro: v.estado !== 'pendiente' })), ...prev])
       beep(true)
     }
   }
@@ -158,7 +219,8 @@ export default function ModalSalida({ onClose, onConfirmado }) {
         .is('despachado_at', null) // idempotente: no pisa una salida ya registrada
       if (error) throw error
 
-      toast(`${ids.length} paquete${ids.length === 1 ? '' : 's'} registrados como despachados`, 'success')
+      const nPaq = contarPaquetes(tanda.filter(t => !t.despachado_at))
+      toast(`${nPaq} paquete${nPaq === 1 ? '' : 's'} registrados como despachados`, 'success')
       setTanda([])
       setUltimo(null)
       await cargar()
@@ -172,6 +234,10 @@ export default function ModalSalida({ onClose, onConfirmado }) {
   }
 
   const totalCobrar = tanda.reduce((s, t) => s + Number(t.total || 0), 0)
+  // Cajas reales de la tanda (un pedido multiproducto es UNA caja)
+  const paquetesTanda = contarPaquetes(tanda)
+  // Con varios couriers mezclados, "Marcar todos" pediría elegir uno antes
+  const mezclaCouriers = filtroTransp === 'todas' && couriersEsperados > 1
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && !confirmando && onClose()}>
@@ -196,7 +262,7 @@ export default function ModalSalida({ onClose, onConfirmado }) {
           }}>
             <Clock size={15} color="var(--yellow)" style={{ flexShrink: 0, marginTop: 2 }} />
             <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              <strong style={{ color: 'var(--yellow)' }}>{olvidados.length} pedido{olvidados.length === 1 ? '' : 's'} sin despachar hace {DIAS_OLVIDADO}+ días.</strong>{' '}
+              <strong style={{ color: 'var(--yellow)' }}>{contarPaquetes(olvidados)} pedido{contarPaquetes(olvidados) === 1 ? '' : 's'} sin despachar hace {DIAS_OLVIDADO}+ días.</strong>{' '}
               Están cargados y descontados del stock, pero nunca salieron. Es plata dormida.
             </div>
           </div>
@@ -241,6 +307,23 @@ export default function ModalSalida({ onClose, onConfirmado }) {
           )}
         </div>
 
+        {/* Filtro por courier: cada recolector se lleva solo su pila */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10, fontSize: 12 }}>
+          <span style={{ color: 'var(--text-muted)' }}>Transportadora:</span>
+          {FILTROS_TRANSP.map(t => (
+            <button
+              key={t.id}
+              type="button"
+              className={`btn btn-sm ${filtroTransp === t.id ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setFiltroTransp(t.id)}
+              disabled={confirmando}
+            >{t.label}</button>
+          ))}
+          {tienda !== 'todas' && (
+            <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>· Tienda: {tienda === 'voltra' ? 'Voltra' : 'Facial Wellness'}</span>
+          )}
+        </div>
+
         {/* Acciones manuales — por si te olvidaste de escanear y ya despachaste */}
         {!loading && esperados.length > 0 && (
           <div style={{ marginBottom: 12 }}>
@@ -248,12 +331,12 @@ export default function ModalSalida({ onClose, onConfirmado }) {
               <button
                 type="button"
                 onClick={agregarTodos}
-                disabled={confirmando}
+                disabled={confirmando || mezclaCouriers}
                 className="btn btn-secondary btn-sm"
                 style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                title="Agrega todos los pendientes a la tanda de una vez"
+                title={mezclaCouriers ? 'Hay pendientes de varias transportadoras: elegí una arriba' : 'Agrega todos los pendientes a la tanda de una vez'}
               >
-                <CheckCircle size={13} /> Marcar todos ({esperados.length})
+                <CheckCircle size={13} /> Marcar todos ({paquetesEsperados}){mezclaCouriers ? ' — elegí transportadora' : ''}
               </button>
               <button
                 type="button"
@@ -317,9 +400,9 @@ export default function ModalSalida({ onClose, onConfirmado }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 10 }}>
           <div>
             <div style={{ fontSize: 24, fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--accent)', lineHeight: 1 }}>
-              {tanda.length}{' '}
+              {paquetesTanda}{' '}
               <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 500 }}>
-                de {esperados.length} pendientes
+                de {paquetesEsperados} pendientes
               </span>
             </div>
             {tanda.length > 0 && (
@@ -337,7 +420,7 @@ export default function ModalSalida({ onClose, onConfirmado }) {
                 El recibo de la transportadora debe decir
               </div>
               <div style={{ fontSize: 17, fontWeight: 800, fontFamily: 'var(--font-display)' }}>
-                {tanda.length} paquete{tanda.length === 1 ? '' : 's'}
+                {paquetesTanda} paquete{paquetesTanda === 1 ? '' : 's'}
               </div>
             </div>
           )}
@@ -359,7 +442,7 @@ export default function ModalSalida({ onClose, onConfirmado }) {
                     <td data-label="Producto" style={{ fontSize: 12 }}>{t.producto_nombre} ×{t.cantidad || 1}</td>
                     <td data-label="A cobrar" style={{ fontWeight: 600 }}>{fmtGs(t.total)}</td>
                     <td>
-                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => quitar(t.id)} title="Quitar" style={{ color: 'var(--red)' }}>
+                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => quitar(t)} title="Quitar" style={{ color: 'var(--red)' }}>
                         <X size={13} />
                       </button>
                     </td>
@@ -374,7 +457,7 @@ export default function ModalSalida({ onClose, onConfirmado }) {
           <button className="btn btn-ghost" onClick={onClose} disabled={confirmando}>Cerrar</button>
           <button className="btn btn-primary" onClick={confirmar} disabled={confirmando || !tanda.length}>
             <Truck size={15} />
-            {confirmando ? 'Registrando…' : `Confirmar salida de ${tanda.length} paquete${tanda.length === 1 ? '' : 's'}`}
+            {confirmando ? 'Registrando…' : `Confirmar salida de ${paquetesTanda} paquete${paquetesTanda === 1 ? '' : 's'}`}
           </button>
         </div>
       </div>

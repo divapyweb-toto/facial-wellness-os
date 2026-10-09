@@ -1,14 +1,17 @@
 // src/pages/dashboard/DashboardPage.jsx
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabaseTienda as supabase, formatGs, formatPct } from '../../lib/supabase'
-import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
+import { supabaseTienda as supabase, supabase as supabaseCrudo, formatGs, formatPct } from '../../lib/supabase'
+import { calcularPiramide, indexarCostos, contarPedidos, categoriaVenta } from '../../lib/contribucion'
+import { armarGastosAutomaticos, cargarGastosAutomaticos, diaLocal, claveCampanaManual, gastosSinDobleAds } from '../../lib/gastosAutomaticos'
+import { cargarTasas } from '../../lib/tipoCambio'
+import { getTienda } from '../../lib/tienda'
 import { construirAlertasNegocio } from '../../lib/alertasNegocio'
 import DashboardHero from './DashboardHero'
 import { rangoMesAnteriorEquivalente, hoyLocal } from '../../lib/fechas'
 import { construirAcciones, COLOR_URGENCIA } from '../../lib/centroAcciones'
 import { entregasPaPAtascadas } from '../../lib/seguimiento'
-import { getUmbralesSeguimientoPaP } from '../../lib/config'
+import { getUmbralesSeguimientoPaP, getGastosAutomaticosConfig } from '../../lib/config'
 import { fetchAll } from '../../lib/fetchAll'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
@@ -136,83 +139,131 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [ventasRecientes, setVentasRecientes] = useState([])
   const [hero, setHero] = useState(null)
+  const [fallasCarga, setFallasCarga] = useState([])
+
+  // Recargas: cada carga lleva un número; si llega una más nueva, la vieja se
+  // descarta (antes dos recargas seguidas se pisaban y quedaba la más lenta).
+  const pedidoRef = useRef(0)
+  const yaCargoRef = useRef(false)
 
   const cargarDatos = useCallback(async () => {
-    setLoading(true)
+    const miPedido = ++pedidoRef.current
+    const vigente = () => miPedido === pedidoRef.current
+    // Skeleton solo la PRIMERA vez: en las recargas los números quedan en
+    // pantalla y se actualizan solos (antes cada venta nueva ponía todo en blanco).
+    if (!yaCargoRef.current) setLoading(true)
+    // Lo que no se pudo leer: se muestra arriba y NO se arma la alerta/KPI que
+    // depende de eso (antes un error daba "ventas cayeron 100%").
+    const fallas = []
+    const tienda = getTienda()
+    try {
     const ahora = new Date()
     const hoyStr = hoyLocal(ahora) // día de Paraguay (con toISOString, de 21 a 24 h ya era 'mañana')
     const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().split('T')[0]
     const finMes = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0).toISOString().split('T')[0]
 
     // Paginado: con más de 1.000 ventas en el mes, Supabase cortaba en silencio y los totales salían bajos.
-    const ventasMes = await fetchAll(() => supabase
-      .from('ventas').select('*').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes))
-
-    // Gastos del mes (costo fijo para el punto de equilibrio)
-    const { data: gastosMes } = await supabase
-      .from('gastos').select('monto, categoria').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
-    const totalGastosMes = (gastosMes || []).reduce((s, g) => s + (g.monto || 0), 0)
-
-    // Gasto de Meta Ads del mes (viene del módulo Campañas). Se descuenta de la
-    // ganancia igual que cualquier gasto — es plata que sale. Fuente única: acá.
-    let totalAdsMes = 0
+    let ventasMes = null
     try {
-      const { data: adsRows } = await supabase.from('campanas_ads').select('gasto').eq('mes', inicioMes.slice(0, 7))
-      totalAdsMes = (adsRows || []).reduce((s, c) => s + (c.gasto || 0), 0)
-    } catch (e) { console.warn('[dashboard] sin gasto de ads cargado:', e?.message || e) }
+      ventasMes = await fetchAll(() => supabase
+        .from('ventas').select('*').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes))
+    } catch (e) { fallas.push('ventas del mes'); console.warn('[dashboard] ventas del mes:', e?.message || e) }
 
-    // Protección anti-doble: ¿hay ads en Campañas Y también un gasto de "Publicidad"?
-    const gastoPublicidad = (gastosMes || []).filter(g => /public|ads|meta|marketing/i.test(g.categoria || '')).reduce((s, g) => s + (g.monto || 0), 0)
-    const posibleDoble = totalAdsMes > 0 && gastoPublicidad > 0
+    // ── Costos del mes: MISMA fórmula que Reportes ──
+    // gastos (Finanzas) + publicidad (Campañas a mano + Meta sincronizado) +
+    // gastos automáticos (WhatsApp, Claude, ElevenLabs, fijos). Antes acá solo
+    // se restaba Campañas, y el gasto de Voltra (que entra por la sincronización
+    // de Meta) no aparecía en la ganancia.
+    let costosOk = true
+    let gastosMes = []
+    try {
+      gastosMes = await fetchAll(() => supabase
+        .from('gastos').select('id, monto, categoria').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes))
+    } catch (e) { costosOk = false; fallas.push('gastos del mes'); console.warn('[dashboard] gastos:', e?.message || e) }
 
-    // Total de gastos que se descuenta de la ganancia = gastos + ads
-    const totalGastosConAds = totalGastosMes + totalAdsMes
+    let campanasMes = []
+    try {
+      const { data: adsRows, error } = await supabase.from('campanas_ads').select('gasto, mes, tienda').eq('mes', inicioMes.slice(0, 7))
+      if (error) throw error
+      campanasMes = adsRows || []
+    } catch (e) { costosOk = false; fallas.push('gasto de Campañas'); console.warn('[dashboard] campañas:', e?.message || e) }
+    const adsManualMes = campanasMes.reduce((s, c) => s + (Number(c.gasto) || 0), 0)
+
+    // Meta sincronizado + WhatsApp/Claude/ElevenLabs/fijos (cada lectura es tolerante, igual que en Reportes).
+    let auto = { metaTotal: 0, totalGs: 0 }
+    try {
+      const rawAuto = await cargarGastosAutomaticos(supabaseCrudo, { inicio: inicioMes, fin: finMes })
+      const cfgAuto = getGastosAutomaticosConfig()
+      const fechaTasaFijos = finMes < hoyStr ? finMes : hoyStr
+      const diasUsd = [...rawAuto.waMensajes, ...rawAuto.turnosIA, ...rawAuto.ciclosMejora].map(r => diaLocal(r.creado_en))
+        .concat(rawAuto.gastosReales.map(r => String(r.fecha).slice(0, 10)), fechaTasaFijos)
+      const { tasas } = await cargarTasas(supabaseCrudo, diasUsd)
+      auto = armarGastosAutomaticos({
+        ...rawAuto, productos: [], tasas, fechaTasaFijos,
+        mesesConCampanas: new Set(campanasMes.filter(c => Number(c.gasto) > 0).map(c => claveCampanaManual(c.tienda, c.mes))),
+        tienda, usdPyg: cfgAuto.usdPyg, gastosFijosTexto: cfgAuto.gastosFijosTexto,
+        fraccionMes: 1, // el Dashboard mira el mes entero, igual que Reportes con un mes elegido
+      })
+    } catch (e) { costosOk = false; fallas.push('gastos automáticos'); console.warn('[dashboard] gastos automáticos:', e?.message || e) }
+
+    const totalAdsMes = adsManualMes + auto.metaTotal
+    // Protección anti-doble: ¿hay ads (Campañas o Meta sync) Y también un gasto de "Publicidad"?
+    // Se resta SOLO el ads y el aviso se mantiene para que se borre el duplicado.
+    const { totalGastos: totalGastosMes, gastoPublicidad, posibleDoble } = gastosSinDobleAds(gastosMes, totalAdsMes)
+
+    // Total que se descuenta de la ganancia = gastos + ads + automáticos (como Reportes)
+    const totalGastosConAds = totalGastosMes + totalAdsMes + (auto.totalGs || 0)
 
     // ── Histórico de 6 meses (tendencia de mediano plazo) ──
     const inicio6m = new Date(ahora.getFullYear(), ahora.getMonth() - 5, 1).toISOString().split('T')[0]
-    const ventas6m = await fetchAll(() => supabase
-      .from('ventas').select('fecha, total, ganancia_neta, estado').is('deleted_at', null).gte('fecha', inicio6m))
-    const mesesData = []
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1)
-      const ini = hoyLocal(d)
-      const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
-      const vMes = (ventas6m || []).filter(v => v.fecha >= ini && v.fecha <= fin)
-      const entMes = vMes.filter(v => v.estado === 'entregado')
-      mesesData.push({
-        mes: d.toLocaleDateString('es-PY', { month: 'short' }),
-        ventas: entMes.reduce((s, v) => s + (v.total || 0), 0),
-        neto: entMes.reduce((s, v) => s + (v.ganancia_neta || 0), 0),
-      })
-    }
-    setHistorico6m(mesesData)
+    try {
+      const ventas6m = await fetchAll(() => supabase
+        .from('ventas').select('id, fecha, total, ganancia_neta, estado').is('deleted_at', null).gte('fecha', inicio6m))
+      const mesesData = []
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1)
+        const ini = hoyLocal(d)
+        const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
+        const vMes = (ventas6m || []).filter(v => v.fecha >= ini && v.fecha <= fin)
+        const entMes = vMes.filter(v => v.estado === 'entregado')
+        mesesData.push({
+          mes: d.toLocaleDateString('es-PY', { month: 'short' }),
+          ventas: entMes.reduce((s, v) => s + (v.total || 0), 0),
+          neto: entMes.reduce((s, v) => s + (v.ganancia_neta || 0), 0),
+        })
+      }
+      if (!vigente()) return
+      setHistorico6m(mesesData)
+    } catch (e) { fallas.push('histórico de 6 meses'); console.warn('[dashboard] histórico:', e?.message || e) }
 
+    if (!vigente()) return
     if (ventasMes) {
       // ── Datos del HERO: derivados de lo YA traído, sin consultas nuevas ──
       const deHoy = ventasMes.filter(v => v.fecha === hoyStr)
       setHero(h => ({
         ...(h || {}),
-        hoyCount: deHoy.length,
+        hoyCount: contarPedidos(deHoy, categoriaVenta).total, // pedidos, no líneas
         hoyMonto: deHoy.reduce((s, v) => s + (v.total || 0), 0),
       }))
-      // Plata en la calle = TODO lo despachado y sin resolver, sin importar el
-      // mes. Antes salía de ventasMes (recortado al mes en curso) y cada día 1
-      // se reseteaba a casi cero, que es justo cuando más plata hay afuera.
-      try {
-        const { data: sinResolver } = await supabase
-          .from('ventas').select('total')
-          .is('deleted_at', null)
-          .in('estado', ['pendiente', 'en_camino', 'en_tramite'])
-        setHero(h => ({
-          ...(h || {}),
-          enCalleCount: (sinResolver || []).length,
-          enCalleMonto: (sinResolver || []).reduce((s, v) => s + (v.total || 0), 0),
-        }))
-      } catch (e) { console.warn('[dashboard] sin plata en la calle:', e?.message || e) }
+    }
+    // Plata en la calle = TODO lo despachado y sin resolver, sin importar el
+    // mes. Antes salía de ventasMes (recortado al mes en curso) y cada día 1
+    // se reseteaba a casi cero, que es justo cuando más plata hay afuera.
+    try {
+      const sinResolver = await fetchAll(() => supabase
+        .from('ventas').select('id, n_referencia, fecha, total')
+        .is('deleted_at', null)
+        .in('estado', ['pendiente', 'en_camino', 'en_tramite']))
+      if (!vigente()) return
+      setHero(h => ({
+        ...(h || {}),
+        enCalleCount: contarPedidos(sinResolver, () => 'en_proceso').total,
+        enCalleMonto: sinResolver.reduce((s, v) => s + (v.total || 0), 0),
+      }))
+    } catch (e) { fallas.push('plata en la calle'); console.warn('[dashboard] sin plata en la calle:', e?.message || e) }
 
+    if (ventasMes && costosOk) {
       const entregadas = ventasMes.filter(v => v.estado === 'entregado')
-      const pendientes = ventasMes.filter(v => v.estado === 'pendiente')
-      const devueltas = ventasMes.filter(v => v.estado === 'devuelto')
 
       // ── Fuente única de verdad: el mismo módulo que usan Entregas y Reportes ──
       // Antes acá había una fórmula propia que NO restaba el flete de las
@@ -222,18 +273,21 @@ export default function DashboardPage() {
         importe: v.total || 0,
         fecha: v.fecha,
         costo_envio: v.costo_envio,  // flete real de esta venta (su transportadora)
+        costo_prod: v.costo_prod,    // costo de ESTA línea (un pedido multiproducto tiene uno por línea)
         categoria: v.estado === 'entregado' ? 'entregado'
                  : v.estado === 'devuelto' ? 'devuelto'
                  : 'en_proceso',
       }))
       const piramide = calcularPiramide(paquetes, indexarCostos(ventasMes), COGS_PROMEDIO, totalGastosConAds)
+      // Conteos por PEDIDO (no por línea), como la pirámide.
+      const ped = contarPedidos(ventasMes, categoriaVenta)
 
       // ── Desglose de cobro sobre lo entregado ──
       // Transferencia (prepago): plata que YA está en tu cuenta.
       // COD: la cobra PaP y te la rinde después.
       const ingresoTransferencia = entregadas.filter(v => v.pago_anticipado).reduce((s, v) => s + (v.total || 0), 0)
       const ingresoCOD = entregadas.filter(v => !v.pago_anticipado).reduce((s, v) => s + (v.total || 0), 0)
-      const cantTransferencia = entregadas.filter(v => v.pago_anticipado).length
+      const cantTransferencia = contarPedidos(entregadas.filter(v => v.pago_anticipado), categoriaVenta).total
 
       // Cada paquete resuelto de más aporta la contribución por envío.
       const margenPromedio = piramide.contribPorEnvio
@@ -248,15 +302,16 @@ export default function DashboardPage() {
         ingresosNetos: piramide.contribucionFirme,
         // Margen de contribución sobre lo cobrado
         margenPct: piramide.ingreso ? (piramide.contribucionFirme / piramide.ingreso) * 100 : 0,
-        paquetesEnviados: ventasMes.length,
-        entregados: entregadas.length,
-        devueltos: devueltas.length,
-        pendientesCount: pendientes.length,
+        paquetesEnviados: ped.total,
+        entregados: ped.entregados,
+        devueltos: ped.devueltos,
+        pendientesCount: ped.porCat.pendiente || 0,
         // Tasa sobre lo RESUELTO (entregados + devueltos), no sobre los que aún vuelan
         tasaEntrega: piramide.tasaEntrega,
         sangradoFlete: piramide.sangradoFlete,
-        // Punto de equilibrio
-        gastosMes: totalGastosMes,
+        // Punto de equilibrio: TODO lo que se descuenta (gastos + ads + automáticos),
+        // así "Meta" y "Cubierto" usan la misma base que la ganancia.
+        gastosMes: totalGastosConAds,
         gastoAds: totalAdsMes,
         posibleDobleAds: posibleDoble,
         margenPromedio,
@@ -268,28 +323,34 @@ export default function DashboardPage() {
         ingresoCOD,
         cantTransferencia,
       })
+    } else {
+      // Sin ventas o sin costos no se puede calcular la ganancia: mejor nada que un número falso.
+      setKpis(null)
     }
 
     // Saldo banco
-    const { data: saldo } = await supabase
-      .from('saldo_banco').select('*').order('created_at', { ascending: false }).limit(1).single()
-    setSaldoBanco(saldo)
+    {
+      const { data: saldo, error } = await supabase
+        .from('saldo_banco').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle()
+      if (!vigente()) return
+      if (error) fallas.push('saldo del banco')
+      else setSaldoBanco(saldo)
+    }
 
     // Chart 7 días
     const hace7 = new Date(); hace7.setDate(hace7.getDate() - 6)
-    const { data: ventasChart } = await supabase
-      .from('ventas').select('fecha, total, estado, ganancia_neta')
-      .is('deleted_at', null)
-      .gte('fecha', hoyLocal(hace7)).order('fecha')
-
-    if (ventasChart) {
-      // Tasa de entrega de los últimos 7 días, sobre lo RESUELTO.
-      const ent7 = ventasChart.filter(v => v.estado === 'entregado').length
-      const dev7 = ventasChart.filter(v => v.estado === 'devuelto').length
+    try {
+      const ventasChart = await fetchAll(() => supabase
+        .from('ventas').select('id, n_referencia, fecha, total, estado, ganancia_neta')
+        .is('deleted_at', null)
+        .gte('fecha', hoyLocal(hace7)))
+      if (!vigente()) return
+      // Tasa de entrega de los últimos 7 días, sobre lo RESUELTO y por pedido.
+      const p7 = contarPedidos(ventasChart, categoriaVenta)
       setHero(h => ({
         ...(h || {}),
-        tasa7d: (ent7 + dev7) ? ent7 / (ent7 + dev7) : null,
-        resueltos7d: ent7 + dev7,
+        tasa7d: p7.resueltos ? p7.entregados / p7.resueltos : null,
+        resueltos7d: p7.resueltos,
       }))
       const porDia = {}
       for (let i = 0; i < 7; i++) {
@@ -305,14 +366,15 @@ export default function DashboardPage() {
         }
       })
       setChartData(Object.values(porDia))
-    }
+    } catch (e) { fallas.push('gráfico de 7 días'); console.warn('[dashboard] 7 días:', e?.message || e) }
 
     // Top productos
-    const { data: topProds } = await supabase
-      .from('ventas').select('producto_nombre, total, ganancia_neta, estado, cantidad')
-      .is('deleted_at', null)
-      .gte('fecha', inicioMes).lte('fecha', finMes).eq('estado', 'entregado')
-    if (topProds) {
+    try {
+      const topProds = await fetchAll(() => supabase
+        .from('ventas').select('id, producto_nombre, total, ganancia_neta, estado, cantidad')
+        .is('deleted_at', null)
+        .gte('fecha', inicioMes).lte('fecha', finMes).eq('estado', 'entregado'))
+      if (!vigente()) return
       const agrupado = {}
       topProds.forEach(v => {
         if (!agrupado[v.producto_nombre]) agrupado[v.producto_nombre] = { nombre: v.producto_nombre, ventas: 0, ingresos: 0 }
@@ -320,13 +382,14 @@ export default function DashboardPage() {
         agrupado[v.producto_nombre].ingresos += v.ganancia_neta
       })
       setTopProductos(Object.values(agrupado).sort((a, b) => b.ingresos - a.ingresos).slice(0, 5))
-    }
+    } catch (e) { fallas.push('top productos'); console.warn('[dashboard] top productos:', e?.message || e) }
 
     // Alertas
     const alertasActivas = []
-    const { data: todosProds } = await supabase.from('productos')
+    const { data: todosProds, error: errProds } = await supabase.from('productos')
       .select('id, nombre, stock_actual, stock_alerta, es_combo, componente_1_id, componente_1_qty, componente_2_id, componente_2_qty')
       .eq('activo', true)
+    if (errProds) fallas.push('stock de productos')
     if (todosProds) {
       const porId = todosProds.reduce((a, p) => { a[p.id] = p; return a }, {})
       // Stock real considerando combos (combo = mínimo de sus componentes disponibles)
@@ -351,84 +414,92 @@ export default function DashboardPage() {
         })
     }
     const hace5 = new Date(); hace5.setDate(hace5.getDate() - 5)
-    const { data: viejos } = await supabase.from('ventas').select('id').is('deleted_at', null).eq('estado', 'pendiente').lt('fecha', hoyLocal(hace5))
-    if (viejos?.length) alertasActivas.push({ tipo: 'pendiente', color: 'yellow', msg: `${viejos.length} pedido(s) pendiente(s) con más de 5 días sin resolver` })
+    // Conteo exacto (sin traer filas): no se corta en 1.000.
+    const { count: viejos, error: errViejos } = await supabase.from('ventas').select('id', { count: 'exact', head: true })
+      .is('deleted_at', null).eq('estado', 'pendiente').lt('fecha', hoyLocal(hace5))
+    if (errViejos) fallas.push('pendientes viejos')
+    else if (viejos) alertasActivas.push({ tipo: 'pendiente', color: 'yellow', msg: `${viejos} pedido(s) pendiente(s) con más de 5 días sin resolver` })
 
-    // Advertencia anti-doble-conteo: ads cargado en Campañas Y en Gastos (Publicidad)
+    // Aviso anti-doble-conteo: ads (Campañas o Meta sync) Y gasto de Publicidad
     if (posibleDoble) {
       alertasActivas.push({
         tipo: 'doble_ads', color: 'yellow', ruta: '/finanzas', accion: 'Revisar gastos',
-        msg: 'Cargaste Meta Ads en Campañas y también un gasto de "Publicidad" este mes. Se está descontando dos veces — borrá el gasto de Publicidad (el ads ya cuenta desde Campañas).',
+        msg: `Hay Meta Ads este mes y también un gasto de "Publicidad" (${formatGs(gastoPublicidad)}). Para no restarlo dos veces se usa solo el de Meta Ads; borrá el gasto de Publicidad para que quede limpio.`,
       })
     }
 
     // ── Alertas inteligentes de negocio (cada dato por separado: si uno falla,
-    //    las demás alertas igual salen) ──
+    //    las demás alertas igual salen, y la que falló NO se arma) ──
     const datosAlertas = {}
     try {
       // Ventas mes actual vs mes anterior — mismo tramo de días en los dos,
       // no mes parcial contra mes completo (ver rangoMesAnteriorEquivalente).
       const { inicio: inicioMesAnt, fin: finMesAnt, dias: diasComparados } = rangoMesAnteriorEquivalente(ahora)
-      const { data: vAct } = await supabase.from('ventas').select('total').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', hoyStr)
-      const { data: vAnt } = await supabase.from('ventas').select('total').is('deleted_at', null).gte('fecha', inicioMesAnt).lte('fecha', finMesAnt)
-      datosAlertas.ventasMesActual = (vAct || []).reduce((s, v) => s + (v.total || 0), 0)
-      datosAlertas.ventasMesAnterior = (vAnt || []).reduce((s, v) => s + (v.total || 0), 0)
+      const [vAct, vAnt] = await Promise.all([
+        fetchAll(() => supabase.from('ventas').select('id, total').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', hoyStr)),
+        fetchAll(() => supabase.from('ventas').select('id, total').is('deleted_at', null).gte('fecha', inicioMesAnt).lte('fecha', finMesAnt)),
+      ])
+      datosAlertas.ventasMesActual = vAct.reduce((s, v) => s + (v.total || 0), 0)
+      datosAlertas.ventasMesAnterior = vAnt.reduce((s, v) => s + (v.total || 0), 0)
       datosAlertas.diasComparados = diasComparados
-    } catch (e) { console.warn('[dashboard] sin comparación de ventas:', e?.message || e) }
+    } catch (e) { fallas.push('comparación de ventas'); console.warn('[dashboard] sin comparación de ventas:', e?.message || e) }
 
     try {
       // Recompra pendientes (clientes listos hoy, estimación)
       const desdeR = new Date(); desdeR.setMonth(desdeR.getMonth() - 8)
-      const [{ data: vEnt }, { data: logs }] = await Promise.all([
-        supabase.from('ventas').select('cliente_telefono, fecha, estado').eq('estado', 'entregado').is('deleted_at', null).gte('fecha', hoyLocal(desdeR)).limit(1000),
+      const [vEnt, { data: logs, error: errLogs }] = await Promise.all([
+        fetchAll(() => supabase.from('ventas').select('id, cliente_telefono, fecha, estado').eq('estado', 'entregado').is('deleted_at', null).gte('fecha', hoyLocal(desdeR))),
         supabase.from('recompra_log').select('telefono, fecha_envio').gte('fecha_envio', new Date(Date.now() - 25 * 86400000).toISOString()),
       ])
+      if (errLogs) throw errLogs
       const enCooldown = new Set((logs || []).map(l => String(l.telefono).replace(/\D/g, '')))
       const hace15 = Date.now() - 15 * 86400000
       const candidatos = new Set()
-      for (const v of (vEnt || [])) {
+      for (const v of vEnt) {
         const tel = String(v.cliente_telefono || '').replace(/\D/g, '')
         if (!tel || enCooldown.has(tel)) continue
         if (v.fecha && new Date(v.fecha).getTime() < hace15) candidatos.add(tel)
       }
       datosAlertas.recompraPendientes = candidatos.size
-    } catch (e) { console.warn('[dashboard] sin alerta de recompra:', e?.message || e) }
+    } catch (e) { fallas.push('recompra'); console.warn('[dashboard] sin alerta de recompra:', e?.message || e) }
 
     try {
       // Plata de PaP sin rendir
       // `cobrado` es el IMPORTE cobrado (un entero), no un booleano: con
       // .eq('cobrado', true) Postgres rechazaba la consulta entera y el catch
       // de abajo se tragaba el error, así que esta alerta nunca disparó.
-      const { data: sinRend } = await supabase.from('entregas').select('cobrado').gt('cobrado', 0).eq('rendido', false).limit(2000)
-      datosAlertas.montoSinRendir = (sinRend || []).reduce((s, e) => s + (Number(e.cobrado) || 0), 0)
-      datosAlertas.cantSinRendir = (sinRend || []).length
-    } catch (e) { console.warn('[dashboard] sin alerta de rendición:', e?.message || e) }
+      const sinRend = await fetchAll(() => supabase.from('entregas').select('cobrado').gt('cobrado', 0).eq('rendido', false), { columnaOrden: 'nro_guia_pap' })
+      datosAlertas.montoSinRendir = sinRend.reduce((s, e) => s + (Number(e.cobrado) || 0), 0)
+      datosAlertas.cantSinRendir = sinRend.length
+    } catch (e) { fallas.push('plata sin rendir'); console.warn('[dashboard] sin alerta de rendición:', e?.message || e) }
 
     try {
-      // Tasa de entrega este mes vs mes anterior (mismo tramo de días)
+      // Tasa de entrega este mes vs mes anterior (mismo tramo de días), por pedido
       const { inicio: inicioMesAnt2, fin: finMesAnt2 } = rangoMesAnteriorEquivalente(ahora)
       const tasa = (arr) => {
-        const ent = (arr || []).filter(v => v.estado === 'entregado').length
-        const dev = (arr || []).filter(v => v.estado === 'devuelto').length
-        return { tasa: (ent + dev) ? ent / (ent + dev) : 0, resueltos: ent + dev }
+        const p = contarPedidos(arr, categoriaVenta)
+        return { tasa: p.resueltos ? p.entregados / p.resueltos : 0, resueltos: p.resueltos }
       }
-      const { data: vMesTasa } = await supabase.from('ventas').select('estado').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', hoyStr)
-      const { data: vAntTasa } = await supabase.from('ventas').select('estado').is('deleted_at', null).gte('fecha', inicioMesAnt2).lte('fecha', finMesAnt2)
+      const [vMesTasa, vAntTasa] = await Promise.all([
+        fetchAll(() => supabase.from('ventas').select('id, n_referencia, fecha, estado').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', hoyStr)),
+        fetchAll(() => supabase.from('ventas').select('id, n_referencia, fecha, estado').is('deleted_at', null).gte('fecha', inicioMesAnt2).lte('fecha', finMesAnt2)),
+      ])
       const tAct = tasa(vMesTasa), tAnt = tasa(vAntTasa)
       datosAlertas.tasaEntregaActual = tAct.tasa
       datosAlertas.tasaEntregaAnterior = tAnt.tasa
       datosAlertas.entregasResueltas = tAct.resueltos
-    } catch (e) { console.warn('[dashboard] sin alerta de entrega:', e?.message || e) }
+    } catch (e) { fallas.push('tasa de entrega'); console.warn('[dashboard] sin alerta de entrega:', e?.message || e) }
 
+    if (!vigente()) return
     const alertasInteligentes = construirAlertasNegocio(datosAlertas)
     setAlertas([...alertasActivas, ...alertasInteligentes])
 
     // ── Centro de acciones: qué falta hacer, priorizado por plata en juego ──
     try {
       const [abiertas, ultEnt, prodsBajos, sinTransp, trancadas, pap] = await Promise.all([
-        supabase.from('ventas')
-          .select('fecha, total, estado, pago_anticipado, cliente_telefono, seguimiento_at')
-          .is('deleted_at', null).in('estado', ['pendiente', 'en_tramite', 'en_camino']),
+        fetchAll(() => supabase.from('ventas')
+          .select('id, fecha, total, estado, pago_anticipado, cliente_telefono, seguimiento_at')
+          .is('deleted_at', null).in('estado', ['pendiente', 'en_tramite', 'en_camino'])),
         supabase.from('entregas').select('fecha_entrega')
           .not('fecha_entrega', 'is', null).order('fecha_entrega', { ascending: false }).limit(1),
         // La columna es stock_alerta, NO alerta_stock: con el nombre invertido
@@ -437,48 +508,72 @@ export default function DashboardPage() {
         supabase.from('ventas').select('id', { count: 'exact', head: true })
           .is('deleted_at', null).is('transportadora', null),
         // Entregas cobradas al cliente que la transportadora todavía no depositó.
-        supabase.from('entregas').select('importe, fecha_entrega')
-          .eq('categoria', 'entregado').eq('rendido', false).not('fecha_entrega', 'is', null),
-        // Guías de PaP en tránsito, para la alerta de "sin moverse". Volumen
-        // chico (en_proceso son las que están volando ahora, no todo el histórico).
-        supabase.from('entregas')
+        fetchAll(() => supabase.from('entregas').select('importe, fecha_entrega')
+          .eq('categoria', 'entregado').eq('rendido', false).not('fecha_entrega', 'is', null), { columnaOrden: 'nro_guia_pap' }),
+        // Guías de PaP en tránsito, para la alerta de "sin moverse".
+        fetchAll(() => supabase.from('entregas')
           .select('estado_pap, categoria, ciudad, fecha_ingreso, transportadora')
-          .eq('transportadora', 'pap').eq('categoria', 'en_proceso'),
+          .eq('transportadora', 'pap').eq('categoria', 'en_proceso'), { columnaOrden: 'nro_guia_pap' }),
       ])
+      const errAcc = ultEnt.error || prodsBajos.error || sinTransp.error
+      if (errAcc) throw errAcc
       // Trancadas = entregadas hace más de 14 días y todavía sin depositar.
       const hace14 = new Date(); hace14.setDate(hace14.getDate() - 14)
       const limite = hoyLocal(hace14)
-      const trancadasList = (trancadas.data || []).filter(e => e.fecha_entrega < limite)
+      const trancadasList = trancadas.filter(e => e.fecha_entrega < limite)
       const bajos = (prodsBajos.data || []).filter(p =>
         (p.stock_actual ?? 0) <= (p.stock_alerta ?? 0))
+      if (!vigente()) return
       setAcciones(construirAcciones({
-        ventasAbiertas: abiertas.data || [],
+        ventasAbiertas: abiertas,
         ultimaEntregaImportada: ultEnt.data?.[0]?.fecha_entrega || null,
+        // Todo el ads del mes (Campañas + Meta sincronizado): con la sincronización
+        // andando ya no hace falta "cargar el gasto" a mano.
         gastoAdsMes: totalAdsMes,
         productosBajos: bajos,
         sinRendir: {
           monto: trancadasList.reduce((s2, e) => s2 + (e.importe || 0), 0),
-          cantidad: (trancadas.data || []).length,
+          cantidad: trancadas.length,
           trancados: trancadasList.length,
         },
         ventasSinTransportadora: sinTransp.count || 0,
-        papAtascado: entregasPaPAtascadas(pap.data || [], getUmbralesSeguimientoPaP()),
+        papAtascado: entregasPaPAtascadas(pap, getUmbralesSeguimientoPaP()),
       }))
-    } catch (e) { console.warn('[dashboard] el centro de acciones es complementario: si falla, no rompe el dashboard:', e?.message || e) }
+    } catch (e) { fallas.push('centro de acciones'); console.warn('[dashboard] el centro de acciones es complementario: si falla, no rompe el dashboard:', e?.message || e) }
 
     // Ventas recientes
-    const { data: recientes } = await supabase.from('ventas').select('*').is('deleted_at', null).order('created_at', { ascending: false }).limit(8)
-    setVentasRecientes(recientes || [])
-
-    setLoading(false)
+    {
+      const { data: recientes, error } = await supabase.from('ventas').select('*').is('deleted_at', null).order('created_at', { ascending: false }).limit(8)
+      if (!vigente()) return
+      if (error) fallas.push('ventas recientes')
+      else setVentasRecientes(recientes || [])
+    }
+    } catch (e) {
+      fallas.push('datos del panel')
+      console.error('[dashboard] error inesperado:', e)
+    } finally {
+      if (vigente()) {
+        setFallasCarga(fallas)
+        yaCargoRef.current = true
+        setLoading(false)
+      }
+    }
   }, [])
 
   useEffect(() => {
     cargarDatos()
+    // Cada cambio en ventas recarga ~20 consultas: se espera 1 s desde el
+    // ÚLTIMO cambio (un import de 30 ventas dispara 30 eventos → 1 recarga).
+    let timer = null
+    const alCambiar = () => { clearTimeout(timer); timer = setTimeout(() => cargarDatos(), 1000) }
     const channel = supabase.channel('dashboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'ventas' }, cargarDatos)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ventas' }, alCambiar)
       .subscribe()
-    return () => supabase.removeChannel(channel)
+    return () => {
+      clearTimeout(timer)
+      pedidoRef.current++ // descarta una carga en vuelo al salir
+      supabase.removeChannel(channel)
+    }
   }, [cargarDatos])
 
   const estadoBadge = {
@@ -521,8 +616,17 @@ export default function DashboardPage() {
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <span className="section-label">{mesActual.charAt(0).toUpperCase() + mesActual.slice(1)}</span>
-        <button className="btn btn-ghost btn-sm" onClick={cargarDatos} title="Actualizar"><RefreshCw size={13} /></button>
+        <button className="btn btn-ghost btn-sm" onClick={() => cargarDatos()} title="Actualizar"><RefreshCw size={13} /></button>
       </div>
+
+      {/* Lo que no se pudo leer: esos números/alertas NO se muestran (mejor nada que uno falso). */}
+      {fallasCarga.length > 0 && (
+        <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(234,179,8,0.1)', border: '1px solid var(--yellow)', fontSize: 12.5, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <AlertTriangle size={14} color="var(--yellow)" />
+          <span>No se pudo cargar: {fallasCarga.join(', ')}. Esos datos no se muestran.</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => cargarDatos()}>Reintentar</button>
+        </div>
+      )}
 
       {/* Alertas */}
       {/* CENTRO DE ACCIONES — qué falta hacer, ordenado por plata en juego.
@@ -852,7 +956,7 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {showSaldoModal && <SaldoModal onClose={() => setShowSaldoModal(false)} onSaved={cargarDatos} />}
+      {showSaldoModal && <SaldoModal onClose={() => setShowSaldoModal(false)} onSaved={() => cargarDatos()} />}
     </div>
   )
 }

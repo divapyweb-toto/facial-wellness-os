@@ -22,16 +22,29 @@ export async function cargarConversaciones() {
 }
 
 // Último mensaje de cada conversación (para la vista previa y el orden).
+// Lee la vista wa_ultimo_mensaje (una fila por chat, migración
+// 20261009000020). Si la vista todavía no existe, cae al método viejo: los
+// últimos 1.000 mensajes juntos (algunos chats pueden quedar sin vista previa).
+const COLS_ULT = 'id, conversacion_id, direccion, tipo, texto, contenido, estado, creado_en'
+const vistaInexistente = (e) => e?.code === '42P01' || e?.code === 'PGRST205' || /wa_ultimo_mensaje/.test(e?.message || '')
+
 export async function cargarUltimosMensajes(ids) {
   if (!ids.length) return {}
+  const ult = {}
+  const { data: vista, error: errVista } = await supabase
+    .from('wa_ultimo_mensaje').select(COLS_ULT).in('conversacion_id', ids)
+  if (!errVista) {
+    for (const m of vista || []) ult[m.conversacion_id] = m
+    return ult
+  }
+  if (!vistaInexistente(errVista)) throw errVista
   const { data, error } = await supabase
     .from('wa_mensajes')
-    .select('id, conversacion_id, direccion, tipo, texto, contenido, estado, creado_en')
+    .select(COLS_ULT)
     .in('conversacion_id', ids)
     .order('creado_en', { ascending: false })
     .limit(1000)
   if (error) throw error
-  const ult = {}
   for (const m of data || []) if (!ult[m.conversacion_id]) ult[m.conversacion_id] = m
   return ult
 }
@@ -91,11 +104,18 @@ export async function enviarMensajeManual(conversacionId, texto) {
 }
 
 // Realtime: un solo canal para las dos tablas. Devuelve la función para cortar.
-export function suscribirBandeja({ onConversacion, onMensaje }) {
+// onReconectar: se llama cuando el canal vuelve a quedar suscripto después de
+// una caída (lo que pasó en el medio no llega por Realtime: hay que recargar).
+export function suscribirBandeja({ onConversacion, onMensaje, onReconectar }) {
+  let yaSuscripto = false
   const canal = supabase
     .channel('bandeja-wa')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'wa_conversaciones' }, (p) => onConversacion?.(p))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'wa_mensajes' }, (p) => onMensaje?.(p))
-    .subscribe()
+    .subscribe((estado) => {
+      if (estado !== 'SUBSCRIBED') return
+      if (yaSuscripto) onReconectar?.()
+      yaSuscripto = true
+    })
   return () => { supabase.removeChannel(canal) }
 }

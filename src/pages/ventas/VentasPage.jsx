@@ -1,14 +1,14 @@
 // src/pages/ventas/VentasPage.jsx
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { supabaseTienda as supabase, formatGs, estadoConfig, getEstadoConfig } from '../../lib/supabase'
+import { supabaseTienda as supabase, supabase as supabaseSinFiltro, formatGs, estadoConfig, getEstadoConfig } from '../../lib/supabase'
 import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
 import { useToast } from '../../lib/toast'
 import { aplicarStockNuevaVenta, aplicarStockCambioEstado, aplicarStockEdicion, devolverStockPorBorrado } from '../../lib/stockEngine'
 import { precioSugerido, precioUnitarioSugerido, totalLinea, avisoPrecio, proximaReferenciaWA, totalesPedido, filasDeVenta } from '../../lib/pedidos'
 import { normalizarRef, normalizarTel } from '../../lib/referencias'
-import { tiendaParaEscribir } from '../../lib/tienda'
+import { tiendaParaEscribir, getTienda } from '../../lib/tienda'
 import { fetchAll } from '../../lib/fetchAll'
 import { logError } from '../../lib/errorLog'
 import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
@@ -122,6 +122,9 @@ function NuevaVentaModal({ onClose, onSaved }) {
   const [ciudades, setCiudades] = useState([])
   const [loading, setLoading] = useState(false)
   const [faltaMigracion, setFaltaMigracion] = useState(false)
+  // En "Todas" no hay tienda implícita: se elige acá (antes caía en 'fw' sin avisar).
+  const enTodas = getTienda() === 'todas'
+  const [tiendaForm, setTiendaForm] = useState('')
   const [form, setForm] = useState({
     fecha: hoyLocal(),
     n_referencia: '',
@@ -204,6 +207,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
     if (conProducto.some(l => (parseInt(l.cantidad, 10) || 0) < 1)) { toast('La cantidad tiene que ser 1 o más', 'error'); return }
     const errorValidacion = validarVenta({ ...form, producto_id: conProducto[0].producto_id, cantidad: conProducto[0].cantidad })
     if (errorValidacion) { toast(errorValidacion, 'error'); return }
+    if (enTodas && !tiendaForm) { toast('Elegí la tienda de esta venta (Voltra o Facial Wellness)', 'error'); return }
 
     setLoading(true)
     try {
@@ -218,7 +222,8 @@ function NuevaVentaModal({ onClose, onSaved }) {
 
       // 8.6 · Avisar si esa referencia ya está cargada, antes de duplicarla.
       if (form.n_referencia?.trim()) {
-        const { data: yaExiste } = await supabase.from('ventas')
+        // Sin filtro de tienda: un duplicado en la otra tienda también cuenta.
+        const { data: yaExiste } = await supabaseSinFiltro.from('ventas')
           .select('id, producto_nombre, fecha').is('deleted_at', null)
           .eq('n_referencia', ref).limit(1)
         if (yaExiste?.length) {
@@ -235,7 +240,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
       const base = {
         ...form,
         n_referencia: ref,
-        tienda: tiendaParaEscribir(),
+        tienda: enTodas ? tiendaForm : tiendaParaEscribir(),
         // 8.5 · Único lugar del sistema que guardaba el teléfono crudo: el
         // mismo cliente aparecía dos veces según cómo se hubiera tipeado.
         cliente_telefono: normalizarTel(form.cliente_telefono) || form.cliente_telefono || '',
@@ -288,6 +293,17 @@ function NuevaVentaModal({ onClose, onSaved }) {
             <div className="alert alert-warning">
               <AlertTriangle size={15} />
               <span>Falta correr <code>005-ventas-abiertas.sql</code>. La venta se guarda igual, pero sin marcar mayorista ni el precio de lista.</span>
+            </div>
+          )}
+
+          {enTodas && (
+            <div className="form-group">
+              <label className="form-label">Tienda (arriba está en "Todas")</label>
+              <select className="form-select" value={tiendaForm} onChange={e => setTiendaForm(e.target.value)} required>
+                <option value="">— Elegí Voltra o Facial Wellness —</option>
+                <option value="voltra">Voltra</option>
+                <option value="fw">Facial Wellness</option>
+              </select>
             </div>
           )}
 
@@ -480,7 +496,7 @@ function NuevaVentaModal({ onClose, onSaved }) {
   )
 }
 
-function EditarVentaModal({ venta, onClose, onSaved }) {
+function EditarVentaModal({ venta, onClose, onSaved, lineasDelPedido }) {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [productos, setProductos] = useState([])
@@ -565,7 +581,22 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
         n_referencia: form.n_referencia,
       }
       try { await aplicarStockEdicion(venta, ventaNueva) } catch (e) { console.warn('stock:', e?.message) }
-      toast('Venta actualizada', 'success'); onSaved(); onClose()
+      // El estado es del PEDIDO: se aplica también a las otras líneas (como cambiarEstado).
+      let otras = 0
+      if (form.estado !== venta.estado && lineasDelPedido) {
+        const hermanas = (await lineasDelPedido(venta)).filter(l => l.id !== venta.id && l.estado !== form.estado)
+        if (hermanas.length) {
+          const { error: errH } = await supabase.from('ventas').update({ estado: form.estado }).in('id', hermanas.map(l => l.id))
+          if (errH) toast('La venta se guardó, pero no pude cambiar el estado de las otras líneas: ' + errH.message, 'error')
+          else {
+            otras = hermanas.length
+            for (const l of hermanas) {
+              try { await aplicarStockCambioEstado(l, form.estado) } catch (e) { console.warn('stock:', e?.message) }
+            }
+          }
+        }
+      }
+      toast(otras ? `Venta actualizada · estado aplicado a ${otras} línea(s) más del pedido` : 'Venta actualizada', 'success'); onSaved(); onClose()
     }
     setLoading(false)
   }
@@ -676,8 +707,10 @@ function EditarVentaModal({ venta, onClose, onSaved }) {
 
 export default function VentasPage() {
   const { toast } = useToast()
-  const [ventas, setVentas] = useState([])
+  const [ventasCargadas, setVentasCargadas] = useState([])
   const [loading, setLoading] = useState(true)
+  // Número de la última carga pedida: una respuesta vieja no pisa a una nueva.
+  const cargaRef = useRef(0)
   const [showModal, setShowModal] = useState(false)
 
   // Deep-link: #/ventas?nueva=1 abre directo el modal de nueva venta.
@@ -701,6 +734,7 @@ export default function VentasPage() {
   const [editando, setEditando] = useState(null)
 
   const cargarVentas = useCallback(async () => {
+    const miCarga = ++cargaRef.current
     setLoading(true)
     // fetchAll re-ejecuta la consulta en cada página, así que necesita una
     // función que la ARME de nuevo: una query de Supabase se consume al
@@ -726,6 +760,7 @@ export default function VentasPage() {
     try {
       data = await fetchAll(armarQuery, { columnaOrden: 'id' })
     } catch (e) {
+      if (miCarga !== cargaRef.current) return
       toast('No pude cargar las ventas: ' + (e?.message || e), 'error')
       setLoading(false)
       return
@@ -736,21 +771,26 @@ export default function VentasPage() {
       String(b.fecha || '').localeCompare(String(a.fecha || '')) ||
       String(b.created_at || '').localeCompare(String(a.created_at || ''))
     )
-    let resultado = data || []
-    if (busqueda) {
-      const b = busqueda.toLowerCase()
-      resultado = resultado.filter(v =>
-        v.producto_nombre?.toLowerCase().includes(b) ||
-        v.n_referencia?.toLowerCase().includes(b) ||
-        v.ciudad?.toLowerCase().includes(b)
-      )
-    }
-    setVentas(resultado)
+    if (miCarga !== cargaRef.current) return   // llegó tarde: hay una carga más nueva
+    setVentasCargadas(data || [])
     setSeleccionadas(new Set())
     setLoading(false)
-  }, [filtroEstado, filtroTransp, busqueda, filtroMes])
+  }, [filtroEstado, filtroTransp, filtroMes])
 
   useEffect(() => { cargarVentas() }, [cargarVentas])
+
+  // La búsqueda filtra en memoria: antes cada tecla volvía a bajar todas las ventas.
+  const ventas = useMemo(() => {
+    if (!busqueda) return ventasCargadas
+    const b = busqueda.toLowerCase()
+    return ventasCargadas.filter(v =>
+      v.producto_nombre?.toLowerCase().includes(b) ||
+      String(v.n_referencia ?? '').toLowerCase().includes(b) ||
+      v.ciudad?.toLowerCase().includes(b)
+    )
+  }, [ventasCargadas, busqueda])
+  // Al cambiar la búsqueda se limpia la selección (no borrar filas que no se ven).
+  useEffect(() => { setSeleccionadas(new Set()) }, [busqueda])
 
   // Un pedido de 2 productos son 2 filas en `ventas`. Cambiar el estado o
   // borrar tocaba UNA sola: quedaba media orden entregada y media pendiente.
@@ -1069,7 +1109,7 @@ export default function VentasPage() {
       {showModal && <NuevaVentaModal onClose={() => setShowModal(false)} onSaved={cargarVentas} />}
       {editando && (
         <ModalErrorBoundary onClose={() => setEditando(null)}>
-          <EditarVentaModal venta={editando} onClose={() => setEditando(null)} onSaved={cargarVentas} />
+          <EditarVentaModal venta={editando} onClose={() => setEditando(null)} onSaved={cargarVentas} lineasDelPedido={lineasDelPedido} />
         </ModalErrorBoundary>
       )}
     </div>

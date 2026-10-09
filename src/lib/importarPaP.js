@@ -41,7 +41,9 @@ export function parseXLSX(arrayBuffer) {
 
 function toISODate(v) {
   if (!v) return null
-  if (v instanceof Date && !isNaN(v)) return v.toISOString().split('T')[0]
+  // Componentes LOCALES: xlsx arma la fecha en hora local y toISOString (UTC)
+  // corría un día si la hora era tarde.
+  if (v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
   if (typeof v === 'string') {
     const m = v.match(/(\d{2})\/(\d{2})\/(\d{4})/)
     if (m) return `${m[3]}-${m[2]}-${m[1]}`

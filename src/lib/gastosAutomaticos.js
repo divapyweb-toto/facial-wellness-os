@@ -18,6 +18,7 @@
 // ═══════════════════════════════════════════════════════════
 import { familiaProducto } from './recompra'
 import { tasaDelDia } from './tipoCambio'
+import { fetchAll } from './fetchAll'
 
 const num = (v) => Number(v) || 0
 
@@ -83,11 +84,30 @@ const detalleOrigen = (p) => ({
   diasReales: p.diasReales, diasEstimados: p.diasEstimados,
 })
 
+// Gastos manuales del período sin doble conteo de publicidad. Si hay ads
+// (Campañas a mano o Meta sincronizado) Y además gastos de categoría
+// "Publicidad", es la misma plata cargada dos veces: se resta SOLO el ads y el
+// de Publicidad queda afuera (posibleDoble avisa para que se borre).
+// Fuente única para Dashboard y Reportes.
+export const esGastoPublicidad = (g) => /public|ads|meta|marketing/i.test(g?.categoria || '')
+export function gastosSinDobleAds(gastos = [], totalAds = 0) {
+  const bruto = (gastos || []).reduce((s, g) => s + (Number(g.monto) || 0), 0)
+  const gastoPublicidad = (gastos || []).filter(esGastoPublicidad).reduce((s, g) => s + (Number(g.monto) || 0), 0)
+  const posibleDoble = totalAds > 0 && gastoPublicidad > 0
+  return { totalGastos: bruto - (posibleDoble ? gastoPublicidad : 0), gastoPublicidad, posibleDoble }
+}
+
+// Clave del set de meses con publicidad cargada a mano. Una fila sin tienda
+// (anterior a la columna) es de Facial Wellness, igual que en gasto_ads_diario.
+export const claveCampanaManual = (tienda, mes) => `${tienda || 'fw'}|${String(mes).slice(0, 7)}`
+
 // Todo lo de un período. Entradas ya leídas de la base (esta función no toca red).
 //   adsDiario:  [{ fecha, gasto, producto_id, tienda? }]
 //   productos:  [{ id, nombre }]
 //   gastosReales: [{ fecha, proveedor, concepto, monto_usd }] (gastos_proveedor_diario)
-//   mesesConCampanas: Set de 'YYYY-MM' que ya tienen publicidad cargada a mano
+//   mesesConCampanas: Set de 'tienda|YYYY-MM' (ver claveCampanaManual) que ya
+//     tienen publicidad cargada a mano. Una clave sin tienda ('YYYY-MM') vale
+//     para todas las tiendas (compatibilidad con llamadas viejas).
 //   tienda:     'voltra' | 'fw' | 'todas'
 //   fraccionMes: qué parte del mes cubre el período (para prorratear gastos fijos)
 export function armarGastosAutomaticos({
@@ -104,7 +124,10 @@ export function armarGastosAutomaticos({
   for (const r of adsDiario) {
     const t = r.tienda || 'fw'
     if (tienda !== 'todas' && t !== tienda) continue
-    if (mesesConCampanas.has(String(r.fecha).slice(0, 7))) { metaDescartado += num(r.gasto); continue }
+    // Por tienda+mes: en "Todas", una campaña manual de FW no puede descartar
+    // el Meta sincronizado de Voltra del mismo mes (son cuentas distintas).
+    const mes = String(r.fecha).slice(0, 7)
+    if (mesesConCampanas.has(claveCampanaManual(t, mes)) || mesesConCampanas.has(mes)) { metaDescartado += num(r.gasto); continue }
     const g = num(r.gasto)
     metaTotal += g
     const fam = idAFamilia.get(r.producto_id)
@@ -157,19 +180,24 @@ export function armarGastosAutomaticos({
 // tabla falla (o la columna `tienda` todavía no existe) el reporte sigue.
 export async function cargarGastosAutomaticos(cliente, { inicio, fin }) {
   const dia = (d, fin_) => `${d}T${fin_ ? '23:59:59' : '00:00:00'}-03:00`
-  const seguro = async (fn) => { try { const { data, error } = await fn(); return error ? null : (data || []) } catch { return null } }
+  // Paginado con fetchAll: `.limit(20000)` NO pasa el tope de 1.000 filas de
+  // Supabase (corta en silencio). Cada tabla se ordena por una clave única.
+  const seguro = async (fn) => { try { return await fn() } catch { return null } }
+  const todo = (q, columnaOrden = 'id') => seguro(() => fetchAll(q, { columnaOrden }))
 
-  let ads = await seguro(() => cliente.from('gasto_ads_diario').select('fecha, gasto, producto_id, tienda').gte('fecha', inicio).lte('fecha', fin).limit(5000))
+  // gasto_ads_diario es único por (fecha, adset_id): orden adset_id + fecha.
+  let ads = await todo(() => cliente.from('gasto_ads_diario').select('fecha, gasto, producto_id, tienda').gte('fecha', inicio).lte('fecha', fin).order('adset_id'), 'fecha')
   // Sin la columna `tienda` (migración todavía sin correr): todo es de Facial Wellness.
-  if (ads === null) ads = await seguro(() => cliente.from('gasto_ads_diario').select('fecha, gasto, producto_id').gte('fecha', inicio).lte('fecha', fin).limit(5000)) || []
+  if (ads === null) ads = await todo(() => cliente.from('gasto_ads_diario').select('fecha, gasto, producto_id').gte('fecha', inicio).lte('fecha', fin).order('adset_id'), 'fecha') || []
 
   const [wa, turnos, ciclos, reales] = await Promise.all([
-    seguro(() => cliente.from('wa_mensajes').select('costo_usd, creado_en').not('costo_usd', 'is', null).gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(20000)),
-    seguro(() => cliente.from('vendedor_turnos').select('costo_usd, simulado, creado_en').gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(20000)),
-    seguro(() => cliente.from('mejora_ciclos').select('costo_usd, creado_en').gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true)).limit(1000)),
+    todo(() => cliente.from('wa_mensajes').select('costo_usd, creado_en').not('costo_usd', 'is', null).gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true))),
+    todo(() => cliente.from('vendedor_turnos').select('costo_usd, simulado, creado_en').gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true))),
+    todo(() => cliente.from('mejora_ciclos').select('costo_usd, creado_en').gte('creado_en', dia(inicio)).lte('creado_en', dia(fin, true))),
     // Lo facturado por cada proveedor. Si la tabla todavía no existe, queda
     // vacío y el reporte sigue con el estimado, como antes.
-    seguro(() => cliente.from('gastos_proveedor_diario').select('fecha, proveedor, concepto, monto_usd').gte('fecha', inicio).lte('fecha', fin).limit(5000)),
+    // Clave única (fecha, proveedor, concepto).
+    todo(() => cliente.from('gastos_proveedor_diario').select('fecha, proveedor, concepto, monto_usd').gte('fecha', inicio).lte('fecha', fin).order('proveedor').order('concepto'), 'fecha'),
   ])
   return { adsDiario: ads, waMensajes: wa || [], turnosIA: turnos || [], ciclosMejora: ciclos || [], gastosReales: reales || [] }
 }

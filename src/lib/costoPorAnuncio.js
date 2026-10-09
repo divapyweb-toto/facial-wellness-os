@@ -9,6 +9,8 @@
 // Se cruza por nombre (sin mayúsculas ni espacios de más) o por ID.
 // ═══════════════════════════════════════════════════════════
 
+import { fetchAll } from './fetchAll'
+
 const clave = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 const esId = (s) => /^\d{6,}$/.test(String(s ?? '').trim())
 
@@ -59,12 +61,16 @@ export function armarCostoPorAnuncio({ gastoAnuncios = [], pedidos = [] } = {}) 
 
 // Lee lo del período. Si las tablas/vistas no existen todavía, devuelve vacío (no rompe Reportes).
 export async function cargarCostoPorAnuncio(cliente, { inicio, fin }) {
-  const seguro = async (fn) => { try { const { data, error } = await fn(); return error ? [] : (data || []) } catch { return [] } }
+  // Paginado con fetchAll: `.limit(20000)` no pasa el tope de 1.000 filas de
+  // Supabase y cortaba en silencio. Orden por clave única de cada fuente.
+  const seguro = async (fn) => { try { return await fn() } catch { return [] } }
   const [gastoAnuncios, pedidos] = await Promise.all([
-    seguro(() => cliente.from('gasto_ads_anuncio_diario').select('fecha, ad_id, ad_nombre, campana_nombre, gasto')
-      .eq('tienda', 'voltra').gte('fecha', inicio).lte('fecha', fin).limit(20000)),
-    seguro(() => cliente.from('pedidos_origen_anuncio').select('shopify_order_id, creado_en, utm_content, anuncio_wa, origen, entregado')
-      .gte('creado_en', `${inicio}T00:00:00-03:00`).lte('creado_en', `${fin}T23:59:59-03:00`).limit(20000)),
+    // Único por (fecha, ad_id).
+    seguro(() => fetchAll(() => cliente.from('gasto_ads_anuncio_diario').select('fecha, ad_id, ad_nombre, campana_nombre, gasto')
+      .eq('tienda', 'voltra').gte('fecha', inicio).lte('fecha', fin).order('ad_id'), { columnaOrden: 'fecha' })),
+    // Una fila por pedido de Shopify.
+    seguro(() => fetchAll(() => cliente.from('pedidos_origen_anuncio').select('shopify_order_id, creado_en, utm_content, anuncio_wa, origen, entregado')
+      .gte('creado_en', `${inicio}T00:00:00-03:00`).lte('creado_en', `${fin}T23:59:59-03:00`), { columnaOrden: 'shopify_order_id' })),
   ])
   return armarCostoPorAnuncio({ gastoAnuncios, pedidos })
 }

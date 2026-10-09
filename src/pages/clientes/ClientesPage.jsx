@@ -52,17 +52,24 @@ export default function ClientesPage() {
   const [loading, setLoading] = useState(true)
   const [busqueda, setBusqueda] = useState('')
   const [detalle, setDetalle] = useState(null)
+  const [errorCarga, setErrorCarga] = useState('')
 
   const cargar = useCallback(async () => {
-    setLoading(true)
-    // .limit(5000) no servía: Supabase corta en 1.000 igual. Hay que paginar.
-    const data = await fetchAll(() => supabase
-      .from('ventas')
-      .select('cliente_nombre, cliente_telefono, ciudad, producto_nombre, total, estado, fecha, ganancia_neta, envio_cliente')
-      .is('deleted_at', null)
-      .order('fecha', { ascending: false }))
-    setVentas(data || [])
-    setLoading(false)
+    setLoading(true); setErrorCarga('')
+    // try/finally: si la consulta fallaba, quedaba "Cargando..." para siempre.
+    try {
+      // .limit(5000) no servía: Supabase corta en 1.000 igual. Hay que paginar.
+      const data = await fetchAll(() => supabase
+        .from('ventas')
+        .select('cliente_nombre, cliente_telefono, ciudad, producto_nombre, total, estado, fecha, ganancia_neta, envio_cliente')
+        .is('deleted_at', null)
+        .order('fecha', { ascending: false }))
+      setVentas(data || [])
+    } catch (e) {
+      setErrorCarga(`No se pudieron cargar los clientes (${e?.message || 'error'}).`)
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   useEffect(() => { cargar() }, [cargar])
@@ -136,6 +143,13 @@ export default function ClientesPage() {
         <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
         <input className="form-input" style={{ paddingLeft: 34 }} placeholder="Buscar por nombre, teléfono o ciudad..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
       </div>
+
+      {errorCarga && (
+        <div className="alert alert-error" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between' }}>
+          {errorCarga}
+          <button className="btn btn-secondary btn-sm" onClick={cargar}>Reintentar</button>
+        </div>
+      )}
 
       <div className="table-wrapper">
         {loading ? (

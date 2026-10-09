@@ -58,7 +58,9 @@ export function refDesdeCodigo(codigo) {
 // '28/07/2026 00:00' → '2026-07-28' · '31/07/2026 (Lote 419)' → '2026-07-31'
 export function fechaLucero(v) {
   if (!v) return null
-  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10)
+  // Componentes LOCALES: xlsx arma la fecha en hora local y toISOString (UTC)
+  // corría un día si la hora era tarde.
+  if (v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
   const m = String(v).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
   if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
   const iso = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/)

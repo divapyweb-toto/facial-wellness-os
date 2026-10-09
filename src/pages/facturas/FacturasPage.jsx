@@ -2,7 +2,7 @@
 // Panel de facturación electrónica (SIFEN). Lee `facturas` (esquema en
 // docs/sifen-contrato.md) y `shopify_pedidos` (solo para mostrar #1003 → VT-1003).
 // La parte visual vive en FacturasVista.jsx; la lógica en logica.js.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
@@ -38,13 +38,20 @@ export default function FacturasPage() {
   const [reenviando, setReenviando] = useState(null)
   const [exportando, setExportando] = useState(false)
 
+  // Cada carga lleva un número: si cambiaste de mes mientras cargaba, la
+  // respuesta vieja se descarta (si no, pisaba el mes nuevo y el Excel salía mal).
+  const pedidoRef = useRef(0)
+
   const cargar = useCallback(async () => {
+    const mio = ++pedidoRef.current
+    const vigente = () => mio === pedidoRef.current
     setCargando(true); setErrorCarga(null)
     const { desde, hasta } = rangoMes(mes)
     try {
       // Del mes por fecha de emisión; las que aún no tienen, por fecha de creación.
       const filas = await fetchAll(() => supabase.from('facturas').select(COLUMNAS)
         .or(`and(fecha_emision.gte.${desde},fecha_emision.lt.${hasta}),and(fecha_emision.is.null,creado_en.gte.${desde},creado_en.lt.${hasta})`))
+      if (!vigente()) return
       filas.sort((a, b) => String(b.fecha_emision || b.creado_en || '').localeCompare(String(a.fecha_emision || a.creado_en || '')))
       setNoActivada(false)
       setFacturas(filas)
@@ -56,13 +63,15 @@ export default function FacturasPage() {
         const { data } = await supabase.from('shopify_pedidos').select('shopify_order_id, nombre').in('shopify_order_id', ids.slice(i, i + 200))
         for (const p of data || []) mapa[p.shopify_order_id] = p.nombre
       }
+      if (!vigente()) return
       setNombresPedido(mapa)
     } catch (e) {
+      if (!vigente()) return
       setFacturas([])
       if (esTablaInexistente(e)) setNoActivada(true)
       else setErrorCarga(e?.message || 'error desconocido')
     } finally {
-      setCargando(false)
+      if (vigente()) setCargando(false)
     }
   }, [mes])
 

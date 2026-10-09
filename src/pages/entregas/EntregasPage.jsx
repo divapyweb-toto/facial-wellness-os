@@ -3,7 +3,9 @@ import { useState, useRef, useMemo, useEffect, Fragment } from 'react'
 import { normalizarRef } from '../../lib/referencias'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx'
-import { supabase, formatGs } from '../../lib/supabase'
+import { supabase, supabaseTienda, formatGs } from '../../lib/supabase'
+import { getTienda } from '../../lib/tienda'
+import { filasPaPParaVoltra, idsVentasParaEstado, diasDesdeParaguay, deudaPorCourier, esDeTienda } from './arreglosEntregas'
 import { sanearEntrega, soloColumnasEntregas, IMPORTE_MAX_RAZONABLE, COLS_VINCULO } from '../../lib/estadosPaP'
 import { calcularVinculos } from '../../lib/vinculacion'
 import { parseXLSX, combinar } from '../../lib/importarPaP'
@@ -55,6 +57,11 @@ export default function EntregasPage() {
   const navigate = useNavigate()
   const fileRef = useRef()
   const autoSaveRef = useRef(null)
+  // Candado: el autoguardado y el botón no pueden correr guardarEnSistema a la vez.
+  const guardandoRef = useRef(false)
+  // Errores de carga: si el histórico no cargó, no se guarda (se pisarían cierres).
+  const [errorHist, setErrorHist] = useState(null)
+  const [errorVentas, setErrorVentas] = useState(null)
   const [paqData, setPaqData] = useState(null)
   const [gesData, setGesData] = useState(null)
   const [historico, setHistorico] = useState([])
@@ -81,12 +88,15 @@ export default function EntregasPage() {
     ;(async () => {
       try {
         // Paginado: sin esto Supabase corta en 1.000 filas sin avisar
+        // Métricas: solo la tienda elegida arriba (supabaseTienda).
         const data = await fetchAll(
-          () => supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
+          () => supabaseTienda.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
           { columnaOrden: 'nro_guia_pap' }
         )
-        if (activo) setHistorico(data || [])
-      } catch (e) { /* tabla vacía o no accesible */ }
+        if (activo) { setHistorico(data || []); setErrorHist(null) }
+      } catch (e) {
+        if (activo) setErrorHist(e?.message || String(e))
+      }
       if (activo) setCargandoHist(false)
     })()
     return () => { activo = false }
@@ -98,7 +108,7 @@ export default function EntregasPage() {
     ;(async () => {
       try {
         // Costos: traer ventas con su referencia y costo_prod real
-        const ventas = await fetchAll(() => supabase
+        const ventas = await fetchAll(() => supabaseTienda
           .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha, ciudad, producto_nombre, cantidad, transportadora').is('deleted_at', null))
         if (activo && ventas) {
           setRefCosto(indexarCostos(ventas))
@@ -106,14 +116,17 @@ export default function EntregasPage() {
           // Mapa referencia → transportadora (la venta es donde se decidió al despachar)
           const mapa = {}
           ventas.forEach(v => {
-            const k = String(v.n_referencia || '').replace(/[^0-9]/g, '')
+            // normalizarRef: 'VT-1003' (Voltra) no choca con '1003' (FW).
+            const k = normalizarRef(v.n_referencia)
             if (k) mapa[k] = v.transportadora || 'pap'
           })
           setTranspPorRef(mapa)
         }
         // Nota: esta página NO consulta gastos a propósito. La logística mide
         // contribución (flete + producto). Los gastos generales viven en Reportes.
-      } catch (e) { /* sin datos */ }
+      } catch (e) {
+        if (activo) setErrorVentas(e?.message || String(e))
+      }
     })()
     return () => { activo = false }
   }, [])
@@ -154,9 +167,12 @@ export default function EntregasPage() {
   const mesEfectivo = filtroMes === 'actual' ? mesActual : filtroMes
 
   // merged filtrado por el mes elegido (o todos)
+  // El reporte nuevo trae filas de las dos tiendas: las métricas muestran solo la elegida.
   const mergedFiltrado = useMemo(() => {
-    if (filtroMes === 'todos') return merged
-    return merged.filter(m => mesDePaquete(m) === mesEfectivo)
+    const t = getTienda()
+    const deTienda = merged.filter(m => esDeTienda(m, t))
+    if (filtroMes === 'todos') return deTienda
+    return deTienda.filter(m => mesDePaquete(m) === mesEfectivo)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [merged, filtroMes, mesEfectivo])
 
@@ -166,7 +182,7 @@ export default function EntregasPage() {
   useEffect(() => {
     if (!reportesNuevos.length) return
     if (autoSaveRef.current) clearTimeout(autoSaveRef.current)
-    autoSaveRef.current = setTimeout(() => { guardarEnSistema() }, 1500)
+    autoSaveRef.current = setTimeout(() => { autoSaveRef.current = null; guardarEnSistema() }, 1500)
     return () => { if (autoSaveRef.current) clearTimeout(autoSaveRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportesNuevos])
@@ -192,15 +208,16 @@ export default function EntregasPage() {
     const rendidos = entregados.filter(m => m.rendido)
     const entregadosSinRendir = entregados.filter(m => !m.rendido)
     const montoRendido = rendidos.reduce((s, m) => s + m.importe, 0)
-    const montoPendienteCobro = entregadosSinRendir.reduce((s, m) => s + m.importe, 0)
+    // Lo que te deben: lo que realmente cae al banco (Lucero descuenta el flete), por courier.
+    const deuda = deudaPorCourier(entregadosSinRendir)
+    const montoPendienteCobro = deuda.total
     const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null)
     const diasRendicionProm = diasRend.length ? (diasRend.reduce((a, b) => a + b, 0) / diasRend.length) : null
     const hayTesoreria = mergedFiltrado.some(m => m.rendido || m.fecha_rendido)
     // Lista detallada de lo que PaP te debe, lo que más tiempo lleva primero (para reclamar)
-    const hoy = new Date()
     const listaSinRendir = entregadosSinRendir.map(m => {
-      const fEnt = m.fecha_entrega ? new Date(m.fecha_entrega) : null
-      const diasSinRendir = fEnt ? Math.max(0, Math.round((hoy - fEnt) / 86400000)) : null
+      // Día de Paraguay (antes new Date('YYYY-MM-DD') en UTC sumaba un día).
+      const diasSinRendir = diasDesdeParaguay(m.fecha_entrega)
       return { ...m, diasSinRendir }
     }).sort((a, b) => (b.diasSinRendir ?? -1) - (a.diasSinRendir ?? -1))
 
@@ -242,7 +259,7 @@ export default function EntregasPage() {
       margenNeto: cobrado - costoEnvios,
       perdidaTotal: perdidoProd + costoEnviosDevueltos,
       diasProm, porCiudad, porMensajero, motivos, distribucion,
-      montoRendido, montoPendienteCobro, diasRendicionProm, hayTesoreria,
+      montoRendido, montoPendienteCobro, deuda, diasRendicionProm, hayTesoreria,
       rendidos: rendidos.length, entregadosSinRendir: entregadosSinRendir.length, listaSinRendir,
       conRef: mergedFiltrado.filter(m => m.n_referencia).length,
     }
@@ -439,9 +456,10 @@ export default function EntregasPage() {
         const guias = regs.map(r => r.nro_guia_pap).filter(Boolean)
         const previo = new Map()
         for (let i = 0; i < guias.length; i += 200) {
-          const { data } = await supabase.from('entregas')
+          const { data, error } = await supabase.from('entregas')
             .select('nro_guia_pap, categoria, cobrado, fecha_entrega')
             .in('nro_guia_pap', guias.slice(i, i + 200))
+          if (error) throw error
           for (const e of (data || [])) previo.set(String(e.nro_guia_pap), e)
         }
         for (const r of regs) {
@@ -453,7 +471,10 @@ export default function EntregasPage() {
           r.fecha_entrega = ant.fecha_entrega ?? r.fecha_entrega
         }
       } catch (e) {
-        console.warn('[lucero] no se pudo leer el estado previo; se guarda sin proteger cierres:', e?.message || e)
+        // Sin el estado previo, guardar devolvería entregados a en_proceso y
+        // borraría `cobrado`. Se corta y se avisa: no se guarda nada.
+        toast('Lucero: no pude leer el estado guardado, no se guardó nada (reintentá): ' + (e?.message || e), 'error')
+        return
       }
 
       let guardados = 0, errorMsg = null
@@ -471,22 +492,32 @@ export default function EntregasPage() {
 
       // 2) Estado de las ventas. Solo lo RESUELTO: 'fallido' sigue en tránsito
       //    y puede terminar entregado (Lucero reintenta), así que no se toca.
+      //    Se cruza en memoria con normalizarRef y se actualiza por id (igual
+      //    que PaP): comparar la referencia normalizada contra la guardada
+      //    ('#2071', 'FW-2071') no encontraba la venta. Los errores se juntan.
       const refsEntregadas = items.filter(i => i.categoria === 'entregado').map(i => i.referencia)
       const refsDevueltas = items.filter(i => i.categoria === 'devuelto').map(i => i.referencia)
       let ventasAct = 0
-      for (const [refs, estado] of [[refsEntregadas, 'entregado'], [refsDevueltas, 'devuelto']]) {
-        for (let i = 0; i < refs.length; i += 100) {
-          const chunk = refs.slice(i, i + 100)
-          if (!chunk.length) continue
-          const { data, error } = await supabase.from('ventas')
-            .update({ estado }).in('n_referencia', chunk).is('deleted_at', null).select('id')
-          if (!error) ventasAct += (data || []).length
+      const erroresVentas = []
+      const { data: ventasTodas, error: errLeerV } = await fetchAllSafe(() => supabase
+        .from('ventas').select('id, n_referencia, estado').is('deleted_at', null))
+      if (errLeerV) erroresVentas.push('no pude leer las ventas: ' + errLeerV.message)
+      else {
+        for (const [refs, estado] of [[refsEntregadas, 'entregado'], [refsDevueltas, 'devuelto']]) {
+          const ids = idsVentasParaEstado(ventasTodas, refs, estado)
+          for (let i = 0; i < ids.length; i += 100) {
+            const { data, error } = await supabase.from('ventas')
+              .update({ estado }).in('id', ids.slice(i, i + 100)).select('id')
+            if (error) erroresVentas.push(error.message)
+            else ventasAct += (data || []).length
+          }
         }
       }
 
       avisarVoltraOS('lucero', items)
       setResumenLucero({ ...resumen, guardados, ventasAct })
       if (errorMsg) toast('Lucero: error al guardar — ' + errorMsg, 'error')
+      else if (erroresVentas.length) toast(`Lucero: ${guardados} envíos guardados, pero las ventas no se actualizaron bien — ${[...new Set(erroresVentas)].join(' · ')}`, 'error')
       else toast(`Lucero: ${guardados} envíos · ${ventasAct} ventas actualizadas`, 'success')
       setRecargar(n => n + 1)
     } catch (err) {
@@ -508,8 +539,18 @@ export default function EntregasPage() {
 
   // Columnas reales de la tabla entregas (sin telefono/nombre_cliente que son solo para el match)
 
-  const guardarEnSistema = async () => {
+  // Clic en "Actualizar ventas": cancela el autoguardado pendiente (si no,
+  // corrían los dos) y re-aplica los estados.
+  const guardarManual = () => {
+    if (autoSaveRef.current) { clearTimeout(autoSaveRef.current); autoSaveRef.current = null }
+    guardarEnSistema({ manual: true })
+  }
+
+  const guardarEnSistema = async ({ manual = false } = {}) => {
     if (!merged.length) return
+    if (guardandoRef.current) return   // ya hay un guardado en curso
+    if (errorHist) { toast('No se guardó: el histórico de entregas no cargó. Recargá la página.', 'error'); return }
+    guardandoRef.current = true
     setGuardando(true)
     try {
       // 1) Guardar las entregas nuevas en la tabla (solo columnas válidas)
@@ -524,12 +565,12 @@ export default function EntregasPage() {
       const yaRendidas = {}
       for (let i = 0; i < guiasSubidas.length; i += 200) {
         const chunk = guiasSubidas.slice(i, i + 200)
-        try {
-          const { data } = await supabase.from('entregas')
-            .select('nro_guia_pap, fecha_rendido, dias_rendicion')
-            .in('nro_guia_pap', chunk).eq('rendido', true)
-          for (const row of (data || [])) yaRendidas[String(row.nro_guia_pap)] = row
-        } catch (e) { /* si falla la consulta, se sigue igual (no se pierde nada) */ }
+        const { data, error } = await supabase.from('entregas')
+          .select('nro_guia_pap, fecha_rendido, dias_rendicion')
+          .in('nro_guia_pap', chunk).eq('rendido', true)
+        // Sin saber cuáles ya estaban rendidas, guardar las desmarcaría. Se corta.
+        if (error) { toast('No se guardó: no pude leer qué guías ya estaban rendidas (reintentá): ' + error.message, 'error'); return }
+        for (const row of (data || [])) yaRendidas[String(row.nro_guia_pap)] = row
       }
       for (const m of limpio) {
         const prev = yaRendidas[String(m.nro_guia_pap)]
@@ -618,7 +659,11 @@ export default function EntregasPage() {
           const vincPorGuia = new Map(vinculos.map(v => [String(v.nro_guia_pap), v]))
           const nuevoEstadoPorRef = new Map()
           const sueltasPorId = new Map()
-          for (const m of merged) {
+          // Solo desde los reportes NUEVOS: recorrer todo el histórico pisaba
+          // correcciones manuales en cada subida. El botón "Actualizar ventas"
+          // sin reporte nuevo sí re-aplica el histórico (pedido explícito).
+          const fuenteEstados = reportesNuevos.length ? reportesNuevos : (manual ? merged : [])
+          for (const m of fuenteEstados) {
             if (m.categoria !== 'entregado' && m.categoria !== 'devuelto') continue
             const estado = m.categoria === 'entregado' ? 'entregado' : 'devuelto'
             const vinc = vincPorGuia.get(String(m.nro_guia_pap)) || previo.get(String(m.nro_guia_pap))
@@ -662,14 +707,28 @@ export default function EntregasPage() {
         vincOk, vincFail, faltanColsVinculo, resumenVinculo, diagnostico,
         sinImporte, descartados })
       toast(diagnostico ? `Guardado con avisos — mirá el detalle` : `${ok} entregas · ${updOk} ventas actualizadas`, diagnostico ? 'error' : 'success')
-      avisarVoltraOS('pap', merged)
+      // Solo lo de ESTE reporte de PaP (no el histórico, no filas de Lucero).
+      avisarVoltraOS('pap', filasPaPParaVoltra(reportesNuevos))
     } catch (err) {
       toast('Error guardando: ' + err.message, 'error')
+    } finally {
+      guardandoRef.current = false
+      setGuardando(false)
     }
-    setGuardando(false)
   }
 
   const reset = () => { setPaqData(null); setGesData(null); setBusqueda(''); setFiltroCat('todos'); setGuardado(false); setResultadoGuardado(null) }
+
+  // Aviso si algo no cargó (antes el error se tragaba y la página mostraba datos incompletos).
+  const avisoCarga = (errorHist || errorVentas) ? (
+    <div className="alert alert-warning">
+      <AlertTriangle size={15} />
+      <span>
+        {errorHist && <>No cargó el histórico de entregas ({errorHist}). El guardado queda bloqueado hasta recargar la página. </>}
+        {errorVentas && <>No cargaron las ventas ({errorVentas}): la rentabilidad y la tasa por transportadora pueden salir incompletas.</>}
+      </span>
+    </div>
+  ) : null
 
   // ── CARGANDO HISTÓRICO ──────────────────────────────────
   if (cargandoHist) return (
@@ -689,6 +748,7 @@ export default function EntregasPage() {
           <p className="page-subtitle">Subí los reportes de Punto a Punto o la exportación de Lucero — el formato se detecta solo</p>
         </div>
       </div>
+      {avisoCarga}
 
       <div className="card">
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>¿Cómo exportar los reportes?</div>
@@ -753,7 +813,7 @@ export default function EntregasPage() {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input ref={fileRef} type="file" accept=".xlsx,.xls" multiple style={{ display: 'none' }} onChange={e => handleFiles(e.target.files)} />
           {guardando && <span style={{ fontSize: 12, color: 'var(--accent)' }}>Procesando...</span>}
-          <button className="btn btn-ghost btn-sm" onClick={guardarEnSistema} disabled={guardando} title="Vuelve a aplicar los estados a tus ventas">
+          <button className="btn btn-ghost btn-sm" onClick={guardarManual} disabled={guardando} title="Vuelve a aplicar los estados a tus ventas">
             <CheckCircle size={13} /> Actualizar ventas
           </button>
           <button className="btn btn-primary btn-sm" onClick={() => fileRef.current?.click()} disabled={guardando}>
@@ -762,6 +822,8 @@ export default function EntregasPage() {
           {reportesNuevos.length > 0 && <button className="btn btn-ghost btn-sm" onClick={reset}><X size={13} /> Limpiar</button>}
         </div>
       </div>
+
+      {avisoCarga}
 
       {/* Selector de mes — analiza por período (fecha de ingreso a despacho) */}
       {mesesDisponibles.length > 0 && (
@@ -1290,8 +1352,13 @@ export default function EntregasPage() {
             </div>
             <div onClick={() => stats.entregadosSinRendir > 0 && setVerSinRendir(v => !v)}
                  style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10, border: '1px solid var(--yellow)', cursor: stats.entregadosSinRendir > 0 ? 'pointer' : 'default' }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>⏳ PaP te debe todavía</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>⏳ {stats.deuda.lucero > 0 ? 'Te deben todavía' : 'PaP te debe todavía'}</div>
               <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--yellow)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.montoPendienteCobro)}</div>
+              {stats.deuda.lucero > 0 && (
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                  PaP {formatGs(stats.deuda.pap)} · Lucero {formatGs(stats.deuda.lucero)} (neto de flete)
+                </div>
+              )}
               <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
                 {stats.entregadosSinRendir} entregados sin rendir
                 {stats.entregadosSinRendir > 0 && <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>· {verSinRendir ? 'ocultar ▲' : 'ver cuáles ▼'}</span>}
@@ -1309,7 +1376,7 @@ export default function EntregasPage() {
             <div style={{ marginTop: 14, border: '1px solid var(--yellow)', borderRadius: 10, overflow: 'hidden' }}>
               <div style={{ padding: '10px 14px', background: 'var(--bg-hover)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--yellow)' }}>
-                  {stats.listaSinRendir.length} entregas que PaP cobró pero todavía no te depositó · {formatGs(stats.montoPendienteCobro)}
+                  {stats.listaSinRendir.length} entregas que {stats.deuda.lucero > 0 ? 'el courier' : 'PaP'} cobró pero todavía no te depositó · {formatGs(stats.montoPendienteCobro)}
                 </span>
                 <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Ordenadas por las que llevan más tiempo (reclamá estas primero)</span>
               </div>

@@ -1,7 +1,7 @@
 // src/pages/recompra/RecompraPage.jsx
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { normalizarRef } from '../../lib/referencias'
-import { supabaseTienda as supabase } from '../../lib/supabase'
+import { supabaseTienda as supabase, supabase as supabaseCrudo } from '../../lib/supabase'
 import { tiendaParaEscribir } from '../../lib/tienda'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
@@ -17,23 +17,24 @@ export default function RecompraPage() {
   const [excluidos, setExcluidos] = useState(new Set())
   const [loading, setLoading] = useState(true)
   const [generando, setGenerando] = useState(false)
+  const [errorCarga, setErrorCarga] = useState('')
 
   const cargar = useCallback(async () => {
-    setLoading(true)
+    setLoading(true); setErrorCarga('')
     try {
       // Ventana: clientes que recibieron en los últimos 8 meses. Más viejo que
       // eso ya recompró o se perdió; no tiene sentido cargarlo (y es más rápido).
       const desdeVentas = new Date(); desdeVentas.setMonth(desdeVentas.getMonth() - 8)
       const desdeVentasStr = desdeVentas.toISOString().slice(0, 10)
 
-      // 1. Ventas entregadas (fuente de verdad de clientes). Ordena por fecha
-      //    (la tabla no tiene 'id' como orden de paginación).
+      // 1. Ventas entregadas (fuente de verdad de clientes). Pagina por 'id'
+      //    (único): por 'fecha' se repetían o saltaban filas entre páginas.
       const ventas = await fetchAll(() => supabase
         .from('ventas')
-        .select('n_referencia, cliente_nombre, cliente_telefono, producto_nombre, cantidad, fecha, estado')
+        .select('n_referencia, cliente_nombre, cliente_telefono, producto_nombre, cantidad, fecha, estado, tienda')
         .eq('estado', 'entregado')
         .gte('fecha', desdeVentasStr)
-        .is('deleted_at', null), { columnaOrden: 'fecha' })
+        .is('deleted_at', null), { columnaOrden: 'id' })
 
       // 2. Fecha de entrega REAL desde PaP (tabla entregas), por referencia. Si hay varias, la más reciente.
       const entregas = await fetchAll(
@@ -50,11 +51,14 @@ export default function RecompraPage() {
 
       // 3. Teléfonos en cooldown (contactados en los últimos 25 días)
       const desde = new Date(Date.now() - getVentanasRecompra().diasCooldown * 86400000).toISOString()
-      const { data: logs } = await supabase
+      //    Cliente crudo: sin filtro de tienda (el teléfono es el mismo cliente en
+      //    las dos). fetchAll tira el error: si falla NO se arma la lista, porque
+      //    sin el cooldown se re-contactaría a todos.
+      const logs = await fetchAll(() => supabaseCrudo
         .from('recompra_log')
-        .select('telefono')
-        .gte('fecha_envio', desde)
-      const excl = new Set((logs || []).map(l => l.telefono))
+        .select('id, telefono')
+        .gte('fecha_envio', desde))
+      const excl = new Set(logs.map(l => l.telefono))
 
       // 4. Construir líneas para el motor (fecha entrega real, o fecha de venta como proxy)
       const ls = (ventas || []).map(v => {
@@ -66,12 +70,15 @@ export default function RecompraPage() {
           familia: familiaProducto(v.producto_nombre),
           cantidad: v.cantidad || 1,
           fechaEntrega,
+          tienda: v.tienda,
         }
       })
 
       setLineas(ls)
       setExcluidos(excl)
     } catch (e) {
+      setLineas([]); setExcluidos(new Set())
+      setErrorCarga('No se pudo cargar la recompra: ' + (e?.message || 'error') + '. No se arma la lista para no re-contactar a nadie antes de tiempo.')
       toast('Error cargando datos: ' + e.message, 'error')
     } finally {
       setLoading(false)
@@ -112,7 +119,17 @@ export default function RecompraPage() {
   // te olvidabas del segundo clic, el cliente volvía a aparecer al día
   // siguiente como si nunca le hubieras escrito.
   // Objetivo: vender el producto y cerrar YA con pago anticipado por transferencia.
+  // Guard de doble toque: un teléfono a la vez (ref = chequeo inmediato,
+  // estado = botón deshabilitado en pantalla).
+  const ocupadosRef = useRef(new Set())
+  const [ocupados, setOcupados] = useState(new Set())
+  const ocupar = (tel, si) => {
+    if (si) ocupadosRef.current.add(tel); else ocupadosRef.current.delete(tel)
+    setOcupados(new Set(ocupadosRef.current))
+  }
+
   const mensajeWhatsApp = (r) => {
+    if (ocupadosRef.current.has(r.telefono)) return
     const nombre = (r.nombre || '').split(' ')[0] || 'Hola'
     const link = r.urlOfrecido ? `\n\n👉 Mirá el producto acá:\n${r.urlOfrecido}` : ''
 
@@ -160,16 +177,21 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
   // se usa cuando esto se dispara solo al abrir WhatsApp, para no duplicar
   // el toast de "¡Copiado!" con uno de "contactado" al mismo tiempo.
   const marcarContactado = async (r, { silencioso = false } = {}) => {
+    if (ocupadosRef.current.has(r.telefono)) return
+    ocupar(r.telefono, true)
     try {
       const { error } = await supabase.from('recompra_log').insert([{
         telefono: r.telefono, grupo: String(r.grupo), producto_ofrecido: r.productoOfrecido,
-        tienda: tiendaParaEscribir(),
+        // La tienda del pedido del cliente; en "Todas" ya no se fuerza 'fw'.
+        tienda: r.tienda || tiendaParaEscribir(),
       }])
       if (error) throw error
       if (!silencioso) toast(`${r.nombre || r.telefono} marcado como contactado`, 'success')
       cargar()
     } catch (e) {
       toast(`No se pudo marcar a ${r.nombre || r.telefono} como contactado: ${e.message}`, 'error')
+    } finally {
+      ocupar(r.telefono, false)
     }
   }
 
@@ -211,6 +233,8 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
           Clientes que ya recibieron su producto y es buen momento para ofrecerles algo. Tocá <strong style={{ color: '#25D366' }}>WhatsApp</strong> y se abre el chat con el mensaje listo — queda marcado como contactado solo, no vuelve a aparecer por {getVentanasRecompra().diasCooldown} días. Si lo contactaste de otra forma (llamada, en persona), usá <strong>Contactado</strong> para marcarlo sin pasar por WhatsApp.
         </p>
       </div>
+
+      {errorCarga && <div className="alert alert-error">{errorCarga}</div>}
 
       {/* Filtros por tipo */}
       {!loading && totalListos > 0 && (
@@ -259,13 +283,13 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
-                  onClick={() => mensajeWhatsApp(r)}
+                  onClick={() => mensajeWhatsApp(r)} disabled={ocupados.has(r.telefono)}
                   style={{ padding: '8px 14px', fontSize: 12.5, fontWeight: 700, borderRadius: 8, cursor: 'pointer', border: 'none', background: '#25D366', color: '#fff', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
                 >
                   <MessageCircle size={14} /> {copiado === r.telefono ? '¡Copiado!' : 'WhatsApp'}
                 </button>
                 <button
-                  onClick={() => marcarContactado(r)}
+                  onClick={() => marcarContactado(r)} disabled={ocupados.has(r.telefono)}
                   title="Marcar como contactado SIN abrir WhatsApp — usalo si ya lo contactaste por otra vía"
                   style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600, borderRadius: 8, cursor: 'pointer', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}
                 >
