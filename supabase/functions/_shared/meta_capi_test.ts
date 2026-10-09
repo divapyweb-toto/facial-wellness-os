@@ -3,11 +3,15 @@ import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
 import {
   armarPayloadMensajeria,
   armarPayloadPrincipal,
+  datosClienteDesdeRaw,
   dentroDePlazo,
   enviarEventoEntregado,
   eventTime,
+  normalizarCiudadCapi,
+  normalizarNombreCapi,
   normalizarTelefonoCapi,
   sha256Hex,
+  validarIp,
 } from "./meta_capi.ts";
 
 const AHORA = new Date("2026-10-06T15:00:00Z");
@@ -146,4 +150,156 @@ Deno.test("real: error de Meta → ok false con el mensaje", async () => {
   });
   assertEquals(r.ok, false);
   assertEquals(r.principal.error, "Invalid parameter");
+});
+
+Deno.test("lead: configLead null si falta token, dataset de mensajería o WABA, o en modo simulado", async () => {
+  const { configLead, armarPayloadLead, EVENTO_LEAD } = await import("./meta_capi.ts");
+  const base = { token: "t", datasetMensajeriaId: "d", wabaId: "w", testEventCode: null, simulado: false };
+  assertEquals(configLead(base), { token: "t", datasetMensajeriaId: "d", wabaId: "w", testEventCode: null });
+  assertEquals(configLead({ ...base, token: null }), null);
+  assertEquals(configLead({ ...base, datasetMensajeriaId: null }), null);
+  assertEquals(configLead({ ...base, wabaId: null }), null);
+  assertEquals(configLead({ ...base, simulado: true }), null);
+  assertEquals(EVENTO_LEAD, "LeadSubmitted");
+  assertEquals(armarPayloadLead({ shopify_order_id: 1, valor: 1, moneda: "PYG", ctwa_clid: "" }, { ahora: AHORA, wabaId: "w" }), null);
+  const p = armarPayloadLead({ shopify_order_id: 1, valor: 129000.4, moneda: "PYG", ctwa_clid: "c", creado_en: "2030-01-01T00:00:00Z" }, { ahora: AHORA, wabaId: "w", testEventCode: "TEST1" });
+  const ev = (p!.data as Record<string, unknown>[])[0];
+  assertEquals(ev.event_time, Math.floor(AHORA.getTime() / 1000), "nunca en el futuro");
+  assertEquals(ev.custom_data, { currency: "PYG", value: 129000 });
+  assertEquals(p!.test_event_code, "TEST1");
+});
+
+// ─── 09-10: fn, ln, ct, client_ip_address, fbc (datos inventados) ─────────
+
+Deno.test("nombre: ejemplo de la doc ('Valéry' → 'valéry', conserva tilde) y ñ", () => {
+  assertEquals(normalizarNombreCapi("Valéry"), "valéry");
+  assertEquals(normalizarNombreCapi("  NÚÑEZ  "), "núñez");
+  assertEquals(normalizarNombreCapi("O'Brien-López"), "o");
+  assertEquals(normalizarNombreCapi("María José"), "maría");
+  assertEquals(normalizarNombreCapi("Jose\u0301"), "josé"); // NFD → NFC: mismo hash que la forma compuesta
+  assertEquals(normalizarNombreCapi(""), null);
+  assertEquals(normalizarNombreCapi("..."), null);
+});
+
+Deno.test("ciudad: sin espacios, sin tildes, sin puntuación (doc: 'newyork')", () => {
+  assertEquals(normalizarCiudadCapi("New York."), "newyork");
+  assertEquals(normalizarCiudadCapi("Ciudad del Este"), "ciudaddeleste");
+  assertEquals(normalizarCiudadCapi("Asunción"), "asuncion");
+  assertEquals(normalizarCiudadCapi("Ñemby"), "nemby");
+  assertEquals(normalizarCiudadCapi("Pdte. Franco"), "pdtefranco");
+  assertEquals(normalizarCiudadCapi("  "), null);
+});
+
+Deno.test("IP: IPv4/IPv6 válidas pasan; inválidas no", () => {
+  assertEquals(validarIp("203.0.113.7"), "203.0.113.7");
+  assertEquals(validarIp(" 2001:DB8::1 "), "2001:db8::1");
+  assertEquals(validarIp("256.1.1.1"), null);
+  assertEquals(validarIp("1.2.3"), null);
+  assertEquals(validarIp("2001:db8:::1:zz"), null);
+  assertEquals(validarIp("hola"), null);
+  assertEquals(validarIp(null), null);
+});
+
+const RAW_WEB = {
+  created_at: "2026-10-05T12:00:00-03:00",
+  shipping_address: { first_name: "Ana María", last_name: "", city: "Ciudad del Este" },
+  note_attributes: [
+    { name: "NOMBRE COMPLETO", value: "Ana María Pérez" },
+    { name: "IP address", value: "198.51.100.23" },
+  ],
+  landing_site: "/products/x?utm_source=fb&fbclid=AbC123",
+};
+
+Deno.test("raw web: nombre partido, ciudad, IP y fbc desde fbclid", () => {
+  const d = datosClienteDesdeRaw(RAW_WEB);
+  assertEquals(d.nombre, "Ana");
+  assertEquals(d.apellido, "María");
+  assertEquals(d.ciudad, "Ciudad del Este");
+  assertEquals(d.ip, "198.51.100.23");
+  assertEquals(d.fbc, `fb.1.${new Date("2026-10-05T12:00:00-03:00").getTime()}.AbC123`);
+});
+
+Deno.test("raw: sin shipping usa NOMBRE COMPLETO y nota Ciudad; _fbc armado gana; IP inválida se descarta", () => {
+  const d = datosClienteDesdeRaw({
+    created_at: "2026-10-05T12:00:00Z",
+    note_attributes: [
+      { name: "NOMBRE COMPLETO", value: "Íñigo Báez" },
+      { name: "Ciudad", value: "Luque" },
+      { name: "IP address", value: "999.1.1.1" },
+      { name: "_fbc", value: "fb.1.1554763741205.ZzZ" },
+    ],
+  });
+  assertEquals([d.nombre, d.apellido, d.ciudad, d.ip, d.fbc], ["Íñigo", "Báez", "Luque", null, "fb.1.1554763741205.ZzZ"]);
+});
+
+Deno.test("raw de pedido de WhatsApp: sin IP ni fbc", () => {
+  const d = datosClienteDesdeRaw({
+    created_at: "2026-10-05T12:00:00Z",
+    shipping_address: { first_name: "Carlos", last_name: "Gómez", city: "Hernandarias" },
+    note_attributes: [{ name: "origen", value: "whatsapp" }],
+  });
+  assertEquals(d.ip, null);
+  assertEquals(d.fbc, null);
+  assertEquals(datosClienteDesdeRaw(null), {});
+});
+
+Deno.test("payload principal con cliente: fn/ln/ct con hash, IP y fbc sin hash", async () => {
+  const p = await armarPayloadPrincipal(
+    { ...ENTRADA, cliente: { nombre: "José", apellido: "Núñez", ciudad: "Ciudad del Este", ip: "203.0.113.7", fbc: "fb.1.1554763741205.AbC" } },
+    { ahora: AHORA },
+  );
+  const ud = (p.data as { user_data: Record<string, unknown> }[])[0].user_data;
+  assertEquals(ud.fn, [await sha256Hex("josé")]);
+  assertEquals(ud.ln, [await sha256Hex("núñez")]);
+  assertEquals(ud.ct, [await sha256Hex("ciudaddeleste")]);
+  assertEquals(ud.client_ip_address, "203.0.113.7");
+  assertEquals(ud.fbc, "fb.1.1554763741205.AbC");
+  assertEquals(ud.country, [await sha256Hex("py")]);
+  assert(Array.isArray(ud.ph) && Array.isArray(ud.external_id));
+});
+
+Deno.test("payload principal sin cliente / pedido WhatsApp: sin IP ni fbc; fbc mal formado se descarta", async () => {
+  const a = await armarPayloadPrincipal(ENTRADA, { ahora: AHORA });
+  const ua = (a.data as { user_data: Record<string, unknown> }[])[0].user_data;
+  assertEquals(Object.keys(ua).sort(), ["country", "external_id", "ph"]);
+  const b = await armarPayloadPrincipal(
+    { ...ENTRADA, cliente: { nombre: "Ana", ip: "no-ip", fbc: "AbC123" } },
+    { ahora: AHORA },
+  );
+  const ub = (b.data as { user_data: Record<string, unknown> }[])[0].user_data;
+  assertFalse("client_ip_address" in ub);
+  assertFalse("fbc" in ub);
+  assert("fn" in ub);
+});
+
+Deno.test("test_event_code: va en los dos payloads si está; no va si falta", async () => {
+  const conCod = await armarPayloadPrincipal(ENTRADA, { ahora: AHORA, testEventCode: "TEST123" });
+  assertEquals(conCod.test_event_code, "TEST123");
+  const sinCod = await armarPayloadPrincipal(ENTRADA, { ahora: AHORA });
+  assertFalse("test_event_code" in sinCod);
+  const e = { ...ENTRADA, origenAnuncio: { ctwa_clid: "clid-x" } };
+  assertEquals(armarPayloadMensajeria(e, { ahora: AHORA, wabaId: "1", testEventCode: "TEST123" })!.test_event_code, "TEST123");
+  assertFalse("test_event_code" in armarPayloadMensajeria(e, { ahora: AHORA, wabaId: "1" })!);
+});
+
+Deno.test("enviarEventoEntregado lee META_TEST_EVENT_CODE del entorno y lo manda (fetch falso)", async () => {
+  const prev = Deno.env.get("META_TEST_EVENT_CODE");
+  Deno.env.set("META_TEST_EVENT_CODE", "TEST999");
+  const cuerpos: Record<string, unknown>[] = [];
+  const f = ((_u: string, init: RequestInit) => {
+    cuerpos.push(JSON.parse(String(init.body)));
+    return Promise.resolve(new Response(JSON.stringify({ events_received: 1 }), { status: 200 }));
+  }) as unknown as typeof fetch;
+  try {
+    const r = await enviarEventoEntregado(
+      { ...ENTRADA, origenAnuncio: { ctwa_clid: "clid-x" } },
+      { token: "t", datasetId: "1", datasetMensajeriaId: "2", wabaId: "3", simulado: false, ahora: AHORA, fetch: f },
+    );
+    assert(r.ok);
+    assertEquals(cuerpos.length, 2);
+    assert(cuerpos.every((c) => c.test_event_code === "TEST999"));
+  } finally {
+    if (prev === undefined) Deno.env.delete("META_TEST_EVENT_CODE");
+    else Deno.env.set("META_TEST_EVENT_CODE", prev);
+  }
 });

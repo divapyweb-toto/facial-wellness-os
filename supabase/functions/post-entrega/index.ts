@@ -8,7 +8,7 @@ import { conServiceRole } from '../_shared/auth_servicio.ts'
 import { normalizarTelefonoPY } from '../_shared/telefono.ts'
 import { agregarTags, orderGid } from '../_shared/shopify.ts'
 import { marcarPagado } from '../_shared/shopify_pagos.ts'
-import { enviarEventoEntregado } from '../_shared/meta_capi.ts'
+import { datosClienteDesdeRaw, type DatosCliente, enviarEventoEntregado } from '../_shared/meta_capi.ts'
 import { avisar } from '../_shared/telegram.ts'
 import { facturarPedidoEntregado } from '../factura/io.ts'
 import type { Courier } from '../_shared/estados_courier.ts'
@@ -32,6 +32,23 @@ async function leerConfig(): Promise<{ pe: CfgPE; prefijos: Record<Courier, stri
     // SIFEN (08-10): factura al entregar con config_wa['sifen'].activo (o la bandera vieja ola4.factura).
     facturaActiva: m['sifen']?.activo === true || m['ola4.factura']?.activo === true,
     prefijos: { lucero: 'lucero' in pre ? arr(pre.lucero) : ['VT-', 'FW-'], pap: 'pap' in pre ? arr(pre.pap) : [] },
+  }
+}
+
+/** 09-10: nombre, ciudad, IP (Releasit) y fbc para la CAPI. Consulta aparte (la vista no trae raw). Si falla, sigue sin esos datos. */
+async function datosCliente(orderId: number): Promise<DatosCliente | null> {
+  try {
+    const { data, error } = await db().from('shopify_pedidos')
+      .select('shipping_address:raw->shipping_address, billing_address:raw->billing_address, note_attributes:raw->note_attributes, landing_site:raw->>landing_site, referring_site:raw->>referring_site, created_at:raw->>created_at')
+      .eq('shopify_order_id', orderId).maybeSingle()
+    if (error || !data) {
+      if (error) console.error('[post-entrega] datosCliente', orderId, error.message)
+      return null
+    }
+    return datosClienteDesdeRaw(data as Record<string, unknown>)
+  } catch (e) {
+    console.error('[post-entrega] datosCliente', orderId, (e as Error)?.message)
+    return null
   }
 }
 
@@ -69,7 +86,7 @@ function repoSupabase(pe: CfgPE): Repo {
       if (error) throw new Error(`shopify_pedidos: ${error.message}`)
     },
     marcarPagado: (orderId) => marcarPagado(orderGid(orderId)),
-    enviarCapi: (p, origen) =>
+    enviarCapi: async (p, origen) =>
       enviarEventoEntregado(
         {
           pedido: { shopify_order_id: p.shopify_order_id, nombre: p.nombre, cliente_id: p.cliente_id, entregado_en: p.entregado_en },
@@ -77,6 +94,7 @@ function repoSupabase(pe: CfgPE): Repo {
           valor: Number(p.total ?? 0),
           moneda: 'PYG',
           origenAnuncio: origen,
+          cliente: await datosCliente(p.shopify_order_id),
         },
         { actionSource: pe.action_source },
       ),
