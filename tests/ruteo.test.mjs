@@ -17,7 +17,7 @@ for (const c of R.lucero) {
   ok(s.transportadora === 'lucero', `${c}: rutea a ${s.transportadora} en vez de lucero`)
   ok(s.tarifa > 0, `${c}: sin tarifa de Lucero (${s.tarifa})`)
 }
-console.log(f ? `  ✗ ${f} problemas` : '  ✓ las 63 rutean a Lucero con tarifa')
+console.log(f ? `  ✗ ${f} problemas` : `  ✓ las ${R.lucero.length} rutean a Lucero con tarifa`)
 
 const antes = f
 console.log(`\n── ${R.pap.length} ciudades asignadas a Punto a Punto ──`)
@@ -26,12 +26,12 @@ for (const c of R.pap) {
   const s = sugerirTransportadora(c, 'Limpiador de Lengua Facial Wellness')
   ok(s.transportadora === 'pap', `${c}: rutea a ${s.transportadora} en vez de pap`)
 }
-console.log(f === antes ? '  ✓ las 29 rutean a PaP' : `  ✗ ${f - antes} problemas`)
+console.log(f === antes ? `  ✓ las ${R.pap.length} rutean a PaP` : `  ✗ ${f - antes} problemas`)
 
 const antes2 = f
 console.log('\n── variantes de escritura (así llegan del CSV) ──')
 const VAR = [['cde','lucero'], ['Cnel Oviedo','lucero'], ['ASUNCION','lucero'], ['Ciudad del este','lucero'],
-             ['pjc','pap'], ['Fernando de la Mora - Zona Norte','pap'], ['Villarrica','pap'], ['Salto del Guaira','pap']]
+             ['pjc','pap'], ['Fernando de la Mora - Zona Norte','lucero'], ['Capiata','pap'], ['Ñemby','pap'], ['Villarrica','pap'], ['Salto del Guaira','pap']]
 for (const [c, esperado] of VAR) {
   const s = sugerirTransportadora(c, 'Limpiador de Lengua Facial Wellness')
   ok(s.transportadora === esperado, `"${c}" → ${s.transportadora}, se esperaba ${esperado}`)
