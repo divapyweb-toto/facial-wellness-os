@@ -289,3 +289,18 @@ Deno.test("derivar_a_enrique por motivo del sistema: el cliente nunca ve el text
   assertFalse(/IA|turnos/.test(prellenado));
   assert(reg.avisos[0].texto.includes("20 turnos"));
 });
+
+Deno.test("inputOrderCreate: precios con IVA incluido (taxesIncluded) y total = oferta + envío − descuento", () => {
+  const d = {
+    nombre: "Cliente Prueba", telefono: "+595981000000", direccion: "Calle 1", referencia: null, ciudad: "Asunción",
+    envio: 33000, factura: null, ubicacion: null,
+    lineas: [{ variante_id: "gid://shopify/ProductVariant/1", titulo: "Tiras", cantidad: 2, total: 125000 }],
+  };
+  const r = inputOrderCreate(d as never, ctxPrueba()) as {
+    order: { taxesIncluded: boolean; lineItems: { quantity: number; priceSet: { shopMoney: { amount: string } } }[]; shippingLines: { priceSet: { shopMoney: { amount: string } } }[] };
+  };
+  assertEquals(r.order.taxesIncluded, true);
+  const lineas = r.order.lineItems.reduce((s, l) => s + l.quantity * Number(l.priceSet.shopMoney.amount), 0);
+  const envio = Number(r.order.shippingLines[0].priceSet.shopMoney.amount);
+  assertEquals(lineas + envio, 125000 + 33000); // sin IVA agregado encima
+});

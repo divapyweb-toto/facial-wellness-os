@@ -462,6 +462,10 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
   return {
     order: {
       currency: "PYG",
+      // Los precios de Voltra YA incluyen IVA: sin esto Shopify calcula el IVA y lo
+      // SUMA encima (pedido #1008: Gs 7.900 de más). Con taxesIncluded el total es
+      // exacto: oferta + envío − descuento (OrderCreateOrderInput.taxesIncluded, Admin GraphQL).
+      taxesIncluded: true,
       phone: d.telefono,
       financialStatus: "PENDING",
       lineItems: lineasShopify(d.lineas),
