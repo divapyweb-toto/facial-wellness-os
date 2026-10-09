@@ -60,6 +60,11 @@ export function depsReales(token = tokenMeta()): Deps {
       if (error) throw new Error(`gasto_ads_diario (lectura): ${error.message}`);
       return (data ?? []) as Existente[];
     },
+    async upsertAnuncios(filas) {
+      const { error } = await s.from("gasto_ads_anuncio_diario").upsert(filas, { onConflict: "fecha,ad_id" });
+      if (error) throw new Error(`gasto_ads_anuncio_diario (upsert): ${error.message}`);
+      return filas.length;
+    },
     async upsert(filas: FilaGasto[]) {
       const { error } = await s.from("gasto_ads_diario").upsert(filas, { onConflict: "fecha,adset_id" });
       if (error) throw new Error(`gasto_ads_diario (upsert): ${error.message}`);

@@ -1,6 +1,8 @@
 // Tests con respuestas de Meta inventadas (sin red ni base).
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
+  filasAnuncio,
+  urlInsightsAnuncios,
   type Deps,
   type FilaGasto,
   type FilaInsight,
@@ -146,4 +148,17 @@ Deno.test("sincronizar: gasto inválido → no escribe nada", async () => {
 Deno.test("errorMeta: pista de permiso", () => {
   const m = errorMeta(400, { error: { code: 100, error_subcode: 33, message: "Unsupported get request." } });
   assertEquals(m.includes("ads_read"), true);
+});
+
+Deno.test("gasto por anuncio: filas válidas, sin gasto 0 y una por fecha+anuncio", () => {
+  const f = filasAnuncio([
+    { ad_id: "1", ad_name: "VID PRUEBA 1", adset_id: "9", campaign_name: "CAMP", spend: "1500.00", date_start: "2026-10-08" },
+    { ad_id: "1", ad_name: "VID PRUEBA 1", adset_id: "9", campaign_name: "CAMP", spend: "1600", date_start: "2026-10-08" },
+    { ad_id: "2", ad_name: "IMG PRUEBA", spend: "0", date_start: "2026-10-08" },
+    { ad_name: "SIN ID", spend: "10", date_start: "2026-10-08" },
+  ], "voltra");
+  assertEquals(f.length, 1);
+  assertEquals(f[0].gasto, 1600);
+  assertEquals(f[0].ad_nombre, "VID PRUEBA 1");
+  assert(urlInsightsAnuncios("123", { since: "2026-10-01", until: "2026-10-07" }).includes("level=ad"));
 });

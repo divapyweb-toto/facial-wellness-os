@@ -43,6 +43,17 @@ export interface FilaGasto {
   tienda: Tienda;
 }
 
+/** Gasto por ANUNCIO (para cruzar con el "UTM content" de cada pedido, que trae el nombre del anuncio). */
+export interface FilaAnuncio {
+  fecha: string;
+  ad_id: string;
+  ad_nombre: string;
+  adset_id: string | null;
+  campana_nombre: string;
+  gasto: number;
+  tienda: Tienda;
+}
+
 export interface Existente { fecha: string; adset_id: string; producto_id: string | null }
 
 export interface Deps {
@@ -51,6 +62,8 @@ export interface Deps {
   leerProductos(): Promise<Producto[]>;
   leerExistentes(tienda: Tienda, desde: string, hasta: string): Promise<Existente[]>;
   upsert(filas: FilaGasto[]): Promise<number>;
+  /** Opcional: gasto por anuncio. Si falta (o falla), el gasto por conjunto se guarda igual. */
+  upsertAnuncios?(filas: FilaAnuncio[]): Promise<number>;
 }
 
 // ---------- fechas (Paraguay, UTC-3 fijo) ----------
@@ -81,6 +94,34 @@ export function urlInsights(cuentaId: string, r: { since: string; until: string 
     limit: "500",
   });
   return `${GRAPH_BASE}/act_${cuentaId}/insights?${p}`;
+}
+
+/** Mismo rango, a nivel ANUNCIO (solo GET). */
+export function urlInsightsAnuncios(cuentaId: string, r: { since: string; until: string }): string {
+  const p = new URLSearchParams({
+    level: "ad",
+    time_increment: "1",
+    time_range: JSON.stringify(r),
+    fields: "ad_id,ad_name,adset_id,campaign_name,spend,date_start",
+    limit: "500",
+  });
+  return `${GRAPH_BASE}/act_${cuentaId}/insights?${p}`;
+}
+
+/** Filas de insights por anuncio → FilaAnuncio (sin gasto 0; una fila por fecha+anuncio). */
+export function filasAnuncio(crudas: Array<Record<string, unknown>>, tienda: Tienda): FilaAnuncio[] {
+  const m = new Map<string, FilaAnuncio>();
+  for (const f of crudas) {
+    const gasto = gastoEntero(f.spend);
+    const ad = f.ad_id ? String(f.ad_id) : "";
+    const fecha = f.date_start ? String(f.date_start) : "";
+    if (gasto <= 0 || !ad || !fecha) continue;
+    m.set(`${fecha}|${ad}`, {
+      fecha, ad_id: ad, ad_nombre: String(f.ad_name ?? ""), adset_id: f.adset_id ? String(f.adset_id) : null,
+      campana_nombre: String(f.campaign_name ?? ""), gasto, tienda,
+    });
+  }
+  return [...m.values()];
 }
 
 // ---------- gasto ----------
@@ -196,7 +237,7 @@ export async function traerInsights(deps: Deps, url: string, maxPaginas = 50): P
 export async function sincronizar(
   deps: Deps,
   opciones: { cuentas?: Cuenta[]; dias?: number; ahora?: Date } = {},
-): Promise<{ ok: true; cuentas: ResumenCuenta[] }> {
+): Promise<{ ok: true; cuentas: ResumenCuenta[]; anuncios: { cuenta: string; filas: number; error?: string }[] }> {
   const cuentas = opciones.cuentas?.length ? opciones.cuentas : CUENTAS_DEFECTO;
   const r = rango(opciones.ahora ?? new Date(), opciones.dias ?? DIAS_DEFECTO);
 
@@ -235,5 +276,20 @@ export async function sincronizar(
   }
 
   for (const l of lotes) if (l.filas.length) await deps.upsert(l.filas);
-  return { ok: true, cuentas: lotes.map((l) => l.resumen) };
+
+  // Gasto por anuncio: aparte y sin frenar lo anterior si falla.
+  const anuncios: { cuenta: string; filas: number; error?: string }[] = [];
+  if (deps.upsertAnuncios) {
+    for (const cuenta of cuentas) {
+      try {
+        const crudas = await traerInsights(deps, urlInsightsAnuncios(cuenta.id, r)) as unknown as Array<Record<string, unknown>>;
+        const filas = filasAnuncio(crudas, cuenta.tienda);
+        if (filas.length) await deps.upsertAnuncios(filas);
+        anuncios.push({ cuenta: cuenta.id, filas: filas.length });
+      } catch (e) {
+        anuncios.push({ cuenta: cuenta.id, filas: 0, error: (e as Error)?.message ?? String(e) });
+      }
+    }
+  }
+  return { ok: true, cuentas: lotes.map((l) => l.resumen), anuncios };
 }
