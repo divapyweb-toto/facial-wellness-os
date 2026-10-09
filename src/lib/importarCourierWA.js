@@ -15,6 +15,8 @@
 // dirección del cliente (el nombre sale del pedido de Shopify).
 // ═══════════════════════════════════════════════════════════
 
+import { esRefVoltra } from './referencias'
+
 const TAMANO_LOTE = 500
 
 // Lucero: el Codigo va COMPLETO ('FW-2071'), no `referencia` ('2071'): la
@@ -66,7 +68,10 @@ export function armarPayloadCourier(courier, salidaParser) {
   const vistos = new Set()
   const unicas = []
   for (const f of filas) {
-    if (!String(f.referencia).trim() && !String(f.telefono).trim()) continue
+    // Solo pedidos de Voltra (VT-…). Las filas de Facial Wellness o sin
+    // referencia NO se mandan: el servidor podría cruzarlas por teléfono con un
+    // cliente de Voltra y marcarle (o avisarle) un estado que no es suyo.
+    if (!esRefVoltra(String(f.referencia).trim())) continue
     const k = `${f.referencia}|${f.estado_crudo}|${f.extra.rendido}`
     if (vistos.has(k)) continue
     vistos.add(k)
@@ -102,4 +107,13 @@ export async function enviarImportacionCourier(supabase, payload, { onProgreso }
     onProgreso?.(Math.min(i + lote.length, filas.length), filas.length)
   }
   return total
+}
+
+// Paso automático después de importar un Excel en Entregas: manda a Voltra OS
+// los estados de los pedidos VT- (avisos por WhatsApp, Shopify, post-entrega,
+// factura). Nunca tira: devuelve null si no había pedidos de Voltra.
+export async function mandarAVoltraOS(supabase, courier, salidaParser) {
+  const payload = armarPayloadCourier(courier, salidaParser)
+  if (!payload.filas.length) return null
+  return enviarImportacionCourier(supabase, payload)
 }

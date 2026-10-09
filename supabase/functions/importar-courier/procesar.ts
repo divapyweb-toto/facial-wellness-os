@@ -177,7 +177,10 @@ export function numeroDesdeReferencia(
   if (directo) return { numero: directo, otraTienda: false }
   const norm = (s: string) => s.toUpperCase().replace(/[\s\-_/]/g, '')
   const rn = norm(r)
-  for (const p of prefijos) {
+  // 'VT-' es SIEMPRE de esta tienda (referencias de Voltra, src/lib/referencias.js),
+  // aunque config_wa.prefijos_courier no lo liste (hoy pap = []: el VT-1004 de PaP
+  // quedaba como 'otra_tienda' y no se procesaba).
+  for (const p of [...prefijos, 'VT-']) {
     const pn = norm(p)
     if (pn && rn.startsWith(pn)) {
       const n = limpio(rn.slice(pn.length))

@@ -9,12 +9,12 @@ import {
 const ESPERADAS = [
   'voltra_confirmacion_pedido', 'voltra_entrega_hoy', 'voltra_no_entregado',
   'voltra_pedido_despachado', 'voltra_recordatorio_confirmacion', 'voltra_seguimiento_entrega',
-  'voltra_recuperar_borrador',
+  'voltra_recuperar_borrador', 'voltra_factura',
   'voltra_mk_cruzada', 'voltra_mk_lanzamiento', 'voltra_mk_pack', 'voltra_mk_reposicion'
 ].sort();
 const palabras = cargarPalabrasProhibidas();
 
-test('las 11 plantillas (7 de utilidad + 4 voltra_mk_ de marketing) existen y pasan la validación', () => {
+test('las 12 plantillas (8 de utilidad + 4 voltra_mk_ de marketing) existen y pasan la validación', () => {
   const r = validarTodas();
   assert.deepEqual(r.map((x) => x.plantilla.name).sort(), ESPERADAS);
   for (const { archivo, errores } of r) assert.deepEqual(errores, [], archivo);

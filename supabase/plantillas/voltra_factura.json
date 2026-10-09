@@ -1,0 +1,37 @@
+{
+  "name": "voltra_factura",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "HEADER",
+      "format": "DOCUMENT",
+      "example": {
+        "header_handle": [
+          "<handle de un PDF de ejemplo: subirlo con la Resumable Upload API o crear la plantilla en WhatsApp Manager>"
+        ]
+      }
+    },
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, te enviamos tu factura de Voltra N.º {{2}}. ¡Gracias por tu compra!",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "001-001-0000001"
+          ]
+        ]
+      }
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "primer nombre",
+      "número de factura 001-001-0000001"
+    ],
+    "botones_payload": [],
+    "encabezado": "DOCUMENT: el KuDE en PDF (URL firmada del bucket 'facturas', 7 días) con filename 'Factura <número>.pdf'. La arma sifen-cola/io.ts componentesFactura().",
+    "aviso": "Meta exige un header_handle real (PDF de ejemplo subido) para aprobar un encabezado DOCUMENT: crearla a mano en WhatsApp Manager o subir el PDF con la Resumable Upload API antes de usar scripts/crear-plantillas-wa.mjs."
+  }
+}

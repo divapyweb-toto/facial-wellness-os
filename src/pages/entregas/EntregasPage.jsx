@@ -15,6 +15,7 @@ import { linkWhatsAppTracking } from '../../lib/seguimiento'
 import { getPlantillaTrackingLucero } from '../../lib/config'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
+import { mandarAVoltraOS } from '../../lib/importarCourierWA'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown, ArrowRight, MessageCircle } from 'lucide-react'
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
@@ -483,6 +484,7 @@ export default function EntregasPage() {
         }
       }
 
+      avisarVoltraOS('lucero', items)
       setResumenLucero({ ...resumen, guardados, ventasAct })
       if (errorMsg) toast('Lucero: error al guardar — ' + errorMsg, 'error')
       else toast(`Lucero: ${guardados} envíos · ${ventasAct} ventas actualizadas`, 'success')
@@ -492,6 +494,14 @@ export default function EntregasPage() {
     } finally {
       setGuardando(false)
     }
+  }
+
+  // Pedidos de Voltra (VT-): el mismo Excel actualiza Voltra OS (estado del envío,
+  // aviso al cliente, Shopify y factura al entregar). No frena el guardado.
+  const avisarVoltraOS = (courier, salida) => {
+    mandarAVoltraOS(supabase, courier, salida)
+      .then(r => { if (r) toast(`Voltra OS: ${r.procesadas} pedidos actualizados${r.sin_pedido ? ` · ${r.sin_pedido} sin pedido` : ''}${r.errores.length ? ` · ${r.errores.length} con error` : ''}`, r.errores.length ? 'error' : 'success') })
+      .catch(e => toast(`Voltra OS no se actualizó: ${e?.message || 'error'}`, 'error'))
   }
 
   const handleFiles = (files) => { Array.from(files).forEach(procesarFile) }
@@ -652,6 +662,7 @@ export default function EntregasPage() {
         vincOk, vincFail, faltanColsVinculo, resumenVinculo, diagnostico,
         sinImporte, descartados })
       toast(diagnostico ? `Guardado con avisos — mirá el detalle` : `${ok} entregas · ${updOk} ventas actualizadas`, diagnostico ? 'error' : 'success')
+      avisarVoltraOS('pap', merged)
     } catch (err) {
       toast('Error guardando: ' + err.message, 'error')
     }

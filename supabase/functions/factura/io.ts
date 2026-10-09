@@ -1,119 +1,73 @@
-// factura · I/O real (Supabase, FacturaSend vía _shared/facturacion.ts, Telegram).
-// Exporta las dos funciones que usan otros módulos:
-//   - facturarPedidoEntregado(orderId)   → la llama post-entrega (H2) cuando el pedido pasa a ENTREGADO.
-//   - envioSeguimientoParaPedido(orderId) → la llama procesar-envios (F) antes de mandar voltra_seguimiento_entrega:
-//       si devuelve algo, se manda ESA plantilla (con la factura adjunta) en lugar del seguimiento normal.
+// factura · I/O. Desde 08-10-2026 delega en la cola SIFEN (sistema propio o FacturaSend según config_wa['sifen'].emisor).
+// Exporta las dos funciones que usan otros módulos (firmas sin cambios):
+//   - facturarPedidoEntregado(orderId)   → la llama post-entrega cuando el pedido pasa a ENTREGADO.
+//   - envioSeguimientoParaPedido(orderId) → la llama procesar-envios (mejora 7) antes de voltra_seguimiento_entrega.
+// La lógica vieja (facturar.ts, FacturaSend directo) queda como LEGADO y ya no se llama desde acá.
 
 import { db } from "../_shared/db.ts";
-import { avisar } from "../_shared/telegram.ts";
-import { escaparHtml } from "../_shared/telegram_formato.ts";
-import { armarSeguimientoConFactura, descargarKude, emitirFactura } from "../_shared/facturacion.ts";
-import {
-  configFactura,
-  type ConfigOla4Factura,
-  type DepsFactura,
-  facturarPedido,
-  type FilaFactura,
-  type PedidoGuardado,
-  type ResultadoFacturar,
-} from "./facturar.ts";
+import { armarSeguimientoConFactura } from "../_shared/facturacion.ts";
 
-export async function leerConfigFactura(): Promise<ConfigOla4Factura> {
-  const { data, error } = await db().from("config_wa").select("valor").eq("clave", "ola4.factura").maybeSingle();
-  if (error) throw new Error(`config_wa ola4.factura: ${error.message}`);
-  if (!data) console.log("factura: falta config_wa['ola4.factura'] → bandera apagada (valor por defecto)");
-  return configFactura(data?.valor);
+// Se invoca la Edge Function sifen-cola (y no su código) para que la emisión corra con su bundle: XSD y fuentes
+// del KuDE van como static_files solo en sifen-cola (config.toml). El cliente db() manda la service role.
+async function invocarCola(cuerpo: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const { data, error } = await db().functions.invoke("sifen-cola", { body: cuerpo });
+  if (error) throw new Error(`sifen-cola: ${error.message}`);
+  return (data ?? {}) as Record<string, unknown>;
 }
 
-export const depsReales: DepsFactura = {
-  ahora: () => new Date(),
-  config: leerConfigFactura,
-  leerPedido: async (id) => {
-    const { data, error } = await db().from("shopify_pedidos")
-      .select("shopify_order_id,nombre,total,estado_envio,tags,raw").eq("shopify_order_id", id).maybeSingle();
-    if (error) throw new Error(`leerPedido: ${error.message}`);
-    return data ? { ...(data as PedidoGuardado), tags: (data.tags as string[] | null) ?? [] } : null;
-  },
-  leerFactura: async (id) => {
-    const { data, error } = await db().from("facturas").select("*").eq("shopify_order_id", id).maybeSingle();
-    if (error) throw new Error(`leerFactura: ${error.message}`);
-    return data as FilaFactura | null;
-  },
-  tomar: async (id, numeroInicial) => {
-    const { data, error } = await db().rpc("tomar_factura", { p_order: id, p_numero_inicial: numeroInicial, p_lease_min: 10 });
-    if (error) throw new Error(`tomar_factura: ${error.message}`);
-    const f = (Array.isArray(data) ? data[0] : data) as { numero: number; tomada: boolean; estado: string; intentos: number };
-    return f;
-  },
-  guardar: async (f) => {
-    const { error } = await db().from("facturas").upsert(f, { onConflict: "shopify_order_id" });
-    if (error) throw new Error(`guardar factura: ${error.message}`);
-  },
-  emitir: emitirFactura,
-  avisar: (t) => avisar(t),
-  escapar: escaparHtml,
-};
+async function sifenActivo(): Promise<boolean> {
+  const { data, error } = await db().from("config_wa").select("valor").eq("clave", "sifen").maybeSingle();
+  if (error) throw new Error(`config_wa sifen: ${error.message}`);
+  return (data?.valor as { activo?: unknown } | null)?.activo === true;
+}
 
-/** Punto de enganche para post-entrega (H2). No tira excepción: devuelve el resultado. */
-export async function facturarPedidoEntregado(orderId: number): Promise<ResultadoFacturar> {
+export interface ResultadoFacturarIo {
+  orderId: number;
+  accion: string;
+  error?: string;
+}
+
+/** Punto de enganche para post-entrega. No tira excepción: devuelve el resultado. */
+export async function facturarPedidoEntregado(orderId: number): Promise<ResultadoFacturarIo> {
   try {
-    return await facturarPedido(orderId, depsReales);
+    const r = await invocarCola({ shopify_order_id: orderId });
+    const accion = String(r.accion ?? (r.ok === false ? "error" : "sin_detalle"));
+    const detalle = (r.detalle ?? r.error) as string | undefined;
+    return { orderId, accion, ...(accion === "error" || accion === "revisar" ? { error: detalle ?? "sin detalle" } : {}) };
   } catch (e) {
-    console.error("facturarPedidoEntregado:", e);
     return { orderId, accion: "error", error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-/** Reintentos (cron): facturas en error con intentos disponibles, emitidas sin PDF y entregados sin factura. */
-export async function facturarPendientes(diasAtras = 7): Promise<{ procesados: number; resultados: ResultadoFacturar[] }> {
-  const cfg = await leerConfigFactura();
-  if (!cfg.activo) return { procesados: 0, resultados: [{ orderId: 0, accion: "bandera_apagada" }] };
-  const sb = db();
-  const desde = new Date(Date.now() - diasAtras * 86_400_000).toISOString();
-  const resultados: ResultadoFacturar[] = [];
-
-  // 1) Emitidas sin PDF: solo se vuelve a pedir el KuDE.
-  const { data: sinPdf } = await sb.from("facturas").select("shopify_order_id,cdc,numero_completo")
-    .eq("estado", "emitida").is("pdf_url", null).not("cdc", "is", null).limit(20);
-  for (const f of sinPdf ?? []) {
-    const r = await descargarKude(f.cdc as string, `${f.shopify_order_id}/${f.numero_completo}.pdf`, cfg);
-    if (r.ok) await sb.from("facturas").update({ pdf_url: r.pdf_url, pdf_path: r.pdf_path, error: null }).eq("shopify_order_id", f.shopify_order_id);
-  }
-
-  // 2) Errores con intentos disponibles + entregados recientes sin fila en facturas.
-  const { data: errores } = await sb.from("facturas").select("shopify_order_id")
-    .eq("estado", "error").lt("intentos", cfg.maximo_intentos).limit(20);
-  const { data: entregados } = await sb.from("shopify_pedidos").select("shopify_order_id")
-    .eq("estado_envio", "ENTREGADO").eq("es_borrador", false).gte("actualizado_en", desde).limit(100);
-  const ids = new Set<number>((errores ?? []).map((f) => Number(f.shopify_order_id)));
-  if (entregados?.length) {
-    const lista = entregados.map((p) => Number(p.shopify_order_id));
-    const { data: ya } = await sb.from("facturas").select("shopify_order_id").in("shopify_order_id", lista);
-    const conFila = new Set((ya ?? []).map((f) => Number(f.shopify_order_id)));
-    for (const id of lista) if (!conFila.has(id)) ids.add(id);
-  }
-  for (const id of ids) resultados.push(await facturarPedidoEntregado(id));
-  return { procesados: ids.size, resultados };
+/** Reintentos (el cron viejo wa-factura-reintentos se reemplazó por sifen-cola; esto queda por compatibilidad). */
+export async function facturarPendientes() {
+  return await invocarCola({ origen: "factura" });
 }
 
 /**
- * Mejora 7. Para procesar-envios: si la bandera está activa y la factura del pedido está emitida con PDF,
- * devuelve la plantilla con el documento adjunto; si no, null (se manda el seguimiento normal).
+ * Mejora 7. Para procesar-envios: si la factura (FE) del pedido está APROBADA con KuDE y todavía no se mandó
+ * por WhatsApp (kude_enviado_en vacío), devuelve la plantilla del seguimiento con la factura adjunta; si no, null.
+ * Si la cola ya la mandó con voltra_factura, sale el seguimiento normal (no se duplica el PDF).
  */
 export async function envioSeguimientoParaPedido(
   orderId: number,
   variables: { nombre?: string | null; productos?: string | null },
 ): Promise<{ plantilla: string; idioma: string; componentes: unknown[] } | null> {
-  const cfg = await leerConfigFactura();
-  if (!cfg.activo) return null;
-  const { data } = await db().from("facturas").select("estado,pdf_url,numero_completo").eq("shopify_order_id", orderId).maybeSingle();
-  if (!data || data.estado !== "emitida" || !data.pdf_url || !data.numero_completo) return null;
+  if (!(await sifenActivo())) return null;
+  const { data } = await db().from("facturas").select("estado,kude_path,numero_completo,kude_enviado_en")
+    .eq("shopify_order_id", orderId).eq("tipo_documento", 1).maybeSingle();
+  if (!data || data.estado !== "aprobada" || !data.kude_path || !data.numero_completo || data.kude_enviado_en) return null;
   return armarSeguimientoConFactura({
     orderId,
     nombre: variables.nombre ?? null,
     productos: variables.productos ?? null,
-    pdfUrl: data.pdf_url as string,
+    pdfUrl: await urlFirmada(data.kude_path as string),
     numeroCompleto: data.numero_completo as string,
-    plantilla: cfg.plantilla_seguimiento,
   });
+}
+
+async function urlFirmada(path: string): Promise<string> {
+  const s = await db().storage.from("facturas").createSignedUrl(path, 7 * 86_400);
+  if (s.error || !s.data?.signedUrl) throw new Error(`url firmada: ${s.error?.message ?? "vacía"}`);
+  return s.data.signedUrl;
 }

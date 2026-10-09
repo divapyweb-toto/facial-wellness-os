@@ -9,7 +9,7 @@ import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
   Users, Calculator, BarChart3, PackageCheck, MapPin, X, MessageCircle,
-  Grid3X3, Search as SearchIcon, Repeat, PackageOpen, ClipboardCheck, Link2, Inbox,
+  Grid3X3, Search as SearchIcon, Repeat, PackageOpen, ClipboardCheck, Link2, Inbox, Receipt,
 } from 'lucide-react'
 
 // ── Logo embebido (PNG transparente, negro → invertir con CSS) ──
@@ -40,6 +40,7 @@ const navDinero = [
   { to: '/ads',       icon: Megaphone,       label: 'Campañas'  },
   { to: '/recompra',  icon: Repeat,          label: 'Recompra'  },
   { to: '/reportes',  icon: FileBarChart2,   label: 'Reportes'  },
+  { to: '/facturas',  icon: Receipt,         label: 'Facturas'  },
 ]
 const navHerramientas = [
   { to: '/calculadora', icon: Calculator,    label: 'Calculadora' },

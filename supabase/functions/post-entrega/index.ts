@@ -20,7 +20,7 @@ const DEFECTO = { limite: 50, max_intentos: 48, aviso_tras: 3, ventana_ctwa_dias
 type CfgPE = typeof DEFECTO
 
 async function leerConfig(): Promise<{ pe: CfgPE; prefijos: Record<Courier, string[]>; facturaActiva: boolean }> {
-  const { data, error } = await db().from('config_wa').select('clave, valor').in('clave', ['post_entrega', 'prefijos_courier', 'ola4.factura'])
+  const { data, error } = await db().from('config_wa').select('clave, valor').in('clave', ['post_entrega', 'prefijos_courier', 'ola4.factura', 'sifen'])
   if (error) throw new Error(`config_wa: ${error.message}`)
   const m = Object.fromEntries((data ?? []).map((r) => [r.clave, r.valor]))
   if (!m.post_entrega) console.log('[post-entrega] falta config_wa.post_entrega; uso valores por defecto', DEFECTO)
@@ -29,7 +29,8 @@ async function leerConfig(): Promise<{ pe: CfgPE; prefijos: Record<Courier, stri
   const arr = (x: unknown) => (Array.isArray(x) ? x.map(String) : typeof x === 'string' ? [x] : [])
   return {
     pe,
-    facturaActiva: m['ola4.factura']?.activo === true,
+    // SIFEN (08-10): factura al entregar con config_wa['sifen'].activo (o la bandera vieja ola4.factura).
+    facturaActiva: m['sifen']?.activo === true || m['ola4.factura']?.activo === true,
     prefijos: { lucero: 'lucero' in pre ? arr(pre.lucero) : ['VT-', 'FW-'], pap: 'pap' in pre ? arr(pre.pap) : [] },
   }
 }

@@ -221,3 +221,9 @@ Deno.test('manianaALas10 cruza el fin de mes', () => {
   assertEquals(manianaALas10(new Date('2026-10-31T23:30:00Z')), '2026-11-01T13:00:00.000Z') // 20:30 local del 31
   assertEquals(manianaALas10(new Date('2026-11-01T02:00:00Z')), '2026-11-01T13:00:00.000Z') // 23:00 local del 31
 })
+
+Deno.test('numeroDesdeReferencia: VT- siempre es de esta tienda, aunque la config no lo liste', () => {
+  assertEquals(numeroDesdeReferencia('VT-1004', []), { numero: '1004', otraTienda: false })
+  assertEquals(numeroDesdeReferencia('vt 1004', ['FW-']), { numero: '1004', otraTienda: false })
+  assertEquals(numeroDesdeReferencia('FW-2071', []), { numero: null, otraTienda: true })
+})

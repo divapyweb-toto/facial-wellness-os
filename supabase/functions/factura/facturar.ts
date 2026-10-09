@@ -1,3 +1,6 @@
+// LEGADO (ola 4, FacturaSend directo). Desde 08-10-2026 NO se usa en producción: factura/io.ts delega en la
+// cola SIFEN (_shared/sifen/cola.ts vía sifen-cola/io.ts), que trabaja con el esquema nuevo de `facturas`
+// (migración 20261008000010). Se conserva con sus tests como referencia; se puede borrar cuando SIFEN esté en prod.
 // factura · lógica pura (sin red ni base). Todo el I/O entra por `DepsFactura`.
 //
 // Cuándo factura: pedido de Voltra con estado_envio ENTREGADO, bandera config_wa['ola4.factura'].activo = true.

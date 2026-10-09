@@ -1,8 +1,6 @@
-// factura · Edge Function (solo service role).
-//   POST {"shopify_order_id": 123}  → factura ese pedido (si la bandera ola4.factura está activa).
-//   POST {"origen": "pg_cron"} o {}  → reintentos (cron de la migración 20261006000007).
-// Con la bandera apagada no hace nada y responde {accion:"bandera_apagada"}.
-
+// factura · Edge Function (solo service role). Compatibilidad: delega en la cola SIFEN.
+//   POST {"shopify_order_id": 123}  → factura ese pedido (si config_wa['sifen'].activo).
+//   POST {} / {"origen":"pg_cron"}  → corrida de la cola (igual que sifen-cola).
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { facturarPedidoEntregado, facturarPendientes } from "./io.ts";
 
