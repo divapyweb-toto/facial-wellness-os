@@ -65,6 +65,12 @@ export function depsReales(token = tokenMeta()): Deps {
       if (error) throw new Error(`gasto_ads_diario (lectura): ${error.message}`);
       return (data ?? []) as Existente[];
     },
+    async borrarConjunto(tienda, fecha, adsetId) {
+      // La fila sin repartir y los repartos anteriores de ese conjunto ese día (se reescriben enseguida).
+      const { error } = await s.from("gasto_ads_diario").delete()
+        .eq("tienda", tienda).eq("fecha", fecha).or(`adset_id.eq.${adsetId},adset_id.like.${adsetId}~*`);
+      if (error) throw new Error(`gasto_ads_diario (borrar conjunto): ${error.message}`);
+    },
     async upsertAnuncios(filas) {
       const { error } = await s.from("gasto_ads_anuncio_diario").upsert(filas, { onConflict: "fecha,ad_id" });
       if (error) throw new Error(`gasto_ads_anuncio_diario (upsert): ${error.message}`);

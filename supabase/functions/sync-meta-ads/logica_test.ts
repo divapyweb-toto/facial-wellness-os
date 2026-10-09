@@ -1,6 +1,7 @@
 // Tests con respuestas de Meta inventadas (sin red ni base).
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
+  repartirPorAnuncio,
   filasAnuncio,
   urlInsightsAnuncios,
   type Deps,
@@ -175,4 +176,28 @@ Deno.test("cuenta que no está en PYG: se frena sin escribir y con error claro; 
   assertEquals(r.cuentas[1].error, undefined);
   assertEquals(escritas.length, 1);
   assertEquals(escritas[0].every((f) => f.tienda === "voltra"), true);
+});
+
+Deno.test("reparto por anuncio: un conjunto mezclado se divide por producto y la suma no cambia", () => {
+  const productos = [
+    { id: "p1", nombre: "Parches bucales" },
+    { id: "p2", nombre: "Tiras nasales" },
+  ] as never;
+  const filas = [
+    { fecha: "2026-10-08", adset_id: "900", adset_nombre: "CONJUNTO WHATSAPP SUEÑO", producto_id: null, gasto: 10000, plataforma: "meta", tienda: "voltra" },
+    { fecha: "2026-10-08", adset_id: "901", adset_nombre: "CONJ PARCHES", producto_id: "p1", gasto: 500, plataforma: "meta", tienda: "voltra" },
+  ] as never;
+  const anuncios = [
+    { date_start: "2026-10-08", adset_id: "900", ad_name: "IMG WHATSAPP PARCHES BUCALES 9", spend: "6000" },
+    { date_start: "2026-10-08", adset_id: "900", ad_name: "IMG WHATSAPP TIRAS NASALES 2", spend: "3000" },
+    { date_start: "2026-10-08", adset_id: "900", ad_name: "VID GENERICO", spend: "999" },
+  ];
+  const r = repartirPorAnuncio(filas, anuncios, productos);
+  const de900 = r.filas.filter((f) => f.adset_id.startsWith("900~"));
+  assertEquals(de900.reduce((s, f) => s + f.gasto, 0), 10000);
+  assertEquals(de900.find((f) => f.producto_id === "p1")?.gasto, 6000);
+  assertEquals(de900.find((f) => f.producto_id === "p2")?.gasto, 3000);
+  assertEquals(de900.find((f) => f.producto_id === null)?.gasto, 1000); // 999 + 1 de redondeo
+  assertEquals(r.repartidos, [{ fecha: "2026-10-08", adset_id: "900" }]);
+  assert(r.filas.some((f) => f.adset_id === "901")); // el que ya tenía producto queda igual
 });

@@ -64,6 +64,8 @@ export interface Deps {
   upsert(filas: FilaGasto[]): Promise<number>;
   /** Opcional: gasto por anuncio. Si falta (o falla), el gasto por conjunto se guarda igual. */
   upsertAnuncios?(filas: FilaAnuncio[]): Promise<number>;
+  /** Opcional: borra la fila de un conjunto (y sus repartos "<id>~...") de una fecha, antes de reescribirla repartida. */
+  borrarConjunto?(tienda: Tienda, fecha: string, adsetId: string): Promise<void>;
   /** GET act_<id>?fields=currency. Si no es PYG, esa cuenta se frena (el gasto se guarda como guaraníes). */
   monedaCuenta?(cuentaId: string): Promise<string>;
 }
@@ -124,6 +126,61 @@ export function filasAnuncio(crudas: Array<Record<string, unknown>>, tienda: Tie
     });
   }
   return [...m.values()];
+}
+
+/**
+ * Conjuntos que mezclan productos ("WHATSAPP SUEÑO", "PACK TIRAS + PARCHES"): su fila queda sin producto.
+ * Cada ANUNCIO sí nombra su producto ("IMG WHATSAPP PARCHES BUCALES 9"), así que el gasto del conjunto se
+ * reparte por producto según el gasto de sus anuncios. Filas resultantes: adset_id "<id>~<producto|sin>".
+ * La suma siempre da el gasto del conjunto (la diferencia de redondeo va al grupo "sin producto" o al mayor).
+ * Devuelve { filas, repartidos } donde repartidos son las claves fecha|adset_id originales reemplazadas.
+ */
+export function repartirPorAnuncio(
+  filas: FilaGasto[],
+  anuncios: Array<Record<string, unknown>>,
+  productos: Producto[],
+): { filas: FilaGasto[]; repartidos: { fecha: string; adset_id: string }[] } {
+  const nombreProd = new Map(productos.map((p) => [p.id, p.nombre]));
+  const porConjunto = new Map<string, Array<Record<string, unknown>>>();
+  for (const a of anuncios) {
+    const k = `${a.date_start}|${a.adset_id}`;
+    if (!porConjunto.has(k)) porConjunto.set(k, []);
+    porConjunto.get(k)!.push(a);
+  }
+  const salida: FilaGasto[] = [];
+  const repartidos: { fecha: string; adset_id: string }[] = [];
+  for (const f of filas) {
+    const ads = porConjunto.get(`${f.fecha}|${f.adset_id}`) ?? [];
+    if (f.producto_id !== null || ads.length === 0) { salida.push(f); continue; }
+    const grupos = new Map<string, number>(); // producto_id | "" (sin producto) → gasto
+    for (const a of ads) {
+      const g = gastoEntero(a.spend);
+      if (g <= 0) continue;
+      const prod = mapearProducto(String(a.ad_name ?? ""), String(a.campaign_name ?? ""), productos) ?? "";
+      grupos.set(prod, (grupos.get(prod) ?? 0) + g);
+    }
+    const conProducto = [...grupos.keys()].filter((k) => k !== "");
+    if (conProducto.length === 0) { salida.push(f); continue; } // nada que repartir
+    // Ajuste para que la suma sea exactamente el gasto del conjunto.
+    const suma = [...grupos.values()].reduce((x, y) => x + y, 0);
+    const dif = f.gasto - suma;
+    if (dif !== 0) {
+      const destino = grupos.has("") ? "" : [...grupos.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      grupos.set(destino, (grupos.get(destino) ?? 0) + dif);
+    }
+    for (const [prod, gasto] of grupos) {
+      if (gasto <= 0) continue;
+      salida.push({
+        ...f,
+        adset_id: `${f.adset_id}~${prod || "sin"}`,
+        adset_nombre: `${f.adset_nombre} · ${prod ? (nombreProd.get(prod) ?? "producto") : "sin producto"}`,
+        producto_id: prod || null,
+        gasto,
+      });
+    }
+    repartidos.push({ fecha: f.fecha, adset_id: f.adset_id });
+  }
+  return { filas: salida, repartidos };
 }
 
 // ---------- gasto ----------
@@ -292,21 +349,45 @@ export async function sincronizar(
     lotes.push({ cuenta, filas, resumen });
   }
 
-  for (const l of lotes) if (l.filas.length) await deps.upsert(l.filas);
-
-  // Gasto por anuncio: aparte y sin frenar lo anterior si falla.
+  // Gasto por anuncio (se lee antes de escribir: sirve para repartir conjuntos mezclados por producto).
   const anuncios: { cuenta: string; filas: number; error?: string }[] = [];
+  const crudasAnuncio = new Map<string, Array<Record<string, unknown>>>();
   if (deps.upsertAnuncios) {
     for (const cuenta of cuentas) {
       if (frenadas.has(cuenta.id)) continue;
       try {
-        const crudas = await traerInsights(deps, urlInsightsAnuncios(cuenta.id, r)) as unknown as Array<Record<string, unknown>>;
-        const filas = filasAnuncio(crudas, cuenta.tienda);
-        if (filas.length) await deps.upsertAnuncios(filas);
-        anuncios.push({ cuenta: cuenta.id, filas: filas.length });
+        crudasAnuncio.set(cuenta.id, await traerInsights(deps, urlInsightsAnuncios(cuenta.id, r)) as unknown as Array<Record<string, unknown>>);
       } catch (e) {
         anuncios.push({ cuenta: cuenta.id, filas: 0, error: (e as Error)?.message ?? String(e) });
       }
+    }
+  }
+
+  for (const l of lotes) {
+    if (!l.filas.length) continue;
+    const ads = crudasAnuncio.get(l.cuenta.id);
+    if (ads && deps.borrarConjunto) {
+      const rep = repartirPorAnuncio(l.filas, ads, productos);
+      for (const x of rep.repartidos) await deps.borrarConjunto(l.cuenta.tienda, x.fecha, x.adset_id);
+      l.filas = rep.filas;
+      // Lo que sigue sin producto después del reparto (anuncios cuyo nombre no nombra un producto).
+      const campanaDe = new Map(l.resumen.sin_mapear.map((x) => [`${x.fecha}|${x.adset}`, x.campana]));
+      l.resumen.sin_mapear = l.filas.filter((f) => f.producto_id === null).map((f) => ({
+        fecha: f.fecha, adset: f.adset_nombre, campana: campanaDe.get(`${f.fecha}|${f.adset_nombre.split(" · ")[0]}`) ?? "", gasto: f.gasto,
+      }));
+      l.resumen.filas = l.filas.length;
+    }
+    await deps.upsert(l.filas);
+  }
+
+  for (const [cuentaId, crudas] of crudasAnuncio) {
+    const cuenta = cuentas.find((c) => c.id === cuentaId)!;
+    try {
+      const filas = filasAnuncio(crudas, cuenta.tienda);
+      if (filas.length) await deps.upsertAnuncios!(filas);
+      anuncios.push({ cuenta: cuentaId, filas: filas.length });
+    } catch (e) {
+      anuncios.push({ cuenta: cuentaId, filas: 0, error: (e as Error)?.message ?? String(e) });
     }
   }
   return { ok: true, cuentas: lotes.map((l) => l.resumen), anuncios };
