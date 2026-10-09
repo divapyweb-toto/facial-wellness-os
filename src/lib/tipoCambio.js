@@ -1,3 +1,4 @@
+import { hoyLocal } from './fechas'
 // src/lib/tipoCambio.js
 // ═══════════════════════════════════════════════════════════
 // TIPO DE CAMBIO POR FECHA (USD → guaraníes)
@@ -54,7 +55,7 @@ const memoria = (almacen) => ({
 })
 
 // Devuelve Map(fecha → guaraníes por dólar) para todos los días pedidos.
-export async function cargarTasas(cliente, fechas, { fetchFn, almacen = globalThis.localStorage, hoy = new Date().toISOString().slice(0, 10) } = {}) {
+export async function cargarTasas(cliente, fechas, { fetchFn, almacen = globalThis.localStorage, hoy = hoyLocal() } = {}) {
   const dias = [...new Set((fechas || []).filter(Boolean))].sort()
   const tasas = new Map()
   const fallidas = []

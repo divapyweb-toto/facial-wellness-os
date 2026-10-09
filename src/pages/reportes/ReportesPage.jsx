@@ -5,6 +5,7 @@ import { armarGastosAutomaticos, cargarGastosAutomaticos, diaLocal } from '../..
 import { cargarTasas } from '../../lib/tipoCambio'
 import { getGastosAutomaticosConfig } from '../../lib/config'
 import { getTienda } from '../../lib/tienda'
+import { hoyLocal } from '../../lib/fechas'
 import CostoPorAnuncio from './CostoPorAnuncio'
 import { fetchAll } from '../../lib/fetchAll'
 import { agruparSerie } from '../../lib/periodos'
@@ -118,7 +119,7 @@ export default function ReportesPage() {
     const diasPeriodoAuto = Math.round((new Date(fin + 'T00:00:00') - new Date(inicio + 'T00:00:00')) / 86400000) + 1
     const cfgAuto = getGastosAutomaticosConfig()
     // Cada gasto en dólares se convierte con el cambio de SU día (no uno solo).
-    const hoyAuto = new Date().toISOString().slice(0, 10)
+    const hoyAuto = hoyLocal()
     const fechaTasaFijos = fin < hoyAuto ? fin : hoyAuto
     const diasUsd = [...rawAuto.waMensajes, ...rawAuto.turnosIA, ...rawAuto.ciclosMejora].map(r => diaLocal(r.creado_en))
       .concat(rawAuto.gastosReales.map(r => String(r.fecha).slice(0, 10)), fechaTasaFijos)
@@ -196,7 +197,7 @@ export default function ReportesPage() {
 
     // Por día del mes (para el gráfico)
     const diasDelMes = new Date(year, month, 0).getDate()
-    const hoyStr = new Date().toISOString().slice(0, 10)
+    const hoyStr = hoyLocal()
     const porDia = []
     for (let d = 1; d <= diasDelMes; d++) {
       const fechaStr = `${mes}-${String(d).padStart(2, '0')}`
@@ -788,7 +789,7 @@ ${tabla(['Métrica', 'Valor'], [
 
 ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a => `<li>${esc(typeof a === 'string' ? a : (a.texto || a.mensaje || JSON.stringify(a)))}</li>`).join('')}</ul>` : ''}
 
-<div class="foot">Voltra OS · reporte generado automáticamente · ${new Date().toISOString().slice(0, 10)}</div>
+<div class="foot">Voltra OS · reporte generado automáticamente · ${hoyLocal()}</div>
 </body></html>`)
     win.document.close()
     setTimeout(() => { win.focus(); win.print() }, 400)

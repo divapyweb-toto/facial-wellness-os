@@ -5,7 +5,7 @@ import { supabaseTienda as supabase, formatGs, formatPct } from '../../lib/supab
 import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
 import { construirAlertasNegocio } from '../../lib/alertasNegocio'
 import DashboardHero from './DashboardHero'
-import { rangoMesAnteriorEquivalente } from '../../lib/fechas'
+import { rangoMesAnteriorEquivalente, hoyLocal } from '../../lib/fechas'
 import { construirAcciones, COLOR_URGENCIA } from '../../lib/centroAcciones'
 import { entregasPaPAtascadas } from '../../lib/seguimiento'
 import { getUmbralesSeguimientoPaP } from '../../lib/config'
@@ -140,12 +140,13 @@ export default function DashboardPage() {
   const cargarDatos = useCallback(async () => {
     setLoading(true)
     const ahora = new Date()
-    const hoyStr = ahora.toISOString().slice(0, 10)
+    const hoyStr = hoyLocal(ahora) // día de Paraguay (con toISOString, de 21 a 24 h ya era 'mañana')
     const inicioMes = new Date(ahora.getFullYear(), ahora.getMonth(), 1).toISOString().split('T')[0]
     const finMes = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0).toISOString().split('T')[0]
 
-    const { data: ventasMes } = await supabase
-      .from('ventas').select('*').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes)
+    // Paginado: con más de 1.000 ventas en el mes, Supabase cortaba en silencio y los totales salían bajos.
+    const ventasMes = await fetchAll(() => supabase
+      .from('ventas').select('*').is('deleted_at', null).gte('fecha', inicioMes).lte('fecha', finMes))
 
     // Gastos del mes (costo fijo para el punto de equilibrio)
     const { data: gastosMes } = await supabase
@@ -174,7 +175,7 @@ export default function DashboardPage() {
     const mesesData = []
     for (let i = 5; i >= 0; i--) {
       const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1)
-      const ini = d.toISOString().split('T')[0]
+      const ini = hoyLocal(d)
       const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
       const vMes = (ventas6m || []).filter(v => v.fecha >= ini && v.fecha <= fin)
       const entMes = vMes.filter(v => v.estado === 'entregado')
@@ -279,7 +280,7 @@ export default function DashboardPage() {
     const { data: ventasChart } = await supabase
       .from('ventas').select('fecha, total, estado, ganancia_neta')
       .is('deleted_at', null)
-      .gte('fecha', hace7.toISOString().split('T')[0]).order('fecha')
+      .gte('fecha', hoyLocal(hace7)).order('fecha')
 
     if (ventasChart) {
       // Tasa de entrega de los últimos 7 días, sobre lo RESUELTO.
@@ -293,7 +294,7 @@ export default function DashboardPage() {
       const porDia = {}
       for (let i = 0; i < 7; i++) {
         const d = new Date(); d.setDate(d.getDate() - (6 - i))
-        const key = d.toISOString().split('T')[0]
+        const key = hoyLocal(d)
         const label = d.toLocaleDateString('es-PY', { weekday: 'short', day: 'numeric' })
         porDia[key] = { fecha: label, ventas: 0, neto: 0 }
       }
@@ -350,7 +351,7 @@ export default function DashboardPage() {
         })
     }
     const hace5 = new Date(); hace5.setDate(hace5.getDate() - 5)
-    const { data: viejos } = await supabase.from('ventas').select('id').is('deleted_at', null).eq('estado', 'pendiente').lt('fecha', hace5.toISOString().split('T')[0])
+    const { data: viejos } = await supabase.from('ventas').select('id').is('deleted_at', null).eq('estado', 'pendiente').lt('fecha', hoyLocal(hace5))
     if (viejos?.length) alertasActivas.push({ tipo: 'pendiente', color: 'yellow', msg: `${viejos.length} pedido(s) pendiente(s) con más de 5 días sin resolver` })
 
     // Advertencia anti-doble-conteo: ads cargado en Campañas Y en Gastos (Publicidad)
@@ -379,7 +380,7 @@ export default function DashboardPage() {
       // Recompra pendientes (clientes listos hoy, estimación)
       const desdeR = new Date(); desdeR.setMonth(desdeR.getMonth() - 8)
       const [{ data: vEnt }, { data: logs }] = await Promise.all([
-        supabase.from('ventas').select('cliente_telefono, fecha, estado').eq('estado', 'entregado').is('deleted_at', null).gte('fecha', desdeR.toISOString().slice(0, 10)).limit(1000),
+        supabase.from('ventas').select('cliente_telefono, fecha, estado').eq('estado', 'entregado').is('deleted_at', null).gte('fecha', hoyLocal(desdeR)).limit(1000),
         supabase.from('recompra_log').select('telefono, fecha_envio').gte('fecha_envio', new Date(Date.now() - 25 * 86400000).toISOString()),
       ])
       const enCooldown = new Set((logs || []).map(l => String(l.telefono).replace(/\D/g, '')))
@@ -446,7 +447,7 @@ export default function DashboardPage() {
       ])
       // Trancadas = entregadas hace más de 14 días y todavía sin depositar.
       const hace14 = new Date(); hace14.setDate(hace14.getDate() - 14)
-      const limite = hace14.toISOString().slice(0, 10)
+      const limite = hoyLocal(hace14)
       const trancadasList = (trancadas.data || []).filter(e => e.fecha_entrega < limite)
       const bajos = (prodsBajos.data || []).filter(p =>
         (p.stock_actual ?? 0) <= (p.stock_alerta ?? 0))
