@@ -68,8 +68,11 @@ export interface Repo {
   enviarCapi(p: PedidoPendiente, origen: OrigenAnuncio | null): Promise<ResultadoCapi>
   agregarTags(orderId: number, tags: string[]): Promise<{ ok: boolean; error?: string }>
   avisar(texto: string): Promise<{ ok: boolean; error?: string }>
-  /** factura/io.ts facturarPedidoEntregado (idempotente). Solo con cfg.facturaActiva. Opcional. */
-  facturar?(orderId: number): Promise<{ accion: string; error?: string }>
+  /**
+   * factura/io.ts facturarPedidoEntregado (idempotente). Solo con cfg.facturaActiva. Opcional.
+   * `entregadoEn` = la fecha de entrega de esta corrida (se guarda al final): la cola la usa para el corte facturar_desde.
+   */
+  facturar?(orderId: number, entregadoEn: string | null): Promise<{ accion: string; error?: string }>
 }
 
 export interface ConfigPostEntrega {
@@ -209,8 +212,9 @@ export async function procesarPostEntrega(repo: Repo, cfg: ConfigPostEntrega): P
     // 2b. Factura electrónica (ola 4). Su falla no frena ni reintenta el resto: la reintenta el cron de factura.
     if (cfg.facturaActiva && repo.facturar) {
       try {
-        const f = await repo.facturar(p.shopify_order_id)
-        if (f.accion === 'error' || f.accion === 'revisar') {
+        const f = await repo.facturar(p.shopify_order_id, entregadoEn)
+        // 'retenido' (anterior al corte) no es error: queda en facturas_retenidas para la contadora.
+        if (f.accion === 'error' || f.accion === 'revisar' || f.accion === 'sin_corte') {
           r.detalle_errores.push(`${etiqueta} factura (${f.accion}): ${f.error ?? 'sin detalle'}`)
         }
       } catch (e) {

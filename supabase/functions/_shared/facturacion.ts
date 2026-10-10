@@ -16,7 +16,8 @@
 //   - Ambiente de pruebas: misma URL; se elige en la consola de FacturaSend (no hay host aparte).
 //
 // Secretos (nombres): FACTURASEND_API_KEY (contrato) y FACTURASEND_TENANT (nuevo: el tenantId de la cuenta).
-// Modo simulado: MODO_SIMULADO=1 o falta cualquiera de los dos → simulador determinista (`simulado: true`).
+// Modo simulado: MODO_SIMULADO=1, SIFEN_PRODUCCION_AUTORIZADA distinto de "si" o falta cualquiera de los dos
+// → simulador determinista (`simulado: true`).
 
 import { partesAsuncion } from "./horario.ts";
 
@@ -114,8 +115,13 @@ export function _configurarFactura(parcial?: Partial<EntornoFactura>): void {
   entorno = parcial ? { ...entornoPorDefecto, ...parcial } : entornoPorDefecto;
 }
 
+/**
+ * Blindaje 10-10: FacturaSend transmite a SIFEN por su cuenta (con valor fiscal), así que, igual que el sistema propio,
+ * sin SIFEN_PRODUCCION_AUTORIZADA=si NUNCA sale de verdad: queda en el simulador aunque estén las claves.
+ */
 export function modoSimuladoFactura(): { simulado: boolean; motivo?: string } {
   if (entorno.env("MODO_SIMULADO") === "1") return { simulado: true, motivo: "MODO_SIMULADO=1" };
+  if (entorno.env("SIFEN_PRODUCCION_AUTORIZADA") !== "si") return { simulado: true, motivo: "producción no autorizada" };
   if (!entorno.env("FACTURASEND_API_KEY")) return { simulado: true, motivo: "falta FACTURASEND_API_KEY" };
   if (!entorno.env("FACTURASEND_TENANT")) return { simulado: true, motivo: "falta FACTURASEND_TENANT" };
   return { simulado: false };

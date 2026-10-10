@@ -6,11 +6,18 @@
 //   - Se factura lo COBRADO de verdad: el precio de cada line_item menos sus descuentos (las ofertas ×2/×3/pack
 //     ya vienen en el precio; el upsell es otro line_item; el downsell es un descuento o un precio menor).
 //   - El envío va como ítem aparte ("Envío", Gs 33.000 por defecto, IVA 10 % configurable). [VERIFICAR contadora]
-//   - Contado, efectivo (iTiPago 1) o transferencia/billetera si el pedido tiene la etiqueta PAGADO_QR. [VERIFICAR MT tabla iTiPago]
+//   - Contado. Medio de pago (MT v150 campo E606 iTiPago, verificado 10-10 en el PDF del MT pág. 82):
+//       etiqueta PAGO_VERIFICADO (pago anticipado por transferencia, verificado en ueno) → 5 Transferencia;
+//       etiqueta PAGADO_QR → pago_tipo_qr (el MT no tiene código "QR": 7 billetera / 21 pago electrónico [VERIFICAR contadora]);
+//       nada → 1 Efectivo (cobro contra entrega).
 //   - La suma de los ítems tiene que dar EXACTO el total cobrado. Si no cuadra → NO se emite (estado 'revisar').
 //   - Receptor: RUC con dígito verificador válido + razón social → 'ruc'; cédula → 'documento';
 //     nada (o RUC inválido) → 'innominado' + aviso. Desde `monto_identificar_consumidor` (Gs 7.000.000, NT-024)
 //     un consumidor final sin identificar va a 'revisar'. [VERIFICAR con la contadora si conviene un tope menor]
+//   - pedido_datos_fiscales (tabla de P2, 10-10): si el pedido tiene fila, MANDA sobre los atributos: receptor 'ruc'
+//     con DV validado + razón social (RUC inválido o sin razón social → 'revisar', nunca consumidor final silencioso) y
+//     condición: 'credito' → iCondOpe 2 con plazo_dias (E643 dPlazoCre "N días"). Sin fila: atributos del pedido
+//     ("condicion"/"plazo_dias" de los pedidos mayoristas creados en Shopify), y si no, contado.
 // Fuente de las formas: Manual Técnico SIFEN v150, grupos gDatRec (receptor), gCamItem (ítems), gCamCond (condición).
 
 import type { DocumentoDE, ItemDE, ReceptorDE, TipoEmision } from "./tipos.ts";
@@ -30,7 +37,23 @@ export interface PedidoSifen {
   estado_confirmacion?: string | null;
   /** true si el pedido pasó alguna vez por RENDIDO (pedido_estados). Lo llena la cola. */
   rendido?: boolean;
+  /** Fila de pedido_datos_fiscales (P2) si existe. Tiene prioridad sobre los atributos del pedido. */
+  datos_fiscales?: DatosFiscalesPedido | null;
 }
+
+/** public.pedido_datos_fiscales (contrato P1-P2 10-10, sección "P2 REDEFINIDO"). */
+export interface DatosFiscalesPedido {
+  ruc: string | null;
+  dv: string | null;
+  razon_social: string | null;
+  email?: string | null;
+  condicion?: string | null; // 'contado' | 'credito'
+  plazo_dias?: number | null;
+  origen?: string | null; // 'mayorista' | 'web_con_ruc'
+}
+
+/** DocumentoDE con el plazo del crédito (E643). emisor.ts lo pasa a armarXmlDEConOpciones({ plazoCredito }). */
+export type CondicionConPlazo = NonNullable<DocumentoDE["condicion"]> & { plazoCredito?: string };
 
 export type ModoEnvio = "linea_shopify" | "separar_del_total" | "ninguno";
 
@@ -60,15 +83,23 @@ export interface ConfigDesdePedido {
   /** Releasit trae RUC y razón social en atributos separados (revisión G 08-10). */
   claves_ruc: string[];
   claves_razon_social: string[];
+  /** Atributos de los pedidos mayoristas creados en Shopify (P2): "condicion" (contado|credito) y "plazo_dias". */
+  claves_condicion: string[];
+  claves_plazo: string[];
+  /** Plazo máximo aceptado (días). Más que esto → 'revisar'. */
+  plazo_maximo_dias: number;
   /** Código por producto cuando el sku viene vacío (8/8 pedidos al 08-10): título normalizado o product_id → código. */
   codigos_producto: Record<string, string>;
   tag_prueba: string;
   /** cUniMed 77 = unidad (MT v150, tabla de unidades de medida). [VERIFICAR] */
   unidad_medida: number;
-  /** iTiPago: 1 efectivo; 5/6/7… transferencia/billetera. [VERIFICAR MT v150 tabla de formas de pago] */
+  /** iTiPago (MT v150 E606): 1 Efectivo, 5 Transferencia, 7 Billetera electrónica, 21 Pago electrónico. */
   pago_tipo_efectivo: number;
   pago_tipo_qr: number;
   tag_pagado_qr: string;
+  /** Pago anticipado por transferencia verificado a mano (telegram-webhook pone la etiqueta PAGO_VERIFICADO). */
+  pago_tipo_transferencia: number;
+  tag_pago_verificado: string;
   tolerancia_gs: number;
 }
 
@@ -86,6 +117,9 @@ export const CONFIG_DESDE_PEDIDO_DEFECTO: ConfigDesdePedido = {
   claves_datos_fiscales: ["factura", "datos de factura", "ruc y razon social"],
   claves_ruc: ["ruc"],
   claves_razon_social: ["razon social", "razón social", "razon_social"],
+  claves_condicion: ["condicion", "condición"],
+  claves_plazo: ["plazo_dias", "plazo dias", "plazo"],
+  plazo_maximo_dias: 365,
   codigos_producto: {},
   tag_prueba: "PRUEBA_E2E",
   claves_documento: ["cedula", "cédula", "ci", "documento", "nro de cedula", "número de cédula", "numero de cedula"],
@@ -93,6 +127,8 @@ export const CONFIG_DESDE_PEDIDO_DEFECTO: ConfigDesdePedido = {
   pago_tipo_efectivo: 1,
   pago_tipo_qr: 7,
   tag_pagado_qr: "PAGADO_QR",
+  pago_tipo_transferencia: 5, // MT v150 E606: 5 = Transferencia
+  tag_pago_verificado: "PAGO_VERIFICADO",
   tolerancia_gs: 0,
 };
 
@@ -326,6 +362,49 @@ export function receptorDesdePedido(raw: unknown, cfg: ConfigDesdePedido): Resum
   return { receptor: { tipo: "innominado", pais: "PRY", email }, avisos };
 }
 
+/**
+ * Receptor desde pedido_datos_fiscales: RUC (sin DV o "base-DV") + DV válido (módulo 11) + razón social.
+ * Cualquier falla → error (la factura va a 'revisar').
+ */
+export function receptorDesdeDatosFiscales(df: DatosFiscalesPedido, emailPedido?: string): { ok: true; receptor: ReceptorDE } | { ok: false; motivo: string } {
+  const rucTxt = (df.ruc ?? "").trim();
+  const dvTxt = (df.dv ?? "").trim();
+  const r = rucDesdeTexto(dvTxt ? `${rucTxt.replace(/-\s*\d$/, "")}-${dvTxt}` : rucTxt);
+  const razon = (df.razon_social ?? "").trim();
+  if (!r) return { ok: false, motivo: `RUC inválido en pedido_datos_fiscales ("${[rucTxt, dvTxt].filter(Boolean).join("-")}")` };
+  if (!razon) return { ok: false, motivo: "pedido_datos_fiscales sin razón social" };
+  const email = (df.email ?? "").trim() || emailPedido;
+  return { ok: true, receptor: { tipo: "ruc", ruc: r.ruc, dv: r.dv, razonSocial: razon, pais: "PRY", email } };
+}
+
+export type CondicionPedido = { ok: true; tipo: 1 | 2; plazoDias: number | null } | { ok: false; motivo: string };
+
+/** Condición de la operación: pedido_datos_fiscales; si no hay fila, atributos "condicion"/"plazo_dias"; si no, contado. */
+export function condicionDesdePedido(ped: Pick<PedidoSifen, "raw" | "datos_fiscales">, cfg: ConfigDesdePedido): CondicionPedido {
+  let cond: string | null = null;
+  let plazo: unknown = null;
+  if (ped.datos_fiscales) {
+    cond = ped.datos_fiscales.condicion ?? "contado";
+    plazo = ped.datos_fiscales.plazo_dias ?? null;
+  } else {
+    const attrs = atributosPedido(ped.raw);
+    const valor = (claves: string[]) => {
+      const set = new Set(claves.map((c) => normalizarTexto(c)));
+      return attrs.find((a) => set.has(normalizarTexto(a.k)) && a.v.trim())?.v.trim() ?? null;
+    };
+    cond = valor(cfg.claves_condicion);
+    plazo = valor(cfg.claves_plazo);
+  }
+  const c = normalizarTexto(cond ?? "contado");
+  if (c === "contado" || c === "") return { ok: true, tipo: 1, plazoDias: null };
+  if (c !== "credito") return { ok: false, motivo: `condición desconocida ("${cond}"): contado o credito` };
+  const n = num(plazo);
+  if (n === null || !Number.isInteger(n) || n < 1 || n > cfg.plazo_maximo_dias) {
+    return { ok: false, motivo: `crédito sin plazo válido (plazo_dias "${plazo ?? ""}", 1 a ${cfg.plazo_maximo_dias})` };
+  }
+  return { ok: true, tipo: 2, plazoDias: n };
+}
+
 export interface BaseDocumento {
   numero: number;
   fechaEmision: string; // fechaSifen(...)
@@ -378,8 +457,22 @@ export function documentoDesdePedido(ped: PedidoSifen, cfg: ConfigDesdePedido, b
     return { ok: false, motivo: `la suma de ítems (${suma}) no coincide con el total cobrado (${total})`, avisos };
   }
 
-  const rec = receptorDesdePedido(ped.raw, cfg);
+  let rec: ResumenReceptor;
+  if (ped.datos_fiscales) {
+    // Fila en pedido_datos_fiscales: manda sobre los atributos; si no cierra, a 'revisar' (nunca consumidor final).
+    const emailPedido = str(r0.email) ?? str(obj(r0.customer).email) ?? undefined;
+    const rf = receptorDesdeDatosFiscales(ped.datos_fiscales, emailPedido);
+    if (!rf.ok) return { ok: false, motivo: rf.motivo, avisos };
+    rec = { receptor: rf.receptor, avisos: [] };
+  } else {
+    rec = receptorDesdePedido(ped.raw, cfg);
+  }
   avisos.push(...rec.avisos);
+  const cond = condicionDesdePedido(ped, cfg);
+  if (!cond.ok) return { ok: false, motivo: cond.motivo, avisos };
+  if (cond.tipo === 2 && rec.receptor.tipo === "innominado") {
+    return { ok: false, motivo: "venta a crédito a consumidor final sin identificar: cargar RUC en datos fiscales", avisos };
+  }
   if (rec.receptor.tipo === "innominado" && cfg.monto_identificar_consumidor !== null && total >= cfg.monto_identificar_consumidor) {
     return {
       ok: false,
@@ -388,7 +481,11 @@ export function documentoDesdePedido(ped: PedidoSifen, cfg: ConfigDesdePedido, b
     };
   }
 
-  const pagadoQr = (ped.tags ?? []).includes(cfg.tag_pagado_qr);
+  const tipoPago = tipoPagoPedido(ped.tags ?? [], cfg);
+  // gCamCond: contado → gPaConEIni con la forma de pago (E605-E606); crédito → gPagCred plazo (E640-E643), sin entrega inicial.
+  const condicion: CondicionConPlazo = cond.tipo === 1
+    ? { tipo: 1, pagos: [{ tipo: tipoPago, monto: total }] }
+    : { tipo: 2, pagos: [], plazoCredito: `${cond.plazoDias} días` };
   const doc: DocumentoDE = {
     tipo: 1,
     establecimiento: cfg.establecimiento,
@@ -400,12 +497,21 @@ export function documentoDesdePedido(ped: PedidoSifen, cfg: ConfigDesdePedido, b
     receptor: rec.receptor,
     items,
     moneda: "PYG",
-    // gCamCond: iCondOpe 1 contado; gPaConEIni con la forma de pago (MT v150 E601-E606).
-    condicion: { tipo: 1, pagos: [{ tipo: pagadoQr ? cfg.pago_tipo_qr : cfg.pago_tipo_efectivo, monto: total }] },
+    condicion,
     shopifyOrderId: ped.shopify_order_id,
     observacion: `Pedido ${ped.nombre ?? ped.shopify_order_id}`,
   };
   return { ok: true, doc, avisos, total };
+}
+
+/**
+ * iTiPago del pedido según sus etiquetas. PAGADO_QR (lo pone pago-qr-webhook) gana sobre PAGO_VERIFICADO (lo pone
+ * telegram-webhook cuando Enrique verifica la transferencia en ueno). Sin etiqueta: efectivo (cobro contra entrega).
+ */
+export function tipoPagoPedido(tags: string[], cfg: Pick<ConfigDesdePedido, "tag_pagado_qr" | "pago_tipo_qr" | "tag_pago_verificado" | "pago_tipo_transferencia" | "pago_tipo_efectivo">): number {
+  if (tags.includes(cfg.tag_pagado_qr)) return cfg.pago_tipo_qr;
+  if (tags.includes(cfg.tag_pago_verificado)) return cfg.pago_tipo_transferencia;
+  return cfg.pago_tipo_efectivo;
 }
 
 function itemEnvio(monto: number, cfg: ConfigDesdePedido): ItemDE {

@@ -92,7 +92,7 @@ export function credencialesDesdeEnv(env: (n: string) => string | undefined): Es
   return { cred, simulado: !!motivo, motivo, certDePrueba: !p12 };
 }
 
-/** Datos del emisor INVENTADOS (simulado / tests). Los reales van en config_wa['sifen'].emisor. */
+/** Datos del emisor INVENTADOS (simulado / tests). Los reales van en config_wa['sifen'].datos_emisor. */
 export function datosEmisorPrueba(): DatosEmisor {
   const ruc = "80000001";
   return {
@@ -161,6 +161,12 @@ export const CARGADORES = {
   eventos: () => import("./eventos_xml.ts") as Promise<Mod>,
 };
 
+/** Plazo del crédito que puso desde_pedido.ts (CondicionConPlazo); undefined = el de xml.ts. */
+export function plazoCreditoDe(doc: DocumentoDE): string | undefined {
+  const p = (doc.condicion as { plazoCredito?: unknown } | undefined)?.plazoCredito;
+  return doc.condicion?.tipo === 2 && typeof p === "string" && p.trim() ? p.trim() : undefined;
+}
+
 export async function cargarModulosSifen(
   simulado: boolean,
   cred: CredencialesSifen,
@@ -177,6 +183,11 @@ export async function cargarModulosSifen(
   };
 
   let armarXmlDE = elegir(xml, ["armarXmlDE", "armarXml"]) as ArmarXmlDE | undefined;
+  // Crédito (10-10): el plazo (E643) viaja en doc.condicion.plazoCredito (desde_pedido.ts) → armarXmlDEConOpciones.
+  const conOpciones = elegir(xml, ["armarXmlDEConOpciones"]) as
+    | ((doc: DocumentoDE, em: DatosEmisor, c: Pick<CredencialesSifen, "timbrado" | "timbradoInicio">, op?: { plazoCredito?: string }) => ReturnType<ArmarXmlDE>)
+    | undefined;
+  if (conOpciones) armarXmlDE = (doc, em, c) => conOpciones(doc, em, c, { plazoCredito: plazoCreditoDe(doc) });
   if (!armarXmlDE) falta("xml.ts"), armarXmlDE = armarXmlSimulado;
   let firmarXml = elegir(firma, ["firmarXml", "firmar"]) as FirmarXml | undefined;
   let armarQr = elegir(qr, ["armarQr", "armarQR"]) as ArmarQr | undefined;
@@ -263,7 +274,7 @@ export async function crearEmisorPropioDesdeEntorno(args: {
 }): Promise<{ emisor: EmisorPropio; simulado: boolean; motivo?: string; modulosSimulados: string[]; cred: CredencialesSifen }> {
   const env = args.env ?? ((n: string) => Deno.env.get(n) ?? undefined);
   const est = credencialesDesdeEnv(env);
-  if (!est.simulado && !args.emisor) throw new Error("SIFEN real: falta config_wa['sifen'].emisor (datos del emisor)");
+  if (!est.simulado && !args.emisor) throw new Error("SIFEN real: falta config_wa['sifen'].datos_emisor (datos del emisor)");
   let usarFirmaReal = !est.certDePrueba;
   if (est.simulado && est.certDePrueba) {
     // Simulado sin .p12: autofirmado de prueba (certificado.ts de C) para que firma y QR sean los reales.

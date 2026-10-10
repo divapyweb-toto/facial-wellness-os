@@ -240,3 +240,17 @@ Deno.test('rendido después: en la corrida siguiente marca pagado una sola vez',
   assertEquals(log.pagos, 1)
   assertEquals(tabla.get(9001)!.pagado_marcado, true)
 })
+
+Deno.test('factura (10-10): viaja la fecha de entrega recién calculada (corte facturar_desde); retenido no es error, sin corte sí', async () => {
+  const fechas: Array<string | null> = []
+  let m = repoMemoria([pedido()])
+  m.repo.facturar = (_id, ent) => (fechas.push(ent), Promise.resolve({ accion: 'retenido' }))
+  let r = await procesarPostEntrega(m.repo, cfg({ facturaActiva: true }))
+  assertEquals(fechas.length, 1)
+  assert(fechas[0] && fechas[0] === m.tabla.get(pedido().shopify_order_id)!.entregado_en, `fecha enviada ${fechas[0]}`)
+  assertEquals(r.detalle_errores.filter((d) => d.includes('factura')), [])
+  m = repoMemoria([pedido()])
+  m.repo.facturar = () => Promise.resolve({ accion: 'sin_corte', error: 'falta facturar_desde' })
+  r = await procesarPostEntrega(m.repo, cfg({ facturaActiva: true }))
+  assert(r.detalle_errores.some((d) => d.includes('sin_corte')))
+})

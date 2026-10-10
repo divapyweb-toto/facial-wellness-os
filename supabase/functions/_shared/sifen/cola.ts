@@ -11,6 +11,14 @@
 //        - si no: dentro del plazo de cancelación (48 h FE) → evento de cancelación (antes se cancelan sus NC);
 //          fuera de plazo → nota de crédito (tipo 5) por el total asociada por CDC. Telegram en ambos casos.
 //   Un error en un pedido no frena al resto (try/catch por ítem).
+//
+// Blindaje 10-10 (agente P1):
+//   - Corte obligatorio: con activo=true y facturar_desde vacío NO se factura nada nuevo (aviso por Telegram, 1 por hora).
+//     Ventana de la cola = desde max(facturar_desde, ahora − dias_atras), solo por entregado_en.
+//   - facturarPedido (cola, post-entrega y llamada manual) respeta el corte: entregado_en < facturar_desde → se registra
+//     en facturas_retenidas ('anterior_al_corte') y NO se factura. Un pedido retenido sin liberar nunca se factura;
+//     al liberarlo (RPC sifen_liberar, con el criterio de la contadora) lo toma la cola por liberadosSinFactura.
+//   - Ventas directas (showroom/mayorista): EN ESPERA (decisión de Enrique 10-10). La cola no las toca.
 // Idempotencia: índice único parcial (una FE por pedido, una NC por factura) + lease atómico (tomarLease)
 //   + número asignado en SQL junto con la fila (sifen_asignar_numero: sin saltos ni duplicados).
 
@@ -27,6 +35,12 @@ import {
   type PedidoSifen,
 } from "./desde_pedido.ts";
 import type { EmisorCola } from "./emisor.ts";
+
+/** Fila de public.facturas_retenidas (migración 20261010000010). */
+export interface Retencion {
+  motivo: string;
+  liberado_en: string | null;
+}
 
 export type EstadoFactura = "pendiente" | "enviada" | "aprobada" | "rechazada" | "cancelada" | "revisar" | "error" | "inutilizada";
 
@@ -86,9 +100,12 @@ export interface EventoSifen {
 export interface ConfigSifen extends ConfigDesdePedido {
   activo: boolean;
   emisor: "propio" | "facturasend";
-  /** Datos del emisor (DatosEmisor). No son secretos; van en config_wa['sifen'].emisor. */
+  /** Datos del emisor (DatosEmisor). No son secretos; van en config_wa['sifen'].datos_emisor (lo lee sifen-cola/io.ts). */
   datos_emisor?: unknown;
-  /** Solo pedidos entregados desde esta fecha (ISO). Evita facturar el histórico al activar. null = últimos `dias_atras`. */
+  /**
+   * Corte OBLIGATORIO al activar (ISO): solo se factura lo entregado desde esta fecha. Con activo=true y null no se
+   * factura nada nuevo. Lo anterior que llegue por post-entrega o llamada manual queda en facturas_retenidas.
+   */
   facturar_desde: string | null;
   dias_atras: number;
   lote: number;
@@ -142,8 +159,9 @@ export const CONFIG_SIFEN_DEFECTO: ConfigSifen = {
 };
 
 export function configSifen(valor: unknown): ConfigSifen {
-  const v = valor && typeof valor === "object" ? valor as Partial<ConfigSifen> & { emisor_datos?: unknown } : {};
+  const v = valor && typeof valor === "object" ? valor as Partial<ConfigSifen> : {};
   const c = { ...CONFIG_SIFEN_DEFECTO, ...v } as ConfigSifen;
+  c.facturar_desde = typeof v.facturar_desde === "string" && !Number.isNaN(new Date(v.facturar_desde).getTime()) ? v.facturar_desde : null;
   c.activo = v.activo === true;
   c.emisor = v.emisor === "facturasend" ? "facturasend" : "propio";
   c.horas_cancelacion = { ...CONFIG_SIFEN_DEFECTO.horas_cancelacion, ...(v.horas_cancelacion ?? {}) };
@@ -160,7 +178,13 @@ export interface DepsCola {
   emisor: EmisorCola;
   fechaSifen(d: Date): string;
   codigoSeguridad(): string;
+  /** ENTREGADO/RENDIDO con entregado_en ≥ desde, sin FE del ambiente y SIN retención (liberada o no). */
   pedidosSinFactura(desdeIso: string, limite: number): Promise<PedidoSifen[]>;
+  /** Pedidos con retención LIBERADA y sin FE del ambiente (los toma la cola aunque estén fuera de la ventana). */
+  liberadosSinFactura(limite: number): Promise<PedidoSifen[]>;
+  retencion(orderId: number): Promise<Retencion | null>;
+  /** INSERT en facturas_retenidas (si ya existe, no hace nada). */
+  retener(orderId: number, motivo: string, nota: string): Promise<void>;
   facturasVencidas(ahoraIso: string, limite: number): Promise<FilaFactura[]>;
   /** FE (tipo 1) aprobadas cuyo pedido figura NO_ENTREGADO/CANCELADO. */
   facturasDevueltas(limite: number): Promise<Array<{ factura: FilaFactura; pedido: PedidoSifen }>>;
@@ -196,7 +220,9 @@ export type AccionCola =
   | "kude_enviado"
   | "cancelada"
   | "nota_credito"
-  | "sin_cambios";
+  | "sin_cambios"
+  | "retenido"
+  | "sin_corte";
 
 export interface ResultadoItem {
   ref: string; // pedido o factura
@@ -209,6 +235,8 @@ export interface ResumenCola {
   reintentos: ResultadoItem[];
   devoluciones: ResultadoItem[];
   errores: string[];
+  /** true si activo=true pero falta facturar_desde (no se facturó nada nuevo). */
+  sin_corte?: boolean;
 }
 
 const msj = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -218,25 +246,50 @@ export function proximoIntento(intentos: number, ahora: Date, esperasMin: number
   return new Date(ahora.getTime() + m * 60_000).toISOString();
 }
 
-function desdeFacturar(cfg: ConfigSifen, ahora: Date): string {
-  const minimo = new Date(ahora.getTime() - cfg.dias_atras * 86_400_000).toISOString();
-  if (!cfg.facturar_desde) return minimo;
-  return cfg.facturar_desde;
+export const MOTIVO_SIN_CORTE = "falta facturar_desde en config_wa['sifen']: el corte es obligatorio al activar, no se factura nada nuevo";
+
+/** Desde cuándo mira la cola: max(facturar_desde, ahora − dias_atras). null = falta el corte (no se factura nada nuevo). */
+export function desdeFacturar(cfg: ConfigSifen, ahora: Date): string | null {
+  if (!cfg.facturar_desde) return null;
+  const minimo = ahora.getTime() - cfg.dias_atras * 86_400_000;
+  const corte = new Date(cfg.facturar_desde).getTime();
+  return new Date(Math.max(minimo, corte)).toISOString();
+}
+
+/** El pedido se entregó antes del corte (sin fecha de entrega no se puede saber: lo decide quien llama). */
+export function anteriorAlCorte(entregadoEn: string, facturarDesde: string): boolean {
+  return new Date(entregadoEn).getTime() < new Date(facturarDesde).getTime();
 }
 
 // ─── 1. Pedido → factura ─────────────────────────────────────
 
-/** Factura un pedido (idempotente). Lo usan la cola y post-entrega (vía factura/io.ts). */
-export async function facturarPedido(pedidoOId: number | PedidoSifen, d: DepsCola): Promise<ResultadoItem> {
-  const ped = typeof pedidoOId === "number" ? await d.leerPedido(pedidoOId) : pedidoOId;
+/**
+ * Factura un pedido (idempotente). Lo usan la cola, post-entrega y la llamada manual (sifen-cola con shopify_order_id).
+ * `op.entregadoEn`: fecha de entrega que post-entrega acaba de calcular y todavía no guardó (solo si la fila no la tiene).
+ */
+export async function facturarPedido(pedidoOId: number | PedidoSifen, d: DepsCola, op: { entregadoEn?: string | null } = {}): Promise<ResultadoItem> {
+  let ped = typeof pedidoOId === "number" ? await d.leerPedido(pedidoOId) : pedidoOId;
   const ref = `pedido ${typeof pedidoOId === "number" ? pedidoOId : pedidoOId.shopify_order_id}`;
   if (!ped) return { ref, accion: "no_facturable", detalle: "no existe" };
+  if (!d.cfg.facturar_desde) return { ref, accion: "sin_corte", detalle: MOTIVO_SIN_CORTE };
+  if (!ped.entregado_en && op.entregadoEn) ped = { ...ped, entregado_en: op.entregadoEn };
   if (!esFacturable(ped.estado_envio)) return { ref, accion: "no_facturable", detalle: `estado_envio ${ped.estado_envio}` };
   const no = motivoNoFacturable(ped, d.cfg);
   if (no) return { ref, accion: "no_facturable", detalle: no };
 
   const previa = await d.facturaDePedido(ped.shopify_order_id);
   if (previa) return { ref, accion: "ya_existe", detalle: previa.estado };
+
+  // Retenido (anterior al corte u otro motivo) y sin liberar: nunca se factura solo.
+  const ret = await d.retencion(ped.shopify_order_id);
+  if (ret && !ret.liberado_en) return { ref, accion: "retenido", detalle: ret.motivo };
+  if (!ret) {
+    if (!ped.entregado_en) return { ref, accion: "no_facturable", detalle: "sin fecha de entrega (entregado_en): lo toma la cola cuando se guarde" };
+    if (anteriorAlCorte(ped.entregado_en, d.cfg.facturar_desde)) {
+      await d.retener(ped.shopify_order_id, "anterior_al_corte", `entregado ${ped.entregado_en} < facturar_desde ${d.cfg.facturar_desde}`);
+      return { ref, accion: "retenido", detalle: "anterior_al_corte" };
+    }
+  }
 
   // Validación ANTES de reservar número (un número reservado y no usado obliga a inutilizarlo).
   const prueba = documentoDesdePedido(ped, d.cfg, { numero: 1, fechaEmision: d.fechaSifen(d.ahora()), codigoSeguridad: "000000001" });
@@ -544,11 +597,24 @@ export async function procesarCola(d: DepsCola): Promise<ResumenCola & { accion?
       }
     }
   };
-  try {
-    const pedidos = await d.pedidosSinFactura(desdeFacturar(d.cfg, ahora), d.cfg.lote);
-    await paso(pedidos, res.nuevos, (p) => facturarPedido(p, d), (p) => `pedido ${p.shopify_order_id}`);
-  } catch (e) {
-    res.errores.push(`pedidos sin factura: ${msj(e)}`);
+  const desde = desdeFacturar(d.cfg, ahora);
+  if (!desde) {
+    // Corte obligatorio: sin facturar_desde no sale nada nuevo. Reintentos y devoluciones de lo ya emitido siguen.
+    res.sin_corte = true;
+    if (ahora.getUTCMinutes() < 10) await d.avisar(`<b>Cola SIFEN</b>: ${d.escapar(MOTIVO_SIN_CORTE)}.`).catch(() => {});
+  } else {
+    try {
+      const pedidos = await d.pedidosSinFactura(desde, d.cfg.lote);
+      await paso(pedidos, res.nuevos, (p) => facturarPedido(p, d), (p) => `pedido ${p.shopify_order_id}`);
+    } catch (e) {
+      res.errores.push(`pedidos sin factura: ${msj(e)}`);
+    }
+    try {
+      const liberados = await d.liberadosSinFactura(d.cfg.lote);
+      await paso(liberados, res.nuevos, (p) => facturarPedido(p, d), (p) => `pedido ${p.shopify_order_id}`);
+    } catch (e) {
+      res.errores.push(`liberados: ${msj(e)}`);
+    }
   }
   try {
     const vencidas = await d.facturasVencidas(ahora.toISOString(), d.cfg.lote);

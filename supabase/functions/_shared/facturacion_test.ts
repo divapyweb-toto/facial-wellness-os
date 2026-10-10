@@ -6,6 +6,7 @@ import {
   datosFiscalesDesdePedido,
   digitoVerificadorRuc,
   emitirFactura,
+  modoSimuladoFactura,
   normalizarRuc,
   type PedidoFactura,
 } from "./facturacion.ts";
@@ -21,7 +22,8 @@ const pedido: PedidoFactura = {
 const PDF = new TextEncoder().encode("%PDF-1.4 prueba");
 const guardarPdf = () => Promise.resolve({ url: "https://storage.test/f.pdf", path: "9001/001-001-0000005.pdf" });
 const json = (o: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(o), { status }));
-const envReal = { FACTURASEND_API_KEY: "k", FACTURASEND_TENANT: "t" };
+// Entorno EN MEMORIA de los tests (no toca ningún secreto real).
+const envReal = { FACTURASEND_API_KEY: "k", FACTURASEND_TENANT: "t", SIFEN_PRODUCCION_AUTORIZADA: "si" };
 
 Deno.test("RUC: dígito verificador y normalización", () => {
   assertEquals(digitoVerificadorRuc("80000001"), digitoVerificadorRuc("80000001"));
@@ -50,6 +52,19 @@ Deno.test("sin credenciales: simulador, sin fetch, CDC empieza con 99", async ()
   assert(r.cdc!.startsWith("99") && r.cdc!.length === 44);
   assertEquals(r.numero_completo, "001-001-0000005");
   assertEquals(llamadas, 0);
+  _configurarFactura();
+});
+
+Deno.test("blindaje: con claves de FacturaSend pero SIN producción autorizada → simulado, sin fetch", async () => {
+  for (const autorizada of [undefined, "no", "SI", "sí"]) {
+    let llamadas = 0;
+    const env: Record<string, string | undefined> = { FACTURASEND_API_KEY: "k", FACTURASEND_TENANT: "t", SIFEN_PRODUCCION_AUTORIZADA: autorizada };
+    _configurarFactura({ env: (n) => env[n], fetch: () => { llamadas++; return json({}); }, guardarPdf });
+    assertEquals(modoSimuladoFactura(), { simulado: true, motivo: "producción no autorizada" });
+    const r = await emitirFactura(pedido, {});
+    assert(r.ok && r.simulado && r.cdc!.startsWith("99"), `autorizada=${autorizada}`);
+    assertEquals(llamadas, 0);
+  }
   _configurarFactura();
 });
 

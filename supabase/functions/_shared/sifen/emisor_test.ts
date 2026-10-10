@@ -69,3 +69,25 @@ Deno.test("fábrica: 'facturasend' envuelve el adaptador; con cdcPrevio no reenv
   assertEquals(pedidoFacturaDesdeDoc(d.doc).pedido.total, 1000);
   assertEquals((await em.cancelar("x", "y")).ok, false);
 });
+
+Deno.test("crédito: el plazo de doc.condicion.plazoCredito llega a armarXmlDEConOpciones (E643)", async () => {
+  const { plazoCreditoDe } = await import("./emisor.ts");
+  const base = { tipo: 1 as const, establecimiento: "001", punto: "001", numero: 1, fechaEmision: "2026-10-08T10:00:00", tipoEmision: 1 as const, codigoSeguridad: "123456789", receptor: { tipo: "innominado" as const }, items: [], moneda: "PYG" as const };
+  assertEquals(plazoCreditoDe({ ...base, condicion: Object.assign({ tipo: 2 as const, pagos: [] }, { plazoCredito: "30 días" }) }), "30 días");
+  assertEquals(plazoCreditoDe({ ...base, condicion: { tipo: 1, pagos: [{ tipo: 1, monto: 1 }] } }), undefined);
+});
+
+Deno.test("crédito de punta a punta (xml.ts real): pedido con datos fiscales a 45 días → gCamCond iCondOpe 2 + dPlazoCre", async () => {
+  const { cargarModulosSifen, datosEmisorPrueba } = await import("./emisor.ts");
+  const est = credencialesDesdeEnv(envSim);
+  const m = await cargarModulosSifen(true, est.cred, { usarFirmaReal: false });
+  const ruc = "80022222";
+  const r = documentoDesdePedido({
+    shopify_order_id: 1, nombre: "#1", total: 112000, estado_envio: "ENTREGADO", tags: ["MAYORISTA"],
+    raw: { total_price: "112000", line_items: [{ title: "Producto inventado", quantity: 1, price: "79000" }], shipping_lines: [{ price: "33000" }] },
+    datos_fiscales: { ruc, dv: String(digitoVerificadorRuc(ruc)), razon_social: "Mayorista Inventado SRL", condicion: "credito", plazo_dias: 45 },
+  }, CONFIG_DESDE_PEDIDO_DEFECTO, BASE);
+  assert(r.ok);
+  const { xml } = m.armarXmlDE(r.doc, datosEmisorPrueba(), est.cred);
+  assert(xml.includes("<iCondOpe>2</iCondOpe>") && xml.includes("<dPlazoCre>45 días</dPlazoCre>"), xml.slice(xml.indexOf("<gCamCond>"), xml.indexOf("</gCamCond>") + 11));
+});

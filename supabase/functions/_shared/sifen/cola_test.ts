@@ -13,8 +13,10 @@ import {
   type DepsInutilizacion,
   type EventoSifen,
   facturarPedido,
+  desdeFacturar,
   type FilaFactura,
   procesarCola,
+  type Retencion,
   procesarInutilizacion,
   rangosAInutilizar,
 } from "./cola.ts";
@@ -45,6 +47,7 @@ function pedido(id: number, over: Partial<PedidoSifen> = {}, raw: Record<string,
     estado_envio: "ENTREGADO",
     tags: [],
     telefono: "595900000000",
+    entregado_en: "2026-10-08T12:00:00Z",
     raw: { total_price: "162000", line_items: [{ title: "Producto A", quantity: 1, price: "129000" }], shipping_lines: [{ price: "33000" }], ...raw },
     ...over,
   };
@@ -56,6 +59,7 @@ function entorno(op: { ws?: OpcionesWsSimulado; cfg?: Record<string, unknown>; a
   const pedidos = new Map<number, PedidoSifen>();
   const numeracion = new Map<string, number>();
   const eventos: EventoSifen[] = [];
+  const retenidas = new Map<number, Retencion & { nota: string }>();
   const avisos: string[] = [];
   const whatsapps: string[] = [];
   const kudes: string[] = [];
@@ -90,9 +94,19 @@ function entorno(op: { ws?: OpcionesWsSimulado; cfg?: Record<string, unknown>; a
     emisor,
     fechaSifen,
     codigoSeguridad: () => codigoSeguridadAleatorio(),
-    pedidosSinFactura: () =>
+    // Igual que sifen-cola/io.ts: ventana SOLO por entregado_en, sin FE y sin retención.
+    pedidosSinFactura: (desde) =>
       Promise.resolve([...pedidos.values()].filter((p) => ["ENTREGADO", "RENDIDO"].includes(p.estado_envio ?? "") &&
+        !!p.entregado_en && p.entregado_en >= desde && !retenidas.has(p.shopify_order_id) &&
         ![...filas.values()].some((f) => f.tipo_documento === 1 && f.shopify_order_id === p.shopify_order_id))),
+    liberadosSinFactura: () =>
+      Promise.resolve([...retenidas.entries()].filter(([id, r]) => r.liberado_en && pedidos.has(id) &&
+        ![...filas.values()].some((f) => f.tipo_documento === 1 && f.shopify_order_id === id)).map(([id]) => pedidos.get(id)!)),
+    retencion: (id) => Promise.resolve(retenidas.has(id) ? { ...retenidas.get(id)! } : null),
+    retener(id, motivo, nota) {
+      if (!retenidas.has(id)) retenidas.set(id, { motivo, nota, liberado_en: null });
+      return Promise.resolve();
+    },
     facturasVencidas: (ahoraIso) =>
       Promise.resolve([...filas.values()].filter((f) => f.proximo_intento && f.proximo_intento <= ahoraIso && ["pendiente", "enviada", "error", "aprobada"].includes(f.estado)).map((f) => ({ ...f }))),
     facturasDevueltas: () =>
@@ -143,7 +157,7 @@ function entorno(op: { ws?: OpcionesWsSimulado; cfg?: Record<string, unknown>; a
     escapar: (s) => String(s),
   };
   const agregar = (...ps: PedidoSifen[]) => ps.forEach((p) => pedidos.set(p.shopify_order_id, p));
-  return { d, ws, filas, pedidos, numeracion, eventos, avisos, whatsapps, kudes, reloj, agregar };
+  return { d, ws, filas, pedidos, numeracion, eventos, avisos, whatsapps, kudes, reloj, agregar, retenidas };
 }
 
 const fe = (e: ReturnType<typeof entorno>, id: number) => [...e.filas.values()].find((f) => f.tipo_documento === 1 && f.shopify_order_id === id)!;
@@ -394,4 +408,99 @@ Deno.test("cron de inutilización: manda solo meses cerrados, marca y avisa desd
   rechazar = true;
   await procesarInutilizacion(deps("2026-12-11T12:00:00Z"));
   assertEquals(avisos.length, 1);
+});
+
+// ─── Blindaje 10-10: corte facturar_desde, retenciones y medio de pago ───
+
+/** Guarda el iTiPago de cada DocumentoDE que llega al emisor. */
+function espiarPagos(e: ReturnType<typeof entorno>): Map<number, number | undefined> {
+  const pagos = new Map<number, number | undefined>();
+  const emitir = e.d.emisor.emitir.bind(e.d.emisor);
+  e.d.emisor = { ...e.d.emisor, emitir: (doc, op) => (pagos.set(doc.shopifyOrderId!, doc.condicion?.pagos[0]?.tipo), emitir(doc, op)) };
+  return pagos;
+}
+
+Deno.test("corte obligatorio: activo sin facturar_desde → no factura nada nuevo, avisa (1 por hora) y la llamada directa tampoco", async () => {
+  const e = entorno({ cfg: { facturar_desde: null } });
+  e.agregar(pedido(1));
+  const r = await procesarCola(e.d);
+  assertEquals([r.sin_corte, r.nuevos.length, e.filas.size], [true, 0, 0]);
+  assert(e.avisos.some((a) => a.includes("falta facturar_desde")));
+  e.reloj.t = new Date("2026-10-08T13:20:00Z"); // minuto 20: no repite el aviso
+  await procesarCola(e.d);
+  assertEquals(e.avisos.filter((a) => a.includes("falta facturar_desde")).length, 1);
+  assertEquals((await facturarPedido(1, e.d)).accion, "sin_corte");
+  assertEquals(e.filas.size, 0);
+});
+
+Deno.test("ventana = max(facturar_desde, ahora − dias_atras); facturar_desde inválido = sin corte", () => {
+  const ahora = new Date("2026-10-08T13:00:00Z");
+  assertEquals(desdeFacturar(configSifen({ activo: true, facturar_desde: "2026-01-01T00:00:00Z" }), ahora), "2026-10-06T13:00:00.000Z");
+  assertEquals(desdeFacturar(configSifen({ activo: true, facturar_desde: "2026-10-08T03:00:00Z" }), ahora), "2026-10-08T03:00:00.000Z");
+  assertEquals(desdeFacturar(configSifen({ activo: true, facturar_desde: null }), ahora), null);
+  assertEquals(desdeFacturar(configSifen({ activo: true, facturar_desde: "cualquier cosa" }), ahora), null);
+});
+
+Deno.test("entregado antes del corte (post-entrega / manual) → facturas_retenidas 'anterior_al_corte', nunca se factura hasta liberarlo", async () => {
+  const e = entorno({ cfg: { facturar_desde: "2026-10-08T03:00:00Z" } });
+  e.agregar(pedido(1, { entregado_en: "2026-10-07T15:00:00Z" }), pedido(2));
+  const r1 = await facturarPedido(1, e.d);
+  assertEquals([r1.accion, r1.detalle], ["retenido", "anterior_al_corte"]);
+  assertEquals(e.retenidas.get(1)?.motivo, "anterior_al_corte");
+  assertEquals(e.filas.size, 0);
+  // Segunda vez (otra corrida de post-entrega o un reintento manual): sigue retenido, sin duplicar.
+  assertEquals((await facturarPedido(1, e.d)).accion, "retenido");
+  assertEquals(e.retenidas.size, 1);
+  // La cola factura el 2 y NO el 1 (ni por la ventana ni por la lista de liberados).
+  const r = await procesarCola(e.d);
+  assertEquals(r.nuevos.map((x) => x.accion), ["aprobada"]);
+  assertEquals(fe(e, 2).estado, "aprobada");
+  assert(!fe(e, 1));
+  // Liberado con el criterio de la contadora (RPC sifen_liberar): lo toma la cola aunque esté fuera de la ventana.
+  e.retenidas.get(1)!.liberado_en = "2026-10-08T14:00:00Z";
+  const r2 = await procesarCola(e.d);
+  assertEquals(r2.nuevos.map((x) => x.accion), ["aprobada"]);
+  assertEquals(fe(e, 1).estado, "aprobada");
+});
+
+Deno.test("retención de otro motivo sin liberar: tampoco se factura aunque esté dentro de la ventana", async () => {
+  const e = entorno();
+  e.agregar(pedido(1));
+  e.retenidas.set(1, { motivo: "criterio_contadora", nota: "", liberado_en: null });
+  assertEquals((await facturarPedido(1, e.d)).accion, "retenido");
+  await procesarCola(e.d);
+  assertEquals(e.filas.size, 0);
+});
+
+Deno.test("post-entrega: fecha de entrega aún sin guardar viaja como entregadoEn; sin fecha no se factura ni se retiene", async () => {
+  const e = entorno({ cfg: { facturar_desde: "2026-10-08T03:00:00Z" } });
+  e.agregar(pedido(1, { entregado_en: null }), pedido(2, { entregado_en: null }), pedido(3, { entregado_en: null }));
+  assertEquals((await facturarPedido(1, e.d, { entregadoEn: "2026-10-08T12:00:00Z" })).accion, "aprobada");
+  assertEquals((await facturarPedido(2, e.d, { entregadoEn: "2026-10-07T12:00:00Z" })).accion, "retenido");
+  const r3 = await facturarPedido(3, e.d);
+  assertEquals(r3.accion, "no_facturable");
+  assert(!e.retenidas.has(3));
+  // Sin entregado_en tampoco entra por la ventana de la cola (se quitó "entregado_en is null y actualizado_en ≥ desde").
+  await procesarCola(e.d);
+  assert(!fe(e, 3));
+});
+
+Deno.test("cobro anticipado por transferencia (PAGO_VERIFICADO, Gs 112.000): iTiPago 5; entregado antes del corte → retenido", async () => {
+  const e = entorno({ cfg: { facturar_desde: "2026-10-08T03:00:00Z" } });
+  const pagos = espiarPagos(e);
+  const raw = { total_price: "112000", line_items: [{ title: "Producto inventado", quantity: 1, price: "79000" }], shipping_lines: [{ price: "33000" }] };
+  e.agregar(
+    pedido(10, { total: 112000, tags: ["PAGO_VERIFICADO"], entregado_en: "2026-10-07T18:00:00Z" }, raw),
+    pedido(11, { total: 112000, tags: ["PAGO_VERIFICADO"] }, raw),
+    pedido(12, { total: 112000 }, raw),
+  );
+  assertEquals((await facturarPedido(10, e.d)).detalle, "anterior_al_corte");
+  await procesarCola(e.d);
+  assertEquals([fe(e, 11).estado, fe(e, 11).total, pagos.get(11)], ["aprobada", 112000, 5]);
+  assertEquals(pagos.get(12), 1); // contra entrega: efectivo
+  assert(!fe(e, 10) && !pagos.has(10));
+  // Liberado: sale con transferencia.
+  e.retenidas.get(10)!.liberado_en = "2026-10-08T14:00:00Z";
+  await procesarCola(e.d);
+  assertEquals([fe(e, 10).estado, pagos.get(10)], ["aprobada", 5]);
 });

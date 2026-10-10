@@ -72,6 +72,8 @@ export function crearEmisorFacturaSend(
       // FacturaSend transmite a SIFEN por su cuenta: si ya se le mandó este documento, no se reenvía (duplicaría).
       if (op.cdcPrevio) return { ok: false, estado: "enviada", cdc: op.cdcPrevio, mensaje: "ya enviado a FacturaSend: revisar en su panel" };
       if (doc.tipo !== 1) return { ok: false, estado: "error", mensaje: `FacturaSend: tipo ${doc.tipo} no implementado en el adaptador` };
+      // El adaptador arma solo contado (total = suma de pagos): una venta a crédito no se manda (quedaría en 0).
+      if (doc.condicion?.tipo === 2) return { ok: false, estado: "error", mensaje: "FacturaSend: venta a crédito no implementada en el adaptador" };
       const { pedido, datos } = pedidoFacturaDesdeDoc(doc);
       const c: ConfigFactura = { ...cfg, establecimiento: Number(doc.establecimiento), punto: doc.punto };
       const r = await emitir(pedido, datos, c);

@@ -202,3 +202,69 @@ Deno.test("fecha en hora de Asunción y código de seguridad de 9 dígitos", () 
   assertEquals(codigoSeguridadAleatorio(() => seq[i++]), "000000001");
   assert(/^\d{9}$/.test(codigoSeguridadAleatorio()));
 });
+
+// ─── 10-10: medio de pago PAGO_VERIFICADO y pedido_datos_fiscales (P2) — datos INVENTADOS ───
+
+const rawMayorista = (extra: Record<string, unknown> = {}) => ({
+  total_price: "112000",
+  line_items: [{ title: "Producto inventado", quantity: 1, price: "79000" }],
+  shipping_lines: envio(),
+  ...extra,
+});
+
+Deno.test("PAGO_VERIFICADO (transferencia anticipada) → iTiPago 5; PAGADO_QR gana; sin etiqueta → 1 efectivo", () => {
+  const pago = (tags: string[]) => {
+    const r = documentoDesdePedido(pedido(rawMayorista(), { tags }), CFG, BASE);
+    assert(r.ok);
+    return r.doc.condicion;
+  };
+  assertEquals(pago(["PAGO_VERIFICADO"]), { tipo: 1, pagos: [{ tipo: 5, monto: 112000 }] });
+  assertEquals(pago(["PAGO_VERIFICADO", "PAGADO_QR"])?.pagos[0].tipo, CFG.pago_tipo_qr);
+  assertEquals(pago([])?.pagos[0].tipo, 1);
+});
+
+Deno.test("pedido_datos_fiscales manda sobre los atributos: receptor 'ruc' de la tabla aunque el pedido diga otro RUC", () => {
+  const r = documentoDesdePedido(pedido(
+    rawMayorista({ note_attributes: [{ name: "Ruc", value: rucValido("80011111") }, { name: "Razon social", value: "Atributo SA" }] }),
+    { datos_fiscales: { ruc: "80022222", dv: String(digitoVerificadorRuc("80022222")), razon_social: "Mayorista Inventado SRL", email: "compras@example.com", condicion: "contado", origen: "mayorista" } },
+  ), CFG, BASE);
+  assert(r.ok);
+  assertEquals([r.doc.receptor.tipo, r.doc.receptor.ruc, r.doc.receptor.razonSocial, r.doc.receptor.email], ["ruc", "80022222", "Mayorista Inventado SRL", "compras@example.com"]);
+  assertEquals(r.doc.condicion?.tipo, 1);
+  // RUC "base-DV" en la columna ruc y dv vacío también vale.
+  const r2 = documentoDesdePedido(pedido(rawMayorista(), { datos_fiscales: { ruc: rucValido("80033333"), dv: null, razon_social: "Otra Inventada SA" } }), CFG, BASE);
+  assert(r2.ok && r2.doc.receptor.ruc === "80033333");
+});
+
+Deno.test("pedido_datos_fiscales con RUC inválido / vacío / sin razón social → 'revisar' (nunca consumidor final silencioso)", () => {
+  const dvMalo = String((digitoVerificadorRuc("80022222") + 1) % 10);
+  for (const df of [
+    { ruc: "80022222", dv: dvMalo, razon_social: "Mayorista Inventado SRL" },
+    { ruc: null, dv: null, razon_social: "Mayorista Inventado SRL" },
+    { ruc: "80022222", dv: String(digitoVerificadorRuc("80022222")), razon_social: "  " },
+  ]) {
+    const r = documentoDesdePedido(pedido(rawMayorista(), { datos_fiscales: df }), CFG, BASE);
+    assert(!r.ok, JSON.stringify(df));
+    assert(/RUC inválido|razón social/.test(r.motivo), r.motivo);
+  }
+});
+
+Deno.test("crédito con plazo_dias (tabla o atributos del pedido mayorista) → iCondOpe 2, sin pagos, plazo 'N días'; sin plazo → revisar", () => {
+  const df = { ruc: "80022222", dv: String(digitoVerificadorRuc("80022222")), razon_social: "Mayorista Inventado SRL", condicion: "credito", plazo_dias: 30 };
+  const r = documentoDesdePedido(pedido(rawMayorista(), { datos_fiscales: df, tags: ["MAYORISTA"] }), CFG, BASE);
+  assert(r.ok);
+  assertEquals(r.doc.condicion as unknown, { tipo: 2, pagos: [], plazoCredito: "30 días" });
+  assertEquals(r.total, 112000);
+  // Sin fila: atributos "condicion"/"plazo_dias" del pedido creado en Shopify.
+  const attrs = [{ name: "Ruc", value: rucValido("80022222") }, { name: "Razon social", value: "Mayorista Inventado SRL" }, { name: "condicion", value: "credito" }, { name: "plazo_dias", value: "15" }];
+  const r2 = documentoDesdePedido(pedido(rawMayorista({ note_attributes: attrs })), CFG, BASE);
+  assert(r2.ok);
+  assertEquals(r2.doc.condicion as unknown, { tipo: 2, pagos: [], plazoCredito: "15 días" });
+  // Crédito sin plazo / plazo absurdo / condición rara / crédito a innominado → revisar.
+  for (const over of [{ plazo_dias: null }, { plazo_dias: 0 }, { plazo_dias: 9999 }, { condicion: "canje" }]) {
+    const x = documentoDesdePedido(pedido(rawMayorista(), { datos_fiscales: { ...df, ...over } }), CFG, BASE);
+    assert(!x.ok, JSON.stringify(over));
+  }
+  const innom = documentoDesdePedido(pedido(rawMayorista({ note_attributes: [{ name: "condicion", value: "credito" }, { name: "plazo_dias", value: "30" }] })), CFG, BASE);
+  assert(!innom.ok && innom.motivo.includes("crédito"));
+});

@@ -27,13 +27,17 @@ export interface ResultadoFacturarIo {
   error?: string;
 }
 
-/** Punto de enganche para post-entrega. No tira excepción: devuelve el resultado. */
-export async function facturarPedidoEntregado(orderId: number): Promise<ResultadoFacturarIo> {
+/**
+ * Punto de enganche para post-entrega. No tira excepción: devuelve el resultado.
+ * `entregadoEn`: fecha de entrega recién calculada por post-entrega (todavía sin guardar); la cola la usa para el corte
+ * facturar_desde. Pedido anterior al corte → accion 'retenido' (queda en facturas_retenidas, no se factura).
+ */
+export async function facturarPedidoEntregado(orderId: number, entregadoEn?: string | null): Promise<ResultadoFacturarIo> {
   try {
-    const r = await invocarCola({ shopify_order_id: orderId });
+    const r = await invocarCola({ shopify_order_id: orderId, ...(entregadoEn ? { entregado_en: entregadoEn } : {}) });
     const accion = String(r.accion ?? (r.ok === false ? "error" : "sin_detalle"));
     const detalle = (r.detalle ?? r.error) as string | undefined;
-    return { orderId, accion, ...(accion === "error" || accion === "revisar" ? { error: detalle ?? "sin detalle" } : {}) };
+    return { orderId, accion, ...(accion === "error" || accion === "revisar" || accion === "sin_corte" ? { error: detalle ?? "sin detalle" } : {}) };
   } catch (e) {
     return { orderId, accion: "error", error: e instanceof Error ? e.message : String(e) };
   }

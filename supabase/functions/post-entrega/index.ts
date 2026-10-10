@@ -103,7 +103,7 @@ function repoSupabase(pe: CfgPE): Repo {
       ),
     agregarTags: (orderId, tags) => agregarTags(orderGid(orderId), tags),
     avisar: (texto) => avisar(texto),
-    facturar: (orderId) => facturarPedidoEntregado(orderId),
+    facturar: (orderId, entregadoEn) => facturarPedidoEntregado(orderId, entregadoEn),
   }
 }
 
