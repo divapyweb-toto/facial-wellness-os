@@ -44,7 +44,7 @@ export default function CostoPorAnuncio({ inicio, fin }) {
         <div>
           <div style={{ fontWeight: 600, fontSize: 14 }}>Costo por anuncio (Meta)</div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-            Gasto real de cada anuncio ÷ los pedidos y entregados que trajo. El gasto de hoy entra mañana a las 10:00.
+            Gasto real de cada anuncio ÷ los pedidos válidos y entregados que trajo (los cancelados no cuentan; los que cayeron sin respuesta van aparte). El gasto de hoy entra mañana a las 10:00.
           </div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -65,6 +65,7 @@ export default function CostoPorAnuncio({ inicio, fin }) {
         {[
           ['Gasto en anuncios', gs(t.gasto)],
           ['Pedidos atribuidos', t.pedidos],
+          ['Cayeron sin respuesta', res.sinRespuestaDisponible ? t.sinRespuesta : '—'],
           ['Entregados', t.entregados],
           ['Costo por pedido', gs(t.costoPedido)],
           ['Costo por entregado', gs(t.costoEntregado)],
@@ -84,6 +85,7 @@ export default function CostoPorAnuncio({ inicio, fin }) {
               <th>Canal</th>
               <th style={{ textAlign: 'right' }}>Gasto</th>
               <th style={{ textAlign: 'right' }}>Pedidos</th>
+              <th style={{ textAlign: 'right' }} title="Cancelados solos por no confirmar. No cuentan en el costo por pedido.">Sin respuesta</th>
               <th style={{ textAlign: 'right' }}>Entregados</th>
               <th style={{ textAlign: 'right' }}>Costo / pedido</th>
               <th style={{ textAlign: 'right' }}>Costo / entregado</th>
@@ -99,6 +101,9 @@ export default function CostoPorAnuncio({ inicio, fin }) {
                 <td data-label="Canal"><span className={`badge ${f.canal === 'WhatsApp' ? 'badge-green' : 'badge-blue'}`}>{f.canal}</span></td>
                 <td data-label="Gasto" style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{gs(f.gasto)}</td>
                 <td data-label="Pedidos" style={{ textAlign: 'right' }}>{f.pedidos}</td>
+                <td data-label="Sin respuesta" style={{ textAlign: 'right', color: f.sinRespuesta ? 'var(--yellow)' : 'var(--text-muted)' }}>
+                  {res.sinRespuestaDisponible ? f.sinRespuesta : '—'}
+                </td>
                 <td data-label="Entregados" style={{ textAlign: 'right' }}>
                   {f.entregados}{f.tasaEntrega != null && f.pedidos > 0 && <span style={{ color: 'var(--text-muted)', fontSize: 11 }}> ({f.tasaEntrega}%)</span>}
                 </td>

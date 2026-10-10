@@ -6,7 +6,8 @@ import { RefreshCw, BarChart3 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import TarjetasKpi from './TarjetasKpi'
 import TablaSemanas from './TablaSemanas'
-import { lunesActual, rangoSemana } from './kpi'
+import { agregarSinRespuesta, lunesActual, rangoSemana } from './kpi'
+import { fetchAll } from '../../lib/fetchAll'
 import './kpi-whatsapp.css'
 
 const SEMANAS = 12
@@ -29,7 +30,18 @@ export default function KpiWhatsappPage() {
     if (e) {
       setError(e.message)
     } else {
-      const lista = data ?? []
+      const base = data ?? []
+      // "Cayó sin respuesta" no es confirmado: se cuenta aparte (la vista no lo separa).
+      const desde = base.length ? base[base.length - 1].semana : null
+      let cancelados = null
+      if (desde) {
+        try {
+          cancelados = await fetchAll(() => supabase.from('shopify_pedidos').select('shopify_order_id, creado_en')
+            .eq('estado_confirmacion', 'cancelado_sin_respuesta').eq('es_borrador', false)
+            .gte('creado_en', `${String(desde).slice(0, 10)}T00:00:00Z`), { columnaOrden: 'shopify_order_id' })
+        } catch { cancelados = null }
+      }
+      const lista = agregarSinRespuesta(base, cancelados)
       setFilas(lista)
       // Por defecto, la última semana cerrada (la que se revisa el lunes).
       setElegida((prev) => prev && lista.some((f) => f.semana === prev)
@@ -67,7 +79,7 @@ export default function KpiWhatsappPage() {
 
       {cargando && !filas.length ? (
         <div className="kpi-grid kpi-wa-grid">
-          {Array.from({ length: 9 }).map((_, i) => <div key={i} className="skeleton skeleton-kpi" style={{ height: 96 }} />)}
+          {Array.from({ length: 10 }).map((_, i) => <div key={i} className="skeleton skeleton-kpi" style={{ height: 96 }} />)}
         </div>
       ) : !filas.length && !error ? (
         <div className="empty-state">
@@ -97,6 +109,7 @@ export default function KpiWhatsappPage() {
             </span>
             <TarjetasKpi fila={fila} anterior={anterior} />
             <p className="kpi-wa-nota">
+              Confirmados % = confirmados ÷ todos los pedidos de la semana; los que cayeron sin respuesta cuentan como NO confirmados y se muestran aparte.
               Entregados % = entregados ÷ (entregados + no entregados) de los pedidos creados esa semana: sube a medida que el courier reporta.
               Costos en dólares, como los factura Meta y Anthropic. La IA cuenta desde que exista el vendedor (ola 2).
             </p>

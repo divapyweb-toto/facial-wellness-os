@@ -4,9 +4,10 @@ import { supabase, formatGs } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2, SlidersHorizontal } from 'lucide-react'
+import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2, SlidersHorizontal, MessageCircle } from 'lucide-react'
 import { getConfig, guardarConfigLote, cargarConfig, getEnvioCliente, getFlete, DEFAULTS, getEstadoConfig, validarReglas } from '../../lib/config'
 import { TARIFAS_LUCERO_INFO, VELOCIDADES_LUCERO, claveCiudadLucero } from '../../lib/transportadoras'
+import { CLAVE_CONFIRMACION, CONFIRMACION_DEFAULTS, leerConfirmacion, validarConfirmacion, armarConfirmacionGuardar, textoAyudaConfirmacion } from '../../lib/confirmacion'
 
 // ─── Modal producto ───────────────────────────────────────
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -573,6 +574,109 @@ Dominio: …`}
   )
 }
 
+// ─── Confirmación de pedidos (config_wa 'confirmacion') ───
+// Campo propio: el <Campo> de Reglas compara contra DEFAULTS de lib/config;
+// estos defaults viven en lib/confirmacion. Fuera del componente por lo mismo
+// que <Campo> (si no, se pierde el foco en cada tecla).
+function CampoConf({ clave, label, sufijo, ayuda, form, setNum }) {
+  const def = CONFIRMACION_DEFAULTS[clave]
+  return (
+    <div className="form-group">
+      <label className="form-label">{label}</label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <input className="form-input" inputMode="numeric" value={form[clave]}
+          onChange={e => setNum(clave, e.target.value)} style={{ maxWidth: 120 }} />
+        {sufijo && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{sufijo}</span>}
+        {String(form[clave]) !== String(def) && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setNum(clave, String(def))} title={`Volver a ${def}`}>
+            ↺ {def}
+          </button>
+        )}
+      </div>
+      {ayuda && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{ayuda}</span>}
+    </div>
+  )
+}
+
+function ConfirmacionPedidos() {
+  const { toast } = useToast()
+  const [form, setForm] = useState(() => leerConfirmacion(null))
+  const [cargado, setCargado] = useState(false)
+  const [errorLectura, setErrorLectura] = useState(null)
+  const [guardando, setGuardando] = useState(false)
+
+  // Leer lo guardado ANTES de habilitar Guardar: si no, se guardarían los de
+  // fábrica encima de lo que ya tenías.
+  useEffect(() => {
+    let vivo = true
+    supabase.from('config_wa').select('valor').eq('clave', CLAVE_CONFIRMACION).maybeSingle()
+      .then(({ data, error }) => {
+        if (!vivo) return
+        if (error) { setErrorLectura(error.message); return }
+        setForm(leerConfirmacion(data?.valor))
+        setCargado(true)
+      }, (e) => { if (vivo) setErrorLectura(e?.message || 'error') })
+    return () => { vivo = false }
+  }, [])
+
+  const setNum = (k, v) => setForm(f => ({ ...f, [k]: String(v).replace(/\D/g, '') }))
+
+  const guardar = async () => {
+    if (!cargado) return
+    const errores = validarConfirmacion(form)
+    if (errores.length) { toast('Revisá: ' + errores.join(' · '), 'error'); return }
+    setGuardando(true)
+    try {
+      // Se relee justo antes de guardar para no pisar claves que otro cambió
+      // (confirmar_min, etc.): merge sobre lo último que hay en la base.
+      const { data, error: eLeer } = await supabase.from('config_wa').select('valor').eq('clave', CLAVE_CONFIRMACION).maybeSingle()
+      if (eLeer) throw eLeer
+      const valor = armarConfirmacionGuardar(data?.valor, form)
+      const { error } = await supabase.from('config_wa').upsert({ clave: CLAVE_CONFIRMACION, valor }, { onConflict: 'clave' })
+      if (error) throw error
+      setForm(leerConfirmacion(valor))
+      toast('Tiempos guardados — rigen para los pedidos nuevos', 'success')
+    } catch (e) {
+      toast('Error al guardar: ' + (e?.message || 'error'), 'error')
+    } finally { setGuardando(false) }
+  }
+
+  const pc = { form, setNum }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 640 }}>
+      {errorLectura && (
+        <div className="alert alert-warning">
+          ⚠ No se pudieron leer los tiempos guardados ({errorLectura}). Guardar queda bloqueado para no pisarlos.
+        </div>
+      )}
+      <div className="card" style={{ padding: '16px 20px' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>✅ Confirmación de pedidos</h3>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          {textoAyudaConfirmacion(form)}
+        </p>
+        <CampoConf {...pc} clave="recordatorio_min" label="Recordatorio al cliente" sufijo="minutos después del pedido"
+          ayuda="Si no respondió la confirmación, a este tiempo le llega un recordatorio por WhatsApp. Mínimo 5." />
+        <CampoConf {...pc} clave="aviso_enrique_h" label="Aviso a Enrique por Telegram" sufijo="horas"
+          ayuda="Para que lo llames. Mínimo 1 hora." />
+        <CampoConf {...pc} clave="ultimo_aviso_h" label="Último aviso al cliente" sufijo="horas"
+          ayuda="No puede ser antes del aviso a Enrique." />
+        <CampoConf {...pc} clave="cancelar_h" label="Cancelación automática" sufijo="horas"
+          ayuda="Mínimo 24 h y al menos 1 h después del último aviso. Cae como «sin respuesta», no como confirmado." />
+        <div className="alert alert-info" style={{ marginTop: 12, fontSize: 12 }}>
+          El cambio aplica a los pedidos NUEVOS. Los que ya entraron siguen con los tiempos que tenían cuando llegaron.
+        </div>
+      </div>
+      <div style={{ position: 'sticky', bottom: 0, display: 'flex', justifyContent: 'flex-end', padding: '12px 0' }}>
+        <button className="btn btn-primary" onClick={guardar} disabled={guardando || !cargado}
+          title={cargado ? undefined : 'Esperá a que se lean los tiempos guardados'}>
+          <Save size={14} /> {guardando ? 'Guardando…' : 'Guardar tiempos'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function ConfigPage() {
   const { isAdmin } = useAuth()
   const navigate = useNavigate()
@@ -627,6 +731,7 @@ export default function ConfigPage() {
     { key: 'pago', icon: CreditCard, label: 'Métodos de pago' },
     { key: 'envio', icon: Truck, label: 'Métodos de envío' },
     { key: 'reglas', icon: SlidersHorizontal, label: 'Reglas del negocio' },
+    { key: 'confirmacion', icon: MessageCircle, label: 'Confirmación de pedidos' },
     { key: 'usuarios', icon: Users, label: 'Usuarios' },
   ]
 
@@ -830,6 +935,9 @@ export default function ConfigPage() {
 
       {/* REGLAS DEL NEGOCIO */}
       {activeTab === 'reglas' && <ReglasNegocio />}
+
+      {/* CONFIRMACIÓN DE PEDIDOS */}
+      {activeTab === 'confirmacion' && <ConfirmacionPedidos />}
 
       {/* Modals */}
       {modal?.tipo === 'producto' && (

@@ -415,7 +415,7 @@ Deno.test("marcado PREPARADO en Shopify (confirmado) → un aviso 'ya salió' co
   const aviso = f.envios.get("courier:5550001:DESPACHADO")!;
   assertEquals(aviso.plantilla, "voltra_pedido_despachado");
   assertEquals(aviso.estado, "pendiente");
-  assertEquals(aviso.variables, { nombre: "Ana", productos: "1 Tiras nasales", courier: "Lucero del Este", plazo: "hoy mismo o en 24 h", total: formatoGs(129000) });
+  assertEquals(aviso.variables, { nombre: "Ana", productos: "1 Tiras nasales", courier: "Lucero del Este", plazo: "el día o al siguiente", total: formatoGs(129000) });
   assertEquals([...f.envios.keys()].filter((k) => k.endsWith(":DESPACHADO")).length, 1);
 });
 
@@ -474,4 +474,35 @@ Deno.test("09-10: pedido ya ENTREGADO/NO_ENTREGADO por el courier → no se prog
     await procesarPedido(normalizarDesdeWebhook("orders/updated", p), f.deps);
     assertEquals([...f.envios.keys()].filter((k) => k.startsWith("courier:")).length, 0, estado_envio);
   }
+});
+
+Deno.test("retiro en persona (RETIRO_EN_CASA): al marcarlo preparado no salen avisos de envío", async () => {
+  const f = dbFalsa();
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest({ tags: "CONFIRMADO, RETIRO_EN_CASA", fulfillment_status: "fulfilled" })), f.deps);
+  assertEquals([...f.envios.keys()].filter((k) => k.startsWith("courier:")).length, 0);
+});
+
+Deno.test("marcado preparado sin poder despacharse (faltan datos / sin confirmar / comprobante sin verificar) → se revierte, sin avisos, aviso a Enrique", async () => {
+  const casos = [
+    [{ tags: "CONFIRMADO, FALTAN_DATOS", fulfillment_status: "fulfilled" }, /faltan datos/],
+    [{ tags: "releasit", fulfillment_status: "fulfilled" }, /no confirmó/],
+    [{ tags: "CONFIRMADO, PAGO_ANTICIPADO_COMPROBANTE", fulfillment_status: "fulfilled", financial_status: "pending" }, /comprobante/],
+  ] as const;
+  for (const [extra, re] of casos) {
+    const f = dbFalsa();
+    const revertidos: number[] = [], avisos: string[] = [];
+    f.deps.revertirPreparado = (id) => (revertidos.push(id), Promise.resolve({ ok: true }));
+    f.deps.avisar = (t) => (avisos.push(t), Promise.resolve());
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest(extra)), f.deps);
+    assertEquals(revertidos, [5550001], JSON.stringify(extra));
+    assert(re.test(avisos[0] ?? ""), avisos[0]);
+    assertEquals([...f.envios.keys()].filter((k) => k.startsWith("courier:")).length, 0);
+  }
+  // Confirmado, con datos y comprobante verificado (pagado): se despacha normal.
+  const f = dbFalsa();
+  const revertidos: number[] = [];
+  f.deps.revertirPreparado = (id) => (revertidos.push(id), Promise.resolve({ ok: true }));
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest({ tags: "CONFIRMADO, PAGO_ANTICIPADO_COMPROBANTE, PAGO_VERIFICADO", fulfillment_status: "fulfilled" })), f.deps);
+  assertEquals(revertidos, []);
+  assert(f.envios.has("courier:5550001:DESPACHADO"));
 });

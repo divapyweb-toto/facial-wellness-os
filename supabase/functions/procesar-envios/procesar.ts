@@ -2,8 +2,10 @@
 // Todo el I/O entra por `Deps`, así los tests no tocan Supabase, Meta, Shopify ni Telegram.
 //
 // Qué hace con cada fila vencida de envios_programados:
-//   - 'ret' (48 h) / 'canc' (72 h): no manda WhatsApp. Retiene o cancela el pedido solo si
-//     sigue sin respuesta, y avisa por Telegram.
+//   - 'ret' / 'canc': no manda WhatsApp. Retiene o cancela el pedido solo si sigue sin respuesta, y avisa
+//     por Telegram. 10-10: 'canc' nunca antes de 24 h desde el pedido y de noche se corre a las 8:00; al
+//     cancelar OK programa 'cmsg:<id>' (voltra_pedido_cancelado_sin_respuesta). 'avi' = Telegram a Enrique
+//     si sigue pendiente. 'ret' queda solo para pedidos con la config vieja.
 //   - Mensajes: marketing solo con consentimiento 'si' vigente y en horario (si no, reprograma
 //     a la próxima apertura o cancela). Utilidad sale las 24 h. Si la ventana de 24 h está
 //     abierta y config_wa.usar_texto_libre_en_ventana = true, va como texto libre (o botones).
@@ -49,6 +51,8 @@ export interface Pedido {
   raw: unknown;
   /** shopify_pedidos.estado_envio (lo escribe importar-courier). */
   estado_envio?: string | null;
+  /** shopify_pedidos.creado_en (10-10: la cancelación nunca antes de 24 h). Manda raw.created_at si está. */
+  creado_en?: string | null;
 }
 
 export interface Contexto {
@@ -137,6 +141,13 @@ export const PLANTILLAS: Record<string, DefPlantilla> = {
   voltra_recordatorio_confirmacion: { vars: ["nombre", "productos"], botones: CONF, soloPendiente: true },
   voltra_pedido_despachado: { vars: ["nombre", "productos", "courier", "plazo", "total"], botones: AYUDA },
   voltra_entrega_hoy: { vars: ["nombre", "total"], botones: AYUDA },
+  // 10-10: secuencia de confirmación (contrato con FUNCIONES): último aviso a las 24 h y aviso al cancelar a las 48 h.
+  voltra_ultimo_aviso_confirmacion: {
+    vars: ["nombre", "productos", "total"],
+    botones: [{ prefijo: "conf_si", titulo: "Confirmar pedido" }, { prefijo: "conf_cancelar", titulo: "Cancelar pedido" }],
+    soloPendiente: true,
+  },
+  voltra_pedido_cancelado_sin_respuesta: { vars: ["nombre", "productos"], botones: [{ prefijo: "reactivar", titulo: "Lo quiero igual" }] },
   // 09-10: recordatorio de entrega del interior y pedido de dirección escrita (pedidos con solo el pin).
   voltra_entrega_proxima: { vars: ["nombre", "total"], botones: AYUDA },
   voltra_completar_direccion: { vars: ["nombre", "pedido"], botones: [] },
@@ -196,16 +207,84 @@ export function nombrePlantilla(p: string): string {
   return n.startsWith("voltra_") ? n : `voltra_${n}`;
 }
 
-export type Tipo = "ret" | "canc" | "mensaje";
+export type Tipo = "ret" | "canc" | "avi" | "mensaje";
 
-/** 'ret' / 'canc': shopify-webhook los programa con plantilla 'accion:retener' / 'accion:cancelar'
- *  y clave_unica "ret:<id>" / "canc:<id>". Se reconoce cualquiera de las dos marcas. */
+/** 'ret' / 'canc' / 'avi': shopify-webhook los programa con plantilla 'accion:retener' / 'accion:cancelar' /
+ *  'accion:aviso_enrique' y clave_unica "ret:<id>" / "canc:<id>" / "avi:<id>". Se reconoce cualquiera de las dos marcas. */
 export function tipoEnvio(e: Pick<Envio, "plantilla" | "clave_unica">): Tipo {
   const pref = (e.clave_unica ?? "").split(":")[0];
   const p = (e.plantilla ?? "").replace(/^voltra_/, "");
   if (pref === "ret" || p === "accion:retener" || p === "ret") return "ret";
   if (pref === "canc" || p === "accion:cancelar" || p === "canc") return "canc";
+  if (pref === "avi" || p === "accion:aviso_enrique") return "avi";
   return "mensaje";
+}
+
+// ─── 10-10: confirmación rápida (conf → rec → avi → ult → canc → cmsg) ───
+
+/** Último aviso al cliente: igual que los avisos de envío, no sale de noche (horario_avisos_envio → 8:00). */
+export const PLANTILLA_ULTIMO_AVISO = "voltra_ultimo_aviso_confirmacion";
+/** "Dimos de baja tu pedido" (botón reactivar): solo si el pedido quedó cancelado_sin_respuesta. */
+export const PLANTILLA_CANCELADO_SIN_RESPUESTA = "voltra_pedido_cancelado_sin_respuesta";
+/** La cancelación automática nunca sale antes de 24 h desde el pedido. */
+export const CANCELAR_MIN_MS = 24 * 3_600_000;
+const SIGUE_PENDIENTE = ["pendiente", "retenido"];
+
+/** Momento del pedido: created_at de Shopify (REST o GraphQL) o, si no está, shopify_pedidos.creado_en. */
+export function fechaPedido(p: Pedido | null): Date | null {
+  if (!p) return null;
+  const raw = obj(p.raw);
+  for (const v of [raw.created_at, raw.createdAt, p.creado_en]) {
+    if (typeof v === "string" && v) {
+      const d = new Date(v);
+      if (Number.isFinite(d.getTime())) return d;
+    }
+  }
+  return null;
+}
+
+/** "10/10 07:21" en hora de Paraguay. */
+export function horaParaguay(d: Date): string {
+  const f = new Intl.DateTimeFormat("es-PY", {
+    timeZone: "America/Asuncion",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const p = Object.fromEntries(f.formatToParts(d).map((x) => [x.type, x.value]));
+  const dd = (x: string) => x.padStart(2, "0");
+  return `${dd(p.day)}/${dd(p.month)} ${dd(p.hour)}:${dd(p.minute)}`;
+}
+
+/** Texto y botones del aviso a Enrique (pedido sin confirmar). `escapar` = escaparHtml. */
+export function armarAvisoEnrique(
+  e: Envio,
+  ctx: Contexto,
+  ahora: Date,
+  escapar: (s: unknown) => string,
+): { texto: string; botones: BotonTg[][] } {
+  const id = e.shopify_order_id as number;
+  const v = obj(e.variables);
+  const extra = datosDesdePedido(ctx.pedido);
+  const productos = str(v.productos) ?? (extra.productos as string | undefined) ?? "?";
+  const totalNum = typeof v.total === "number" ? v.total : ctx.pedido?.total ?? null;
+  const total = str(v.total_texto) ?? (totalNum != null ? formatearGs(totalNum) : "?");
+  const creado = fechaPedido(ctx.pedido);
+  const horas = creado ? Math.max(0, Math.round((ahora.getTime() - creado.getTime()) / 3_600_000)) : null;
+  const tel = (ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? str(v.telefono) ?? "").replace(/\D/g, "");
+  const link = tel ? `https://wa.me/${tel}` : null;
+  const lineas = [
+    `⏰ <b>Pedido ${escapar(ctx.pedido?.nombre ?? `#${id}`)} sin confirmar${horas != null ? ` (${horas} h)` : ""}</b>`,
+    `Productos: ${escapar(productos)}`,
+    `Total: Gs ${escapar(total)}`,
+    `Hecho: ${creado ? horaParaguay(creado) : "?"} (hora de Paraguay)`,
+    link ? `Cliente: <a href="${link}">${link}</a>` : "Cliente: sin teléfono",
+  ];
+  const botones: BotonTg[][] = [[{ texto: "Le escribo yo", callback: `escribo:${id}` }, { texto: "Cancelar ya", callback: `cancelar:${id}` }]];
+  if (link) botones.push([{ texto: "Abrir WhatsApp", url: link }]);
+  return { texto: lineas.join("\n"), botones };
 }
 
 // ─── Variables ───
@@ -324,7 +403,8 @@ export type Decision =
   | { accion: "cancelar"; motivo: string }
   | { accion: "fallar"; motivo: string }
   | { accion: "retener" }
-  | { accion: "cancelar_pedido" };
+  | { accion: "cancelar_pedido" }
+  | { accion: "aviso_enrique" };
 
 const CANCELADOS = ["cancelado_cliente", "cancelado_sin_respuesta"];
 
@@ -350,8 +430,22 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
   if (tipo === "canc") {
     if (!ctx.pedido) return { accion: "cancelar", motivo: "pedido_no_encontrado" };
     // 'retenido' también es "sigue sin respuesta": lo puso la retención de las 48 h.
-    return estadoPedido === "pendiente" || estadoPedido === "retenido"
-      ? { accion: "cancelar_pedido" }
+    if (!SIGUE_PENDIENTE.includes(estadoPedido ?? "")) return { accion: "cancelar", motivo: `pedido_${estadoPedido}` };
+    // 10-10: nunca antes de 24 h desde el pedido, y de noche se corre a las 8:00 (horario_avisos_envio).
+    const creado = fechaPedido(ctx.pedido);
+    if (creado && ahora.getTime() < creado.getTime() + CANCELAR_MIN_MS) {
+      return { accion: "reprogramar", enviar_desde: new Date(creado.getTime() + CANCELAR_MIN_MS), motivo: "cancelacion_antes_de_24h" };
+    }
+    if (!horario.dentro(ahora, cfg.horarioAvisosEnvio)) {
+      return { accion: "reprogramar", enviar_desde: horario.proxima(ahora, cfg.horarioAvisosEnvio), motivo: "fuera_de_horario_avisos_envio" };
+    }
+    return { accion: "cancelar_pedido" };
+  }
+  if (tipo === "avi") {
+    // 10-10: no manda WhatsApp; Telegram a Enrique solo si el pedido sigue sin confirmar.
+    if (!ctx.pedido) return { accion: "cancelar", motivo: "pedido_no_encontrado" };
+    return SIGUE_PENDIENTE.includes(estadoPedido ?? "")
+      ? { accion: "aviso_enrique" }
       : { accion: "cancelar", motivo: `pedido_${estadoPedido}` };
   }
 
@@ -359,7 +453,12 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
   const def = PLANTILLAS[nombre];
   if (!def) return { accion: "fallar", motivo: `plantilla_desconocida:${nombre}` };
 
-  if (e.shopify_order_id != null && estadoPedido) {
+  // 10-10: "dimos de baja tu pedido" solo si lo canceló la acción canc (cancelado_sin_respuesta).
+  if (nombre === PLANTILLA_CANCELADO_SIN_RESPUESTA && estadoPedido !== "cancelado_sin_respuesta") {
+    return { accion: "cancelar", motivo: `pedido_${estadoPedido ?? "no_encontrado"}` };
+  }
+
+  if (e.shopify_order_id != null && estadoPedido && nombre !== PLANTILLA_CANCELADO_SIN_RESPUESTA) {
     if (CANCELADOS.includes(estadoPedido)) return { accion: "cancelar", motivo: `pedido_${estadoPedido}` };
     if (def.soloPendiente && estadoPedido !== "pendiente" && estadoPedido !== "retenido") {
       return { accion: "cancelar", motivo: `pedido_${estadoPedido}` };
@@ -382,7 +481,8 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
     }
   }
 
-  if (AVISOS_ENVIO_CON_HORARIO.has(nombre) && !horario.dentro(ahora, cfg.horarioAvisosEnvio)) {
+  // 10-10: el último aviso de confirmación tampoco sale de noche (se corre a las 8:00, como los avisos de envío).
+  if ((AVISOS_ENVIO_CON_HORARIO.has(nombre) || nombre === PLANTILLA_ULTIMO_AVISO) && !horario.dentro(ahora, cfg.horarioAvisosEnvio)) {
     return {
       accion: "reprogramar",
       enviar_desde: horario.proxima(ahora, cfg.horarioAvisosEnvio),
@@ -502,7 +602,19 @@ export interface Deps {
   ): Promise<{ plantilla: string; idioma: string; componentes: unknown[] } | null>;
   /** Pausa entre reintentos del update tras un envío OK (los tests la pasan instantánea). */
   esperar?(ms: number): Promise<void>;
+  /** 10-10: insert en envios_programados (on conflict clave_unica do nothing). Lo usa la cancelación para el cmsg. */
+  programarEnvio?(fila: FilaNueva): Promise<void>;
 }
+
+export type FilaNueva = {
+  cliente_id: string;
+  shopify_order_id: number;
+  plantilla: string;
+  variables: unknown;
+  categoria: Categoria;
+  enviar_desde: string;
+  clave_unica: string;
+};
 
 export type Opciones = { clienteId?: string | null; conversacionId?: string | null };
 
@@ -587,8 +699,35 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
           }]],
         );
       } else {
-        await d.avisar(`Pedido ${pedidoTxt} cancelado: 72 h sin confirmar.`);
+        await d.avisar(`Pedido ${pedidoTxt} cancelado: 48 h sin confirmar.`);
+        // 10-10: recién ahora (cancelación OK) se programa el "dimos de baja tu pedido" con el botón reactivar.
+        // Si falla, la cancelación ya quedó: solo se avisa.
+        if (d.programarEnvio && e.cliente_id) {
+          try {
+            await d.programarEnvio({
+              cliente_id: e.cliente_id,
+              shopify_order_id: id,
+              plantilla: PLANTILLA_CANCELADO_SIN_RESPUESTA,
+              variables: e.variables,
+              categoria: "utilidad",
+              enviar_desde: ahora.toISOString(),
+              clave_unica: `cmsg:${id}`,
+            });
+          } catch (err) {
+            await d.avisar(
+              `No se programó el aviso de baja al cliente del pedido ${pedidoTxt}: ${d.escapar(err instanceof Error ? err.message : err)}`,
+            ).catch(() => {});
+          }
+        }
       }
+      return;
+    }
+    case "aviso_enrique": {
+      const a = armarAvisoEnrique(e, ctx, ahora, d.escapar);
+      const t = await d.avisar(a.texto, a.botones) as { ok?: boolean; error?: string } | undefined;
+      if (t?.ok === false) return aplicarError(e, `telegram: ${t.error ?? "error"}`, d, r, pedidoTxt);
+      r.acciones++;
+      await d.actualizarEnvio(e.id, { estado: "enviado", intentos: (e.intentos ?? 0) + 1, ultimo_error: null });
       return;
     }
     default: {

@@ -44,12 +44,30 @@ export function lunesActual(ahora = new Date()) {
   return f.toISOString().slice(0, 10)
 }
 
+/**
+ * Pedidos que "cayeron sin respuesta" (estado_confirmacion 'cancelado_sin_respuesta') por semana.
+ * La vista kpi_whatsapp_semanal no los separa: los cuenta en `pedidos` y como NO confirmados.
+ * Se agregan a cada fila como `sin_respuesta` (null si no se pudieron leer → se ve '—').
+ */
+export function agregarSinRespuesta(filas, cancelados) {
+  if (!Array.isArray(cancelados)) return filas.map((f) => ({ ...f, sin_respuesta: null }))
+  const porSemana = new Map()
+  for (const c of cancelados) {
+    if (!c?.creado_en) continue
+    const s = lunesActual(new Date(c.creado_en))
+    porSemana.set(s, (porSemana.get(s) ?? 0) + 1)
+  }
+  return filas.map((f) => ({ ...f, sin_respuesta: porSemana.get(String(f.semana).slice(0, 10)) ?? 0 }))
+}
+
 // sentido: 'sube' = mejor si sube; 'baja' = mejor si baja; null = neutro.
 export const KPIS = [
   { clave: 'pedidos', etiqueta: 'Pedidos', fmt: fmtNum, sentido: 'sube',
     sub: (f) => `${fmtNum(f.pedidos_whatsapp)} por WhatsApp` },
   { clave: 'pct_confirmados', etiqueta: 'Confirmados', fmt: fmtPct, sentido: 'sube',
     sub: (f) => `${fmtNum(f.confirmados)} de ${fmtNum(f.pedidos)}` },
+  { clave: 'sin_respuesta', etiqueta: 'Cayeron sin respuesta', fmt: fmtNum, sentido: 'baja',
+    sub: () => 'cancelados solos: no son confirmados ni ventas' },
   { clave: 'pct_entregados', etiqueta: 'Entregados', fmt: fmtPct, sentido: 'sube',
     sub: (f) => `${fmtNum(f.entregados)} entregados · ${fmtNum(f.no_entregados)} no` },
   { clave: 'minutos_mediana_confirmar', etiqueta: 'Tiempo a confirmar', fmt: fmtMin, sentido: 'baja',

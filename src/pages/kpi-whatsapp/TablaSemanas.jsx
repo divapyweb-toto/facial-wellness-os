@@ -4,6 +4,7 @@ import { fmtMin, fmtNum, fmtPct, fmtUsd, rangoSemana } from './kpi'
 const COLS = [
   { k: 'pedidos', t: 'Pedidos', f: fmtNum },
   { k: 'pct_confirmados', t: 'Confirm.', f: fmtPct },
+  { k: 'sin_respuesta', t: 'Sin resp.', f: fmtNum },
   { k: 'pct_entregados', t: 'Entrega', f: fmtPct },
   { k: 'pct_entrega_confirmados', t: 'Entrega conf.', f: fmtPct },
   { k: 'pct_entrega_no_confirmados', t: 'Entrega no conf.', f: fmtPct },

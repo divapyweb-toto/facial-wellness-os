@@ -2,7 +2,7 @@
 // Todo el I/O (base de datos, reloj, normalizador de teléfono) entra por `Deps`,
 // así los tests no tocan Supabase ni Shopify.
 
-import { inicioDespacho, plazoPorCiudad } from "../_shared/plazo_zona.ts";
+import { inicioDespacho, plazoParaEnDesdeHoy, plazoPorCiudad } from "../_shared/plazo_zona.ts";
 import { verificarHmacShopify } from "../_shared/shopify.ts";
 import { envioTerminal } from "../procesar-envios/procesar.ts";
 
@@ -26,7 +26,13 @@ export const PLANTILLAS = {
   rec: "voltra_recordatorio_confirmacion", // supabase/plantillas/voltra_recordatorio_confirmacion.json (F)
   ret: "accion:retener", // no es plantilla: tag RETENIDO_SIN_RESPUESTA + estado 'retenido'
   canc: "accion:cancelar", // no es plantilla: orderCancel + estado 'cancelado_sin_respuesta'
+  // 10-10 (confirmación rápida): aviso a Enrique por Telegram (no es WhatsApp) y último aviso al cliente.
+  avi: "accion:aviso_enrique",
+  ult: "voltra_ultimo_aviso_confirmacion",
 } as const;
+
+/** 10-10: la cancelación automática nunca sale antes de 24 h desde el pedido. */
+export const CANCELAR_MIN_H = 24;
 
 /** Tags de Shopify que fijan estado_confirmacion (si alguien los pone a mano o desde otro módulo). */
 const TAG_A_ESTADO: Array<[string, string]> = [
@@ -38,10 +44,35 @@ const TAG_A_ESTADO: Array<[string, string]> = [
 
 export type ConfigConfirmacion = {
   confirmar_min?: number; // demora de la confirmación; si no está en config_wa sale al instante (07-10: Enrique la quiere lo más rápido posible)
-  recordatorio_h: number;
-  retener_h: number;
+  // 10-10 (contrato con la pantalla de Config): recordatorio_min, aviso_enrique_h, ultimo_aviso_h, cancelar_h.
+  recordatorio_min?: number;
+  aviso_enrique_h?: number;
+  ultimo_aviso_h?: number;
   cancelar_h: number;
+  // Claves viejas (antes del 10-10): se aceptan si falta recordatorio_min. retener_h solo vale con la config vieja.
+  recordatorio_h?: number;
+  retener_h?: number;
 };
+
+/** true si la config es la del contrato del 10-10 (sin retención a las 48 h). */
+export function esConfigNueva(cfg: ConfigConfirmacion): boolean {
+  return typeof cfg.recordatorio_min === "number" || typeof cfg.aviso_enrique_h === "number" ||
+    typeof cfg.ultimo_aviso_h === "number";
+}
+
+/** config_wa.confirmacion usable: cancelar_h y un recordatorio (recordatorio_min o, viejo, recordatorio_h). */
+export function configConfirmacionValida(v: unknown): v is ConfigConfirmacion {
+  if (!v || typeof v !== "object") return false;
+  const c = v as ConfigConfirmacion;
+  return typeof c.cancelar_h === "number" && minutosRecordatorio(c) !== null;
+}
+
+/** Minutos hasta el recordatorio: recordatorio_min, o recordatorio_h × 60 (config vieja). null = no se programa. */
+export function minutosRecordatorio(cfg: ConfigConfirmacion): number | null {
+  if (typeof cfg.recordatorio_min === "number") return cfg.recordatorio_min;
+  if (typeof cfg.recordatorio_h === "number") return cfg.recordatorio_h * 60;
+  return null;
+}
 
 /** Forma común de un pedido, venga del webhook (REST) o de la conciliación (GraphQL). */
 export type PedidoNormalizado = {
@@ -106,6 +137,10 @@ export interface Deps {
    * lo pasa shopify-webhook (la conciliación horaria no lo manda).
    */
   notificarPedidoMeta?(p: { shopifyOrderId: number; clienteId: string; total: number | null; creadoEn: string | null }): Promise<unknown>;
+  /** Deshace el "preparado" (cancela los fulfillments) de un pedido que no se podía despachar. Opcional (09-10). */
+  revertirPreparado?(orderId: number): Promise<{ ok: boolean; error?: string }>;
+  /** Aviso a Enrique por Telegram (HTML). Opcional (09-10). */
+  avisar?(textoHtml: string): Promise<unknown>;
   /** Transportadora que se le asignó en Despacho (ventas.transportadora: 'lucero' | 'pap' | …), o null. Opcional (08-10). */
   courierDePedido?(nombrePedido: string | null): Promise<string | null>;
 }
@@ -289,12 +324,28 @@ export function armarEnvios(
     enviar_desde: new Date(base + ms).toISOString(),
     clave_unica: `${tipo}:${ped.shopifyOrderId}`,
   });
-  return [
-    fila("conf", (cfg.confirmar_min ?? 0) * min),
-    fila("rec", cfg.recordatorio_h * h),
-    fila("ret", cfg.retener_h * h),
-    fila("canc", cfg.cancelar_h * h),
-  ];
+  // 10-10: conf → rec (+recordatorio_min) → avi (Telegram a Enrique) → ult (último aviso) → canc (≥ 24 h).
+  // La noche (ult y canc a las 8:00) y el "solo si sigue pendiente" los resuelve procesar-envios al ejecutar.
+  const filas = [fila("conf", (cfg.confirmar_min ?? 0) * min)];
+  const recMin = minutosRecordatorio(cfg);
+  if (recMin !== null) filas.push(fila("rec", recMin * min));
+  if (typeof cfg.aviso_enrique_h === "number") filas.push(fila("avi", cfg.aviso_enrique_h * h));
+  if (typeof cfg.ultimo_aviso_h === "number") filas.push(fila("ult", cfg.ultimo_aviso_h * h));
+  // Retención: solo con la config vieja (el contrato del 10-10 la saca).
+  if (!esConfigNueva(cfg) && typeof cfg.retener_h === "number") filas.push(fila("ret", cfg.retener_h * h));
+  filas.push(fila("canc", Math.max(cfg.cancelar_h, CANCELAR_MIN_H) * h));
+  return filas;
+}
+
+/** Por qué un pedido marcado preparado no se podía despachar (null = se podía). 09-10. */
+export function motivoParaNoDespachar(ped: PedidoNormalizado, estadoConfirmacion: string | undefined): string | null {
+  const t = ped.tags.map((x) => x.toUpperCase());
+  if (t.includes("FALTAN_DATOS")) return "le faltan datos de la dirección";
+  if (estadoConfirmacion !== "confirmado" && !t.includes("CONFIRMADO")) return "el cliente todavía no confirmó";
+  const r = obj(ped.raw);
+  const pagado = s(r.financial_status)?.toLowerCase() === "paid" || s(r.displayFinancialStatus)?.toUpperCase() === "PAID" || t.includes("PAGO_VERIFICADO");
+  if (t.includes("PAGO_ANTICIPADO_COMPROBANTE") && !pagado) return "mandó comprobante de pago y todavía no lo verificaste en ueno";
+  return null;
 }
 
 /** El pedido figura como preparado (fulfilled) en Shopify: REST (webhook) o GraphQL (conciliación). */
@@ -307,7 +358,8 @@ const NOMBRE_COURIER: Record<string, string> = { lucero: "Lucero del Este", pap:
 
 export function armarAvisoPreparado(ped: PedidoNormalizado, clienteId: string, courier: string | null, ahora: Date): FilaEnvio {
   const c = courier?.toLowerCase() ?? "";
-  const plazo = plazoPorCiudad(ped.ciudad) ?? (c === "lucero" ? "1 a 3 días hábiles" : "2 a 5 días hábiles");
+  // 10-10: días reales desde el despacho (sin sábados ni domingos), igual que lo que dice el vendedor.
+  const plazo = plazoParaEnDesdeHoy(ped.ciudad, inicioDespacho(ahora));
   return {
     cliente_id: clienteId,
     shopify_order_id: ped.shopifyOrderId,
@@ -411,7 +463,18 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   // 08-10: marcado como PREPARADO en Shopify (fulfillment) → aviso "tu pedido ya salió" (voltra_pedido_despachado).
   // Misma clave que usa importar-courier para DESPACHADO: si después se importa el reporte del courier, no se repite.
   // 09-10: si el courier ya lo entregó o devolvió (estado_envio terminal), no se programan avisos de entrega.
-  if (!ped.cancelado && !esPruebaE2E && clienteId && estaPreparado(ped.raw) && !envioTerminal(existente?.estado_envio)) {
+  // Retiro en persona (RETIRO_EN_CASA): no hay courier, no van los avisos de "ya salió" ni "hoy te llega".
+  const retira = ped.tags.some((t) => t.toUpperCase() === "RETIRO_EN_CASA");
+  // 09-10: Enrique marca "preparado" a todos los "No preparado" de una. Si entre ellos hay uno que no se podía
+  // despachar, se devuelve a "No preparado", no se avisa al cliente y se le avisa a él.
+  const motivoNoDespachar = estaPreparado(ped.raw) && !ped.cancelado && !esPruebaE2E && !retira ? motivoParaNoDespachar(ped, fila.estado_confirmacion ?? existente?.estado_confirmacion) : null;
+  if (motivoNoDespachar && deps.revertirPreparado) {
+    const r = await deps.revertirPreparado(ped.shopifyOrderId).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    await deps.avisar?.(r.ok
+      ? `↩️ <b>${ped.nombre ?? ped.shopifyOrderId}</b> lo marcaste preparado pero ${motivoNoDespachar}. Lo devolví a "No preparado" y no le avisé al cliente. No lo despaches todavía.`
+      : `⚠️ <b>${ped.nombre ?? ped.shopifyOrderId}</b> lo marcaste preparado pero ${motivoNoDespachar}. No pude devolverlo a "No preparado" (${r.error}): sacalo a mano y no lo despaches.`)?.catch?.(() => {});
+  }
+  if (!motivoNoDespachar && !ped.cancelado && !esPruebaE2E && !retira && clienteId && estaPreparado(ped.raw) && !envioTerminal(existente?.estado_envio)) {
     const courier = deps.courierDePedido ? await deps.courierDePedido(ped.nombre).catch(() => null) : null;
     const recordatorio = armarRecordatorioEntrega(ped, clienteId, deps.ahora());
     await deps.programarEnvios([armarAvisoPreparado(ped, clienteId, courier, deps.ahora()), ...(recordatorio ? [recordatorio] : [])]);

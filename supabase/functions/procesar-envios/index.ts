@@ -57,7 +57,7 @@ async function contexto(e: Envio): Promise<Contexto> {
       ? sb.from("wa_clientes").select("telefono,wa_user_id,nombre").eq("id", e.cliente_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     e.shopify_order_id != null
-      ? sb.from("shopify_pedidos").select("shopify_order_id,nombre,estado_confirmacion,tags,total,raw,estado_envio")
+      ? sb.from("shopify_pedidos").select("shopify_order_id,nombre,estado_confirmacion,tags,total,raw,estado_envio,creado_en")
         .eq("shopify_order_id", e.shopify_order_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     e.cliente_id
@@ -117,7 +117,7 @@ const deps = (cfg: Deps["cfg"]): Deps => ({
     return { ok: true };
   },
   cancelarPedidoSinRespuesta: async (id) => {
-    const r = await cancelarPedido(orderGid(id), "Sin confirmación por WhatsApp en 72 h");
+    const r = await cancelarPedido(orderGid(id), "Sin confirmación por WhatsApp en 48 h");
     if (!r.ok) return { ok: false, error: r.error };
     await marcarPedido(id, "cancelado_sin_respuesta");
     await db().from("envios_programados").update({
@@ -131,6 +131,11 @@ const deps = (cfg: Deps["cfg"]): Deps => ({
   escapar: escaparHtml,
   registrarBaja: (clienteId) => registrarBaja(clienteId, "meta_131050"),
   seguimientoConFactura: (orderId, variables) => envioSeguimientoParaPedido(orderId, variables),
+  // 10-10: cmsg:<id> tras cancelar sin respuesta. Idempotente por clave_unica.
+  programarEnvio: async (fila) => {
+    const { error } = await db().from("envios_programados").upsert(fila, { onConflict: "clave_unica", ignoreDuplicates: true });
+    if (error) throw new Error(`programarEnvio: ${error.message}`);
+  },
 });
 
 Deno.serve(conServiceRole(async (_req) => {

@@ -25,6 +25,8 @@ import pDesp from "../../plantillas/voltra_pedido_despachado.json" with { type: 
 import pHoy from "../../plantillas/voltra_entrega_hoy.json" with { type: "json" };
 import pProx from "../../plantillas/voltra_entrega_proxima.json" with { type: "json" };
 import pDir from "../../plantillas/voltra_completar_direccion.json" with { type: "json" };
+import pUlt from "../../plantillas/voltra_ultimo_aviso_confirmacion.json" with { type: "json" };
+import pBaja from "../../plantillas/voltra_pedido_cancelado_sin_respuesta.json" with { type: "json" };
 import pNo from "../../plantillas/voltra_no_entregado.json" with { type: "json" };
 import pSeg from "../../plantillas/voltra_seguimiento_entrega.json" with { type: "json" };
 import pRecup from "../../plantillas/voltra_recuperar_borrador.json" with { type: "json" };
@@ -282,7 +284,7 @@ Deno.test("formato de guaraníes y config desde config_wa", () => {
 });
 
 Deno.test("el catálogo coincide con los JSON de supabase/plantillas (botones, payloads, variables)", () => {
-  for (const p of [pConf, pRec, pDesp, pHoy, pProx, pDir, pNo, pSeg, pRecup, pMkRep, pMkPack, pMkCru, pMkLan]) {
+  for (const p of [pConf, pRec, pDesp, pHoy, pProx, pDir, pUlt, pBaja, pNo, pSeg, pRecup, pMkRep, pMkPack, pMkCru, pMkLan]) {
     const def = PLANTILLAS[p.name];
     assert(def, p.name);
     const botones = (p.components as { type: string; buttons?: { text: string }[] }[])
@@ -292,7 +294,7 @@ Deno.test("el catálogo coincide con los JSON de supabase/plantillas (botones, p
     assertEquals(def.vars.length, p._notas.variables.length, p.name);
     assertEquals(p.language, "es");
   }
-  assertEquals(Object.keys(PLANTILLAS).length, 15); // + v2 y v3 (07-10), entrega_proxima y completar_direccion (09-10)
+  assertEquals(Object.keys(PLANTILLAS).length, 17); // + v2 y v3 (07-10), entrega_proxima y completar_direccion (09-10)
 });
 
 Deno.test("armarParametros: objeto con claves numéricas", () => {

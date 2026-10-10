@@ -1,9 +1,11 @@
 // I/O real (Supabase) para procesarPedido. Lo comparten shopify-webhook y shopify-conciliar.
 import { db, guardarEventoCrudo } from "../_shared/db.ts";
 import { normalizarTelefonoPY } from "../_shared/telefono.ts";
+import { gql } from "../_shared/shopify.ts";
+import { avisar } from "../_shared/telegram.ts";
 import { configLead, enviarEventoLead } from "../_shared/meta_capi.ts";
 import { type DepsLeadMeta, notificarLeadMeta } from "./lead_meta.ts";
-import type { ConfigConfirmacion, Deps } from "./procesar.ts";
+import { type ConfigConfirmacion, configConfirmacionValida, type Deps } from "./procesar.ts";
 
 /** I/O real del evento temprano a Meta (lead_meta.ts). */
 export function depsLeadMetaReales(): DepsLeadMeta {
@@ -55,11 +57,9 @@ export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
     async leerConfigConfirmacion() {
       const { data, error } = await sb.from("config_wa").select("valor").eq("clave", "confirmacion").maybeSingle();
       if (error) throw new Error(`config_wa: ${error.message}`);
-      const v = data?.valor as ConfigConfirmacion | undefined;
-      if (!v || typeof v.recordatorio_h !== "number" || typeof v.retener_h !== "number" || typeof v.cancelar_h !== "number") {
-        throw new Error("config_wa.confirmacion falta o está incompleta");
-      }
-      return v;
+      // 10-10: acepta la config nueva (recordatorio_min, aviso_enrique_h, ultimo_aviso_h) y la vieja (recordatorio_h, retener_h).
+      if (!configConfirmacionValida(data?.valor)) throw new Error("config_wa.confirmacion falta o está incompleta");
+      return data!.valor as ConfigConfirmacion;
     },
 
     async buscarPedido(id) {
@@ -110,6 +110,21 @@ export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
       else await p;
     },
 
+    async revertirPreparado(orderId) {
+      const d = await gql<{ order: { fulfillments: Array<{ id: string; status: string }> } | null }>(
+        `query($id: ID!) { order(id: $id) { fulfillments(first: 10) { id status } } }`, { id: `gid://shopify/Order/${orderId}` });
+      const activos = (d.order?.fulfillments ?? []).filter((f) => f.status === "SUCCESS" || f.status === "OPEN");
+      for (const f of activos) {
+        const r = await gql<{ fulfillmentCancel: { userErrors: Array<{ message: string }> } }>(
+          `mutation($id: ID!) { fulfillmentCancel(id: $id) { userErrors { message } } }`, { id: f.id });
+        const e = r.fulfillmentCancel.userErrors ?? [];
+        if (e.length) return { ok: false, error: e.map((x) => x.message).join("; ") };
+      }
+      return { ok: true };
+    },
+
+    avisar: (texto) => avisar(texto),
+
     async courierDePedido(nombrePedido) {
       const n = String(nombrePedido ?? "").replace(/\D/g, "");
       if (!n) return null;
@@ -124,6 +139,10 @@ export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
       // si el pedido se canceló.
       let q = sb.from("envios_programados").update({ estado: "cancelado" }).eq("shopify_order_id", id).eq("estado", "pendiente");
       if (!opts?.incluirAvisos) q = q.not("clave_unica", "like", "courier:%");
+      // 10-10: el "dimos de baja tu pedido" (cmsg:) se programa justo DESPUÉS de cancelar en Shopify; el webhook
+      // orders/updated de esa misma cancelación no lo tiene que frenar (procesar-envios lo manda solo si quedó
+      // cancelado_sin_respuesta).
+      q = q.or("clave_unica.is.null,clave_unica.not.like.cmsg:*");
       const { error } = await q;
       if (error) throw new Error(`cancelarEnviosPendientes: ${error.message}`);
     },
