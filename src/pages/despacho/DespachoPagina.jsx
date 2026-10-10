@@ -82,6 +82,8 @@ function extraerNota(notas, clave) {
 function clasificarEstado(tags, cancelledAt) {
   const t = (tags || '').toLowerCase()
   if (t.includes('cancelado') || cancelledAt) return 'cancelado'
+  // 10-10: venta mayorista ya entregada y cobrada antes del corte de facturación: nunca se despacha.
+  if (t.includes('anterior_al_corte')) return 'cancelado'
   // 09-10: retira en persona o le faltan datos de entrega → no va al courier aunque esté confirmado.
   if (t.includes('retiro_en_casa') || t.includes('faltan_datos')) return 'pending'
   if (t.includes('confirmado')) return 'confirmado'
@@ -167,6 +169,8 @@ function mapearGrupoAPedidos(grupoRows) {
   // 09-10: pago anticipado. Pagado en Shopify (botón "Verifiqué el pago" de Telegram o a mano) → sale como YA PAGADO.
   // Comprobante recibido pero sin verificar → no se despacha hasta verificarlo (ni cobro doble ni envío sin cobrar).
   const pagadoShopify = String(primero('Financial Status') || '').toLowerCase() === 'paid' || tagsTxt.includes('pago_verificado')
+    // 10-10: mayorista a crédito con plazo: el courier NO cobra en la puerta (se cobra después).
+    || tagsTxt.includes('credito')
   const comprobanteSinVerificar = !pagadoShopify && tagsTxt.includes('pago_anticipado_comprobante')
   const cfg = estado === 'confirmado' && comprobanteSinVerificar
     ? { ...ESTADO_CONFIG.pending, label: '💳 Mandó comprobante: verificá el pago en ueno antes de despachar', color: 'var(--purple)' }

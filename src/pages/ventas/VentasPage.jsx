@@ -14,7 +14,8 @@ import { logError } from '../../lib/errorLog'
 import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
 import { validarVenta } from '../../lib/validation'
 import { logAccion, logAccionLote } from '../../lib/audit'
-import { Plus, Search, X, Clock, Trash2, Edit2, Save, AlertTriangle } from 'lucide-react'
+import { Plus, Search, X, Clock, Trash2, Edit2, Save, AlertTriangle, Receipt } from 'lucide-react'
+import DatosFactura from '../../components/DatosFactura'
 import { hoyLocal } from '../../lib/fechas'
 
 const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro']
@@ -732,6 +733,8 @@ export default function VentasPage() {
   const [filtroMes, setFiltroMes] = useState('')
   const [seleccionadas, setSeleccionadas] = useState(new Set())
   const [editando, setEditando] = useState(null)
+  // Datos de factura (RUC) de un pedido de Shopify de Voltra (VT-…): pedido_datos_fiscales.
+  const [datosFactura, setDatosFactura] = useState(null)
 
   const cargarVentas = useCallback(async () => {
     const miCarga = ++cargaRef.current
@@ -1003,6 +1006,11 @@ export default function VentasPage() {
                         <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setEditando(v)} style={{ color: 'var(--accent)' }} title="Editar">
                           <Edit2 size={13} />
                         </button>
+                        {normalizarRef(v.n_referencia).startsWith('VT-') && (
+                          <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setDatosFactura(v.n_referencia)} title="Datos de factura (RUC)">
+                            <Receipt size={13} />
+                          </button>
+                        )}
                         <button className="btn btn-ghost btn-sm btn-icon" onClick={() => eliminar(v.id)} style={{ color: 'var(--red)', opacity: 0.6 }} title="Eliminar">
                           <Trash2 size={13} />
                         </button>
@@ -1094,6 +1102,11 @@ export default function VentasPage() {
                       <button className="btn btn-ghost btn-sm" onClick={() => setEditando(v)} style={{ color: 'var(--accent)' }}>
                         <Edit2 size={14} /> Editar
                       </button>
+                      {normalizarRef(v.n_referencia).startsWith('VT-') && (
+                        <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setDatosFactura(v.n_referencia)} title="Datos de factura (RUC)">
+                          <Receipt size={14} />
+                        </button>
+                      )}
                       <button className="btn btn-ghost btn-sm btn-icon" onClick={() => eliminar(v.id)} style={{ color: 'var(--red)', opacity: 0.7 }} title="Eliminar">
                         <Trash2 size={14} />
                       </button>
@@ -1107,6 +1120,11 @@ export default function VentasPage() {
       </div>
 
       {showModal && <NuevaVentaModal onClose={() => setShowModal(false)} onSaved={cargarVentas} />}
+      {datosFactura && (
+        <ModalErrorBoundary onClose={() => setDatosFactura(null)}>
+          <DatosFactura referencia={datosFactura} onClose={() => setDatosFactura(null)} onSaved={() => setDatosFactura(null)} />
+        </ModalErrorBoundary>
+      )}
       {editando && (
         <ModalErrorBoundary onClose={() => setEditando(null)}>
           <EditarVentaModal venta={editando} onClose={() => setEditando(null)} onSaved={cargarVentas} lineasDelPedido={lineasDelPedido} />

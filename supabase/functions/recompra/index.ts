@@ -71,6 +71,8 @@ async function pedidos(desde: Date): Promise<PedidoFila[]> {
     r = await leerPaginado<FilaPedido>(q(base));
   }
   falla("pedidos", r.error);
+  // 10-10: pedidos cargados como "sin mensajes" (ventas anteriores al corte, mayoristas) no reciben marketing.
+  r.filas = r.filas.filter((f) => !/SIN_MENSAJES/i.test(String((f.raw as { tags?: unknown } | null)?.tags ?? "")));
 
   const ids = r.filas.map((f) => f.shopify_order_id);
   const entregaEstado = new Map<number, string>();

@@ -29,6 +29,7 @@ const VinculosPage = lazy(() => import('./pages/vinculos/VinculosPage'))
 const BandejaPage = lazy(() => import('./pages/bandeja/BandejaPage'))
 const KpiWhatsappPage = lazy(() => import('./pages/kpi-whatsapp/KpiWhatsappPage'))
 const FacturasPage = lazy(() => import('./pages/facturas/FacturasPage'))
+const PedidoMayoristaPage = lazy(() => import('./pages/mayorista/PedidoMayoristaPage'))
 
 // Spinner mientras carga una página diferida
 // Esqueleto con la forma de una página (título + tarjetas), no un spinner
@@ -71,6 +72,7 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="ventas" element={<VentasPage />} />
+          <Route path="pedido-mayorista" element={<Suspense fallback={<PageLoader />}><PedidoMayoristaPage /></Suspense>} />
           <Route path="clientes" element={<Suspense fallback={<PageLoader />}><ClientesPage /></Suspense>} />
           <Route path="stock" element={<Suspense fallback={<PageLoader />}><StockPage /></Suspense>} />
           <Route path="ads" element={<Suspense fallback={<PageLoader />}><AdsPage /></Suspense>} />

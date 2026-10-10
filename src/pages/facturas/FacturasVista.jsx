@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react'
 import {
   FileText, FileSpreadsheet, Download, Copy, MessageCircle, Eye, AlertTriangle,
-  Clock, XCircle, Ban, Receipt, CalendarDays, Loader2, FlaskConical,
+  Clock, XCircle, Ban, Receipt, CalendarDays, Loader2, FlaskConical, Unlock, X, Scale,
 } from 'lucide-react'
 import { formatGs } from '../../lib/supabase'
 import { etiquetaMes, mesesRecientes } from '../../lib/fechas'
@@ -13,7 +13,134 @@ import {
   siglaTipo, nombreTipo, numeroCompleto, etiquetaPedido, etiquetaCliente, etiquetaRuc,
   ivaTotal, fechaHoraCorta, fechaFactura,
 } from './logica'
+import { etiquetaMotivo, criterioValido } from './retenidos'
 import './facturas.css'
+
+const fechaCorta = (iso) => (iso ? fechaHoraCorta(iso).slice(0, 10) : '—')
+
+/** Modal: pide el criterio de la contadora antes de liberar (obligatorio). */
+function ModalLiberar({ fila, ocupado, onCancelar, onConfirmar }) {
+  const [criterio, setCriterio] = useState('')
+  const valido = criterioValido(criterio)
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && !ocupado && onCancelar()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="fac-liberar-titulo">
+        <div className="modal-header">
+          <h2 className="modal-title" id="fac-liberar-titulo">Liberar pedido {fila.pedido}</h2>
+          <button className="modal-close" onClick={onCancelar} disabled={ocupado} aria-label="Cerrar"><X size={18} /></button>
+        </div>
+        <p className="fac-ret-ayuda">
+          {fila.cliente} · {formatGs(fila.monto)} · entregado {fechaCorta(fila.entregado_en)} · {fila.medio_pago}.
+          Al liberarlo, la cola SIFEN lo factura en la próxima corrida (hasta 10 min), con fecha de emisión de ese momento.
+        </p>
+        <div className="form-group">
+          <label className="form-label" htmlFor="fac-criterio">Criterio de la contadora (obligatorio)</label>
+          <textarea id="fac-criterio" className="form-input" rows={3} value={criterio} autoFocus
+            placeholder="Ej.: facturar con fecha de hoy; la venta se declara en el mes de emisión"
+            onChange={e => setCriterio(e.target.value)} maxLength={2000} />
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onCancelar} disabled={ocupado}>Cancelar</button>
+          <button className="btn btn-primary" disabled={!valido || ocupado} onClick={() => onConfirmar(criterio)}>
+            {ocupado ? <Loader2 size={14} className="spinning" /> : <Unlock size={14} />}Liberar y facturar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Pestaña "Pendientes de criterio contable": pedidos retenidos (p. ej. entregados antes del corte). */
+function Retenidos({ filas, cargando, error, onLiberar, liberando, onExportar }) {
+  const [abierto, setAbierto] = useState(null)
+  const confirmar = async (criterio) => {
+    if (await onLiberar(abierto, criterio)) setAbierto(null)
+  }
+  return (
+    <>
+      <div className="fac-ret-head">
+        <p className="fac-ret-ayuda">
+          No se facturan solos. La contadora decide el criterio; al liberar, la cola los factura. Solo pedidos de Shopify.
+        </p>
+        <button className="btn btn-secondary btn-sm" disabled={cargando || !filas.length} onClick={onExportar} title="CSV para la contadora">
+          <Download size={14} />CSV contadora
+        </button>
+      </div>
+      {error && <div className="fac-alerta-error"><AlertTriangle size={15} />No se pudieron cargar los pendientes: {error}</div>}
+      {cargando ? (
+        <div className="skeleton skeleton-hero" />
+      ) : filas.length === 0 ? (
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state-icon"><Scale size={22} /></div>
+            <div className="empty-state-title">Nada pendiente de criterio</div>
+            <div className="empty-state-desc">Si un pedido entregado antes del corte llega a facturación, aparece acá en vez de facturarse.</div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="table-wrapper desktop-only">
+            <table className="fac-tabla">
+              <thead>
+                <tr>
+                  <th>Pedido</th><th>Cliente</th><th>RUC/CI</th><th className="num">Monto</th><th>Entrega</th>
+                  <th>Cobro</th><th>Medio de pago</th><th>Courier</th><th>Motivo</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filas.map(f => (
+                  <tr key={f.id}>
+                    <td className="mono">{f.pedido}</td>
+                    <td className="fac-cliente" title={f.cliente}>{f.cliente}</td>
+                    <td className="mono">{f.ruc_ci || '—'}</td>
+                    <td className="num">{formatGs(f.monto)}</td>
+                    <td className="muted">{fechaCorta(f.entregado_en)}</td>
+                    <td className="muted">{fechaCorta(f.cobrado_en)}</td>
+                    <td>{f.medio_pago}</td>
+                    <td>{f.courier || '—'}</td>
+                    <td><span className="badge badge-yellow">{etiquetaMotivo(f.motivo)}</span></td>
+                    <td>
+                      <button className="btn btn-secondary btn-sm" disabled={liberando === f.id} onClick={() => setAbierto(f)}>
+                        <Unlock size={13} />Liberar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mobile-only">
+            <div className="fac-cards">
+              {filas.map(f => (
+                <div key={f.id} className="product-card-mobile">
+                  <div className="product-card-mobile-row">
+                    <span className="fac-num-movil">{f.pedido}</span>
+                    <span className="badge badge-yellow">{etiquetaMotivo(f.motivo)}</span>
+                  </div>
+                  <div className="product-card-mobile-row">
+                    <span className="fac-cliente">{f.cliente}</span>
+                    <b>{formatGs(f.monto)}</b>
+                  </div>
+                  <div className="product-card-mobile-row fac-meta">
+                    <span>Entrega {fechaCorta(f.entregado_en)} · {f.medio_pago}</span>
+                    <span>{f.courier || '—'}</span>
+                  </div>
+                  {f.ruc_ci && <div className="fac-meta">{f.ruc_ci}</div>}
+                  <button className="btn btn-secondary fac-ret-btn-movil" disabled={liberando === f.id} onClick={() => setAbierto(f)}>
+                    <Unlock size={14} />Liberar
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+      {abierto && (
+        <ModalLiberar fila={abierto} ocupado={liberando === abierto.id} onCancelar={() => setAbierto(null)} onConfirmar={confirmar} />
+      )}
+    </>
+  )
+}
 
 function Kpi({ label, valor, sub, color, Icon }) {
   return (
@@ -54,6 +181,7 @@ function Motivo({ f }) {
 export default function FacturasVista({
   mes, onCambiarMes, facturas, nombresPedido = {}, cargando, noActivada, errorCarga,
   onVerKude, onCopiarCdc, onReenviar, onExportar, reenviando, exportando, ahora,
+  retenidos = [], cargandoRetenidos = false, errorRetenidos = null, onLiberar, liberando, onExportarRetenidos,
 }) {
   const [pestana, setPestana] = useState('todas')
   const meses = useMemo(() => mesesRecientes(12, ahora), [ahora])
@@ -154,10 +282,16 @@ export default function FacturasVista({
                       {p.label} <span className="fac-tab-n">{conteo[p.id]}</span>
                     </button>
                   ))}
+                  <button role="tab" aria-selected={pestana === 'retenidos'} className={`tab${pestana === 'retenidos' ? ' active' : ''}`} onClick={() => setPestana('retenidos')}>
+                    Pendientes de criterio contable <span className={`fac-tab-n${retenidos.length ? ' fac-tab-n-alerta' : ''}`}>{cargandoRetenidos ? '…' : retenidos.length}</span>
+                  </button>
                 </div>
               </div>
 
-              {visibles.length === 0 ? (
+              {pestana === 'retenidos' ? (
+                <Retenidos filas={retenidos} cargando={cargandoRetenidos} error={errorRetenidos}
+                  onLiberar={onLiberar} liberando={liberando} onExportar={onExportarRetenidos} />
+              ) : visibles.length === 0 ? (
                 <div className="card">
                   <div className="empty-state">
                     <div className="empty-state-icon"><Receipt size={22} /></div>
