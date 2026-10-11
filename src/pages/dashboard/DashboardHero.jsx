@@ -8,6 +8,8 @@
 //
 // Es un componente PURO: recibe los números ya calculados por DashboardPage
 // a partir de datos que la página ya traía — cero consultas propias.
+// `pendiente` marca los números que todavía están llegando (primera carga):
+// se muestra "…" en vez de un 0 que parecería real.
 // ═══════════════════════════════════════════════════════════
 import { useNavigate } from 'react-router-dom'
 import { formatGs } from '../../lib/supabase'
@@ -18,7 +20,7 @@ const fechaLarga = () => {
   return f.charAt(0).toUpperCase() + f.slice(1)
 }
 
-export default function DashboardHero({ nombre, hoyCount, hoyMonto, tasa7d, resueltos7d, enCalleCount, enCalleMonto, alertasCount }) {
+export default function DashboardHero({ nombre, hoyCount, hoyMonto, tasa7d, resueltos7d, enCalleCount, enCalleMonto, alertasCount, pendiente = {} }) {
   const navigate = useNavigate()
   const colorTasa = tasa7d == null ? 'var(--text-secondary)'
     : tasa7d >= 0.6 ? 'var(--green)' : tasa7d >= 0.4 ? 'var(--yellow)' : 'var(--red)'
@@ -37,23 +39,23 @@ export default function DashboardHero({ nombre, hoyCount, hoyMonto, tasa7d, resu
           <div className="hero-stat">
             <span>Entrega 7d</span>
             <b style={{ color: colorTasa }}>
-              {tasa7d == null ? '—' : `${Math.round(tasa7d * 100)}%`}
+              {pendiente.tasa ? '…' : tasa7d == null ? '—' : `${Math.round(tasa7d * 100)}%`}
             </b>
             <span style={{ textTransform: 'none', letterSpacing: 0 }}>
-              {resueltos7d ? `${resueltos7d} resueltos` : 'sin resueltos aún'}
+              {pendiente.tasa ? 'cargando' : resueltos7d ? `${resueltos7d} resueltos` : 'sin resueltos aún'}
             </span>
           </div>
           <div className="hero-stat">
             <span>En la calle</span>
-            <b style={{ color: enCalleCount ? 'var(--yellow)' : 'var(--text-primary)' }}>{enCalleCount}</b>
-            <span style={{ textTransform: 'none', letterSpacing: 0 }}>{formatGs(enCalleMonto)}</span>
+            <b style={{ color: enCalleCount ? 'var(--yellow)' : 'var(--text-primary)' }}>{pendiente.enCalle ? '…' : enCalleCount}</b>
+            <span style={{ textTransform: 'none', letterSpacing: 0 }}>{pendiente.enCalle ? 'cargando' : formatGs(enCalleMonto)}</span>
           </div>
           <div className="hero-stat">
             <span>Alertas</span>
-            <b style={{ color: alertasCount ? 'var(--red)' : 'var(--green)' }}>
-              {alertasCount || 'Sin alertas'}
+            <b style={{ color: pendiente.alertas ? 'var(--text-secondary)' : alertasCount ? 'var(--red)' : 'var(--green)' }}>
+              {pendiente.alertas ? '…' : alertasCount || 'Sin alertas'}
             </b>
-            {alertasCount > 0 && (
+            {!pendiente.alertas && alertasCount > 0 && (
               <span style={{ textTransform: 'none', letterSpacing: 0, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                 <AlertTriangle size={9} /> revisar abajo
               </span>

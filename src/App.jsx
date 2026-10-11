@@ -7,8 +7,9 @@ import Layout from './components/layout/Layout'
 import LoginPage from './pages/auth/LoginPage'
 // Páginas más usadas: carga directa (inicio instantáneo)
 import DashboardPage from './pages/dashboard/DashboardPage'
-import VentasPage from './pages/ventas/VentasPage'
 // Resto: carga diferida (se baja solo al abrir cada sección) → bundle inicial más liviano
+const cargarVentas = () => import('./pages/ventas/VentasPage')
+const VentasPage = lazy(cargarVentas)
 const StockPage = lazy(() => import('./pages/stock/StockPage'))
 const AdsPage = lazy(() => import('./pages/ads/AdsPage'))
 const FinanzasPage = lazy(() => import('./pages/finanzas/FinanzasPage'))
@@ -17,7 +18,8 @@ const ReportesPage = lazy(() => import('./pages/reportes/ReportesPage'))
 const ConfigPage = lazy(() => import('./pages/config/ConfigPage'))
 const ClientesPage = lazy(() => import('./pages/clientes/ClientesPage'))
 const CalculadoraPage = lazy(() => import('./pages/calculadora/CalculadoraPage'))
-const DespachoPagina = lazy(() => import('./pages/despacho/DespachoPagina'))
+const cargarDespacho = () => import('./pages/despacho/DespachoPagina')
+const DespachoPagina = lazy(cargarDespacho)
 const RecompraPage = lazy(() => import('./pages/recompra/RecompraPage'))
 const InteligenciaEntregaPage = lazy(() => import('./pages/entrega/InteligenciaEntregaPage'))
 const RecepcionPage = lazy(() => import('./pages/recepcion/RecepcionPage'))
@@ -26,7 +28,8 @@ const SistemaPage = lazy(() => import('./pages/sistema/SistemaPage'))
 const SeguimientoPage = lazy(() => import('./pages/seguimiento/SeguimientoPage'))
 const ReclamosPage = lazy(() => import('./pages/reclamos/ReclamosPage'))
 const VinculosPage = lazy(() => import('./pages/vinculos/VinculosPage'))
-const BandejaPage = lazy(() => import('./pages/bandeja/BandejaPage'))
+const cargarBandeja = () => import('./pages/bandeja/BandejaPage')
+const BandejaPage = lazy(cargarBandeja)
 const KpiWhatsappPage = lazy(() => import('./pages/kpi-whatsapp/KpiWhatsappPage'))
 const FacturasPage = lazy(() => import('./pages/facturas/FacturasPage'))
 const PedidoMayoristaPage = lazy(() => import('./pages/mayorista/PedidoMayoristaPage'))
@@ -63,6 +66,13 @@ export default function App() {
   // Cargar la configuración central (flete, umbrales, ventanas, pago) una vez
   // al iniciar. Si falla, se usan los defaults y el sistema anda igual.
   useEffect(() => { cargarConfig() }, [])
+  // 11-10: cuando la app ya arrancó y está libre, baja en segundo plano las secciones más usadas,
+  // así al tocarlas abren al instante (no compite con el primer pintado).
+  useEffect(() => {
+    const precargar = () => { cargarVentas(); cargarDespacho(); cargarBandeja() }
+    const id = 'requestIdleCallback' in window ? window.requestIdleCallback(precargar, { timeout: 4000 }) : setTimeout(precargar, 2500)
+    return () => ('cancelIdleCallback' in window ? window.cancelIdleCallback(id) : clearTimeout(id))
+  }, [])
 
   return (
     <ToastProvider>
@@ -71,7 +81,7 @@ export default function App() {
         <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="ventas" element={<VentasPage />} />
+          <Route path="ventas" element={<Suspense fallback={<PageLoader />}><VentasPage /></Suspense>} />
           <Route path="pedido-mayorista" element={<Suspense fallback={<PageLoader />}><PedidoMayoristaPage /></Suspense>} />
           <Route path="clientes" element={<Suspense fallback={<PageLoader />}><ClientesPage /></Suspense>} />
           <Route path="stock" element={<Suspense fallback={<PageLoader />}><StockPage /></Suspense>} />

@@ -17,11 +17,21 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // Nota: NO se separan las librerías en chunks manuales. Se probó y rompía
-    // la app (pantalla negra): librerías como lucide-react usan React.forwardRef
-    // al cargar, y quedaban en un chunk separado de React → "Cannot read
-    // properties of undefined (reading 'forwardRef')". Vite arma los chunks solo.
-    // La velocidad de arranque ya se resolvió cargando los gráficos aparte
-    // (DashboardCharts.jsx con lazy), que es independiente de esto.
+    // Historia: separar CADA librería en su propio archivo rompió la app (lucide-react quedaba separado de
+    // React → "reading 'forwardRef'"). 11-10: separación SEGURA y mínima: React, react-dom, scheduler,
+    // el router y lucide-react van JUNTOS en 'vendor' (los íconos siempre al lado de React), y Supabase
+    // (que no depende de React) aparte. Todo lo demás (gráficos, xlsx, docx…) lo sigue armando Vite solo.
+    // Beneficio: esos archivos casi nunca cambian, el navegador los guarda y cada despliegue baja solo el
+    // código propio.
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (/node_modules\/@supabase\//.test(id)) return 'supabase'
+          if (/node_modules\/(react|react-dom|scheduler|react-router|react-router-dom|@remix-run|lucide-react)\//.test(id)) return 'vendor'
+          return undefined
+        },
+      },
+    },
   },
 })

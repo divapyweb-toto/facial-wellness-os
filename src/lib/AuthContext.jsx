@@ -15,15 +15,18 @@ export function AuthProvider({ children }) {
     // Obtener sesión actual
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null)
+      // 11-10: la app arranca apenas hay sesión; el perfil (nombre, rol para el menú) llega en segundo plano.
+      // Antes se esperaba una consulta más a la base antes de mostrar nada.
+      setLoading(false)
       if (session?.user) fetchProfile(session.user.id)
-      else setLoading(false)
     })
 
     // Escuchar cambios de auth
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null)
+      setLoading(false)
       if (session?.user) fetchProfile(session.user.id)
-      else { setProfile(null); setLoading(false) }
+      else setProfile(null)
     })
 
     return () => subscription.unsubscribe()
