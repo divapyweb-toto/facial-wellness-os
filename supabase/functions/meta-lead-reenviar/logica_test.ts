@@ -62,7 +62,7 @@ Deno.test("prueba: UN evento con test_event_code, sin candado (el pedido sigue p
   assertEquals(f.enviados.length, 1);
   assertEquals(f.enviados[0].cfg.testEventCode, "TEST123");
   assertEquals(r.prueba?.pedido, "#1003");
-  assertEquals(r.prueba?.respuesta?.events_received, 1);
+  assertEquals((r.prueba?.respuesta as { events_received?: number } | undefined)?.events_received, 1);
   assertEquals(f.reservados.size, 0);
   await assertRejects(() => reenviar("prueba", {}, f.d), Error, "test_event_code");
 });
