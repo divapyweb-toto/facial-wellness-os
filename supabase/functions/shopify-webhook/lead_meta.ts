@@ -5,10 +5,13 @@
 // (fuente 'shopify', id_externo 'meta_lead:<order_id>'), el mismo patrón que usan Telegram y mejora-mensual.
 // Si el envío falla, el candado queda con el error (no se reintenta: es una señal extra, no la venta).
 // Todo el I/O entra por DepsLeadMeta (io.ts en producción) para poder probarlo sin red.
-import { dentroDePlazo, type ConfigLead, type EntradaLead, type ResultadoEnvio } from "../_shared/meta_capi.ts";
+import { dentroDePlazo, type ConfigLead, type EntradaLead, EVENTO_PURCHASE, type EventoMensajeria, type ResultadoEnvio } from "../_shared/meta_capi.ts";
 
 export const VENTANA_CTWA_DIAS = 7;
 export const idCandadoLead = (orderId: number | string) => `meta_lead:${orderId}`;
+/** Candado por evento: LeadSubmitted "meta_lead:<id>", Purchase "meta_purchase:<id>" (12-10). */
+export const idCandado = (evento: EventoMensajeria, orderId: number | string) =>
+  evento === EVENTO_PURCHASE ? `meta_purchase:${orderId}` : idCandadoLead(orderId);
 
 export type PedidoLead = {
   shopifyOrderId: number;
@@ -35,7 +38,7 @@ export type ResultadoLead =
   | { accion: "omitido"; motivo: string }
   | { accion: "error"; motivo: string };
 
-export async function notificarLeadMeta(p: PedidoLead, d: DepsLeadMeta): Promise<ResultadoLead> {
+export async function notificarLeadMeta(p: PedidoLead, d: DepsLeadMeta, evento: EventoMensajeria = "LeadSubmitted"): Promise<ResultadoLead> {
   const cfg = d.config();
   if (!cfg) return { accion: "omitido", motivo: "sin_config" };
   const ahora = d.ahora();
@@ -46,16 +49,17 @@ export async function notificarLeadMeta(p: PedidoLead, d: DepsLeadMeta): Promise
   const origen = await d.origenAnuncio(p.clienteId, desde, hasta);
   if (!origen?.ctwa_clid?.trim()) return { accion: "omitido", motivo: "sin_ctwa_clid" };
 
-  const id = idCandadoLead(p.shopifyOrderId);
+  const id = idCandado(evento, p.shopifyOrderId);
   const entrada: EntradaLead = {
     shopify_order_id: p.shopifyOrderId,
     creado_en: creado.toISOString(),
     valor: Number(p.total ?? 0),
     moneda: "PYG",
     ctwa_clid: origen.ctwa_clid,
+    evento,
   };
   // Sin el ctwa_clid en el registro (es un identificador de Meta; con el order id alcanza para rastrearlo).
-  const nuevo = await d.reservar(id, { tipo: "meta_lead", evento: "LeadSubmitted", shopify_order_id: p.shopifyOrderId, valor: entrada.valor });
+  const nuevo = await d.reservar(id, { tipo: evento === EVENTO_PURCHASE ? "meta_purchase" : "meta_lead", evento, shopify_order_id: p.shopifyOrderId, valor: entrada.valor });
   if (!nuevo) return { accion: "omitido", motivo: "ya_enviado" };
 
   const r = await d.enviar(entrada, cfg);

@@ -385,9 +385,14 @@ Deno.test("evento temprano a Meta: solo pedido nuevo, no cancelado, no PRUEBA_E2
     assertEquals(llamadas.length, esperado, nombre);
     if (esperado) {
       assertEquals(llamadas[0], { shopifyOrderId: 5550001, clienteId: "c1", total: 129000, creadoEn: "2026-10-06T11:59:00-03:00" });
-      // orders/updated del mismo pedido (ya existe): no se repite.
+      // 12-10: orders/updated del mismo pedido creado hace 1 min: se vuelve a llamar (el candado de lead_meta evita el
+      // doble envío). Es el caso del vendedor IA, que guarda el pedido antes de que llegue el webhook.
       await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest()), f.deps);
-      assertEquals(llamadas.length, 1);
+      assertEquals(llamadas.length, 2);
+      // Creado hace más de 15 min y ya guardado: no se llama (no reenvía pedidos viejos solo).
+      f.deps.ahora = () => new Date(AHORA.getTime() + 2 * 3_600_000);
+      await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest()), f.deps);
+      assertEquals(llamadas.length, 2);
     }
   }
   // Borrador: nunca.

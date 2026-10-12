@@ -414,6 +414,12 @@ export function armarRecordatorioEntrega(ped: PedidoNormalizado, clienteId: stri
  * - Si Shopify trae una tag de estado (CONFIRMADO, etc.) o el pedido fue cancelado, actualiza
  *   estado_confirmacion y cancela los envíos pendientes.
  */
+/** true si Shopify creó el pedido hace menos de `min` minutos (fecha inválida o ausente → false). */
+export function creadoHaceMenosDe(creadoEn: string | null | undefined, ahora: Date, min: number): boolean {
+  const t = creadoEn ? Date.parse(creadoEn) : NaN;
+  return Number.isFinite(t) && ahora.getTime() - t < min * 60_000;
+}
+
 export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promise<ResultadoProceso> {
   if (!Number.isFinite(ped.shopifyOrderId)) throw new Error("Pedido sin id");
   const telefono = ped.telefonoCrudo ? deps.normalizarTelefono(ped.telefonoCrudo) : null;
@@ -451,7 +457,10 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   const esPruebaE2E = ped.tags.some((t) => t.toUpperCase() === "PRUEBA_E2E");
 
   // Pedido nuevo: señal temprana a Meta (sin esperar; un error acá nunca frena el webhook).
-  if (!existente && !ped.cancelado && !esPruebaE2E && clienteId && deps.notificarPedidoMeta) {
+  // 12-10: "nuevo" = no estaba guardado O Shopify lo creó hace menos de 15 min. El vendedor IA guarda el pedido apenas
+  // lo crea (registrarComoReleasit, sin envío a Meta) y el webhook llega segundos después con el pedido ya guardado:
+  // con solo `!existente` esos pedidos nunca mandaban el evento. El candado de eventos_crudos evita el doble envío.
+  if ((!existente || creadoHaceMenosDe(ped.creadoEn, deps.ahora(), 15)) && !ped.cancelado && !esPruebaE2E && clienteId && deps.notificarPedidoMeta) {
     try {
       deps.notificarPedidoMeta({ shopifyOrderId: ped.shopifyOrderId, clienteId, total: ped.total, creadoEn: ped.creadoEn })
         ?.catch?.((e) => console.warn("notificarPedidoMeta:", e instanceof Error ? e.message : e));

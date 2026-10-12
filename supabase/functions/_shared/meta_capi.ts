@@ -370,6 +370,10 @@ export async function enviarEventoEntregado(e: EntradaEvento, opc: OpcionesCapi 
 // Sin META_CAPI_TOKEN, META_DATASET_MENSAJERIA_ID o WA_WABA_ID, o con MODO_SIMULADO=1: no se llama a Meta.
 
 export const EVENTO_LEAD = "LeadSubmitted";
+// 12-10-2026 (decisión de Enrique): "Purchase" al CONFIRMAR el pedido, para habilitar "Maximizar compras por mensajes"
+// (pide 10 compras en 30 días). Mismo armado que el LeadSubmitted; event_time = creación del pedido.
+export const EVENTO_PURCHASE = "Purchase";
+export type EventoMensajeria = typeof EVENTO_LEAD | typeof EVENTO_PURCHASE;
 
 export function eventIdLead(orderId: number | string): string {
   return `lead:${orderId}`;
@@ -382,6 +386,8 @@ export interface EntradaLead {
   valor: number;
   moneda: "PYG";
   ctwa_clid: string;
+  /** Por defecto LeadSubmitted. */
+  evento?: EventoMensajeria;
 }
 
 export function armarPayloadLead(
@@ -392,9 +398,9 @@ export function armarPayloadLead(
   if (!clid) return null;
   const p: Record<string, unknown> = {
     data: [{
-      event_name: EVENTO_LEAD,
+      event_name: e.evento ?? EVENTO_LEAD,
       event_time: eventTime(e.creado_en, o.ahora),
-      event_id: eventIdLead(e.shopify_order_id),
+      event_id: e.evento === EVENTO_PURCHASE ? `purchase:${e.shopify_order_id}` : eventIdLead(e.shopify_order_id),
       action_source: "business_messaging",
       messaging_channel: "whatsapp",
       user_data: { whatsapp_business_account_id: o.wabaId, ctwa_clid: clid },
