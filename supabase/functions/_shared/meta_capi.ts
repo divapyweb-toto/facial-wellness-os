@@ -417,6 +417,9 @@ export interface ConfigLead {
   datasetMensajeriaId: string;
   wabaId: string;
   testEventCode: string | null;
+  /** 12-10: false hasta verificar que Meta procesa nuestros ctwa_clid (secreto META_MENSAJERIA_CONFIRMADO=si). Mientras
+   *  tanto cada envío queda "enviado_sin_confirmar" y se reintenta una vez por día dentro de los 7 días. */
+  confirmado?: boolean;
 }
 
 /** Config para el evento temprano; null si falta algo o está en modo simulado (entonces no se hace nada). */
@@ -427,7 +430,7 @@ export function configLead(opc: OpcionesCapi = {}): ConfigLead | null {
   const simulado = opc.simulado ?? envOpcional("MODO_SIMULADO") === "1";
   if (!token || !ds || !waba || simulado) return null;
   const testEventCode = opc.testEventCode !== undefined ? opc.testEventCode : envOpcional("META_TEST_EVENT_CODE");
-  return { token, datasetMensajeriaId: ds, wabaId: waba, testEventCode: testEventCode ?? null };
+  return { token, datasetMensajeriaId: ds, wabaId: waba, testEventCode: testEventCode ?? null, confirmado: envOpcional("META_MENSAJERIA_CONFIRMADO") === "si" };
 }
 
 /** Manda el LeadSubmitted (una sola llamada, timeout corto). No tira excepción. */

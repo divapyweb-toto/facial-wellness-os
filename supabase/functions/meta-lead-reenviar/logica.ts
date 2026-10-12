@@ -8,7 +8,7 @@
 // WhatsApp o web) que vino de un anuncio: mismo ctwa_clid, valor del pedido en PYG, candado propio (meta_purchase:<id>),
 // así no se repite ni se mezcla con el LeadSubmitted. El cron (body {origen:"pg_cron"}) corre `automatico`: manda los dos.
 import { type ConfigLead, dentroDePlazo, EVENTO_LEAD, EVENTO_PURCHASE, type EventoMensajeria, type ResultadoEnvio } from "../_shared/meta_capi.ts";
-import { type DepsLeadMeta, idCandado, notificarLeadMeta, type PedidoLead, VENTANA_CTWA_DIAS } from "../shopify-webhook/lead_meta.ts";
+import { type DepsLeadMeta, idCandado, notificarLeadMeta, type PedidoLead, SIN_CONFIRMAR, VENTANA_CTWA_DIAS } from "../shopify-webhook/lead_meta.ts";
 
 export type Modo = "listar" | "prueba" | "enviar";
 export type Candidato = PedidoLead & { nombre: string; confirmado: boolean };
@@ -17,19 +17,24 @@ export interface DepsReenvio {
   lead: DepsLeadMeta;
   /** Pedidos no borrador ni PRUEBA_E2E creados desde `desdeISO`, con cliente. */
   candidatos(desdeISO: string): Promise<Candidato[]>;
-  existeCandado(idExterno: string): Promise<boolean>;
+  /** null si no hay candado; si hay, su error (SIN_CONFIRMAR = reintentable) y cuándo se procesó. */
+  estadoCandado(idExterno: string): Promise<{ error: string | null; procesadoEn: string | null } | null>;
+  borrarCandado(idExterno: string): Promise<void>;
 }
+
+/** Un "enviado_sin_confirmar" se reintenta una vez por día (o ya, si se confirmó el canal o se pide forzar). */
+export const REINTENTO_SIN_CONFIRMAR_MS = 24 * 3_600_000;
 
 export interface Fila {
   pedido: string;
   creado: string | null;
-  estado: "enviado" | "ya_enviado" | "sin_ctwa_clid" | "fuera_de_plazo_7_dias" | "pendiente" | "error";
+  estado: "enviado" | "enviado_sin_confirmar" | "ya_enviado" | "sin_ctwa_clid" | "fuera_de_plazo_7_dias" | "pendiente" | "error";
   detalle?: string;
 }
 
 export async function reenviar(
   modo: Modo,
-  op: { testEventCode?: string | null; pedidos?: string[]; evento?: EventoMensajeria },
+  op: { testEventCode?: string | null; pedidos?: string[]; evento?: EventoMensajeria; forzar?: boolean },
   d: DepsReenvio,
 ): Promise<{ modo: Modo; evento: EventoMensajeria; filas: Fila[]; prueba?: ResultadoEnvio & { pedido?: string } }> {
   const evento = op.evento ?? EVENTO_LEAD;
@@ -61,13 +66,24 @@ export async function reenviar(
       fila.estado = "sin_ctwa_clid";
       continue;
     }
-    if (await d.existeCandado(idCandado(evento, c.shopifyOrderId))) {
-      fila.estado = "ya_enviado";
-      continue;
+    const idC = idCandado(evento, c.shopifyOrderId);
+    const cand = await d.estadoCandado(idC);
+    if (cand) {
+      if (cand.error !== SIN_CONFIRMAR) {
+        fila.estado = "ya_enviado";
+        continue;
+      }
+      const vencido = !cand.procesadoEn || ahora.getTime() - Date.parse(cand.procesadoEn) >= REINTENTO_SIN_CONFIRMAR_MS;
+      if (!(cfg.confirmado || vencido || op.forzar) || modo !== "enviar") {
+        fila.estado = "enviado_sin_confirmar";
+        continue;
+      }
+      await d.borrarCandado(idC); // se vuelve a mandar
     }
     if (modo === "enviar") {
       const r = await notificarLeadMeta(c, d.lead, evento);
-      fila.estado = r.accion === "enviado" ? "enviado" : r.accion === "error" ? "error" : (r.motivo as Fila["estado"]);
+      fila.estado = r.accion === "enviado" ? (cfg.confirmado ? "enviado" : "enviado_sin_confirmar") : r.accion === "error" ? "error" : (r.motivo as Fila["estado"]);
+      if (r.accion === "enviado") fila.detalle = "nuevo"; // salió en esta corrida
       if (r.accion === "error") fila.detalle = r.motivo;
     }
   }
@@ -88,7 +104,7 @@ export async function reenviar(
 export async function automatico(d: DepsReenvio) {
   const lead = await reenviar("enviar", { evento: EVENTO_LEAD }, d);
   const purchase = await reenviar("enviar", { evento: EVENTO_PURCHASE }, d);
-  const enviados = (r: { filas: Fila[] }) => r.filas.filter((f) => f.estado === "enviado").map((f) => f.pedido);
+  const enviados = (r: { filas: Fila[] }) => r.filas.filter((f) => f.estado === "enviado" || (f.estado === "enviado_sin_confirmar" && f.detalle === "nuevo")).map((f) => f.pedido);
   const errores = (r: { filas: Fila[] }) => r.filas.filter((f) => f.estado === "error").map((f) => `${f.pedido}: ${f.detalle}`);
   return { lead: { enviados: enviados(lead), errores: errores(lead) }, purchase: { enviados: enviados(purchase), errores: errores(purchase) } };
 }

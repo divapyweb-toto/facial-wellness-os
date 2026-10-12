@@ -9,7 +9,7 @@ import { db } from "../_shared/db.ts";
 
 Deno.serve(conServiceRole(async (req: Request) => {
   try {
-    const b = await req.json().catch(() => ({})) as { modo?: Modo; evento?: string; test_event_code?: string; pedidos?: string[]; origen?: string };
+    const b = await req.json().catch(() => ({})) as { modo?: Modo; evento?: string; test_event_code?: string; pedidos?: string[]; origen?: string; forzar?: boolean };
     if ((b as { modo?: string }).modo === "diagnostico") {
       // Solo lectura: qué dataset tiene vinculado la WABA (GET /{waba}/dataset, CAPI for Business Messaging).
       const token = Deno.env.get("META_CAPI_TOKEN"), waba = Deno.env.get("WA_WABA_ID");
@@ -74,7 +74,7 @@ Deno.serve(conServiceRole(async (req: Request) => {
     }
     const evento = b.evento === EVENTO_PURCHASE ? EVENTO_PURCHASE : "LeadSubmitted";
     const modo: Modo = b.modo === "prueba" || b.modo === "enviar" ? b.modo : "listar";
-    const r = await reenviar(modo, { testEventCode: b.test_event_code ?? null, pedidos: b.pedidos, evento }, depsReales());
+    const r = await reenviar(modo, { testEventCode: b.test_event_code ?? null, pedidos: b.pedidos, evento, forzar: b.forzar === true }, depsReales());
     console.log("meta-lead-reenviar", JSON.stringify({ modo, filas: r.filas, prueba: r.prueba }));
     return Response.json({ ok: true, ...r });
   } catch (e) {

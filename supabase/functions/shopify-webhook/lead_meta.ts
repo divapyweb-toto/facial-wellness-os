@@ -8,6 +8,8 @@
 import { dentroDePlazo, type ConfigLead, type EntradaLead, EVENTO_PURCHASE, type EventoMensajeria, type ResultadoEnvio } from "../_shared/meta_capi.ts";
 
 export const VENTANA_CTWA_DIAS = 7;
+/** Candado de un envío aceptado por la API mientras no está verificado que Meta lo procesa (12-10): se reintenta. */
+export const SIN_CONFIRMAR = "enviado_sin_confirmar";
 export const idCandadoLead = (orderId: number | string) => `meta_lead:${orderId}`;
 /** Candado por evento: LeadSubmitted "meta_lead:<id>", Purchase "meta_purchase:<id>" (12-10). */
 export const idCandado = (evento: EventoMensajeria, orderId: number | string) =>
@@ -64,6 +66,6 @@ export async function notificarLeadMeta(p: PedidoLead, d: DepsLeadMeta, evento: 
 
   const r = await d.enviar(entrada, cfg);
   const error = r.ok ? null : (r.error ?? "error desconocido");
-  await d.registrar(id, error).catch((e) => console.warn("meta_lead registrar:", e instanceof Error ? e.message : e));
+  await d.registrar(id, error ?? (cfg.confirmado ? null : SIN_CONFIRMAR)).catch((e) => console.warn("meta_lead registrar:", e instanceof Error ? e.message : e));
   return error ? { accion: "error", motivo: error } : { accion: "enviado" };
 }

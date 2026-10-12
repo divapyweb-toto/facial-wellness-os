@@ -24,11 +24,15 @@ export function depsReales(): DepsReenvio {
           confirmado: p.estado_confirmacion === "confirmado",
         }));
     },
-    async existeCandado(id) {
-      const { count, error } = await sb.from("eventos_crudos").select("id", { count: "exact", head: true })
-        .eq("fuente", "shopify").eq("id_externo", id);
+    async estadoCandado(id) {
+      const { data, error } = await sb.from("eventos_crudos").select("error,procesado_en")
+        .eq("fuente", "shopify").eq("id_externo", id).maybeSingle();
       if (error) throw new Error(`eventos_crudos: ${error.message}`);
-      return (count ?? 0) > 0;
+      return data ? { error: data.error ?? null, procesadoEn: data.procesado_en ?? null } : null;
+    },
+    async borrarCandado(id) {
+      const { error } = await sb.from("eventos_crudos").delete().eq("fuente", "shopify").eq("id_externo", id);
+      if (error) throw new Error(`eventos_crudos: ${error.message}`);
     },
   };
 }

@@ -155,7 +155,7 @@ Deno.test("real: error de Meta → ok false con el mensaje", async () => {
 Deno.test("lead: configLead null si falta token, dataset de mensajería o WABA, o en modo simulado", async () => {
   const { configLead, armarPayloadLead, EVENTO_LEAD } = await import("./meta_capi.ts");
   const base = { token: "t", datasetMensajeriaId: "d", wabaId: "w", testEventCode: null, simulado: false };
-  assertEquals(configLead(base), { token: "t", datasetMensajeriaId: "d", wabaId: "w", testEventCode: null });
+  assertEquals(configLead(base), { token: "t", datasetMensajeriaId: "d", wabaId: "w", testEventCode: null, confirmado: false }); // 12-10: sin META_MENSAJERIA_CONFIRMADO=si
   assertEquals(configLead({ ...base, token: null }), null);
   assertEquals(configLead({ ...base, datasetMensajeriaId: null }), null);
   assertEquals(configLead({ ...base, wabaId: null }), null);

@@ -5,7 +5,7 @@ import { type ConfigLead, enviarEventoLead } from "../_shared/meta_capi.ts";
 import { type DepsLeadMeta, idCandadoLead, notificarLeadMeta, type PedidoLead } from "./lead_meta.ts";
 
 const AHORA = new Date("2026-10-08T15:00:00Z");
-const CFG: ConfigLead = { token: "tok-falso", datasetMensajeriaId: "ds-msj", wabaId: "waba-1", testEventCode: null };
+const CFG: ConfigLead = { token: "tok-falso", datasetMensajeriaId: "ds-msj", wabaId: "waba-1", testEventCode: null, confirmado: true };
 const PEDIDO: PedidoLead = { shopifyOrderId: 5550001, clienteId: "cli-1", total: 199000, creadoEn: "2026-10-08T14:59:00Z" };
 
 function escenario(op: { clid?: string | null; cfg?: ConfigLead | null; respuesta?: { status: number; body: unknown } } = {}) {
