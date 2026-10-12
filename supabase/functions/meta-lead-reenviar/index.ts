@@ -22,6 +22,32 @@ Deno.serve(conServiceRole(async (req: Request) => {
       const permisos = { app_id: d.app_id, tipo: d.type, valido: d.is_valid, vence: d.expires_at, scopes: d.scopes, granular_scopes: d.granular_scopes, error: d.error };
       return Response.json({ ok: r.ok, waba_dataset: j, dataset_configurado: Deno.env.get("META_DATASET_MENSAJERIA_ID"), permisos });
     }
+    if ((b as { modo?: string }).modo === "prueba_cruda") {
+      // 12-10: envío literal de `data` (solo con test_event_code). "ahora" en event_time → ahora; "RECIENTE" en
+      // ctwa_clid → el del clic de anuncio más reciente. Devuelve la respuesta completa de Meta.
+      const cfg = configLead();
+      const datos = (b as { data?: Record<string, unknown>[] }).data;
+      if (!cfg || !b.test_event_code || !Array.isArray(datos)) return Response.json({ ok: false, error: "falta config, test_event_code o data" }, { status: 400 });
+      let reciente = "";
+      if (JSON.stringify(datos).includes('"RECIENTE"')) {
+        const { data } = await db().from("wa_mensajes").select("contenido").eq("direccion", "in")
+          .not("contenido->referral->>ctwa_clid", "is", null).order("creado_en", { ascending: false }).limit(1);
+        reciente = (data?.[0]?.contenido as { referral?: { ctwa_clid?: string } })?.referral?.ctwa_clid ?? "";
+      }
+      const ahora = Math.floor(Date.now() / 1000);
+      const data = datos.map((e) => ({
+        ...e,
+        ...(e.event_time === "ahora" ? { event_time: ahora } : {}),
+        user_data: { ...(e.user_data as Record<string, unknown>), ...((e.user_data as { ctwa_clid?: string })?.ctwa_clid === "RECIENTE" ? { ctwa_clid: reciente } : {}) },
+      }));
+      const r = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${cfg.datasetMensajeriaId}/events`, {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
+        body: JSON.stringify({ data, test_event_code: b.test_event_code }),
+      });
+      const j = await r.json().catch(() => ({}));
+      const visible = data.map((e) => ({ ...e, user_data: { ...e.user_data, ctwa_clid: `${String(e.user_data.ctwa_clid).slice(0, 4)}…(${String(e.user_data.ctwa_clid).length})` } }));
+      return Response.json({ ok: r.ok, http: r.status, meta: j, enviado: { data: visible, test_event_code: b.test_event_code } });
+    }
     if ((b as { modo?: string }).modo === "prueba_reciente") {
       // 12-10: prueba con el ctwa_clid del clic de anuncio MÁS RECIENTE (event_time = ahora), con test_event_code.
       const cfg = configLead();
