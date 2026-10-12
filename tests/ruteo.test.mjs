@@ -4,7 +4,9 @@
 // transportadora asignada, sin importar qué diga la comparación de costo.
 // Correr:  npm test
 // ═══════════════════════════════════════════════════════════
-import { sugerirTransportadora, ciudadesRuteo, ruteoOficial, tarifaDe } from '../src/lib/transportadoras.js'
+import { sugerirTransportadora, ciudadesRuteo, ruteoOficial, tarifaDe, DIAS_PREFERIR_LUCERO } from '../src/lib/transportadoras.js'
+// Estas pruebas son de la regla NORMAL: se apaga la preferencia temporal por Lucero (lluvia) si cae hoy.
+DIAS_PREFERIR_LUCERO.length = 0
 
 let f = 0
 const ok = (c, m) => { if (!c) { console.log(`✗ ${m}`); f++ } }
