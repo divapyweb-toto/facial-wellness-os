@@ -4,10 +4,11 @@
 // A mano: {acciones: [{pedido: "#1016", quitar_etiqueta: "FALTAN_DATOS"}, {pedido: "#1005", agregar_etiqueta: "CONFIRMADO"}, {pedido: "#1019", cancelar: true}]}.
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { db } from "../_shared/db.ts";
+import { marcarPreparado } from "../_shared/shopify_preparar.ts";
 import { cancelarEnShopify, candadosTomados, ejecutar, etiqueta, idCandadoAuto, pedidosAbiertos, registrarError, tomarCandado } from "./io.ts";
 import { accionesPara } from "./logica.ts";
 
-type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean };
+type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean; preparar?: boolean };
 
 async function automatico(simular: boolean) {
   const ahora = new Date();
@@ -45,6 +46,8 @@ async function manual(acciones: AccionManual[]) {
     if (a.quitar_etiqueta) pasos.push([`quitar ${a.quitar_etiqueta}`, () => etiqueta(id, a.quitar_etiqueta!, false)]);
     if (a.agregar_etiqueta) pasos.push([`agregar ${a.agregar_etiqueta}`, () => etiqueta(id, a.agregar_etiqueta!, true)]);
     if (a.cancelar) pasos.push(["cancelar", () => cancelarEnShopify(id)]);
+    // Preparado sin aviso al cliente (mismo camino que Despacho). Ej.: retiro en persona ya entregado.
+    if (a.preparar) pasos.push(["preparar", async () => { const r = await marcarPreparado(id); return r.ok ? null : (r.error ?? "no se pudo"); }]);
     for (const [nombre, f] of pasos) {
       const e = await f().catch((x) => String(x));
       res.push({ pedido: a.pedido, accion: nombre, ok: !e, ...(e ? { error: e } : {}) });
