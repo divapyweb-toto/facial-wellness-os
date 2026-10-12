@@ -307,9 +307,10 @@ async function postear(
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
-    const j = await r.json().catch(() => ({})) as { events_received?: number; error?: { message?: string } };
-    if (!r.ok || j.error) return { ok: false, error: j.error?.message ?? `HTTP ${r.status}` };
-    return { ok: true, respuesta: { events_received: j.events_received } };
+    const j = await r.json().catch(() => ({})) as { events_received?: number; messages?: unknown[]; fbtrace_id?: string; error?: { message?: string; fbtrace_id?: string } };
+    if (!r.ok || j.error) return { ok: false, error: `${j.error?.message ?? `HTTP ${r.status}`}${j.error?.fbtrace_id ? ` (fbtrace_id ${j.error.fbtrace_id})` : ""}` };
+    // 12-10: respuesta completa de Meta (mensajes + fbtrace_id) para poder rastrear un evento con soporte.
+    return { ok: true, respuesta: { events_received: j.events_received, messages: j.messages, fbtrace_id: j.fbtrace_id } };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
