@@ -4,11 +4,18 @@
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { depsReales } from "./io.ts";
 import { automatico, type Modo, reenviar } from "./logica.ts";
-import { EVENTO_PURCHASE } from "../_shared/meta_capi.ts";
+import { EVENTO_PURCHASE, GRAPH_VERSION } from "../_shared/meta_capi.ts";
 
 Deno.serve(conServiceRole(async (req: Request) => {
   try {
     const b = await req.json().catch(() => ({})) as { modo?: Modo; evento?: string; test_event_code?: string; pedidos?: string[]; origen?: string };
+    if ((b as { modo?: string }).modo === "diagnostico") {
+      // Solo lectura: qué dataset tiene vinculado la WABA (GET /{waba}/dataset, CAPI for Business Messaging).
+      const token = Deno.env.get("META_CAPI_TOKEN"), waba = Deno.env.get("WA_WABA_ID");
+      const r = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${waba}/dataset`, { headers: { Authorization: `Bearer ${token}` } });
+      const j = await r.json().catch(() => ({}));
+      return Response.json({ ok: r.ok, waba_dataset: j, dataset_configurado: Deno.env.get("META_DATASET_MENSAJERIA_ID") });
+    }
     if (b.origen === "pg_cron") {
       const r = await automatico(depsReales());
       console.log("meta-lead-reenviar cron", JSON.stringify(r));
