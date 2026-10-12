@@ -2,7 +2,7 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/
 import { validar, validarOFallar } from "./validar_xsd.ts";
 import { armarXmlDEConOpciones } from "./xml.ts";
 import { armarQr, CSC_PRUEBA } from "./qr.ts";
-import { xmlEventoCancelacion, xmlEventoInutilizacion } from "./eventos_xml.ts";
+import { xmlEventoCancelacion, xmlEventoInutilizacion, xmlEventoReceptor } from "./eventos_xml.ts";
 import { AUTOFACTURA, CDC_FE_PRUEBA_DIGEST, CRED, docFE, EMISOR, FECHA_FIRMA, firmar, firmarEvento, item, REMISION } from "./xml_fixtures_test.ts";
 import type { DocumentoDE } from "./tipos.ts";
 
@@ -45,7 +45,18 @@ for (const motor of ["wasm", "binario"] as const) {
   Deno.test(`xsd (${motor}): eventos firmados pasan siRecepEvento_v150.xsd`, async () => {
     const can = xmlEventoCancelacion({ cdc: "01444444017001001001452822017012515873260988", motivo: "Pedido anulado", id: 1, fechaFirma: FECHA_FIRMA });
     const inu = xmlEventoInutilizacion({ timbrado: "12345678", establecimiento: "001", punto: "001", desde: 5, hasta: 7, tipo: 1, motivo: "Saltos de numeración", id: 2, fechaFirma: FECHA_FIRMA });
-    for (const x of [can.xml, inu.xml]) {
+    const cdc = "01444444017001001001452822017012515873260988";
+    const rec = { tipo: 1 as const, nombre: "Voltra E.A.S.", ruc: "80177762", dv: "3" };
+    const f = { fechaEmision: "2026-10-08T10:00:00", fechaRecepcion: "2026-10-08T12:00:00" };
+    const receptor = [
+      xmlEventoReceptor({ evento: "notificacion", cdc, ...f, receptor: rec, totalGs: 162000, id: 3, fechaFirma: FECHA_FIRMA }),
+      xmlEventoReceptor({ evento: "conformidad", cdc, fechaRecepcion: f.fechaRecepcion, id: 4, fechaFirma: FECHA_FIRMA }),
+      xmlEventoReceptor({ evento: "conformidad", cdc, parcial: true, fechaRecepcion: f.fechaRecepcion, id: 5, fechaFirma: FECHA_FIRMA }),
+      xmlEventoReceptor({ evento: "disconformidad", cdc, motivo: "Mercadería dañada", id: 6, fechaFirma: FECHA_FIRMA }),
+      xmlEventoReceptor({ evento: "desconocimiento", cdc, ...f, receptor: rec, motivo: "No reconozco la operación", id: 7, fechaFirma: FECHA_FIRMA }),
+      xmlEventoReceptor({ evento: "desconocimiento", cdc, ...f, receptor: { tipo: 2, nombre: "Cliente Inventado", documentoTipo: 1, documentoNumero: "1234567" }, motivo: "No reconozco la operación", id: 8, fechaFirma: FECHA_FIRMA }),
+    ];
+    for (const x of [can.xml, inu.xml, ...receptor.map((r) => r.xml)]) {
       const r = await validar(firmarEvento(x), "evento", { motor });
       assert(r.valido, r.errores.join(" | "));
     }

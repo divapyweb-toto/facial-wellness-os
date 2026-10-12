@@ -13,11 +13,15 @@
 //   SIFEN_BATERIA_RECEPTOR_RAZON razón social de ese RUC
 //   SIFEN_BATERIA_NUMERO_DESDE  primer número a usar (por defecto 1; usar uno libre si se repite la batería)
 //   SIFEN_BATERIA_ESPERA_LOTE_MIN minutos máximos esperando los lotes asíncronos (por defecto 15)
+//
+// Voltra tiene UN solo punto de expedición (001-001, decisión del 11-10-2026): sync, lotes, inutilizaciones y
+// eventos usan 001. Las inutilizaciones toman números lejanos (NUMERO_DESDE + 900…) que la batería nunca emite.
 
 import type { DatosEmisor, DocumentoDE, ItemDE, RespuestaSifen, TipoDE } from "../supabase/functions/_shared/sifen/tipos.ts";
 import { cargarModulosSifen, credencialesDesdeEnv, datosEmisorPrueba, CARGADORES } from "../supabase/functions/_shared/sifen/emisor.ts";
 import { type ClienteWsSifen, crearEmisorPropio, type DepsEmisorPropio, type EmisorPropio } from "../supabase/functions/_shared/sifen/emisor_propio.ts";
 import { codigoSeguridadAleatorio, fechaSifen } from "../supabase/functions/_shared/sifen/desde_pedido.ts";
+import { type EventoReceptor, xmlEventoReceptor } from "../supabase/functions/_shared/sifen/eventos_xml.ts";
 
 // ─── Casos (Guía de Pruebas feb-2026, docs/sifen-requisitos.md §5) ───
 export const CASOS = {
@@ -28,7 +32,7 @@ export const CASOS = {
   asyncRechazados: 5, // por tipo, 1 lote por tipo
   cancelaciones: 5,
   inutilizaciones: [1, 1, 5, 6, 4] as TipoDE[], // 2 FE, 1 NC, 1 ND, 1 AF
-  eventosReceptor: 15, // conformidad/disconformidad/desconocimiento/notificación/ajuste ×3 [VERIFICAR cómo hacerlos en test]
+  eventosReceptor: 3, // por tipo: notificación, conformidad, disconformidad, desconocimiento y ajuste (Guía §4.3, rol RECEPTOR)
   consultasPorTipo: 3,
   kudePorTipo: 1,
   qrPorTipo: 2,
@@ -80,6 +84,26 @@ if (simulado && est.certDePrueba) {
     console.warn("sin certificado de prueba:", e);
   }
 }
+// Modo real: el certificado tiene que servir ANTES de mandar nada (Guía §4.1: cualificado, con el RUC del emisor y clientAuth).
+if (!simulado) {
+  const cm = await CARGADORES.certificado();
+  try {
+    // deno-lint-ignore no-explicit-any
+    const c = (cm.cargarP12 as any)(cred.certP12, cred.certClave);
+    const avisos: string[] = (cm.avisosCertificado as (c: unknown, r?: string) => string[])(c, emisorDatos.ruc);
+    console.log(`Certificado: RUC ${c.ruc ?? "?"}-${c.dv ?? "?"} · emitido por ${c.emisor} · vence ${c.venceEl.toISOString().slice(0, 10)} · clientAuth ${c.clientAuth ? "sí" : "NO"}`);
+    for (const a of avisos) console.log(`  aviso: ${a}`);
+    const graves = avisos.filter((a) => !/vence pronto/.test(a));
+    if (graves.length) {
+      console.error("El certificado no sirve para SIFEN test; no se envió nada. Corregí esto y volvé a correr la batería.");
+      Deno.exit(2);
+    }
+  } catch (e) {
+    console.error(`No se pudo abrir el certificado: ${e instanceof Error ? e.message : e}`);
+    Deno.exit(2);
+  }
+}
+
 const mod = await cargarModulosSifen(simulado, cred, { usarFirmaReal });
 
 // Cliente WS completo de C (para lotes) solo en modo real.
@@ -244,7 +268,7 @@ for (const t of CASOS.tipos) {
   for (const [esperado, n] of [["aprobada", CASOS.asyncAprobados], ["rechazada", CASOS.asyncRechazados]] as const) {
     const xmls: string[] = [];
     for (let i = 0; i < n; i++) {
-      const d = esperado === "aprobada" ? documento(t, "002") : documento(t, "002", { fechaEmision: fechaSifen(new Date(Date.now() - 40 * 86_400_000)) });
+      const d = esperado === "aprobada" ? documento(t, "001") : documento(t, "001", { fechaEmision: fechaSifen(new Date(Date.now() - 40 * 86_400_000)) });
       const x = await firmarSinEnviar(d);
       if (x) xmls.push(x);
     }
@@ -332,23 +356,60 @@ for (const a of paraCancelar) {
   res.push({ bloque: "4.3 cancelación", tipo: "FE", caso: a.cdc, esperado: "aprobado", obtenido: r.estado, ok: r.estado === "aprobado", cdc: a.cdc, codigo: r.codigo, mensaje: r.mensaje });
 }
 
-// 4.3 Inutilizaciones (2 FE, 1 NC, 1 ND, 1 AF): números nunca usados, punto 003.
+// 4.3 Inutilizaciones (2 FE, 1 NC, 1 ND, 1 AF): punto 001, números lejanos que la batería nunca emite.
+const inuPorTipo = new Map<TipoDE, number>();
 for (const t of CASOS.inutilizaciones) {
-  const n = siguiente(t, "003") + 100;
-  contadores.set(`${t}/003`, n);
-  const r = await em.inutilizar({ tipo: t, establecimiento: "001", punto: "003", desde: n, hasta: n, motivo: "Prueba de inutilización de la batería de habilitación" });
+  const n = desde + 900 + (inuPorTipo.get(t) ?? 0);
+  inuPorTipo.set(t, (inuPorTipo.get(t) ?? 0) + 1);
+  const r = await em.inutilizar({ tipo: t, establecimiento: "001", punto: "001", desde: n, hasta: n, motivo: "Prueba de inutilización de la batería de habilitación" });
   marcarConexion("evento", r);
-  res.push({ bloque: "4.3 inutilización", tipo: NOMBRE[t], caso: `001-003 n.º ${n}`, esperado: "aprobado", obtenido: r.estado, ok: r.estado === "aprobado", codigo: r.codigo, mensaje: r.mensaje });
+  res.push({ bloque: "4.3 inutilización", tipo: NOMBRE[t], caso: `001-001 n.º ${n}`, esperado: "aprobado", obtenido: r.estado, ok: r.estado === "aprobado", codigo: r.codigo, mensaje: r.mensaje });
 }
 
-// 4.3 Eventos del receptor: requieren DTE emitidos A NOMBRE de Voltra por otro emisor [VERIFICAR con la Mesa SIFEN].
-res.push({ bloque: "4.3 eventos receptor", caso: `${CASOS.eventosReceptor} eventos (conformidad, disconformidad, desconocimiento, notificación, ajuste ×3)`, esperado: "aprobado", obtenido: "no implementado", ok: "pendiente", mensaje: "Faltan los armadores en eventos_xml.ts y DTE recibidos por Voltra en test [VERIFICAR]" });
+// 4.3 Eventos del receptor (rol RECEPTOR). Con el mismo RUC: Voltra se emite FE a sí misma y, como receptora (firma
+// con su propio certificado), registra sobre esos CDC 3 notificaciones, 3 conformidades, 3 disconformidades,
+// 3 desconocimientos y 3 ajustes (conformidad sobre los CDC que ya tenían disconformidad).
+// [VERIFICAR] que SIFEN test acepte FE con receptor = emisor y que ese sea el "ajuste" que pide la Guía:
+// si no, el reporte trae el código de rechazo de SIFEN.
+const yo = { tipo: 1 as const, nombre: emisorDatos.razonSocial, ruc: emisorDatos.ruc, dv: emisorDatos.dv };
+const propias: Array<{ cdc: string; fechaEmision: string; total: number }> = [];
+for (let i = 1; i <= CASOS.eventosReceptor * 4; i++) {
+  const doc = documento(1, "001", { receptor: { ...receptorRuc, ruc: emisorDatos.ruc, dv: emisorDatos.dv, razonSocial: emisorDatos.razonSocial } });
+  const r = await em.emitir(doc);
+  if (r.estado === "aprobada" && r.cdc) propias.push({ cdc: r.cdc, fechaEmision: doc.fechaEmision, total: r.totales?.total ?? 162000 });
+  else res.push({ bloque: "4.3 eventos receptor", tipo: "FE", caso: `FE a nombre de Voltra #${i}`, esperado: "aprobada", obtenido: r.estado, ok: false, cdc: r.cdc, codigo: r.codigo, mensaje: r.mensaje });
+}
+async function eventoReceptor(caso: string, ev: EventoReceptor) {
+  try {
+    const arm = xmlEventoReceptor(ev);
+    const firmado = await mod.firmarXml(arm.xml, arm.idEvento, cred.certP12, cred.certClave);
+    const r = await mod.ws.enviarEvento(firmado.xmlFirmado);
+    marcarConexion("evento", r);
+    res.push({ bloque: "4.3 eventos receptor", caso, esperado: "aprobado", obtenido: r.estado, ok: r.estado === "aprobado", cdc: ev.cdc, codigo: r.codigo, mensaje: r.mensaje });
+  } catch (e) {
+    res.push({ bloque: "4.3 eventos receptor", caso, esperado: "aprobado", obtenido: "excepción", ok: false, cdc: ev.cdc, mensaje: e instanceof Error ? e.message : String(e) });
+  }
+}
+const grupo = (k: number) => propias.slice(k * CASOS.eventosReceptor, (k + 1) * CASOS.eventosReceptor);
+const recibido = () => fechaSifen(new Date());
+for (const p of grupo(0)) {
+  await eventoReceptor("notificación de recepción", { evento: "notificacion", cdc: p.cdc, fechaEmision: p.fechaEmision, fechaRecepcion: recibido(), receptor: yo, totalGs: p.total });
+}
+for (const p of grupo(1)) await eventoReceptor("conformidad", { evento: "conformidad", cdc: p.cdc, fechaRecepcion: recibido() });
+for (const p of grupo(2)) await eventoReceptor("disconformidad", { evento: "disconformidad", cdc: p.cdc, motivo: "Prueba de disconformidad de la batería de habilitación" });
+for (const p of grupo(3)) {
+  await eventoReceptor("desconocimiento", { evento: "desconocimiento", cdc: p.cdc, fechaEmision: p.fechaEmision, fechaRecepcion: recibido(), receptor: yo, motivo: "Prueba de desconocimiento de la batería de habilitación" });
+}
+for (const p of grupo(2)) await eventoReceptor("ajuste (conformidad tras disconformidad)", { evento: "conformidad", cdc: p.cdc, fechaRecepcion: recibido() });
 
 // 4.1 Conexión por WS.
 for (const ws of ["recibe (sync)", "recibe-lote (async)", "consulta-lote", "consulta DE", "evento", "consulta RUC"]) {
   const v = conexion.get(ws) ?? (simulado ? "simulado" : "sin llamada");
   res.push({ bloque: "4.1 conexión", caso: ws, esperado: "OK", obtenido: v, ok: simulado ? "simulado" : v.startsWith("OK") });
 }
+
+// En simulado nada pasó por SIFEN: todo lo que depende de la red queda "simulado", nunca "sí" (solo el KuDE es local).
+if (simulado) for (const r of res) if (r.ok === true && r.bloque !== "4.5 KuDE") r.ok = "simulado";
 
 // ─── Reporte ───
 const resumen: Record<string, { total: number; ok: number; fallas: number; simulados: number; pendientes: number }> = {};

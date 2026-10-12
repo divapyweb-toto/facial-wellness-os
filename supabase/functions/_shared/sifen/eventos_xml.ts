@@ -1,4 +1,4 @@
-// _shared/sifen/eventos_xml.ts · XML de eventos del emisor: cancelación e inutilización (SIN firma).
+// _shared/sifen/eventos_xml.ts · XML de eventos (SIN firma): emisor (cancelación, inutilización) y receptor (notificación, conformidad, disconformidad, desconocimiento).
 // Fuentes:
 //  - Manual Técnico SIFEN v150, sección 11.5 "Formato de eventos" (GDE000–GDE008) y 11.5.1
 //    "Formato de eventos emisor": cancelación GEC001–GEC003, inutilización GEI001–GEI008.
@@ -113,5 +113,85 @@ export function xmlEventoInutilizacion(ev: EventoInutilizacion): XmlEvento {
     `<mOtEve>${escaparXml(motivoValido(ev.motivo))}</mOtEve>` + // GEI008
     (ev.serie ? `<dSerieNum>${ev.serie}</dSerieNum>` : "") + // NT 10
     `</rGeVeInu>`;
+  return envolver(ev.id ?? idEventoAleatorio(), ev.fechaFirma ?? ahoraAsuncion(), grupo);
+}
+
+// ─── Eventos del receptor (MT v150 11.5.2; XSD Evento_v150.xsd: trGeVeNotRec, trGeVeConf, trGeVeDisconf, trGeVeDescon) ───
+// Los firma quien RECIBIÓ el DTE (el RUC del certificado debe ser el receptor del documento). Guía de Pruebas §4.3
+// pide 3 de cada uno + 3 "ajustes" (un evento nuevo sobre un CDC que ya tenía otro).
+
+/** Receptor que se informa en notificación y desconocimiento. tipo 1 = contribuyente (RUC y DV), 2 = no contribuyente. */
+export interface ReceptorEvento {
+  tipo: 1 | 2; // iTipRec
+  nombre: string; // dNomRec (4-255)
+  ruc?: string; // dRucRec (sin DV)
+  dv?: string; // dDVRec
+  documentoTipo?: number; // dTipIDRec
+  documentoNumero?: string; // dNumID
+}
+
+export type EventoReceptor = EventoBase & { cdc: string } & (
+  | { evento: "notificacion"; fechaEmision: string; fechaRecepcion: string; receptor: ReceptorEvento; totalGs: number }
+  | { evento: "conformidad"; parcial?: boolean; fechaRecepcion?: string }
+  | { evento: "disconformidad"; motivo: string }
+  | { evento: "desconocimiento"; fechaEmision: string; fechaRecepcion: string; receptor: ReceptorEvento; motivo: string }
+);
+
+function fechaHora(f: string, campo: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(f ?? "")) throw new Error(`${campo} inválida ("${f}"): AAAA-MM-DDThh:mm:ss.`);
+  return f;
+}
+
+function receptorXml(r: ReceptorEvento, rangoTipoDoc: RegExp): string {
+  const nombre = limpiarTexto(r?.nombre ?? "");
+  if (nombre.length < 4 || nombre.length > 255) throw new Error("Evento del receptor: nombre de 4 a 255 caracteres (dNomRec).");
+  let x = `<iTipRec>${r.tipo}</iTipRec><dNomRec>${escaparXml(nombre)}</dNomRec>`;
+  if (r.tipo === 1) {
+    if (!/^[1-9]\d{2,7}$/.test(r.ruc ?? "") || !/^\d$/.test(r.dv ?? "")) throw new Error("Evento del receptor: contribuyente con RUC (3-8 dígitos, sin DV) y DV de 1 dígito.");
+    x += `<dRucRec>${r.ruc}</dRucRec><dDVRec>${r.dv}</dDVRec>`;
+  } else if (r.tipo === 2) {
+    if (!rangoTipoDoc.test(String(r.documentoTipo ?? "")) || !/^[0-9A-Za-z-]{1,20}$/.test(r.documentoNumero ?? "")) {
+      throw new Error("Evento del receptor: no contribuyente con tipo y número de documento.");
+    }
+    x += `<dTipIDRec>${r.documentoTipo}</dTipIDRec><dNumID>${r.documentoNumero}</dNumID>`;
+  } else throw new Error(`Evento del receptor: tipo de receptor inválido (${(r as { tipo?: unknown })?.tipo}), 1 o 2.`);
+  return x;
+}
+
+/** Evento del receptor: notificación de recepción, conformidad, disconformidad o desconocimiento. */
+export function xmlEventoReceptor(ev: EventoReceptor): XmlEvento {
+  if (!validarCdc(ev?.cdc)) throw new Error(`Evento del receptor: CDC inválido ("${ev?.cdc ?? ""}").`);
+  const id = `<Id>${ev.cdc}</Id>`;
+  let grupo: string;
+  switch (ev.evento) {
+    case "notificacion": {
+      if (!Number.isFinite(ev.totalGs) || ev.totalGs < 0) throw new Error("Notificación de recepción: total en guaraníes inválido (dTotalGs).");
+      grupo = `<rGeVeNotRec>${id}` +
+        `<dFecEmi>${fechaHora(ev.fechaEmision, "Fecha de emisión del DE")}</dFecEmi>` +
+        `<dFecRecep>${fechaHora(ev.fechaRecepcion, "Fecha de recepción")}</dFecRecep>` +
+        receptorXml(ev.receptor, /^([1-6]|9)$/) +
+        `<dTotalGs>${Math.round(ev.totalGs)}</dTotalGs></rGeVeNotRec>`;
+      break;
+    }
+    case "conformidad":
+      // iTipConf: 1 conformidad total, 2 parcial (dFecRecep obligatoria en la parcial).
+      if (ev.parcial && !ev.fechaRecepcion) throw new Error("Conformidad parcial: falta la fecha de recepción.");
+      grupo = `<rGeVeConf>${id}<iTipConf>${ev.parcial ? 2 : 1}</iTipConf>` +
+        (ev.fechaRecepcion ? `<dFecRecep>${fechaHora(ev.fechaRecepcion, "Fecha de recepción")}</dFecRecep>` : "") +
+        `</rGeVeConf>`;
+      break;
+    case "disconformidad":
+      grupo = `<rGeVeDisconf>${id}<mOtEve>${escaparXml(motivoValido(ev.motivo))}</mOtEve></rGeVeDisconf>`;
+      break;
+    case "desconocimiento":
+      grupo = `<rGeVeDescon>${id}` +
+        `<dFecEmi>${fechaHora(ev.fechaEmision, "Fecha de emisión del DE")}</dFecEmi>` +
+        `<dFecRecep>${fechaHora(ev.fechaRecepcion, "Fecha de recepción")}</dFecRecep>` +
+        receptorXml(ev.receptor, /^[1-4]$/) +
+        `<mOtEve>${escaparXml(motivoValido(ev.motivo))}</mOtEve></rGeVeDescon>`;
+      break;
+    default:
+      throw new Error(`Evento del receptor desconocido: ${(ev as { evento?: unknown })?.evento}`);
+  }
   return envolver(ev.id ?? idEventoAleatorio(), ev.fechaFirma ?? ahoraAsuncion(), grupo);
 }
