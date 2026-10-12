@@ -429,6 +429,17 @@ export function transportadoraForzada(productoNombre) {
   return fam ? (REGLA_TRANSPORTADORA_PRODUCTO[fam] || null) : null
 }
 
+// ─── Preferencia temporal por Lucero ───────────────────────
+// 12-10-2026: por la lluvia, Enrique pidió que SOLO ese día vaya por Lucero todo lo que Lucero cubre.
+// Fechas en hora de Paraguay (AAAA-MM-DD). Para repetirlo otro día, agregar la fecha; vacío = regla normal.
+export const DIAS_PREFERIR_LUCERO = ['2026-10-12']
+
+export const hoyParaguay = (d = new Date()) => d.toLocaleDateString('en-CA', { timeZone: 'America/Asuncion' })
+
+export function preferirLucero(fecha = hoyParaguay()) {
+  return DIAS_PREFERIR_LUCERO.includes(fecha)
+}
+
 // ─── Sugerencia automática ──────────────────────────────────
 // Regla vigente: Lucero si cubre la ciudad Y su tarifa es ≤ 30.000
 // (más barato o +1.000 compensado por cobrar 6 días antes).
@@ -461,6 +472,18 @@ export function sugerirTransportadora(ciudad, productoNombre = '') {
   const cL = ciudadLucero(ciudad)
   const hayPaP = tieneCobranzaPaP(ciudad)
   const flete = getFlete()
+
+  // ── Preferencia temporal por Lucero (lluvia) ──
+  // Después de la regla de producto y ANTES de la lista oficial: esos días, todo lo que Lucero cubre va por Lucero.
+  if (cL && preferirLucero()) {
+    return {
+      transportadora: 'lucero',
+      motivo: 'Hoy por lluvia: Lucero en toda ciudad que cubre',
+      tarifa: tarifaDe('lucero', ciudad),
+      velocidad: velocidadLucero(cL),
+      bloqueadoPorProducto: false,
+    }
+  }
 
   // ── La lista oficial manda ──
   // Va DESPUÉS de la regla por producto (esa es de negocio y pesa más) pero
