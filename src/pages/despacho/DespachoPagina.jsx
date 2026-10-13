@@ -1,11 +1,12 @@
 // src/pages/despacho/DespachoPagina.jsx
 import { useState, useRef, useMemo } from 'react'
-import { limpiarTel, refVoltra } from '../../lib/referencias'
-import { esPedidoImportable, filasCsvDesdePedidoShopify } from '../../lib/pedidosVoltra'
+import { limpiarTel, refVoltra, normalizarRef } from '../../lib/referencias'
+import { esPedidoImportable, filasCsvDesdePedidoShopify, esPagoAnticipado, esRetiroConfirmado, METODO_ENVIO_RETIRO, ENVIO_YA_SALIO, envioEntregado } from '../../lib/pedidosVoltra'
+import { getTienda } from '../../lib/tienda'
 import * as XLSX from 'xlsx'
 import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRun, BorderStyle, Table, TableRow, TableCell, WidthType, convertMillimetersToTwip } from 'docx'
 import { generarBarcodePNG, codigoPedido } from '../../lib/barcode'
-import ModalSalida from './ModalSalida'
+import ModalSalida, { refsEnCourier, pendienteDeSalir } from './ModalSalida'
 import { supabase, formatGs } from '../../lib/supabase'
 import { categorizarPaP as categoriaPaP, importeSano, esImporteCorrupto, cantidadSana, esCantidadCorrupta } from '../../lib/estadosPaP'
 import { costoFleteActual } from '../../lib/flete'
@@ -20,6 +21,7 @@ import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel 
 import { construirHistorialCiudades, evaluarCiudad } from '../../lib/riesgoCiudad'
 import { useToast } from '../../lib/toast'
 import { prepararEnShopify } from '../../lib/prepararShopify'
+import { esPrioridad, ordenarGuias, ordenarPorPrioridad, pagadoPorTags, tienePrioridad } from './prioridad'
 
 // Helpers locales para el cruce ventas ⋈ entregas del historial de riesgo
 const normRefRiesgo = (ref) => {
@@ -168,9 +170,15 @@ function mapearGrupoAPedidos(grupoRows) {
   const tagsTxt = String(primero('Tags') || '').toLowerCase()
   // 09-10: pago anticipado. Pagado en Shopify (botón "Verifiqué el pago" de Telegram o a mano) → sale como YA PAGADO.
   // Comprobante recibido pero sin verificar → no se despacha hasta verificarlo (ni cobro doble ni envío sin cobrar).
-  const pagadoShopify = String(primero('Financial Status') || '').toLowerCase() === 'paid' || tagsTxt.includes('pago_verificado')
+  // 12-10: también el tag PAGADO ("Recibido" del pago con prioridad) y PAGADO_QR → cobro 0.
+  // 12-10 (auditoría): 'paid' suelto NO es prepago: en contra entrega Shopify marca 'paid' AL ENTREGAR
+  // (VT-1007, VT-1014). Regla en esPagoAnticipado; los tags PAGADO / PAGADO_QR siguen valiendo.
+  const pagadoShopify = esPagoAnticipado({ financial: primero('Financial Status'), fulfillment: primero('Fulfillment Status'), tags: primero('Tags') })
+    || pagadoPorTags(primero('Tags'), '')
     // 10-10: mayorista a crédito con plazo: el courier NO cobra en la puerta (se cobra después).
     || tagsTxt.includes('credito')
+  // 12-10: pagó por adelantado con prioridad → sale primero en la lista y en la cabecera / guías.
+  const prioridad = tienePrioridad(primero('Tags'))
   const comprobanteSinVerificar = !pagadoShopify && tagsTxt.includes('pago_anticipado_comprobante')
   const cfg = estado === 'confirmado' && comprobanteSinVerificar
     ? { ...ESTADO_CONFIG.pending, label: '💳 Mandó comprobante: verificá el pago en ueno antes de despachar', color: 'var(--purple)' }
@@ -186,6 +194,8 @@ function mapearGrupoAPedidos(grupoRows) {
   const tienda = esVoltra ? 'voltra' : 'fw'
   const origenWhatsApp = /ORIGEN_WHATSAPP/i.test(String(primero('Tags') || '')) || /whatsapp/i.test(String(extraerNota(notas, 'origen') || ''))
   const ref = esVoltra ? refVoltra(primero('Name')) : (primero('Name') || '').replace('#', '').trim()
+  // 12-10: retira en persona y está confirmado → es venta, pero sin courier.
+  const retiroConfirmado = esRetiroConfirmado(primero('Tags'), primero('Cancelled at'))
   const nombre = (extraerNota(notas, 'Nombre y apellido') || primero('Billing Name') || primero('Shipping Name') || '').replace(/\s*-\s*$/, '').trim()
   const ciudad = extraerNota(notas, 'ciudad') || primero('Shipping City') || ''
   const departamento = extraerNota(notas, 'departamento') || ''
@@ -266,7 +276,7 @@ function mapearGrupoAPedidos(grupoRows) {
     n_referencia: ref, tienda, origenWhatsApp, cliente_nombre: nombre, ciudad, departamento, direccion,
     referencia_dir: refDir,          // separada: Lucero la pide en su propia columna
     telefono, producto_nombre: it.producto_nombre, cantidad: it.cantidad,
-    total: totales[i], fecha, estado_releasit: estado, pagadoShopify,
+    total: totales[i], fecha, estado_releasit: estado, pagadoShopify, retiroConfirmado, prioridad,
     cfg, cobranzaOk, despachar, faltantes,
     transportadora,                  // 'pap' | 'lucero' | 'otra' — editable después en la UI
     motivoTransportadora: sugerencia.motivo,
@@ -572,7 +582,7 @@ function descargarCabeceraXLSX(pedidos) {
       p.cliente_nombre, p.ciudad, p.direccion, p.telefono,
       p.esMultiProducto ? p.tipoCombinado : getTipo(p.producto_nombre),
       1,
-      p.prepago ? 'urgente' : null,                          // prepago = prioridad urgente
+      esPrioridad(p) ? 'urgente' : null,                     // prepago / PRIORIDAD = prioridad urgente
       p.prepago ? 'ya esta pagado' : 'efectivo a cobrar',    // forma de pago
       p.prepago ? 0 : p.total,                               // importe a cobrar (0 si ya pagó)
       isNaN(refNum) ? p.n_referencia : refNum,
@@ -807,6 +817,8 @@ function ventaAPedido(v) {
     // Sin esto, una venta ya pagada salía como "efectivo a cobrar" en la
     // cabecera y la guía, y el courier le cobraba de nuevo al cliente.
     prepago: !!v.pago_anticipado,
+    // 12-10: Ventas no guarda tags: lo pagado por adelantado (pago con prioridad) va primero.
+    prioridad: !!v.pago_anticipado,
     tienda: v.tienda || undefined,
   }
 }
@@ -816,6 +828,8 @@ function ventaAPedido(v) {
 // ellas en vez de dejar la pantalla vacía.
 const COLS_VENTAS_PEND_BASE = 'id, n_referencia, fecha, cliente_nombre, cliente_telefono, cliente_direccion, ciudad, producto_nombre, cantidad, total, estado_releasit'
 const COLS_VENTAS_PEND_EXTRA = 'pago_anticipado, transportadora, costo_envio, tienda'
+// 12-10: marca de retiro en persona (no sale por courier).
+const COLS_VENTAS_PEND_RETIRO = 'metodo_envio_nombre'
 const esErrorColumnaFaltante = (e) => /column .* does not exist|Could not find the .* column|42703/i.test(`${e?.message || ''} ${e?.code || ''}`)
 
 // 'otra' no tiene tarifario: si no se tipeó el flete se guardaba 0 y la
@@ -965,6 +979,109 @@ function ModalEditarPedido({ pedido, onGuardar, onCerrar }) {
   )
 }
 
+function filaVentaDePedido(p, catalogo) {
+  const prod = matchProducto(p.producto_nombre, catalogo)
+  // ── Cierre automático: prepago + transportadora sin reporte ──
+  // TSI, Multienvíos y cualquier courier convencional NO entregan reporte
+  // de estados, así que estas ventas nunca podrían salir de 'pendiente':
+  // no hay archivo que importar ni rendición que las cierre. Quedarían
+  // restando flete sin sumar nunca el ingreso, hundiendo la ganancia.
+  // Como además están 100% pagadas por adelantado (la plata YA entró y no
+  // depende de que el cliente reciba), se marcan entregadas al despachar.
+  // OJO: solo aplica a 'otra'. PaP y Lucero SÍ tienen reporte — esas se
+  // cierran con el dato real, no por suposición.
+  const cierreAutomatico = p.prepago && p.transportadora === 'otra'
+  const fila = {
+    fecha: p.fecha,
+    producto_nombre: prod ? prod.nombre : p.producto_nombre,
+    cantidad: p.cantidad,
+    // 12-10: precio UNITARIO (antes guardaba el total del pedido).
+    precio_unit: Math.round((p.total || 0) / (p.cantidad || 1)),
+    total: p.total,
+    n_referencia: p.n_referencia,
+    tienda: p.tienda || 'fw',
+    estado: cierreAutomatico ? 'entregado' : 'pendiente',
+    // Los pedidos cargados a mano NO vinieron de Shopify — dejarlos como
+    // "Shopify Orgánico" ensuciaría cualquier reporte por canal de origen.
+    canal_origen: (p.origenManual || p.origenWhatsApp) ? 'WhatsApp' : 'Shopify Orgánico',
+    ciudad: p.ciudad,
+    cliente_nombre: p.cliente_nombre,
+    cliente_telefono: p.telefono,
+    cliente_direccion: p.direccion,
+    producto_id: prod ? prod.id : null,
+    costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
+    // Lo que la lista sugería para esa cantidad, al momento de importar.
+    // Guardarlo es lo que permite ver después si el pedido llevó descuento
+    // o upsell: descuento = precio_lista − total. Sin esto, un precio
+    // rebajado es indistinguible de un error de carga.
+    precio_lista: prod ? precioSugerido(prod, p.cantidad || 1) : null,
+    // Flete REAL de la transportadora elegida en ESA ciudad. Se congela acá:
+    // si mañana cambia la tarifa, los reportes viejos no se mueven.
+    costo_envio: p.costo_envio ?? tarifaDe(p.transportadora || 'pap', p.ciudad) ?? costoFleteActual(),
+    transportadora: p.transportadora || 'pap',
+    envio_cliente: 0,
+    metodo_envio_nombre: (TRANSPORTADORAS[p.transportadora] || TRANSPORTADORAS.pap).nombre,
+    metodo_pago_nombre: p.prepago ? 'Transferencia (anticipado)' : 'Efectivo COD',
+    pago_anticipado: !!p.prepago,  // pagó por adelantado (transferencia verificada)
+    estado_releasit: p.estado_releasit,
+    // CI/RUC del pedido manual (columna opcional — ver nota de guardado tolerante abajo).
+    notas: p.notas || null,
+  }
+  // 12-10: RETIRO_EN_CASA confirmado. Venta sin courier: transportadora 'otra'
+  // (la columna no acepta null), flete 0 y método "Retiro en persona", que la
+  // deja fuera de la planilla, las guías y la salida. Entregada si Shopify ya
+  // la marcó ENTREGADO; si no, queda pendiente (sin courier).
+  if (p.retiroEnPersona) {
+    return {
+      ...fila,
+      transportadora: 'otra', costo_envio: 0, envio_cliente: 0,
+      metodo_envio_nombre: METODO_ENVIO_RETIRO,
+      estado: p.entregadoRetiro ? 'entregado' : 'pendiente',
+      estado_releasit: 'confirmado',
+    }
+  }
+  return fila
+}
+
+// 12-10: separa lo que trae "Traer pedidos de Voltra":
+//   · listos: confirmados con transportadora → Ventas, como siempre.
+//   · retiros: RETIRO_EN_CASA confirmados → Ventas SIN courier.
+//   · sinCobertura: confirmados sin transportadora que cubra (ciudad o regla
+//     de producto) → NO se insertan con PaP por defecto: decide Enrique a mano.
+function separarPedidosVoltra(pedidos, envioPorRef = new Map()) {
+  const listos = [], retiros = [], sinCobertura = []
+  for (const p of pedidos || []) {
+    if (p.retiroConfirmado) {
+      retiros.push({ ...p, retiroEnPersona: true, entregadoRetiro: envioEntregado(envioPorRef.get(p.n_referencia)) })
+    } else if (p.cfg?.despachar) {
+      if (p.transportadora) listos.push(p)
+      else sinCobertura.push(p)
+    }
+  }
+  return { listos, retiros, sinCobertura }
+}
+
+// 12-10: "Desde Ventas" solo muestra lo que todavía tiene que salir: de la
+// tienda elegida, sin salida escaneada, sin fila real en `entregas`, que no
+// sea retiro en persona y que Shopify no dé como despachado/entregado.
+function pendientesDesdeVentas(ventas, { tienda = 'todas', enCourier = new Set(), salidasShopify = new Set() } = {}) {
+  return (ventas || []).filter(v =>
+    (tienda === 'todas' || (v.tienda || 'fw') === tienda)
+    && pendienteDeSalir({ ...v, estado: v.estado || 'pendiente' }, enCourier)
+    && !salidasShopify.has(normalizarRef(v.n_referencia)))
+}
+
+// Shopify (Voltra): filas { nombre: '#1011', estado_envio } → refs que ya salieron.
+function refsSalidasShopify(filas) {
+  const set = new Set()
+  for (const f of filas || []) {
+    if (!ENVIO_YA_SALIO.includes(f?.estado_envio)) continue
+    const r = normalizarRef(refVoltra(f?.nombre))
+    if (r) set.add(r)
+  }
+  return set
+}
+
 export default function DespachoPagina() {
   const { toast } = useToast()
   const fileRef = useRef()
@@ -989,6 +1106,8 @@ export default function DespachoPagina() {
   const [cargVentas, setCargVentas] = useState(false)
   const [trayendoVoltra, setTrayendoVoltra] = useState(false)
   const trayendoVoltraRef = useRef(false)   // candado: el estado tarda un render, el ref no
+  // 12-10: pedidos de Voltra confirmados sin transportadora que cubra: no se pasan a Ventas.
+  const [voltraSinCobertura, setVoltraSinCobertura] = useState([])
   const [busqVentas, setBusqVentas] = useState('')
 
   // ── Memos CSV ──────────────────────────────────────────
@@ -1103,7 +1222,8 @@ export default function DespachoPagina() {
     [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual, ediciones]
   )
 
-  const paraDespacho = useMemo(() => todosConOverride.filter(p => p.despachar), [todosConOverride])
+  // 12-10: PRIORIDAD primero (lista, cabecera y guías salen en este orden).
+  const paraDespacho = useMemo(() => ordenarPorPrioridad(todosConOverride.filter(p => p.despachar)), [todosConOverride])
   const excluidos = useMemo(() => todosConOverride.filter(p => !p.despachar), [todosConOverride])
 
   const toggleForzar = (ref) => {
@@ -1169,9 +1289,10 @@ export default function DespachoPagina() {
   }, [paraDespacho])
   const conFaltantes = useMemo(() => paraDespacho.filter(p => p.faltantes.length > 0), [paraDespacho])
   const tablaFiltrada = useMemo(() => {
-    if (!busqueda.trim()) return todosConOverride
+    // 12-10: PRIORIDAD primero en la lista.
+    if (!busqueda.trim()) return ordenarPorPrioridad(todosConOverride)
     const q = busqueda.toLowerCase()
-    return todosConOverride.filter(p =>
+    return ordenarPorPrioridad(todosConOverride).filter(p =>
       p.cliente_nombre.toLowerCase().includes(q) ||
       p.ciudad.toLowerCase().includes(q) ||
       p.n_referencia.includes(q) ||
@@ -1225,9 +1346,11 @@ export default function DespachoPagina() {
 
   // ── Memos Ventas ───────────────────────────────────────
   const ventasFiltradas = useMemo(() => {
-    if (!busqVentas.trim()) return ventasPend
+    // 12-10: lo pagado por adelantado (pago con prioridad) primero.
+    const base = ordenarPorPrioridad(ventasPend.map(v => ({ ...v, prioridad: !!v.pago_anticipado })))
+    if (!busqVentas.trim()) return base
     const q = busqVentas.toLowerCase()
-    return ventasPend.filter(v =>
+    return base.filter(v =>
       (v.cliente_nombre || '').toLowerCase().includes(q) ||
       (v.ciudad || '').toLowerCase().includes(q) ||
       (v.n_referencia || '').includes(q) ||
@@ -1236,7 +1359,7 @@ export default function DespachoPagina() {
     )
   }, [ventasPend, busqVentas])
   const pedidosSeleccionados = useMemo(
-    () => ventasPend.filter(v => selVentas.has(v.id)).map(ventaAPedido),
+    () => ordenarPorPrioridad(ventasPend.filter(v => selVentas.has(v.id)).map(ventaAPedido)),
     [ventasPend, selVentas]
   )
   const todosSeleccionados = ventasFiltradas.length > 0 && ventasFiltradas.every(v => selVentas.has(v.id))
@@ -1323,55 +1446,6 @@ export default function DespachoPagina() {
     }
   }
 
-  const filaVentaDePedido = (p, catalogo) => {
-      const prod = matchProducto(p.producto_nombre, catalogo)
-      // ── Cierre automático: prepago + transportadora sin reporte ──
-      // TSI, Multienvíos y cualquier courier convencional NO entregan reporte
-      // de estados, así que estas ventas nunca podrían salir de 'pendiente':
-      // no hay archivo que importar ni rendición que las cierre. Quedarían
-      // restando flete sin sumar nunca el ingreso, hundiendo la ganancia.
-      // Como además están 100% pagadas por adelantado (la plata YA entró y no
-      // depende de que el cliente reciba), se marcan entregadas al despachar.
-      // OJO: solo aplica a 'otra'. PaP y Lucero SÍ tienen reporte — esas se
-      // cierran con el dato real, no por suposición.
-      const cierreAutomatico = p.prepago && p.transportadora === 'otra'
-      return {
-        fecha: p.fecha,
-        producto_nombre: prod ? prod.nombre : p.producto_nombre,
-        cantidad: p.cantidad,
-        precio_unit: p.total,
-        total: p.total,
-        n_referencia: p.n_referencia,
-        tienda: p.tienda || 'fw',
-        estado: cierreAutomatico ? 'entregado' : 'pendiente',
-        // Los pedidos cargados a mano NO vinieron de Shopify — dejarlos como
-        // "Shopify Orgánico" ensuciaría cualquier reporte por canal de origen.
-        canal_origen: (p.origenManual || p.origenWhatsApp) ? 'WhatsApp' : 'Shopify Orgánico',
-        ciudad: p.ciudad,
-        cliente_nombre: p.cliente_nombre,
-        cliente_telefono: p.telefono,
-        cliente_direccion: p.direccion,
-        producto_id: prod ? prod.id : null,
-        costo_prod: prod ? (prod.costo_unit || 0) * (p.cantidad || 1) : 0,
-        // Lo que la lista sugería para esa cantidad, al momento de importar.
-        // Guardarlo es lo que permite ver después si el pedido llevó descuento
-        // o upsell: descuento = precio_lista − total. Sin esto, un precio
-        // rebajado es indistinguible de un error de carga.
-        precio_lista: prod ? precioSugerido(prod, p.cantidad || 1) : null,
-        // Flete REAL de la transportadora elegida en ESA ciudad. Se congela acá:
-        // si mañana cambia la tarifa, los reportes viejos no se mueven.
-        costo_envio: p.costo_envio ?? tarifaDe(p.transportadora || 'pap', p.ciudad) ?? costoFleteActual(),
-        transportadora: p.transportadora || 'pap',
-        envio_cliente: 0,
-        metodo_envio_nombre: (TRANSPORTADORAS[p.transportadora] || TRANSPORTADORAS.pap).nombre,
-        metodo_pago_nombre: p.prepago ? 'Transferencia (anticipado)' : 'Efectivo COD',
-        pago_anticipado: !!p.prepago,  // pagó por adelantado (transferencia verificada)
-        estado_releasit: p.estado_releasit,
-        // CI/RUC del pedido manual (columna opcional — ver nota de guardado tolerante abajo).
-        notas: p.notas || null,
-      }
-    }
-
   const cargarVentas = async () => {
     if (!paraDespacho.length) return
     setCargando(true)
@@ -1444,11 +1518,24 @@ export default function DespachoPagina() {
       .filter(p => p.prepago && refsExistentes.has(String(p.n_referencia)))
       .map(p => String(p.n_referencia))
     if (prepagoExistentes.length) {
-      try {
-        await supabase.from('ventas')
+      // 12-10: por tienda (el 1003 de FW no es el VT-1003) y mirando `error`:
+      // supabase no tira excepción, antes una falla pasaba en silencio.
+      const porTienda = new Map()
+      for (const p of paraDespacho) {
+        if (!p.prepago || !refsExistentes.has(String(p.n_referencia))) continue
+        const t = p.tienda || 'fw'
+        if (!porTienda.has(t)) porTienda.set(t, new Set())
+        porTienda.get(t).add(String(p.n_referencia))
+      }
+      for (const [t, refsT] of porTienda) {
+        const { error: errPre } = await supabase.from('ventas')
           .update({ pago_anticipado: true, metodo_pago_nombre: 'Transferencia (anticipado)' })
-          .in('n_referencia', prepagoExistentes)
-      } catch (e) { console.warn('No se pudo actualizar prepago existentes:', e?.message) }
+          .eq('tienda', t).in('n_referencia', [...refsT]).is('deleted_at', null)
+        if (errPre) {
+          console.warn('No se pudo actualizar prepago existentes:', errPre.message)
+          toast('No se pudo marcar como pagadas por adelantado las ventas ya cargadas: ' + (errPre.message || ''), 'error')
+        }
+      }
     }
 
     if (!nuevas.length) {
@@ -1560,10 +1647,8 @@ export default function DespachoPagina() {
     try {
       prepararEnShopify(paraDespacho, toast)
       const colapsados = colapsarPorReferencia(paraDespacho)
-      const orden = { pap: 0, lucero: 1, otra: 2 }
-      const ordenadas = [...colapsados].sort(
-        (a, b) => (orden[a.transportadora] ?? 0) - (orden[b.transportadora] ?? 0)
-      )
+      // Por transportadora y, dentro de cada una, PRIORIDAD primero (12-10).
+      const ordenadas = ordenarGuias(colapsados)
       await descargarGuiasDOCX(ordenadas)
       toast('Guías Word (.docx) descargadas', 'success')
     } catch (e) {
@@ -1586,14 +1671,29 @@ export default function DespachoPagina() {
         .select(cols)
         .eq('estado', 'pendiente')
         .is('deleted_at', null)
+        .is('despachado_at', null)   // 12-10: lo escaneado en "Confirmar salida" ya salió
         .order('fecha', { ascending: false }))
-      let { data, error } = await consulta(`${COLS_VENTAS_PEND_BASE}, ${COLS_VENTAS_PEND_EXTRA}`)
+      // 12-10: en paralelo, lo que ya está en manos del courier (entregas) y lo
+      // que Shopify da como despachado: no se vuelve a imprimir ni despachar.
+      const [res, resEnt, resShop] = await Promise.all([
+        consulta(`${COLS_VENTAS_PEND_BASE}, ${COLS_VENTAS_PEND_EXTRA}, ${COLS_VENTAS_PEND_RETIRO}`),
+        fetchAllSafe(() => supabase.from('entregas').select('n_referencia, estado_pap'), { columnaOrden: 'nro_guia_pap' }),
+        fetchAllSafe(() => supabase.from('shopify_pedidos').select('shopify_order_id, nombre, estado_envio').in('estado_envio', ENVIO_YA_SALIO), { columnaOrden: 'shopify_order_id' }),
+      ])
+      let { data, error } = res
       if (error && esErrorColumnaFaltante(error)) {
         console.warn('Desde Ventas: falta alguna columna extra, se reintenta sin ellas:', error.message)
         ;({ data, error } = await consulta(COLS_VENTAS_PEND_BASE))
       }
       if (error) throw error
-      setVentasPend(data || [])
+      if (resEnt.error || resShop.error) {
+        toast('No se pudo cruzar con Entregas/Shopify: la lista puede incluir pedidos que ya salieron', 'error')
+      }
+      setVentasPend(pendientesDesdeVentas(data || [], {
+        tienda: getTienda(),
+        enCourier: refsEnCourier(resEnt.data || []),
+        salidasShopify: refsSalidasShopify(resShop.data || []),
+      }))
       setSelVentas(new Set())
       setBusqVentas('')
     } catch (e) {
@@ -1616,28 +1716,45 @@ export default function DespachoPagina() {
     try {
       const desde = new Date(Date.now() - 90 * 86400000).toISOString()
       const { data: filas, error } = await fetchAllSafe(() => supabase
-        .from('shopify_pedidos').select('shopify_order_id, nombre, es_borrador, raw')
+        .from('shopify_pedidos').select('shopify_order_id, nombre, es_borrador, raw, estado_envio, entregado_en')
         .gte('creado_en', desde), { columnaOrden: 'shopify_order_id' })
       if (error) throw error
+      // 12-10: estado del envío por referencia (retiro en persona ya entregado).
+      const envioPorRef = new Map((filas || []).map(f => [refVoltra(f.raw?.name || f.nombre), f]))
 
       const pedidos = (filas || []).filter(esPedidoImportable)
         .flatMap(f => agruparFilasPorReferencia(filasCsvDesdePedidoShopify(f)).flatMap(mapearGrupoAPedidos))
         .filter(p => p.producto_nombre)
       // Solo los confirmados (o con ayuda): igual que Despacho, un pedido sin
       // confirmar no se despacha, así que tampoco entra a Ventas todavía.
-      const listos = pedidos.filter(p => p.cfg?.despachar)
-      const sinConfirmar = new Set(pedidos.filter(p => !p.cfg?.despachar && p.estado_releasit !== 'cancelado').map(p => p.n_referencia)).size
-      if (!listos.length) {
+      // 12-10: los retiros en persona confirmados entran SIN courier, y los
+      // que no tienen transportadora que cubra NO entran (antes iban como PaP
+      // con flete de respaldo sin que nadie lo decidiera).
+      const { listos: conCourier, retiros, sinCobertura } = separarPedidosVoltra(pedidos, envioPorRef)
+      const listos = [...conCourier, ...retiros]
+      const sinConfirmar = new Set(pedidos.filter(p => !p.cfg?.despachar && !p.retiroConfirmado && p.estado_releasit !== 'cancelado').map(p => p.n_referencia)).size
+      if (!listos.length && !sinCobertura.length) {
+        setVoltraSinCobertura([])
         if (!silencioso) toast(sinConfirmar ? `Hay ${sinConfirmar} pedido(s) de Voltra sin confirmar todavía` : 'No hay pedidos de Voltra para traer', 'info')
         return
       }
 
-      const refs = [...new Set(listos.map(p => p.n_referencia))]
+      const refs = [...new Set([...listos, ...sinCobertura].map(p => p.n_referencia))]
       const cuenta = new Map()
       const { data: ya, error: errYa } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs).is('deleted_at', null)
       // Sin saber qué ya existe, insertar duplicaría ventas: se aborta.
       if (errYa) throw errYa
       ;(ya || []).forEach(d => cuenta.set(String(d.n_referencia), (cuenta.get(String(d.n_referencia)) || 0) + 1))
+      // 12-10: sin cobertura y todavía fuera de Ventas → aviso "decidir a mano" (uno por pedido).
+      const pendientesDecidir = new Map()
+      for (const p of sinCobertura) {
+        if (cuenta.has(String(p.n_referencia)) || pendientesDecidir.has(p.n_referencia)) continue
+        pendientesDecidir.set(p.n_referencia, { ref: p.n_referencia, ciudad: p.ciudad, motivo: p.motivoTransportadora || 'Ninguna transportadora cubre esta ciudad' })
+      }
+      setVoltraSinCobertura([...pendientesDecidir.values()])
+      if (pendientesDecidir.size && !silencioso) {
+        toast(`${pendientesDecidir.size} pedido(s) de Voltra sin cobertura: decidir a mano (no se pasaron a Ventas)`, 'error')
+      }
       const vistas = new Map()
       const nuevas = []
       for (const p of listos) {
@@ -1736,10 +1853,8 @@ export default function DespachoPagina() {
     try {
       prepararEnShopify(pedidosSeleccionados, toast)
       const colapsados = colapsarPorReferencia(pedidosSeleccionados)
-      const orden = { pap: 0, lucero: 1, otra: 2 }
-      const ordenadas = [...colapsados].sort(
-        (a, b) => (orden[a.transportadora] ?? 0) - (orden[b.transportadora] ?? 0)
-      )
+      // Por transportadora y, dentro de cada una, PRIORIDAD primero (12-10).
+      const ordenadas = ordenarGuias(colapsados)
       await descargarGuiasDOCX(ordenadas)
       toast('Guías Word (.docx) descargadas', 'success')
     } catch (e) {
@@ -1824,6 +1939,19 @@ export default function DespachoPagina() {
       ═══════════════════════════════════════════════════ */}
       {modo === 'ventas' && (
         <>
+          {/* 12-10: pedidos de Voltra sin cobertura — no se cargan con PaP por defecto */}
+          {voltraSinCobertura.length > 0 && (
+            <div className="alert" style={{ background: 'var(--yellow-dim)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+              <AlertTriangle size={14} color="var(--yellow)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                <strong>{voltraSinCobertura.length} pedido{voltraSinCobertura.length === 1 ? '' : 's'} de Voltra sin cobertura: decidir a mano.</strong>{' '}
+                No se pasaron a Ventas ni se les puso PaP por defecto:{' '}
+                {voltraSinCobertura.map(x => `${x.ref} (${x.ciudad || 'sin ciudad'})`).join(' · ')}.{' '}
+                Corregí la ciudad en Shopify, o subí el CSV de pedidos, elegí la transportadora y tocá "Sin cobranza · forzar".
+              </span>
+            </div>
+          )}
+
           {/* Aviso: solo si hay ventas seleccionadas SIN dirección */}
           {(() => {
             const sinDir = pedidosSeleccionados.filter(p => !p.direccion).length
@@ -2451,6 +2579,11 @@ export default function DespachoPagina() {
                           </button>
                         ) : (
                           <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
+                        )}
+                        {p.prioridad && (
+                          <span title="Pagó por adelantado con prioridad: sale primero" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: 'var(--green)', whiteSpace: 'nowrap' }}>
+                            ⚡ Prioridad
+                          </span>
                         )}
                       </td>
                     </tr>

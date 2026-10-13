@@ -150,8 +150,15 @@ export function sanearEntrega(e) {
   // `neto_depositado` puede ser menor que `importe`. `depositoReal` es "lo que
   // efectivamente cae al banco por este ítem" para cualquiera de las dos: si
   // no hay neto guardado (PaP, o Lucero viejo sin este campo), cae al bruto.
+  //
+  // 12-10: el neto se sanea por MAGNITUD (esImporteCorrupto), no con
+  // importeSano: en prepagos Lucero descuenta el flete y el neto es negativo
+  // legítimo (ver "DOS POLÍTICAS" arriba). importeSano lo llevaba a 0 y
+  // "Ya te depositaron" de Lucero FW salía inflado (10.762.100 vs 9.872.100).
   const netoRaw = e?.neto_depositado
-  const depositoReal = (netoRaw != null && netoRaw !== '') ? importeSano(netoRaw) : importe
+  const depositoReal = (netoRaw != null && netoRaw !== '')
+    ? (esImporteCorrupto(netoRaw) ? 0 : Number(netoRaw))
+    : importe
   return {
     ...e,
     categoria,

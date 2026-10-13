@@ -18,6 +18,7 @@ import {
 } from 'recharts'
 import { familiaProducto } from '../../lib/recompra'
 import { calcularMetricasAds } from '../../lib/metricasAds'
+import { tasaEntregaRealista, textoEsperada, textoRango, colorTasa } from '../../lib/tasaEntrega'
 
 // Normaliza n_referencia igual que metricasAds/AdsPage (para cruzar ventas ↔ entregas)
 const normRef = (ref) => {
@@ -349,6 +350,27 @@ export default function ReportesPage() {
     // totalGastos ya viene SIN el gasto de "Publicidad" si hay ads (anti-doble, ver arriba).
     const utilidadNetaCalc = dineroEntro - fleteFirme - totalGastos - costoMercaderiaVendida - totalGastoAds - auto.totalGs
 
+    // ── Tasa de entrega REALISTA (12-10-2026) ──
+    // Sobre resueltos sola engaña mientras el mes está abierto (4 de 27 resueltos → "100%"). Se muestra la ESPERADA
+    // (entregados + en camino × tasa histórica) con el rango peor/mejor caso. Los cancelados no cuentan como enviados.
+    const CANCELADOS_V = ['cancelado', 'anulado']
+    const enCaminoLineas = (ventas || []).filter(v => !['entregado', 'devuelto', ...CANCELADOS_V].includes(v.estado))
+    const nCancelados = CANCELADOS_V.reduce((n, c) => n + (pedMes.porCat[c] || 0), 0)
+    const enviadosReales = pedMes.total - nCancelados
+    const enCamino = Math.max(0, enviadosReales - pedMes.resueltos)
+    // Regla común de todas las pantallas (src/lib/tasaEntrega.js): historia = este mes y el anterior.
+    const pedHist = contarPedidos([...(ventasPrev || []), ...(ventas || [])], categoriaVenta)
+    const tasaR = tasaEntregaRealista({ entregados: pedMes.entregados, devueltos: pedMes.devueltos, enCamino, hist: pedHist })
+    const tasaHist = tasaR.tasaUsada
+    const tasaHistFuente = tasaR.fuente === 'historica'
+      ? `tu tasa real de ${pedHist.resueltos} paquetes resueltos (este mes y el anterior)`
+      : 'una referencia de 80%, porque todavía hay menos de 20 paquetes resueltos'
+    const { min: tasaMin, max: tasaMax, esperada: tasaEsperada } = tasaR
+    // Ganancia proyectada = firme + lo que dejan los en camino si se entregan a la tasa histórica (el flete se paga igual;
+    // lo devuelto vuelve al stock, así que su mercadería no se pierde).
+    const sumC = (f) => enCaminoLineas.reduce((s, v) => s + (f(v) || 0), 0)
+    const gananciaProyectada = utilidadNetaCalc + tasaHist * (sumC(v => v.total) - sumC(v => v.costo_prod)) - sumC(v => v.costo_envio)
+
     // ── Detalle de Meta Ads por producto (recalculado igual que la página Campañas) ──
     // campanas_ads solo guarda { mes, nombre(familia), gasto }; CPA/ROAS/ganancia se calculan al vuelo.
     const estadoPaPRep = {}
@@ -446,6 +468,8 @@ export default function ReportesPage() {
       entregados: pedMes.entregados, devueltos: pedMes.devueltos, pendientesCount: pedMes.porCat.pendiente || 0,
       // Misma corrección que arriba: denominador = resueltos, no total enviado.
       tasaEntrega: pedMes.resueltos ? (pedMes.entregados / pedMes.resueltos) * 100 : 0,
+      enviadosReales, enCamino, tasaMin, tasaMax, tasaEsperada, tasaHist, tasaHistFuente, gananciaProyectada, tasaR,
+      gastosTodo: totalGastos + totalGastoAds + auto.totalGs,
       utilidadNeta: utilidadNetaCalc,
       posibleDobleAds: posibleDobleAdsRep,
       porProducto: porProductoArr,
@@ -672,7 +696,7 @@ export default function ReportesPage() {
     // Motivos de devolución
     const motivoFilas = (d.motivos || []).map(m => filaTabla([esc(m.motivo || m.nombre), m.cantidad ?? m.count]))
     // Meta Ads — detalle por producto (CPA/ROAS/ganancia recalculados como en Campañas)
-    const veredictoTxt = { gana: 'Rinde', pierde: 'Pierde', ajustar: 'Ajustar', sin_gasto: '—' }
+    const veredictoTxt = { gana: 'Rinde', pierde: 'Pierde', ajustar: 'Ajustar', esperar: 'Esperá (en camino)', sin_gasto: '—' }
     const roas = (n) => (n == null ? '—' : Number(n).toFixed(2) + 'x')
     const adsRow = (a, bold) => `<tr${bold ? ' style="font-weight:700;background:#f7f7f7"' : ''}>${[
       esc(a.label),
@@ -734,7 +758,7 @@ export default function ReportesPage() {
   .formula { font-size: 9.5px; color: #777; margin: -2px 0 8px; }
 </style></head><body>
 
-<h1>Facial Wellness — Reporte completo</h1>
+<h1>${getTienda() === 'fw' ? 'Facial Wellness' : getTienda() === 'todas' ? 'Voltra + Facial Wellness' : 'Voltra'} — Reporte completo</h1>
 <div class="sub">${esc(d.periodo?.etiqueta || d.mes)} · comparado con ${esc(d.periodo?.etiquetaPrev || 'período anterior')} · generado ${new Date().toLocaleString('es-PY')}</div>
 <div class="sub">Documento de datos para análisis. Todas las cifras en guaraníes (Gs.).</div>
 
@@ -745,9 +769,10 @@ export default function ReportesPage() {
   <div class="kpi"><div class="lbl">Utilidad neta</div><div class="val">${gs(d.utilidadNeta)}</div></div>
   <div class="kpi"><div class="lbl">Margen %</div><div class="val">${pct(d.margenPct)}</div></div>
   <div class="kpi"><div class="lbl">Pedidos enviados</div><div class="val">${totalPedidos}</div></div>
-  <div class="kpi"><div class="lbl">Tasa de entrega</div><div class="val">${pct(d.tasaEntrega)}</div></div>
+  <div class="kpi"><div class="lbl">Tasa de entrega esperada (rango)</div><div class="val">${d.tasaEsperada == null ? '—' : `~${Math.round(d.tasaEsperada)}% (${Math.round(d.tasaMin)}–${Math.round(d.tasaMax)}%)`}</div></div>
+  <div class="kpi"><div class="lbl">En camino</div><div class="val">${d.enCamino}</div></div>
   <div class="kpi"><div class="lbl">Gasto en ads</div><div class="val">${gs(d.totalGastoAds)}</div></div>
-  <div class="kpi"><div class="lbl">Gastos totales</div><div class="val">${gs(d.totalGastos)}</div></div>
+  <div class="kpi"><div class="lbl">Gastos totales (ads + APIs + otros)</div><div class="val">${gs(d.gastosTodo)}</div></div>
   <div class="kpi"><div class="lbl">Costo mercadería vendida</div><div class="val">${gs(d.costoMercaderiaVendida)}</div></div>
 </div>
 <div class="formula">Contribución firme = ingreso entregadas − flete (todos los envíos) − costo de producto entregado. Utilidad neta = contribución firme − gasto en Meta Ads − otros gastos del período.</div>
@@ -912,7 +937,11 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
           }}>
             <div>
               <div style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-                FACIAL <span style={{ color: 'var(--accent)' }}>WELLNESS</span>
+                {getTienda() === 'fw'
+                  ? <>FACIAL <span style={{ color: 'var(--accent)' }}>WELLNESS</span></>
+                  : getTienda() === 'todas'
+                    ? <>VOLTRA <span style={{ color: 'var(--accent)' }}>+ FACIAL WELLNESS</span></>
+                    : <>VOL<span style={{ color: 'var(--accent)' }}>TRA</span></>}
               </div>
               <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
                 Reporte Ejecutivo Mensual
@@ -934,11 +963,16 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               { label: 'Ventas brutas', value: formatGs(datos.ventasBrutas), sub: 'Cobrado (entregadas)', color: 'var(--text-primary)' },
               { label: 'Costo de venta', value: formatGs(datos.costoMercaderiaVendida), sub: 'Mercadería vendida (entregada)', color: 'var(--red)' },
               { label: 'Margen %', value: formatPct(datos.margenPct), sub: 'Ingreso neto / ventas', color: datos.margenPct > 40 ? 'var(--green)' : 'var(--yellow)' },
-              { label: 'Ganancia firme', value: formatGs(datos.utilidadNeta), sub: 'Lo ya cerrado', color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' },
-              { label: 'Paquetes enviados', value: datos.paquetesEnviados, sub: `${datos.entregados} entregados`, color: 'var(--text-primary)' },
+              { label: 'Ganancia firme', value: formatGs(datos.utilidadNeta), sub: `Lo ya cerrado · proyectada ${formatGs(datos.gananciaProyectada)}`, color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' },
+              { label: 'Paquetes enviados', value: datos.enviadosReales, sub: `${datos.entregados} entregados · ${datos.enCamino} en camino`, color: 'var(--text-primary)' },
               { label: 'Devoluciones', value: datos.devueltos, sub: `${formatGs(datos.fleteDevoluciones)} en flete perdido`, color: datos.devueltos > 10 ? 'var(--red)' : 'var(--yellow)' },
-              { label: 'Tasa de entrega', value: formatPct(datos.tasaEntrega), sub: 'Sobre total enviado', color: datos.tasaEntrega > 60 ? 'var(--green)' : 'var(--red)' },
-              { label: 'Gastos totales', value: formatGs(datos.totalGastos), sub: `Ads: ${formatGs(datos.totalGastoAds)}`, color: 'var(--red)' },
+              {
+                label: 'Tasa de entrega (esperada)',
+                value: textoEsperada(datos.tasaR),
+                sub: `${textoRango(datos.tasaR)} · ${datos.entregados}/${datos.enviadosReales} entregados`,
+                color: colorTasa(datos.tasaR),
+              },
+              { label: 'Gastos totales', value: formatGs(datos.gastosTodo), sub: `Ads ${formatGs(datos.totalGastoAds)} · APIs y fijos ${formatGs(datos.auto.totalGs)} · otros ${formatGs(datos.totalGastos)}`, color: 'var(--red)' },
             ].map((k, i) => (
               <div key={i} className="kpi-card">
                 <div className="kpi-label">{k.label}</div>
@@ -993,7 +1027,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
                 <span style={{ fontWeight: 800, color: datos.utilidadNeta > 0 ? 'var(--green)' : 'var(--red)' }}>{formatGs(datos.utilidadNeta)}</span>
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', paddingBottom: 12, lineHeight: 1.5 }}>
-                Esta es tu ganancia <strong>firme</strong>: cuenta solo los {datos.entregados + datos.devueltos} paquetes que ya cerraron (entregados + devueltos), porque de esos ya pagaste el flete. {datos.pendientesCount > 0 ? `Tenés ${datos.pendientesCount} pendientes en tránsito (${formatGs(datos.fletePendientes)} en flete y ${formatGs(datos.cogsPendientes)} en mercadería) que sumarán cuando se entreguen — mirá el detalle en Entregas.` : ''}
+                Esta es tu ganancia <strong>firme</strong>: cuenta solo los {datos.entregados + datos.devueltos} paquetes que ya cerraron (entregados + devueltos), porque de esos ya pagaste el flete. {datos.enCamino > 0 ? `Tenés ${datos.enCamino} paquetes en camino: pueden entregarse o volver. Si se entregan como hasta ahora (${Math.round(datos.tasaHist * 100)}%, según ${datos.tasaHistFuente}), la ganancia del mes queda en ${formatGs(datos.gananciaProyectada)}. La tasa de entrega final va a estar entre ${Math.round(datos.tasaMin)}% (si vuelven todos) y ${Math.round(datos.tasaMax)}% (si se entregan todos).` : ''}
               </div>
             </div>
           </div>

@@ -24,6 +24,7 @@
 
 import { sumarFlete, costoFleteActual } from './flete'
 import { normalizarRef } from './referencias'
+import { tasaEntregaRealista, MIN_RESUELTOS } from './tasaEntrega'
 
 // Tarifa vigente hoy (para compatibilidad con quien importe COSTO_PAP)
 const COSTO_PAP = costoFleteActual()
@@ -81,15 +82,52 @@ export function contarPedidos(lineas, catDe = (l) => l.categoria) {
 // Categoría de una venta según su estado (para contarPedidos sobre `ventas`).
 export const categoriaVenta = (v) => (v.estado === 'entregado' ? 'entregado' : v.estado === 'devuelto' ? 'devuelto' : (v.estado || 'en_proceso'))
 
+// ═══ ¿LA VENTA SALIÓ DE VERDAD? (12-10) ═══
+// Una venta "pendiente" puede estar todavía en el depósito. Solo cuenta como
+// despachada (en camino) si tiene guía en `entregas` (cruzada por venta_id o
+// por referencia) o `despachado_at`. Antes "23 ya despachados" incluía 2 sin guía.
+// Devuelve una función venta → true/false.
+export function indexarDespachos(entregas) {
+  const ids = new Set(), refs = new Set()
+  for (const e of (entregas || [])) {
+    if (!(e?.nro_guia_pap || e?.guia_transportadora)) continue
+    if (e.venta_id != null) ids.add(String(e.venta_id))
+    const r = normalizarRef(e.n_referencia)
+    if (r) refs.add(r)
+  }
+  return (v) => !!v?.despachado_at
+    || (v?.id != null && ids.has(String(v.id)))
+    || refs.has(normalizarRef(v?.n_referencia))
+}
+
+// Historia de entrega (entregados / resueltos por pedido) de un conjunto de
+// ventas ya cerradas, para proyectar lo que está en camino. (12-10)
+export function historiaEntrega(ventas) {
+  const p = contarPedidos(ventas, categoriaVenta)
+  return { entregados: p.entregados, resueltos: p.resueltos }
+}
+
 // ═══ FUNCIÓN PRINCIPAL ═══
 // Calcula la pirámide completa: bloque firme + bloque en tránsito.
-export function calcularPiramide(paquetes, refCosto = {}, cogsPromedio = 12000, gastosMes = 0) {
+// opciones.hist = { entregados, resueltos } de períodos anteriores (12-10):
+// la proyección de lo en camino usa esa tasa si tiene ≥ MIN_RESUELTOS; si no,
+// la del propio período si tiene ≥ MIN_RESUELTOS; si no, la referencia (80%).
+// Antes usaba la tasa del MISMO mes: con 4 de 4 resueltos proyectaba al 100%.
+// Un paquete con `despachado: false` es venta sin guía: no está en camino, no
+// compromete flete ni entra en la proyección (sin el campo, cuenta como despachado).
+export function calcularPiramide(paquetes, refCosto = {}, cogsPromedio = 12000, gastosMes = 0, opciones = {}) {
   const entregados = paquetes.filter(p => p.categoria === 'entregado')
   const devueltos = paquetes.filter(p => p.categoria === 'devuelto')
   const enProceso = paquetes.filter(p => p.categoria === 'en_proceso')
+  const enCaminoPaq = enProceso.filter(p => p.despachado !== false)
   // Conteos y tasas por PEDIDO; la plata (abajo) sigue sumándose por línea.
-  const ped = contarPedidos(paquetes)
+  const ped = contarPedidos(paquetes, p => (p.categoria === 'en_proceso' && p.despachado === false) ? 'sin_despachar' : p.categoria)
   const resueltos = ped.resueltos
+  const sinDespachar = ped.porCat.sin_despachar || 0
+  const enCamino = ped.enProceso - sinDespachar
+  const hist = (opciones.hist?.resueltos >= MIN_RESUELTOS) ? opciones.hist : { entregados: ped.entregados, resueltos }
+  const tasaReal = tasaEntregaRealista({ entregados: ped.entregados, devueltos: ped.devueltos, enCamino, hist })
+  const tasaProy = tasaReal.tasaUsada
 
   // ── BLOQUE 1: GANANCIA FIRME (solo resueltos) ──
   const ingreso = entregados.reduce((s, p) => s + (p.importe || 0), 0)
@@ -103,19 +141,19 @@ export function calcularPiramide(paquetes, refCosto = {}, cogsPromedio = 12000, 
   const gananciaFirme = contribucionFirme - gastosMes
 
   // ── BLOQUE 2: EN TRÁNSITO (en proceso) ──
-  const fleteEnTransito = sumarFlete(enProceso)  // flete ya comprometido
-  const ingresoPotencialBruto = enProceso.reduce((s, p) => s + (p.importe || 0), 0)
-  // Tasa de entrega histórica (de lo ya resuelto) para proyectar
-  const tasaEntrega = resueltos ? (ped.entregados / resueltos) : 0
-  // Proyección: cuántos de los en-proceso se entregarían y cuánto sumarían
-  const entregadosProyectados = Math.round(ped.enProceso * tasaEntrega)
-  const devueltosProyectados = ped.enProceso - entregadosProyectados
-  const ingresoProyectado = Math.round(ingresoPotencialBruto * tasaEntrega)
+  // Solo lo despachado (con guía): lo que sigue en el depósito no pagó flete.
+  const fleteEnTransito = sumarFlete(enCaminoPaq)  // flete ya comprometido
+  const ingresoPotencialBruto = enCaminoPaq.reduce((s, p) => s + (p.importe || 0), 0)
+  // Proyección: cuántos de los en camino se entregarían y cuánto sumarían,
+  // a la tasa histórica real (o la referencia si no hay historia suficiente).
+  const entregadosProyectados = Math.round(enCamino * tasaProy)
+  const devueltosProyectados = enCamino - entregadosProyectados
+  const ingresoProyectado = Math.round(ingresoPotencialBruto * tasaProy)
   // COGS proyectado de lo que se entregaría (estimado proporcional)
-  const cogsProyectado = enProceso.length
-    ? Math.round(calcularCOGS(enProceso, refCosto, cogsPromedio).cogs * tasaEntrega)
+  const cogsProyectado = enCaminoPaq.length
+    ? Math.round(calcularCOGS(enCaminoPaq, refCosto, cogsPromedio).cogs * tasaProy)
     : 0
-  // Contribución que aportaría lo en tránsito si cierra a la tasa histórica
+  // Contribución que aportaría lo en tránsito si cierra a esa tasa
   const contribucionProyectada = ingresoProyectado - fleteEnTransito - cogsProyectado
 
   // ── MÉTRICAS CLAVE ──
@@ -143,19 +181,26 @@ export function calcularPiramide(paquetes, refCosto = {}, cogsPromedio = 12000, 
     contribucionProyectada,
     entregadosProyectados,
     devueltosProyectados,
+    // Con qué tasa se proyectó (12-10): % y si es 'historica' o 'referencia'
+    tasaProyeccion: Math.round(tasaProy * 100),
+    fuenteTasa: tasaReal.fuente,
 
     // ═══ CONTEOS ═══
     // Por pedido (un pedido de 2 líneas cuenta 1).
     entregados: ped.entregados,
     devueltos: ped.devueltos,
-    enProceso: ped.enProceso,
+    enProceso: ped.enProceso,       // todo lo sin resolver (con y sin guía)
+    enCamino,                        // sin resolver CON guía (despachado de verdad)
+    sinDespachar,                    // sin resolver y sin guía (sigue en el depósito)
     resueltos,
     total: ped.total,
 
     // ═══ MÉTRICAS ═══
     contribPorEnvio,
     tasaDevolucion,
-    tasaEntrega: tasaEntregaPct,
+    tasaEntrega: tasaEntregaPct,     // sobre resueltos (dato crudo; NO mostrar solo)
+    // Tasa realista (12-10): ~esperada, rango min–max, en camino. Es la que se muestra.
+    tasaReal,
     sangradoFlete: fleteDevueltos,
     fleteDevueltos,
 

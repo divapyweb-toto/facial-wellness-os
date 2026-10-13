@@ -9,6 +9,7 @@ import { cargarDashboard } from './cargaDashboard'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import CountUp from '../../lib/CountUp'
+import { textoEsperada, textoRango, textoFuente, colorTasa } from '../../lib/tasaEntrega'
 import { lazy, Suspense } from 'react'
 // recharts (~5 MB) se carga aparte: los números aparecen ya, los gráficos después
 const ChartUltimos7 = lazy(() => import('./DashboardCharts').then(m => ({ default: m.ChartUltimos7 })))
@@ -159,7 +160,7 @@ export default function DashboardPage() {
           case 'heroHoy': setHero(h => ({ ...(h || {}), hoyCount: d.hoyCount, hoyMonto: d.hoyMonto })); break
           case 'enCalle': setHero(h => ({ ...(h || {}), enCalleCount: d.enCalleCount, enCalleMonto: d.enCalleMonto })); break
           case 'chart7':
-            setHero(h => ({ ...(h || {}), tasa7d: d.tasa7d, resueltos7d: d.resueltos7d }))
+            setHero(h => ({ ...(h || {}), tasa7d: d.tasa7d, resueltos7d: d.resueltos7d, tasa7dReal: d.tasa7dReal }))
             setChartData(d.chartData)
             break
           case 'principal': setKpis(d.kpis); break
@@ -239,6 +240,7 @@ export default function DashboardPage() {
             hoyMonto={hero?.hoyMonto ?? 0}
             tasa7d={hero?.tasa7d ?? null}
             resueltos7d={hero?.resueltos7d ?? 0}
+            tasa7dReal={hero?.tasa7dReal ?? null}
             enCalleCount={hero?.enCalleCount ?? 0}
             enCalleMonto={hero?.enCalleMonto ?? 0}
             alertasCount={alertas.length}
@@ -382,15 +384,20 @@ export default function DashboardPage() {
         <div className="kpi-card">
           <div className="kpi-label"><Package size={11} />Enviados</div>
           <div className="kpi-value">{kpis?.paquetesEnviados || 0}</div>
-          <div className="kpi-sub">{kpis?.entregados || 0} entregados · {kpis?.devueltos || 0} devueltos</div>
+          <div className="kpi-sub">
+            {kpis?.entregados || 0} entregados · {kpis?.devueltos || 0} devueltos · {kpis?.enCamino || 0} en camino
+            {(kpis?.sinDespachar || 0) > 0 && <span style={{ color: 'var(--yellow)' }}> · {kpis.sinDespachar} sin guía</span>}
+          </div>
         </div>
+        {/* 12-10: ~esperada + rango + en camino. Con pocos resueltos, color neutro
+            (antes: 4 de 4 resueltos con 23 volando = "100%" verde). */}
         <div className="kpi-card">
           <div className="kpi-label"><Truck size={11} />Tasa entrega</div>
-          <div className={`kpi-value ${(kpis?.tasaEntrega || 0) > 60 ? 'green' : (kpis?.tasaEntrega || 0) > 40 ? 'yellow' : 'red'}`}>
-            {formatPct(kpis?.tasaEntrega || 0)}
+          <div className="kpi-value" style={{ color: colorTasa(kpis?.tasaReal, { verde: 60, amarillo: 40 }) }}>
+            {textoEsperada(kpis?.tasaReal)}
           </div>
-          <div className="kpi-sub" style={{ color: (kpis?.pendientesCount || 0) > 0 ? 'var(--yellow)' : undefined }}>
-            {kpis?.pendientesCount || 0} pendientes
+          <div className="kpi-sub" title={kpis?.tasaReal ? textoFuente(kpis.tasaReal) : undefined}>
+            {textoRango(kpis?.tasaReal)}
           </div>
         </div>
       </div>
@@ -418,7 +425,7 @@ export default function DashboardPage() {
                 {formatGs(kpis.ingresoCOD)}
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-                lo cobra PaP y te lo rinde
+                lo cobra la transportadora y te lo rinde
               </div>
             </div>
           </div>
@@ -472,6 +479,18 @@ export default function DashboardPage() {
               )}
             </div>
           )}
+          {/* 12-10: lo que todavía vuela no está en la ganancia firme; se muestra
+              aparte cuánto aportaría si cierra a la tasa proyectada. */}
+          {kpis.enCamino > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 10, padding: '8px 10px', background: 'var(--bg-hover)', borderRadius: 8 }}>
+              <Clock size={12} style={{ verticalAlign: -2 }} /> {kpis.enCamino} en camino aportarían ~
+              <strong style={{ color: kpis.contribucionProyectada >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                {kpis.contribucionProyectada >= 0 ? '+' : ''}{formatGs(kpis.contribucionProyectada)}
+              </strong>
+              {' '}de contribución si cierran al {kpis.tasaProyeccion}% ({kpis.fuenteTasa === 'historica' ? 'tu historial' : 'referencia, poca historia'}).
+              {!kpis.cubierto && kpis.gananciaReal + kpis.contribucionProyectada >= 0 && ' Con eso cubrirías el mes.'}
+            </div>
+          )}
           <div
             onClick={() => navigate('/entregas')}
             style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border-subtle)', fontSize: 12, color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
@@ -508,7 +527,7 @@ export default function DashboardPage() {
       {cargando.top && <SkeletonBloque alto={150} />}
       {topProductos.length > 0 && (
         <div className="card card-sm">
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Top productos — este mes</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Top productos — este mes <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>(por contribución, solo entregados)</span></div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {topProductos.map((p, i) => {
               const maxIngresos = topProductos[0]?.ingresos || 1
@@ -517,7 +536,7 @@ export default function DashboardPage() {
                 <div key={i}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
                     <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.nombre}</span>
-                    <span style={{ fontSize: 12, fontWeight: 600 }}>{p.ventas} uds · {formatGs(p.ingresos)}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600 }}>{p.ventas} uds · {formatGs(p.ingresos)} <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>contribución</span></span>
                   </div>
                   <div style={{ background: 'var(--bg-hover)', borderRadius: 3, height: 4 }}>
                     <div style={{ width: `${pct}%`, height: '100%', background: i === 0 ? 'var(--accent)' : 'var(--green)', borderRadius: 3, transition: 'width 0.6s ease' }} />

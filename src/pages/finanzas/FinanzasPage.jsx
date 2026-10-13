@@ -1,7 +1,11 @@
 // src/pages/finanzas/FinanzasPage.jsx
 import { useState, useEffect, useCallback } from 'react'
-import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
-import { tiendaParaEscribir } from '../../lib/tienda'
+import { supabaseTienda as supabase, supabase as supabaseCrudo, formatGs } from '../../lib/supabase'
+import { tiendaParaEscribir, getTienda } from '../../lib/tienda'
+import { armarGastosAutomaticos, cargarGastosAutomaticos, diaLocal, claveCampanaManual, gastosSinDobleAds } from '../../lib/gastosAutomaticos'
+import { cargarTasas } from '../../lib/tipoCambio'
+import { getGastosAutomaticosConfig } from '../../lib/config'
+import { resumenSalidaMes } from '../../lib/metricasAds'
 import { useAuth } from '../../lib/AuthContext'
 import { useToast } from '../../lib/toast'
 import { Plus, X, DollarSign, TrendingDown, TrendingUp, BarChart3, Edit2, Trash2, Save } from 'lucide-react'
@@ -10,6 +14,7 @@ import { logAccion, logAccionLote } from '../../lib/audit'
 import { logError } from '../../lib/errorLog'
 import { validarGasto } from '../../lib/validation'
 import { hoyLocal } from '../../lib/fechas'
+import { fetchAll } from '../../lib/fetchAll'
 
 const CATEGORIAS = ['Publicidad', 'Logística', 'Operativo', 'Personal', 'Impuestos', 'Otro']
 
@@ -120,6 +125,10 @@ export default function FinanzasPage() {
   // `campanas_ads`. Finanzas lo ignoraba por completo, así que el gasto más
   // grande del negocio no aparecía en la pantalla de gastos.
   const [gastoAds, setGastoAds] = useState(0)
+  // 12-10: Meta sincronizado (gasto_ads_diario) + WhatsApp/Claude/ElevenLabs/
+  // fijos. Antes Finanzas no los leía y en Voltra la salida daba 0.
+  const [auto, setAuto] = useState(null)
+  const [autoFallo, setAutoFallo] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editando, setEditando] = useState(null)
@@ -167,13 +176,42 @@ export default function FinanzasPage() {
 
     setGastos(g || [])
 
-    // Gasto de ads del mes, desde Campañas.
+    // Gasto de ads del mes, desde Campañas (carga a mano).
+    let campanasMes = []
     try {
-      const { data: ads } = await supabase.from('campanas_ads').select('gasto').eq('mes', filtroMes)
-      setGastoAds((ads || []).reduce((s2, a) => s2 + (a.gasto || 0), 0))
+      const { data: ads, error } = await supabase.from('campanas_ads').select('gasto, mes, tienda').eq('mes', filtroMes)
+      if (error) throw error
+      campanasMes = ads || []
+      setGastoAds(campanasMes.reduce((s2, a) => s2 + (Number(a.gasto) || 0), 0))
     } catch (e) {
       console.warn('[finanzas] sin gasto de ads del mes:', e?.message || e)
       setGastoAds(0)
+    }
+
+    // 12-10: gastos que se cargan solos, con la MISMA fórmula que Dashboard y
+    // Reportes (cargaDashboard.js, bloque pAutoCrudo/pCostos). Cliente crudo a
+    // propósito: la tienda se filtra adentro de armarGastosAutomaticos.
+    try {
+      const rawAuto = await cargarGastosAutomaticos(supabaseCrudo, { inicio, fin })
+      const cfgAuto = getGastosAutomaticosConfig()
+      const hoyStr = hoyLocal()
+      const fechaTasaFijos = fin < hoyStr ? fin : hoyStr
+      const diasUsd = [...rawAuto.waMensajes, ...rawAuto.turnosIA, ...rawAuto.ciclosMejora].map(r => diaLocal(r.creado_en))
+        .concat(rawAuto.gastosReales.map(r => String(r.fecha).slice(0, 10)), fechaTasaFijos)
+      const { tasas } = await cargarTasas(supabaseCrudo, diasUsd)
+      const productos = await fetchAll(() => supabaseCrudo.from('productos').select('id, nombre')).catch(() => [])
+      setAuto(armarGastosAutomaticos({
+        ...rawAuto, productos, tasas, fechaTasaFijos,
+        // Si el mes ya tiene ads cargados a mano en Campañas, ese manda (sin doble conteo).
+        mesesConCampanas: new Set(campanasMes.filter(x => Number(x.gasto) > 0).map(x => claveCampanaManual(x.tienda, x.mes))),
+        tienda: getTienda(), usdPyg: cfgAuto.usdPyg, gastosFijosTexto: cfgAuto.gastosFijosTexto,
+        fraccionMes: 1, // Finanzas mira el mes entero
+      }))
+      setAutoFallo(false)
+    } catch (e) {
+      console.warn('[finanzas] sin gastos automáticos:', e?.message || e)
+      setAuto(null)
+      setAutoFallo(true)
     }
 
     // Flujo diario para chart
@@ -200,11 +238,22 @@ export default function FinanzasPage() {
   const totalPresupuestado = gastos.reduce((s, g) => s + (g.presupuestado || 0), 0)
   // Si además hay un gasto manual de categoría Publicidad, sumar ads encima
   // contaría lo mismo dos veces: se avisa en vez de inventar un total.
-  const gastoPublicidadManual = gastos
-    .filter(g => /public|ads|meta|marketing/i.test(g.categoria || ''))
-    .reduce((s, g) => s + g.monto, 0)
-  const posibleDobleAds = gastoAds > 0 && gastoPublicidadManual > 0
-  const salidaTotal = totalGastos + gastoAds
+  // 12-10: misma protección que Dashboard/Reportes (gastosSinDobleAds): con ads
+  // (Campañas o Meta sincronizado) se resta el gasto de Publicidad manual.
+  const salida = resumenSalidaMes({
+    gastosBruto: totalGastos,
+    gastosSinDoble: gastosSinDobleAds(gastos, gastoAds + (Number(auto?.metaTotal) || 0)),
+    adsManual: gastoAds,
+    auto,
+  })
+  const posibleDobleAds = salida.posibleDoble
+  const salidaTotal = salida.salidaTotal
+  const detalleAuto = [
+    salida.whatsappGs > 0 && `WhatsApp ${formatGs(salida.whatsappGs)}`,
+    salida.claudeGs > 0 && `Claude ${formatGs(salida.claudeGs)}`,
+    salida.elevenlabsGs > 0 && `ElevenLabs ${formatGs(salida.elevenlabsGs)}`,
+    salida.fijosGs > 0 && `fijos ${formatGs(salida.fijosGs)}`,
+  ].filter(Boolean).join(' · ')
 
   // Gastos por categoría
   const porCategoria = {}
@@ -246,20 +295,34 @@ export default function FinanzasPage() {
         <div className="kpi-card">
           <div className="kpi-label"><TrendingDown size={12} />Total gastos</div>
           <div className="kpi-value red">{formatGs(totalGastos)}</div>
-          <div className="kpi-sub">Cargados acá, sin ads</div>
+          <div className="kpi-sub">Cargados acá, sin ads ni automáticos</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label"><TrendingDown size={12} />Ads del mes</div>
-          <div className="kpi-value red">{formatGs(gastoAds)}</div>
-          <div className="kpi-sub">Desde Campañas</div>
+          <div className="kpi-value red">{formatGs(salida.totalAds)}</div>
+          {/* 12-10: desglose para que se vea de dónde sale */}
+          <div className="kpi-sub">
+            Meta sincronizado {formatGs(salida.metaSync)} · Campañas a mano {formatGs(salida.adsManual)}
+            {Number(auto?.metaDescartado) > 0 && ` · ${formatGs(auto.metaDescartado)} de Meta no se suman (el mes ya tiene carga a mano)`}
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label"><TrendingDown size={12} />Automáticos</div>
+          <div className="kpi-value red">{autoFallo ? '—' : formatGs(salida.automaticos)}</div>
+          <div className="kpi-sub">
+            {autoFallo
+              ? 'No se pudieron leer (WhatsApp, Claude, fijos)'
+              : (detalleAuto || 'WhatsApp, Claude, ElevenLabs y fijos: sin gasto')}
+            {salida.faltaTipoCambio && ' · ⚠️ falta tipo de cambio: hay dólares sin sumar'}
+          </div>
         </div>
         <div className="kpi-card">
           <div className="kpi-label"><TrendingDown size={12} />Salida total</div>
           <div className="kpi-value red">{formatGs(salidaTotal)}</div>
           <div className="kpi-sub">
             {posibleDobleAds
-              ? '⚠️ hay un gasto de Publicidad cargado a mano: puede estar contado dos veces'
-              : 'Gastos + ads'}
+              ? `⚠️ hay un gasto de Publicidad cargado a mano (${formatGs(salida.gastoPublicidad)}): se usa solo el de ads para no contarlo dos veces; borralo para que quede limpio`
+              : 'Gastos + ads + automáticos (igual que Dashboard y Reportes)'}
           </div>
         </div>
         <div className="kpi-card">

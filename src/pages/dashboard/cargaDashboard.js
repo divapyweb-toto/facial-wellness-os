@@ -23,7 +23,8 @@
 // Devuelve { fallas }: lista de lo que no se pudo leer, en orden fijo.
 // ═══════════════════════════════════════════════════════════
 import { formatGs } from '../../lib/supabase'
-import { calcularPiramide, indexarCostos, contarPedidos, categoriaVenta } from '../../lib/contribucion'
+import { calcularPiramide, indexarCostos, contarPedidos, categoriaVenta, indexarDespachos, historiaEntrega } from '../../lib/contribucion'
+import { tasaEntregaRealista } from '../../lib/tasaEntrega'
 import { armarGastosAutomaticos, cargarGastosAutomaticos, diaLocal, claveCampanaManual, gastosSinDobleAds } from '../../lib/gastosAutomaticos'
 import { cargarTasas } from '../../lib/tipoCambio'
 import { construirAlertasNegocio } from '../../lib/alertasNegocio'
@@ -42,7 +43,7 @@ export const ORDEN_FALLAS = [
   'ventas del mes', 'gastos del mes', 'gasto de Campañas', 'gastos automáticos',
   'histórico de 6 meses', 'plata en la calle', 'saldo del banco', 'gráfico de 7 días',
   'top productos', 'stock de productos', 'pendientes viejos', 'comparación de ventas',
-  'recompra', 'plata sin rendir', 'tasa de entrega', 'centro de acciones',
+  'recompra', 'plata sin rendir', 'tasa de entrega', 'guías despachadas', 'centro de acciones',
   'ventas recientes', 'datos del panel',
 ]
 
@@ -102,7 +103,7 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
 
   // Consultas de los bloques secundarios: también arrancan YA.
   const pVentas6m = settle(fetchAll(() => supabase
-    .from('ventas').select('id, fecha, total, ganancia_neta, estado').is('deleted_at', null).gte('fecha', inicio6m)))
+    .from('ventas').select('id, n_referencia, fecha, total, ganancia_neta, estado').is('deleted_at', null).gte('fecha', inicio6m)))
   // Plata en la calle = TODO lo despachado y sin resolver, sin importar el mes.
   const pSinResolver = settle(fetchAll(() => supabase
     .from('ventas').select('id, n_referencia, fecha, total')
@@ -112,9 +113,28 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
     .from('saldo_banco').select('*').order('created_at', { ascending: false }).limit(1).maybeSingle())
   const hace7 = new Date(); hace7.setDate(hace7.getDate() - 6)
   const pVentasChart = settle(fetchAll(() => supabase
-    .from('ventas').select('id, n_referencia, fecha, total, estado, ganancia_neta')
+    .from('ventas').select('id, n_referencia, fecha, total, estado, ganancia_neta, despachado_at')
     .is('deleted_at', null)
     .gte('fecha', hoyLocal(hace7))))
+  // Guías cargadas (12-10): una venta "pendiente" solo está EN CAMINO si tiene
+  // guía en entregas o despachado_at. Ingresos desde 3 días antes del período
+  // más viejo que se mira (mes o últimos 7 días), por las zonas horarias.
+  const desdeGuias = new Date(Math.min(new Date(inicioMes).getTime(), hace7.getTime()) - 3 * 86400000)
+  const pDespachos = settle(fetchAll(() => supabase.from('entregas')
+    .select('venta_id, n_referencia, nro_guia_pap, guia_transportadora')
+    .gte('fecha_ingreso', hoyLocal(desdeGuias)), { columnaOrden: 'nro_guia_pap' }))
+  // Historia de entrega (12-10): los 3 meses cerrados anteriores, para proyectar
+  // lo en camino con una tasa real y no con la del mes en curso (4 de 4 = 100%).
+  const inicioHist = new Date(ahora.getFullYear(), ahora.getMonth() - 3, 1).toISOString().split('T')[0]
+  const pHist = pVentas6m.then(r => r.ok ? historiaEntrega(r.v.filter(v => v.fecha >= inicioHist && v.fecha < inicioMes)) : null)
+  // Si las guías no se pudieron leer, se cuenta todo lo pendiente como en
+  // camino (como antes) y se avisa una sola vez.
+  let avisoGuias = false
+  const pEsDespachada = pDespachos.then(r => {
+    if (r.ok) return indexarDespachos(r.v)
+    if (!avisoGuias) { avisoGuias = true; fallar('guías despachadas', 'guías', r.e) }
+    return () => true
+  })
   const pTopProds = settle(fetchAll(() => supabase
     .from('ventas').select('id, producto_nombre, total, ganancia_neta, estado, cantidad')
     .is('deleted_at', null)
@@ -143,7 +163,10 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
   ]))
   // Plata de PaP sin rendir. `cobrado` es el IMPORTE cobrado (un entero), no
   // un booleano: con .eq('cobrado', true) Postgres rechazaba la consulta entera.
-  const pSinRend = settle(fetchAll(() => supabase.from('entregas').select('cobrado').gt('cobrado', 0).eq('rendido', false), { columnaOrden: 'nro_guia_pap' }))
+  // 12-10: rendido NULL también es "sin rendir" (Lucero los deja vacíos: con
+  // .eq('rendido', false) quedaban afuera). `rendido IS NOT TRUE` = null o false.
+  // Se trae la transportadora para que la alerta diga a quién seguir.
+  const pSinRend = settle(fetchAll(() => supabase.from('entregas').select('cobrado, transportadora').gt('cobrado', 0).not('rendido', 'is', true), { columnaOrden: 'nro_guia_pap' }))
   // Tasa de entrega este mes vs mes anterior (mismo tramo de días), por pedido
   const { inicio: inicioMesAnt2, fin: finMesAnt2 } = rangoMesAnteriorEquivalente(ahora)
   const pTasaEntrega = settle(Promise.all([
@@ -165,7 +188,7 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
       .is('deleted_at', null).is('transportadora', null),
     // Entregas cobradas al cliente que la transportadora todavía no depositó.
     fetchAll(() => supabase.from('entregas').select('importe, fecha_entrega')
-      .eq('categoria', 'entregado').eq('rendido', false).not('fecha_entrega', 'is', null), { columnaOrden: 'nro_guia_pap' }),
+      .eq('categoria', 'entregado').not('rendido', 'is', true).not('fecha_entrega', 'is', null), { columnaOrden: 'nro_guia_pap' }), // 12-10: incluye rendido NULL
     // Guías de PaP en tránsito, para la alerta de "sin moverse".
     fetchAll(() => supabase.from('entregas')
       .select('estado_pap, categoria, ciudad, fecha_ingreso, transportadora')
@@ -218,7 +241,7 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
 
     // Bloque principal: ventas/ganancia del mes, KPIs y punto de equilibrio.
     bloque('principal', async () => {
-      const [ventasMes, costos] = await Promise.all([pVentasMes, pCostos])
+      const [ventasMes, costos, esDespachada, hist] = await Promise.all([pVentasMes, pCostos, pEsDespachada, pHist])
       if (!(ventasMes && costos.costosOk)) {
         // Sin ventas o sin costos no se puede calcular la ganancia: mejor nada que un número falso.
         return { kpis: null }
@@ -236,8 +259,9 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
         categoria: v.estado === 'entregado' ? 'entregado'
                  : v.estado === 'devuelto' ? 'devuelto'
                  : 'en_proceso',
+        despachado: esDespachada(v), // 12-10: sin guía no está en camino
       }))
-      const piramide = calcularPiramide(paquetes, indexarCostos(ventasMes), COGS_PROMEDIO, totalGastosConAds)
+      const piramide = calcularPiramide(paquetes, indexarCostos(ventasMes), COGS_PROMEDIO, totalGastosConAds, { hist })
       // Conteos por PEDIDO (no por línea), como la pirámide.
       const ped = contarPedidos(ventasMes, categoriaVenta)
 
@@ -262,12 +286,24 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
           ingresosNetos: piramide.contribucionFirme,
           // Margen de contribución sobre lo cobrado
           margenPct: piramide.ingreso ? (piramide.contribucionFirme / piramide.ingreso) * 100 : 0,
-          paquetesEnviados: ped.total,
+          // 12-10: enviados = solo lo que salió con guía (antes contaba los
+          // pedidos todavía en el depósito).
+          paquetesEnviados: piramide.entregados + piramide.devueltos + piramide.enCamino,
+          pedidosMes: ped.total,
           entregados: ped.entregados,
           devueltos: ped.devueltos,
           pendientesCount: ped.porCat.pendiente || 0,
-          // Tasa sobre lo RESUELTO (entregados + devueltos), no sobre los que aún vuelan
+          enCamino: piramide.enCamino,
+          sinDespachar: piramide.sinDespachar,
+          // Tasa sobre lo RESUELTO (dato crudo, compatibilidad)
           tasaEntrega: piramide.tasaEntrega,
+          // 12-10: la que se muestra: ~esperada, rango y en camino (con 4 de 4
+          // resueltos y 23 volando ya no sale "100%" verde).
+          tasaReal: piramide.tasaReal,
+          // Lo que aportaría lo en camino si cierra a la tasa proyectada
+          contribucionProyectada: piramide.contribucionProyectada,
+          tasaProyeccion: piramide.tasaProyeccion,
+          fuenteTasa: piramide.fuenteTasa,
           sangradoFlete: piramide.sangradoFlete,
           // Punto de equilibrio: TODO lo que se descuenta (gastos + ads + automáticos),
           // así "Meta" y "Cubierto" usan la misma base que la ganancia.
@@ -332,12 +368,16 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
 
     // Chart 7 días + tasa de entrega de la semana (hero)
     bloque('chart7', async () => {
-      const r = await pVentasChart
+      const [r, esDespachada, hist] = await Promise.all([pVentasChart, pEsDespachada, pHist])
       try {
         if (!r.ok) throw r.e
         const ventasChart = r.v
-        // Tasa de entrega de los últimos 7 días, sobre lo RESUELTO y por pedido.
-        const p7 = contarPedidos(ventasChart, categoriaVenta)
+        // Tasa de entrega de los últimos 7 días, por pedido. 12-10: con lo en
+        // camino (con guía) y rango; los sin guía no cuentan como enviados.
+        const p7 = contarPedidos(ventasChart, v => {
+          const c = categoriaVenta(v)
+          return (c === 'entregado' || c === 'devuelto') ? c : (esDespachada(v) ? 'en_camino' : 'sin_despachar')
+        })
         const porDia = {}
         for (let i = 0; i < 7; i++) {
           const d = new Date(); d.setDate(d.getDate() - (6 - i))
@@ -354,6 +394,7 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
         return {
           tasa7d: p7.resueltos ? p7.entregados / p7.resueltos : null,
           resueltos7d: p7.resueltos,
+          tasa7dReal: tasaEntregaRealista({ entregados: p7.entregados, devueltos: p7.devueltos, enCamino: p7.porCat.en_camino || 0, hist }),
           chartData: Object.values(porDia),
         }
       } catch (e) { fallar('gráfico de 7 días', '7 días', e) }
@@ -370,6 +411,7 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
           agrupado[v.producto_nombre].ventas += v.cantidad
           agrupado[v.producto_nombre].ingresos += v.ganancia_neta
         })
+        // `ingresos` es la suma de ganancia_neta: la pantalla lo rotula "contribución" (12-10)
         return Object.values(agrupado).sort((a, b) => b.ingresos - a.ingresos).slice(0, 5)
       } catch (e) { fallar('top productos', 'top productos', e) }
     }),
@@ -451,6 +493,12 @@ export async function cargarDashboard({ supabase, supabaseCrudo, tienda, vigente
         const sinRend = rSinRend.v
         datosAlertas.montoSinRendir = sinRend.reduce((s, e) => s + (Number(e.cobrado) || 0), 0)
         datosAlertas.cantSinRendir = sinRend.length
+        // 12-10: cuánto debe cada transportadora (antes decía siempre "PaP")
+        datosAlertas.sinRendirPorCourier = sinRend.reduce((a, e) => {
+          const k = e.transportadora || 'pap'
+          a[k] = (a[k] || 0) + (Number(e.cobrado) || 0)
+          return a
+        }, {})
       } catch (e) { fallar('plata sin rendir', 'sin alerta de rendición', e) }
 
       try {

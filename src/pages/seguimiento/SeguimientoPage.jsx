@@ -17,7 +17,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
-import { refUtil } from '../../lib/buscadorPedidos'
+import { refUtil, estadoEnvioPorRef, fechaCorta } from '../../lib/buscadorPedidos'
 import { useToast } from '../../lib/toast'
 import { labelTransportadora } from '../../lib/transportadoras'
 import { getUmbralesSeguimientoPaP, getPlantillaSeguimientoPaP } from '../../lib/config'
@@ -49,7 +49,8 @@ export default function SeguimientoPage() {
   const cargar = useCallback(async () => {
     setCargando(true)
     try {
-      const cols = 'id, n_referencia, fecha, cliente_nombre, cliente_telefono, producto_nombre, ciudad, total, estado, pago_anticipado, transportadora, seguimiento_at, seguimiento_estado, seguimiento_intentos, seguimiento_nota, seguimiento_fecha_prometida'
+      // 12-10: + tienda (marca del mensaje) y despachado_at (días desde el despacho).
+      const cols = 'id, n_referencia, fecha, cliente_nombre, cliente_telefono, producto_nombre, ciudad, total, estado, pago_anticipado, transportadora, tienda, despachado_at, seguimiento_at, seguimiento_estado, seguimiento_intentos, seguimiento_nota, seguimiento_fecha_prometida'
       const abiertas = await fetchAll(() => supabase.from('ventas').select(cols)
         .is('deleted_at', null).in('estado', ['pendiente', 'en_tramite', 'en_camino'])
         .order('fecha', { ascending: true }))
@@ -63,14 +64,30 @@ export default function SeguimientoPage() {
         const ents = await fetchAll(() => supabase.from('entregas')
           .select('n_referencia, nro_guia_pap, guia_transportadora, transportadora, estado_pap, categoria, ciudad, fecha_ingreso, nombre_courier'),
           { columnaOrden: 'nro_guia_pap' })
+        // 12-10: + fecha_ingreso (cuándo lo tomó el courier). Si hay dos filas
+        // para la misma referencia gana la de ingreso más reciente, mismo
+        // criterio que construirIndice: es el despacho vigente.
         ;(ents || []).forEach(e => {
           const k = refUtil(e.n_referencia)
-          if (k) guiaPorRef[k] = { nro_guia: e.nro_guia_pap, guia_transportadora: e.guia_transportadora }
+          if (!k) return
+          const prev = guiaPorRef[k]
+          if (prev && String(e.fecha_ingreso || '') <= String(prev.fecha_ingreso || '')) return
+          guiaPorRef[k] = { nro_guia: e.nro_guia_pap, guia_transportadora: e.guia_transportadora, fecha_ingreso: e.fecha_ingreso || null }
         })
         setEntregasCrudas(ents || [])
       } catch { /* sin guías: el mensaje sale con referencia igual, y la bandeja de PaP queda vacía */ }
+      // 12-10: estado de envío de Shopify (Voltra) para detectar los intentos
+      // de entrega fallidos. Si falla la lectura, la bandeja sigue como antes.
+      let envioPorRef = new Map()
+      try {
+        const sp = await fetchAll(() => supabase.from('shopify_pedidos')
+          .select('shopify_order_id, nombre, estado_envio').not('estado_envio', 'is', null),
+          { columnaOrden: 'shopify_order_id' })
+        envioPorRef = estadoEnvioPorRef(sp)
+      } catch { /* sin estado de Shopify: no se marcan intentos fallidos */ }
       setVentas((abiertas || []).map(v => ({
         ...v, ...(guiaPorRef[refUtil(v.n_referencia)] || {}),
+        estado_envio: envioPorRef.get(refUtil(v.n_referencia)) || null,
       })))
       // Histórico solo para medir efectividad (ya cerradas y contactadas).
       try {
@@ -237,7 +254,9 @@ export default function SeguimientoPage() {
         <div className="kpi-card">
           <div className="kpi-label"><Clock size={11} /> Más viejo</div>
           <div className="kpi-value" style={{ fontSize: 22 }}>{resumen.masViejo} días</div>
-          <div className="kpi-sub">Desde el despacho</div>
+          <div className="kpi-sub">
+            Desde el despacho{resumen.sinRastro ? ` · ${resumen.sinRastro} sin rastro del courier` : ''}
+          </div>
         </div>
         {efect.tasaRescate != null && (
           <div className="kpi-card" style={{ borderLeft: '3px solid var(--green)' }}>
@@ -247,6 +266,16 @@ export default function SeguimientoPage() {
           </div>
         )}
       </div>
+
+      {/* 12-10: intentos de entrega fallidos (Shopify). Van arriba de todo en
+          la lista y con su propia plantilla: coordinar, no "¿ya lo recibiste?". */}
+      {resumen.intentosFallidos > 0 && (
+        <div className="card" style={{ padding: '12px 16px', borderLeft: '3px solid var(--red)', fontSize: 12 }}>
+          <AlertTriangle size={13} style={{ verticalAlign: -2, marginRight: 4, color: 'var(--red)' }} />
+          <b>{resumen.intentosFallidos} intento{resumen.intentosFallidos !== 1 ? 's' : ''} de entrega fallido{resumen.intentosFallidos !== 1 ? 's' : ''}.</b>{' '}
+          El courier ya fue y no pudo entregar: escribile al cliente hoy para coordinar día y horario. Están primeros en la lista.
+        </div>
+      )}
 
       {/* Reclamo agrupado por courier */}
       {Object.keys(reclamos).length > 0 && (
@@ -341,6 +370,12 @@ export default function SeguimientoPage() {
                         fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
                         background: 'var(--bg-hover)', color: v.cfg.color,
                       }}>{v.cfg.label}</span>
+                      {v.envioFallido && (
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                          background: 'var(--red)', color: '#fff',
+                        }}>{v.envioFallido}</span>
+                      )}
                       {v.n_referencia && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>#{v.n_referencia}</span>}
                       {codigoCourier(v) && (
                         <span style={{ fontSize: 10, color: 'var(--text-dim)' }} title="Código que reconoce el courier">
@@ -352,8 +387,12 @@ export default function SeguimientoPage() {
                       {v.producto_nombre} · {v.ciudad || 'sin ciudad'} · {formatGs(v.total)} · {labelTransportadora(v.transportadora || 'pap')}
                     </div>
                     <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      {/* 12-10: días desde que lo tomó el courier; sin rastro del
+                          courier se aclara que se cuenta desde el pedido. */}
                       <span style={{ color: urgente ? 'var(--red)' : 'var(--text-dim)', fontWeight: urgente ? 700 : 400 }}>
-                        {v.dias} días desde el despacho
+                        {v.sinRastro
+                          ? `${v.dias} días desde el pedido · sin rastro del courier`
+                          : `${v.dias} días desde el despacho${v.fechaDespacho ? ` (${fechaCorta(v.fechaDespacho)})` : ''}`}
                       </span>
                       {v.intentos > 0 && <span style={{ color: 'var(--text-muted)' }}>{v.intentos} mensaje{v.intentos > 1 ? 's' : ''} enviado{v.intentos > 1 ? 's' : ''}</span>}
                       {v.seguimiento_fecha_prometida && <span style={{ color: 'var(--purple)' }}>prometido para el {v.seguimiento_fecha_prometida}</span>}

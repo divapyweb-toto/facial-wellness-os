@@ -6,7 +6,7 @@ import { RefreshCw, BarChart3 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import TarjetasKpi from './TarjetasKpi'
 import TablaSemanas from './TablaSemanas'
-import { agregarSinRespuesta, lunesActual, rangoSemana } from './kpi'
+import { agregarEntrega, agregarSinRespuesta, lunesActual, rangoSemana } from './kpi'
 import { fetchAll } from '../../lib/fetchAll'
 import './kpi-whatsapp.css'
 
@@ -41,7 +41,8 @@ export default function KpiWhatsappPage() {
             .gte('creado_en', `${String(desde).slice(0, 10)}T00:00:00Z`), { columnaOrden: 'shopify_order_id' })
         } catch { cancelados = null }
       }
-      const lista = agregarSinRespuesta(base, cancelados)
+      // 12-10: entrega realista (en camino, % resuelto) derivada en el cliente.
+      const lista = agregarEntrega(agregarSinRespuesta(base, cancelados))
       setFilas(lista)
       // Por defecto, la última semana cerrada (la que se revisa el lunes).
       setElegida((prev) => prev && lista.some((f) => f.semana === prev)
@@ -110,7 +111,8 @@ export default function KpiWhatsappPage() {
             <TarjetasKpi fila={fila} anterior={anterior} />
             <p className="kpi-wa-nota">
               Confirmados % = confirmados ÷ todos los pedidos de la semana; los que cayeron sin respuesta cuentan como NO confirmados y se muestran aparte.
-              Entregados % = entregados ÷ (entregados + no entregados) de los pedidos creados esa semana: sube a medida que el courier reporta.
+              Entregados = tasa esperada (~) de los pedidos creados esa semana: lo entregado más lo que sigue en camino proyectado con la tasa de las semanas ya cerradas (o 80 % si hay poca historia), con el rango de peor a mejor caso. En camino = confirmados que todavía no son ni entregados ni devueltos.
+              El costo por entregado se muestra recién cuando la semana tiene al menos 80 % de los confirmados resueltos; antes figura como "parcial".
               Costos en dólares, como los factura Meta y Anthropic. La IA cuenta desde que exista el vendedor (ola 2).
             </p>
           </div>

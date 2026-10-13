@@ -22,7 +22,7 @@
 //
 // ESTE MÓDULO NO ESCRIBE NADA. Solo lee.
 // ═══════════════════════════════════════════════════════════
-import { normalizarRef, limpiarTel } from './referencias'
+import { normalizarRef, limpiarTel, esRefVoltra, refVoltra } from './referencias'
 
 // ─── Normalización de texto ─────────────────────────────────
 // Sin tildes, sin mayúsculas, sin espacios de más. 'José Ñandú' → 'jose nandu'
@@ -71,6 +71,30 @@ export function fechaCorta(iso) {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : (iso ? String(iso) : '—')
 }
 
+// ─── Envío fallido según Shopify (Voltra) ───────────────────
+// (Vive acá y no en seguimiento.js porque lo usan las dos pantallas y
+// seguimiento.js ya importa de este archivo.)
+// 12-10: `shopify_pedidos.estado_envio` es el estado que carga el importador
+// de couriers. Un INTENTO_FALLIDO (el courier fue y no pudo entregar) se veía
+// como "pendiente" y la bandeja le mandaba "¿ya lo recibiste?" a alguien que
+// sabe perfectamente que no lo recibió. Estos dos estados son "rescatable:
+// coordinar otra entrega ya", no "preguntar si llegó".
+export const ENVIO_FALLIDO = {
+  INTENTO_FALLIDO: 'Intento de entrega fallido',
+  NO_ENTREGADO_RESCATABLE: 'No entregado (rescatable)',
+}
+
+// Filas de shopify_pedidos ({ nombre: '#1004', estado_envio }) → Map por la
+// referencia que usa `ventas` ('VT-1004'). Así se cruza con refUtil(venta).
+export function estadoEnvioPorRef(pedidosShopify) {
+  const m = new Map()
+  for (const p of (pedidosShopify || [])) {
+    const ref = refVoltra(p?.nombre)
+    if (ref && p?.estado_envio) m.set(normalizarRef(ref), p.estado_envio)
+  }
+  return m
+}
+
 // ═══════════════════════════════════════════════════════════
 // ÍNDICE
 // ═══════════════════════════════════════════════════════════
@@ -81,7 +105,10 @@ export function fechaCorta(iso) {
 //
 // Las ventas SIN referencia no se pueden agrupar ni cruzar: van solas,
 // identificadas por su id.
-export function construirIndice(ventas, entregas) {
+// 12-10: `envioPorRef` (opcional) = Map de estadoEnvioPorRef(): estado de
+// envío de Shopify por referencia, para que un INTENTO_FALLIDO no se vea como
+// "En tránsito".
+export function construirIndice(ventas, entregas, envioPorRef = null) {
   // Entrega por referencia normalizada. Si hay más de una fila para la misma
   // referencia (pasa en 4 casos), gana la que tenga fecha de ingreso más
   // reciente: es el despacho vigente.
@@ -139,6 +166,7 @@ export function construirIndice(ventas, entregas) {
   // Enganchar la entrega
   for (const p of porClave.values()) {
     p.entrega = p.ref ? (entPorRef.get(p.ref) || null) : null
+    p.estado_envio = (p.ref && envioPorRef) ? (envioPorRef.get(p.ref) || null) : null
   }
 
   // ── Entregas sin venta ──
@@ -266,6 +294,16 @@ export function buscarPedidos(indice, consulta, limite = 40) {
 // Misma regla que `codigoCourier()` de lib/seguimiento.js, pero devolviendo
 // las partes por separado para poder mostrar el número grande y copiar SOLO
 // el número. Si cambia la regla, hay que cambiarla en los dos lados.
+
+// Código que Lucero conoce para una referencia. 12-10: Voltra va tal cual
+// ('VT-1004'), igual que codigoLucero() de DespachoPagina.jsx; antes salía
+// 'FW-VT-1004' y Lucero no encontraba el reclamo. FW sigue con 'FW-'.
+// Si cambia la regla de Despacho, cambiarla acá (la usan las dos pantallas).
+export function codigoLuceroDeRef(ref) {
+  if (!ref) return null
+  return esRefVoltra(ref) ? normalizarRef(ref) : `FW-${ref}`
+}
+
 export function guiaCourier(p) {
   const t = p?.transportadora || 'pap'
   const e = p?.entrega
@@ -273,7 +311,7 @@ export function guiaCourier(p) {
   if (t === 'lucero') {
     if (!p?.ref) return { falta: 'Este pedido no tiene número de referencia, así que no hay código que darle a Lucero.' }
     return {
-      numero: `FW-${p.ref}`,
+      numero: codigoLuceroDeRef(p.ref),
       etiqueta: 'Código Lucero',
       extra: e?.guia_transportadora ? `EnvioID ${e.guia_transportadora}` : null,
       courier: 'Lucero del Este',
@@ -325,6 +363,7 @@ const EST = {
   transito:      { label: 'En tránsito',   color: 'var(--yellow)' },
   sin_despachar: { label: 'Sin despachar', color: 'var(--text-muted)' },
   no_despachado: { label: 'Nunca despachado', color: 'var(--red)' },
+  fallido:       { label: 'Intento de entrega fallido', color: 'var(--red)' },
 }
 
 export function estadoPedido(p) {
@@ -340,6 +379,13 @@ export function estadoPedido(p) {
   else if (cat === 'devuelto') base = EST.devuelto
   else if (cat === 'no_despachado') base = EST.no_despachado
   else base = EST.transito
+
+  // 12-10: si Shopify dice que el courier fue y no pudo entregar, eso manda
+  // sobre "En tránsito" / "Sin despachar". No pisa un resultado final del
+  // courier (entregado/devuelto) ni lo que ya cerraste en ventas.
+  const fallido = ENVIO_FALLIDO[p?.estado_envio]
+  const cerrado = ['entregado', 'devuelto'].includes(cat) || ['entregado', 'devuelto'].includes(p?.estado)
+  if (fallido && !cerrado) base = { ...EST.fallido, label: fallido }
 
   // ¿El courier y tu sistema dicen lo mismo?
   let discrepancia = null

@@ -14,15 +14,20 @@
 import { useNavigate } from 'react-router-dom'
 import { formatGs } from '../../lib/supabase'
 import { Plus, PackageCheck, Search, AlertTriangle } from 'lucide-react'
+import { textoEsperada, textoRango, textoFuente, colorTasa as colorTasaReal } from '../../lib/tasaEntrega'
 
 const fechaLarga = () => {
   const f = new Date().toLocaleDateString('es-PY', { weekday: 'long', day: 'numeric', month: 'long' })
   return f.charAt(0).toUpperCase() + f.slice(1)
 }
 
-export default function DashboardHero({ nombre, hoyCount, hoyMonto, tasa7d, resueltos7d, enCalleCount, enCalleMonto, alertasCount, pendiente = {} }) {
+// tasa7dReal (12-10): resultado de tasaEntregaRealista. Se muestra "~esperada"
+// y el rango con lo en camino; con pocos resueltos el color es neutro (antes
+// 4 de 4 resueltos daba "100%" verde). tasa7d/resueltos7d quedan de respaldo.
+export default function DashboardHero({ nombre, hoyCount, hoyMonto, tasa7d, resueltos7d, tasa7dReal = null, enCalleCount, enCalleMonto, alertasCount, pendiente = {} }) {
   const navigate = useNavigate()
-  const colorTasa = tasa7d == null ? 'var(--text-secondary)'
+  const colorTasa = tasa7dReal ? colorTasaReal(tasa7dReal, { verde: 60, amarillo: 40 })
+    : tasa7d == null ? 'var(--text-secondary)'
     : tasa7d >= 0.6 ? 'var(--green)' : tasa7d >= 0.4 ? 'var(--yellow)' : 'var(--red)'
 
   return (
@@ -39,10 +44,10 @@ export default function DashboardHero({ nombre, hoyCount, hoyMonto, tasa7d, resu
           <div className="hero-stat">
             <span>Entrega 7d</span>
             <b style={{ color: colorTasa }}>
-              {pendiente.tasa ? '…' : tasa7d == null ? '—' : `${Math.round(tasa7d * 100)}%`}
+              {pendiente.tasa ? '…' : tasa7dReal ? textoEsperada(tasa7dReal) : tasa7d == null ? '—' : `${Math.round(tasa7d * 100)}%`}
             </b>
-            <span style={{ textTransform: 'none', letterSpacing: 0 }}>
-              {pendiente.tasa ? 'cargando' : resueltos7d ? `${resueltos7d} resueltos` : 'sin resueltos aún'}
+            <span style={{ textTransform: 'none', letterSpacing: 0 }} title={tasa7dReal ? textoFuente(tasa7dReal) : undefined}>
+              {pendiente.tasa ? 'cargando' : tasa7dReal ? textoRango(tasa7dReal) : resueltos7d ? `${resueltos7d} resueltos` : 'sin resueltos aún'}
             </span>
           </div>
           <div className="hero-stat">

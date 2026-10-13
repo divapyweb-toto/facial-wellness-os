@@ -10,6 +10,7 @@ import { precioSugerido, precioUnitarioSugerido, totalLinea, avisoPrecio, proxim
 import { normalizarRef, normalizarTel } from '../../lib/referencias'
 import { tiendaParaEscribir, getTienda } from '../../lib/tienda'
 import { fetchAll } from '../../lib/fetchAll'
+import { refUtil } from '../../lib/buscadorPedidos'
 import { logError } from '../../lib/errorLog'
 import ModalErrorBoundary from '../../lib/ModalErrorBoundary'
 import { validarVenta } from '../../lib/validation'
@@ -881,6 +882,12 @@ export default function VentasPage() {
 
   const totalVentas = ventas.filter(v => v.estado === 'entregado').reduce((s, v) => s + v.total, 0)
   const totalNeto = ventas.filter(v => v.estado === 'entregado').reduce((s, v) => s + v.ganancia_neta, 0)
+  // 12-10: el subtítulo decía "N registros · X" con N = todas las filas y X =
+  // solo lo entregado (Voltra oct: "27 registros · 570.000" cuando los 27
+  // suman 3.580.000). Ahora: pedidos (filas con la misma referencia son un
+  // pedido), cobrado de lo entregado y total pedido, cada uno con su nombre.
+  const totalPedido = ventas.reduce((s, v) => s + (v.total || 0), 0)
+  const nPedidos = new Set(ventas.map(v => refUtil(v.n_referencia) || `id:${v.id}`)).size
 
   const mesesDisponibles = []
   const _hoy = new Date()
@@ -899,7 +906,12 @@ export default function VentasPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Ventas</h1>
-          <p className="page-subtitle">{ventas.length} registros · {formatGs(totalVentas)} · Neto: {formatGs(totalNeto)}</p>
+          <p className="page-subtitle">
+            {nPedidos} pedido{nPedidos !== 1 ? 's' : ''}{nPedidos !== ventas.length ? ` (${ventas.length} líneas)` : ''}
+            {' · '}Cobrado (entregados): {formatGs(totalVentas)}
+            {' · '}Total pedido: {formatGs(totalPedido)}
+            {' · '}Neto (entregados): {formatGs(totalNeto)}
+          </p>
         </div>
         <div className="page-actions">
           <button className="btn btn-primary" onClick={() => setShowModal(true)}>

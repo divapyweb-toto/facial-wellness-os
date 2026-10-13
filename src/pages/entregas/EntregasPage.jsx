@@ -20,7 +20,8 @@ import { useToast } from '../../lib/toast'
 import { mandarAVoltraOS } from '../../lib/importarCourierWA'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown, ArrowRight, MessageCircle } from 'lucide-react'
-import { calcularPiramide, indexarCostos } from '../../lib/contribucion'
+import { calcularPiramide, indexarCostos, indexarDespachos, historiaEntrega } from '../../lib/contribucion'
+import { tasaEntregaRealista, textoEsperada, textoRango, textoFuente, colorTasa as colorTasaReal, REFERENCIA_TASA as REFERENCIA_TASA_UI } from '../../lib/tasaEntrega'
 import { normalizarCiudad, ZONAS } from '../../lib/ciudades'
 import MapaCiudades from './MapaCiudades'
 
@@ -109,7 +110,7 @@ export default function EntregasPage() {
       try {
         // Costos: traer ventas con su referencia y costo_prod real
         const ventas = await fetchAll(() => supabaseTienda
-          .from('ventas').select('n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha, ciudad, producto_nombre, cantidad, transportadora').is('deleted_at', null))
+          .from('ventas').select('id, n_referencia, costo_prod, costo_envio, total, ganancia_neta, estado, fecha, ciudad, producto_nombre, cantidad, transportadora, despachado_at').is('deleted_at', null))
         if (activo && ventas) {
           setRefCosto(indexarCostos(ventas))
           setVentasParaPiramide(ventas)
@@ -271,6 +272,9 @@ export default function EntregasPage() {
   // ── Convierte VENTAS de un mes al formato de calcularPiramide ──
   // estado → categoria, total → importe. Esta es la FUENTE ÚNICA de la ganancia
   // (la misma que usa Reportes), para que ambas pantallas coincidan exacto.
+  // 12-10: una venta sin resolver solo está EN CAMINO si tiene guía en entregas
+  // (o despachado_at). Antes "23 ya despachados" contaba 2 sin guía.
+  const esDespachada = useMemo(() => indexarDespachos(merged), [merged])
   const ventasComoPaquetes = (ventasMes) => ventasMes.map(v => ({
     n_referencia: v.n_referencia,
     importe: v.total || 0,
@@ -279,6 +283,7 @@ export default function EntregasPage() {
     categoria: v.estado === 'entregado' ? 'entregado'
              : v.estado === 'devuelto' ? 'devuelto'
              : 'en_proceso',
+    despachado: esDespachada(v),
   }))
 
   // Ventas filtradas por el mes elegido (la pirámide sale de acá, no de PaP)
@@ -335,7 +340,7 @@ export default function EntregasPage() {
       return { ...info, ...p, productos }
     }).sort((a, b) => b.contribucionFirme - a.contribucionFirme)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ventasDelMes, refCosto, datosPaPPorRef])
+  }, [ventasDelMes, refCosto, datosPaPPorRef, esDespachada])
 
   // Resumen por zona: ¿conviene mandar lejos?
   const porZona = useMemo(() => {
@@ -365,13 +370,27 @@ export default function EntregasPage() {
 
   const sinReconocer = useMemo(() => porCiudad.filter(c => !c.reconocida && c.clave !== '_sin_dato'), [porCiudad])
 
+  // Historia de entrega para proyectar lo en camino (12-10): los 3 meses
+  // anteriores al elegido. Antes se usaba la tasa del MISMO mes (4 de 4 = 100%).
+  // Si no llega a MIN_RESUELTOS, calcularPiramide usa la referencia (80%).
+  const histEntrega = useMemo(() => {
+    if (filtroMes === 'todos' || !mesEfectivo) return null
+    const [y, m] = mesEfectivo.split('-').map(Number)
+    const d = new Date(y, m - 4, 1)
+    const desde = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    return historiaEntrega(ventasParaPiramide.filter(v => {
+      const mm = (v.fecha || '').slice(0, 7)
+      return mm >= desde && mm < mesEfectivo
+    }))
+  }, [ventasParaPiramide, filtroMes, mesEfectivo])
+
   const piramide = useMemo(() => {
     if (!ventasDelMes.length) return null
     // gastos = 0: los gastos generales (ads, sueldos) no los controla la logística.
     // Esta pirámide llega hasta la contribución firme. La ganancia final vive en Reportes.
-    return calcularPiramide(ventasComoPaquetes(ventasDelMes), refCosto, COGS_PROMEDIO, 0)
+    return calcularPiramide(ventasComoPaquetes(ventasDelMes), refCosto, COGS_PROMEDIO, 0, { hist: histEntrega })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ventasDelMes, refCosto, filtroMes, mesEfectivo])
+  }, [ventasDelMes, refCosto, filtroMes, mesEfectivo, esDespachada, histEntrega])
 
   // Pirámide del MES ANTERIOR (para comparar: ¿mejoró o empeoró?)
   const piramideMesAnterior = useMemo(() => {
@@ -384,7 +403,7 @@ export default function EntregasPage() {
     if (!ventasAnt.length) return null
     return { ...calcularPiramide(ventasComoPaquetes(ventasAnt), refCosto, COGS_PROMEDIO, 0), mes: mesAnt }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ventasParaPiramide, refCosto, filtroMes, mesEfectivo])
+  }, [ventasParaPiramide, refCosto, filtroMes, mesEfectivo, esDespachada])
 
   const tablaFiltrada = useMemo(() => {
     let r = mergedFiltrado
@@ -1008,7 +1027,11 @@ export default function EntregasPage() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
                   <div className="kpi-card"><div className="kpi-label">Envíos</div><div className="kpi-value" style={{ fontSize: 18 }}>{resumenLucero.guardados}</div><div className="kpi-sub">{resumenLucero.ventasAct} ventas actualizadas</div></div>
                   <div className="kpi-card"><div className="kpi-label">Entregados</div><div className="kpi-value" style={{ fontSize: 18, color: 'var(--green)' }}>{resumenLucero.entregados}</div><div className="kpi-sub">{resumenLucero.devueltos} cerrados en contra</div></div>
-                  <div className="kpi-card"><div className="kpi-label">Tasa de entrega</div><div className="kpi-value" style={{ fontSize: 18 }}>{resumenLucero.tasaEntrega != null ? Math.round(resumenLucero.tasaEntrega) + '%' : '—'}</div><div className="kpi-sub">sobre resueltos</div></div>
+                  {(() => {
+                    // 12-10: ~esperada + rango con lo en proceso (criterio común)
+                    const t = tasaEntregaRealista({ entregados: resumenLucero.entregados, devueltos: resumenLucero.devueltos, enCamino: resumenLucero.enProceso })
+                    return <div className="kpi-card"><div className="kpi-label">Tasa de entrega</div><div className="kpi-value" style={{ fontSize: 18, color: colorTasaReal(t) }}>{textoEsperada(t)}</div><div className="kpi-sub" title={textoFuente(t)}>{textoRango(t)}</div></div>
+                  })()}
                   <div className="kpi-card"><div className="kpi-label">En proceso</div><div className="kpi-value" style={{ fontSize: 18, color: 'var(--accent)' }}>{resumenLucero.enProceso}</div><div className="kpi-sub">{resumenLucero.reintentables} fallidos reintentables</div></div>
                   <div className="kpi-card"><div className="kpi-label">Costo por entrega</div><div className="kpi-value" style={{ fontSize: 18 }}>{resumenLucero.costoPorEntrega != null ? formatGs(Math.round(resumenLucero.costoPorEntrega)) : '—'}</div><div className="kpi-sub">incluye flete de devoluciones</div></div>
                 </div>
@@ -1037,33 +1060,40 @@ export default function EntregasPage() {
             {/* TASA DE ENTREGA POR TRANSPORTADORA */}
             {(() => {
               const tp = tasaPorTransportadora(mergedFiltrado, transpPorRef)
-              const cols = Object.entries(tp).filter(([k, v]) => k !== 'total' && v.resueltos > 0)
+              const cols = Object.entries(tp).filter(([k, v]) => k !== 'total' && (v.resueltos > 0 || v.enCamino > 0))
               if (!cols.length) return null
-              const pct = (x) => x == null ? '—' : `${Math.round(x * 100)}%`
-              const colorTasa = (t) => t == null ? 'var(--text-muted)' : t >= 0.85 ? 'var(--green)' : t >= 0.7 ? 'var(--accent)' : 'var(--red)'
+              // 12-10: ~esperada + rango + en camino; con pocos resueltos, color neutro.
+              const real = (v) => tasaEntregaRealista({ entregados: v.entregados, devueltos: v.devueltos, enCamino: v.enCamino })
+              const colorTasa = (t) => colorTasaReal(t, { verde: 85, amarillo: 70 })
               return (
                 <div className="card" style={{ padding: '16px 20px' }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                     Tasa de entrega por transportadora
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
-                    Solo paquetes cerrados (entregados + devueltos). Los que vuelven pagan flete igual, así que cada punto vale plata.
+                    ~Esperada = entregados + en camino proyectados al {Math.round(REFERENCIA_TASA_UI * 100)}% de referencia; el rango va de "vuelven todos" a "llegan todos". Los que vuelven pagan flete igual, así que cada punto vale plata.
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-                    {cols.map(([id, v]) => (
-                      <div key={id} className="kpi-card">
-                        <div className="kpi-label">{labelTransportadora(id)}</div>
-                        <div className="kpi-value" style={{ fontSize: 22, color: colorTasa(v.tasa) }}>{pct(v.tasa)}</div>
-                        <div className="kpi-sub">{v.entregados} de {v.resueltos} · {v.devueltos} devueltos</div>
-                      </div>
-                    ))}
-                    {tp.total && cols.length > 1 && (
-                      <div className="kpi-card">
-                        <div className="kpi-label">Total</div>
-                        <div className="kpi-value" style={{ fontSize: 22 }}>{pct(tp.total.tasa)}</div>
-                        <div className="kpi-sub">{tp.total.entregados} de {tp.total.resueltos}</div>
-                      </div>
-                    )}
+                    {cols.map(([id, v]) => {
+                      const t = real(v)
+                      return (
+                        <div key={id} className="kpi-card">
+                          <div className="kpi-label">{labelTransportadora(id)}</div>
+                          <div className="kpi-value" style={{ fontSize: 22, color: colorTasa(t) }}>{textoEsperada(t)}</div>
+                          <div className="kpi-sub">{v.entregados} de {v.resueltos} resueltos · {textoRango(t)}</div>
+                        </div>
+                      )
+                    })}
+                    {tp.total && cols.length > 1 && (() => {
+                      const t = real(tp.total)
+                      return (
+                        <div className="kpi-card">
+                          <div className="kpi-label">Total</div>
+                          <div className="kpi-value" style={{ fontSize: 22, color: colorTasa(t) }}>{textoEsperada(t)}</div>
+                          <div className="kpi-sub">{tp.total.entregados} de {tp.total.resueltos} resueltos · {textoRango(t)}</div>
+                        </div>
+                      )
+                    })()}
                   </div>
                   {cols.length < 2 && (
                     <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 10 }}>
@@ -1131,34 +1161,38 @@ export default function EntregasPage() {
             </div>
 
             {/* BLOQUE EN TRÁNSITO — lo que todavía está volando (proyección) */}
-            {p.enProceso > 0 && (
+            {p.enCamino > 0 && (
               <div className="card" style={{ padding: '16px 20px', border: '1px solid var(--yellow)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <Clock size={15} color="var(--yellow)" />
-                  <span style={{ fontSize: 13, fontWeight: 700 }}>En tránsito · {p.enProceso} paquetes todavía volando</span>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>En tránsito · {p.enCamino} paquetes todavía volando</span>
                 </div>
                 <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>
-                  Estos NO están en la contribución firme porque aún no cerraron. Esto es la <strong>proyección</strong> si cierran como tu historial ({p.tasaEntrega}% de entrega).
+                  Estos NO están en la contribución firme porque aún no cerraron. Esto es la <strong>proyección</strong> si cierran al {p.tasaProyeccion}% de entrega
+                  {p.fuenteTasa === 'historica'
+                    ? ' (tu historial de los meses anteriores).'
+                    : ' (referencia del rubro: todavía no hay suficientes paquetes cerrados para usar tu historial).'}
+                  {p.sinDespachar > 0 && ` Hay ${p.sinDespachar} pedido${p.sinDespachar === 1 ? '' : 's'} más sin guía: no cuentan hasta que salgan.`}
                 </p>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
                   <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Flete ya comprometido</div>
                     <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--red)', fontFamily: 'var(--font-display)' }}>−{formatGs(p.fleteEnTransito)}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{p.enProceso} ya despachados</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{p.enCamino} ya despachados (con guía)</div>
                   </div>
                   <div style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Proyección de cierre</div>
                     <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'var(--font-display)' }}>
                       ~{p.entregadosProyectados} <span style={{ color: 'var(--green)', fontSize: 12 }}>entregan</span> · ~{p.devueltosProyectados} <span style={{ color: 'var(--red)', fontSize: 12 }}>vuelven</span>
                     </div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>a tu tasa histórica {p.tasaEntrega}%</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>al {p.tasaProyeccion}% {p.fuenteTasa === 'historica' ? 'histórico' : 'de referencia'}</div>
                   </div>
                   <div style={{ padding: 12, background: p.contribucionProyectada >= 0 ? 'var(--green-dim)' : 'var(--bg-hover)', borderRadius: 10 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Aportaría a tu contribución</div>
                     <div style={{ fontSize: 16, fontWeight: 700, color: p.contribucionProyectada >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-display)' }}>
                       {p.contribucionProyectada >= 0 ? '+' : ''}{formatGs(p.contribucionProyectada)}
                     </div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>si cierran como el promedio</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>si cierran al {p.tasaProyeccion}%</div>
                   </div>
                 </div>
               </div>
@@ -1168,8 +1202,9 @@ export default function EntregasPage() {
             <div className="kpi-grid">
               <div className="kpi-card">
                 <div className="kpi-label"><TrendingUp size={13} style={{ verticalAlign: -2 }} /> Tasa de entrega</div>
-                <div className="kpi-value" style={{ color: p.tasaEntrega >= 70 ? 'var(--green)' : p.tasaEntrega >= 50 ? 'var(--yellow)' : 'var(--red)' }}>{p.tasaEntrega}%</div>
-                <div className="kpi-sub">{p.entregados} de {p.resueltos} resueltos llegaron</div>
+                {/* 12-10: ~esperada + rango + en camino (antes 4 de 4 = "100%" verde) */}
+                <div className="kpi-value" style={{ color: colorTasaReal(p.tasaReal) }}>{textoEsperada(p.tasaReal)}</div>
+                <div className="kpi-sub" title={textoFuente(p.tasaReal)}>{p.entregados} de {p.resueltos} resueltos · {textoRango(p.tasaReal)}</div>
               </div>
               <div className="kpi-card">
                 <div className="kpi-label"><PackageX size={13} style={{ verticalAlign: -2 }} /> Tasa de devolución</div>

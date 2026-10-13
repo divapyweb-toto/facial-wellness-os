@@ -3,7 +3,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { getFlete } from '../../lib/config'
-import { analizarEntregas, categorizarEntrega, tasaPorMes, TASA_CRITICA, TASA_VIGILAR } from '../../lib/inteligenciaEntrega'
+import { analizarEntregas, normalizarParaInteligencia, serieRealista, tendenciaRealista, COLUMNAS_INTELIGENCIA, COLUMNA_FECHA_PERIODO, TASA_CRITICA, TASA_VIGILAR } from '../../lib/inteligenciaEntrega'
+import { tasaEntregaRealista, textoEsperada, textoRango, textoFuente, colorTasa } from '../../lib/tasaEntrega'
 import { Loader2, TrendingUp, AlertTriangle, MapPin, Package, User, RotateCcw, Truck } from 'lucide-react'
 
 const SUG_CFG = {
@@ -13,10 +14,12 @@ const SUG_CFG = {
   pocos:   { color: 'var(--text-muted)', bg: 'transparent' },
 }
 
-function barra(tasa) {
-  const pct = Math.round(tasa * 100)
-  const color = tasa < TASA_CRITICA ? 'var(--red)' : tasa < TASA_VIGILAR ? 'var(--yellow)' : 'var(--green)'
-  return { pct, color }
+// 12-10: misma regla que el resto del sistema (src/lib/tasaEntrega.js):
+// ~esperada con lo que sigue en camino; con pocos resueltos, color neutro
+// (antes una ciudad con 3/3 salía 100 % en verde).
+const UMBRALES = { verde: Math.round(TASA_VIGILAR * 100), amarillo: Math.round(TASA_CRITICA * 100) }
+function barra(t) {
+  return { pct: Math.round(t?.esperada ?? 0), color: colorTasa(t, UMBRALES) }
 }
 
 export default function InteligenciaEntregaPage() {
@@ -29,16 +32,13 @@ export default function InteligenciaEntregaPage() {
     try {
       const desde = new Date(); desde.setMonth(desde.getMonth() - meses)
       const desdeStr = desde.toISOString().slice(0, 10)
+      // 12-10: por fecha de INGRESO (fecha_entrega solo existe en las entregadas:
+      // filtrar por ella dejaba afuera los devueltos y en tránsito de Lucero).
       const data = await fetchAll(
-        () => supabase.from('entregas').select('ciudad, producto, mensajero, motivo, estado_pap, fecha_entrega').gte('fecha_entrega', desdeStr),
+        () => supabase.from('entregas').select(COLUMNAS_INTELIGENCIA).gte(COLUMNA_FECHA_PERIODO, desdeStr),
         { columnaOrden: 'nro_guia_pap' })
-      // Normalizar cada entrega para el análisis
-      const norm = (data || []).map(e => ({
-        categoria: categorizarEntrega(e.estado_pap, e.motivo),
-        ciudad: e.ciudad, producto: e.producto, mensajero: e.mensajero,
-        motivo: e.motivo, fecha: e.fecha_entrega,
-      }))
-      setEntregas(norm)
+      // Categoría con sanearEntrega (Lucero conserva la suya; borradores afuera).
+      setEntregas(normalizarParaInteligencia(data))
     } catch (e) {
       setEntregas([])
     } finally {
@@ -50,15 +50,11 @@ export default function InteligenciaEntregaPage() {
 
   const flete = getFlete()
   const a = useMemo(() => analizarEntregas(entregas, flete), [entregas, flete])
-  const serie = useMemo(() => tasaPorMes(entregas), [entregas])
-  const tendencia = useMemo(() => {
-    if (serie.length < 2) return null
-    const ult = serie[serie.length - 1].tasa, prev = serie[serie.length - 2].tasa
-    return { sube: ult >= prev, delta: Math.round((ult - prev) * 100) }
-  }, [serie])
-
-  const pctGeneral = Math.round(a.tasaGeneral * 100)
-  const colGeneral = a.tasaGeneral < TASA_CRITICA ? 'var(--red)' : a.tasaGeneral < TASA_VIGILAR ? 'var(--yellow)' : 'var(--green)'
+  // Lo en camino se proyecta con la tasa de lo ya resuelto en el período.
+  const hist = useMemo(() => ({ entregados: a.entregados, resueltos: a.resueltos }), [a])
+  const tGeneral = useMemo(() => tasaEntregaRealista({ entregados: a.entregados, devueltos: a.devueltos, enCamino: a.enProceso, hist }), [a, hist])
+  const serie = useMemo(() => serieRealista(entregas, hist), [entregas, hist])
+  const tendencia = useMemo(() => tendenciaRealista(serie), [serie])
 
   return (
     <div className="page">
@@ -76,7 +72,7 @@ export default function InteligenciaEntregaPage() {
 
       {loading ? (
         <div className="empty-state" style={{ padding: 60 }}><Loader2 size={28} className="spinning" /><p>Analizando entregas…</p></div>
-      ) : a.resueltos === 0 ? (
+      ) : a.resueltos + a.enProceso === 0 ? (
         <div className="empty-state" style={{ padding: 60 }}>
           <div className="empty-state-icon"><Truck size={28} /></div>
           <p style={{ fontWeight: 600 }}>Sin datos de entrega en el período</p>
@@ -89,8 +85,9 @@ export default function InteligenciaEntregaPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 18 }}>
               <div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Tasa de entrega</div>
-                <div style={{ fontSize: 28, fontWeight: 800, fontFamily: 'var(--font-display)', color: colGeneral }}>{pctGeneral}%</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{a.entregados} de {a.resueltos} entregados</div>
+                <div style={{ fontSize: 28, fontWeight: 800, fontFamily: 'var(--font-display)', color: colorTasa(tGeneral, UMBRALES) }}>{textoEsperada(tGeneral)}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{a.entregados} de {tGeneral.enviados} enviados entregados · {textoRango(tGeneral)}</div>
+                {tGeneral.enCamino > 0 && <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>{textoFuente(tGeneral)}</div>}
               </div>
               <div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>Plata perdida en fletes</div>
@@ -108,7 +105,7 @@ export default function InteligenciaEntregaPage() {
                   <div style={{ fontSize: 28, fontWeight: 800, fontFamily: 'var(--font-display)', color: tendencia.sube ? 'var(--green)' : 'var(--red)', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {tendencia.sube ? '↑' : '↓'} {Math.abs(tendencia.delta)}%
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>vs mes anterior</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>vs mes anterior (por mes de despacho)</div>
                 </div>
               )}
             </div>
@@ -120,12 +117,12 @@ export default function InteligenciaEntregaPage() {
           </div>
 
           {/* Por ciudad */}
-          <SeccionGrupo titulo="Por ciudad" Icon={MapPin} grupos={a.porCiudad} maxItems={15} />
+          <SeccionGrupo titulo="Por ciudad" Icon={MapPin} grupos={a.porCiudad} hist={hist} maxItems={15} />
 
           {/* Por producto y mensajero, lado a lado */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 }}>
-            <SeccionGrupo titulo="Por producto" Icon={Package} grupos={a.porProducto} maxItems={8} compacto />
-            <SeccionGrupo titulo="Por mensajero" Icon={User} grupos={a.porMensajero} maxItems={8} compacto />
+            <SeccionGrupo titulo="Por producto" Icon={Package} grupos={a.porProducto} hist={hist} maxItems={8} compacto />
+            <SeccionGrupo titulo="Por mensajero" Icon={User} grupos={a.porMensajero} hist={hist} maxItems={8} compacto />
           </div>
 
           {/* Motivos de devolución */}
@@ -154,7 +151,7 @@ export default function InteligenciaEntregaPage() {
 }
 
 // Sección reutilizable: lista de grupos (ciudad/producto/mensajero) con su tasa y sugerencia.
-function SeccionGrupo({ titulo, Icon, grupos, maxItems = 10, compacto = false }) {
+function SeccionGrupo({ titulo, Icon, grupos, hist = null, maxItems = 10, compacto = false }) {
   const items = (grupos || []).filter(g => g.resueltos > 0).slice(0, maxItems)
   if (!items.length) return null
   return (
@@ -164,7 +161,8 @@ function SeccionGrupo({ titulo, Icon, grupos, maxItems = 10, compacto = false })
       </h3>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {items.map(g => {
-          const b = barra(g.tasa)
+          const t = tasaEntregaRealista({ entregados: g.entregados, devueltos: g.devueltos, enCamino: g.enProceso, hist })
+          const b = barra(t)
           const cfg = SUG_CFG[g.sugerencia.nivel] || SUG_CFG.pocos
           return (
             <div key={g.clave} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -172,8 +170,10 @@ function SeccionGrupo({ titulo, Icon, grupos, maxItems = 10, compacto = false })
               <div style={{ flex: 1, minWidth: 80, height: 6, background: 'var(--bg-hover)', borderRadius: 3 }}>
                 <div style={{ width: `${b.pct}%`, height: '100%', borderRadius: 3, background: b.color, transition: 'width 0.5s' }} />
               </div>
-              <span style={{ fontSize: 12, fontWeight: 700, minWidth: 38, textAlign: 'right', color: b.color }}>{b.pct}%</span>
-              <span style={{ fontSize: 10.5, color: 'var(--text-muted)', minWidth: 44, textAlign: 'right' }}>{g.entregados}/{g.resueltos}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, minWidth: 38, textAlign: 'right', color: b.color }}>{textoEsperada(t)}</span>
+              <span style={{ fontSize: 10.5, color: 'var(--text-muted)', minWidth: 44, textAlign: 'right' }} title={textoRango(t)}>
+                {g.entregados}/{g.resueltos}{g.enProceso > 0 ? ` · ${g.enProceso} en camino` : ''}
+              </span>
               {g.sugerencia.nivel === 'critico' && (
                 <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: cfg.bg, color: cfg.color, whiteSpace: 'nowrap' }}>
                   {g.sugerencia.texto}

@@ -1,5 +1,6 @@
 // src/pages/kpi-whatsapp/kpi.js — formato y definiciones del panel semanal (sin React).
 // Los datos salen de la vista kpi_whatsapp_semanal (migración 20261006000006).
+import { tasaEntregaRealista, textoEsperada, textoRango, colorTasa } from '../../lib/tasaEntrega'
 
 const nf1 = new Intl.NumberFormat('es-PY', { maximumFractionDigits: 1, minimumFractionDigits: 0 })
 const nf0 = new Intl.NumberFormat('es-PY', { maximumFractionDigits: 0 })
@@ -60,6 +61,59 @@ export function agregarSinRespuesta(filas, cancelados) {
   return filas.map((f) => ({ ...f, sin_respuesta: porSemana.get(String(f.semana).slice(0, 10)) ?? 0 }))
 }
 
+// ── Entrega realista por semana (12-10) ──────────────────────
+// La vista calcula pct_entregados = entregados ÷ (entregados + no entregados):
+// con 5 entregados, 0 devueltos y 28 confirmados daba "100 %", y el costo por
+// entregado dividía la plata de toda la semana por los 5 que ya llegaron.
+// Sin tocar la vista (no hay migraciones), acá se deriva:
+//   · en_camino     = confirmados que todavía no son ni entregados ni devueltos
+//                     (aproximado: la vista no expone entregados_confirmados).
+//   · pct_resuelto  = (entregados + no entregados) ÷ confirmados.
+//   · semana_resuelta (≥ 80 % resuelto): recién ahí el costo por entregado es real.
+//   · tasa_entrega  = tasaEntregaRealista (~esperada + rango + en camino).
+export const MIN_RESUELTO_SEMANA = 80
+
+export function derivarEntrega(f, hist = null) {
+  const ent = Math.max(0, Number(f?.entregados) || 0)
+  const dev = Math.max(0, Number(f?.no_entregados) || 0)
+  const conf = Math.max(0, Number(f?.confirmados) || 0)
+  const resueltos = ent + dev
+  const base = Math.max(conf, resueltos)
+  const enCamino = Math.max(0, conf - resueltos)
+  const pctResuelto = base ? (resueltos / base) * 100 : null
+  const t = tasaEntregaRealista({ entregados: ent, devueltos: dev, enCamino, hist })
+  return {
+    ...f,
+    en_camino: enCamino,
+    pct_resuelto: pctResuelto,
+    semana_resuelta: pctResuelto != null && pctResuelto >= MIN_RESUELTO_SEMANA,
+    pct_entrega_esperada: t.esperada,
+    tasa_entrega: t,
+  }
+}
+
+// Aplica derivarEntrega a todas las semanas. La tasa con la que se proyecta
+// lo que está en camino sale de las semanas YA resueltas (≥ 80 %); si no
+// suman 20 resueltos, tasaEntregaRealista cae a la referencia del rubro.
+export function agregarEntrega(filas) {
+  const hist = { entregados: 0, resueltos: 0 }
+  for (const f of filas || []) {
+    const d = derivarEntrega(f)
+    if (!d.semana_resuelta) continue
+    hist.entregados += Number(f.entregados) || 0
+    hist.resueltos += (Number(f.entregados) || 0) + (Number(f.no_entregados) || 0)
+  }
+  return (filas || []).map((f) => derivarEntrega(f, hist))
+}
+
+// Costo por entregado: solo con la semana resuelta; si no, 'parcial'.
+export function fmtPorEntregado(f, clave) {
+  if (!f?.semana_resuelta) return esNulo(f?.[clave]) ? '—' : 'parcial'
+  return fmtUsd(f[clave])
+}
+const subResuelto = (f) => (f?.semana_resuelta || f?.pct_resuelto == null
+  ? '' : ` · ${nf0.format(Math.round(f.pct_resuelto))} % resuelto`)
+
 // sentido: 'sube' = mejor si sube; 'baja' = mejor si baja; null = neutro.
 export const KPIS = [
   { clave: 'pedidos', etiqueta: 'Pedidos', fmt: fmtNum, sentido: 'sube',
@@ -68,14 +122,24 @@ export const KPIS = [
     sub: (f) => `${fmtNum(f.confirmados)} de ${fmtNum(f.pedidos)}` },
   { clave: 'sin_respuesta', etiqueta: 'Cayeron sin respuesta', fmt: fmtNum, sentido: 'baja',
     sub: () => 'cancelados solos: no son confirmados ni ventas' },
-  { clave: 'pct_entregados', etiqueta: 'Entregados', fmt: fmtPct, sentido: 'sube',
-    sub: (f) => `${fmtNum(f.entregados)} entregados · ${fmtNum(f.no_entregados)} no` },
+  // 12-10: ~esperada + "N de M confirmados · N en camino · rango"; nunca el
+  // 100 % de pocos resueltos. Solo se compara con la semana anterior si las
+  // dos están resueltas (si no, se compararían proyecciones).
+  { clave: 'pct_entrega_esperada', etiqueta: 'Entregados', sentido: 'sube',
+    fmt: (v) => (esNulo(v) ? '—' : `~${nf0.format(Math.round(Number(v)))} %`),
+    valor: (f) => (f.tasa_entrega ? textoEsperada(f.tasa_entrega) : '—'),
+    color: (f) => (f.tasa_entrega ? colorTasa(f.tasa_entrega) : null),
+    comparable: (f) => !!f?.semana_resuelta,
+    sub: (f) => `${fmtNum(f.entregados)} de ${fmtNum(f.confirmados)} confirmados · ${fmtNum(f.no_entregados)} no`
+      + (f.tasa_entrega ? ` · ${textoRango(f.tasa_entrega)}` : '') },
   { clave: 'minutos_mediana_confirmar', etiqueta: 'Tiempo a confirmar', fmt: fmtMin, sentido: 'baja',
     sub: () => 'mediana, desde el pedido' },
   { clave: 'costo_mensajes_por_entregado_usd', etiqueta: 'Mensajes / entregado', fmt: fmtUsd, sentido: 'baja',
-    sub: (f) => `${fmtUsd(f.costo_mensajes_usd)} en la semana` },
+    valor: (f) => fmtPorEntregado(f, 'costo_mensajes_por_entregado_usd'), comparable: (f) => !!f?.semana_resuelta,
+    sub: (f) => `${fmtUsd(f.costo_mensajes_usd)} en la semana${subResuelto(f)}` },
   { clave: 'costo_ia_por_entregado_usd', etiqueta: 'IA / entregado', fmt: fmtUsd, sentido: 'baja',
-    sub: (f) => `${fmtUsd(f.costo_ia_usd)} en la semana` },
+    valor: (f) => fmtPorEntregado(f, 'costo_ia_por_entregado_usd'), comparable: (f) => !!f?.semana_resuelta,
+    sub: (f) => `${fmtUsd(f.costo_ia_usd)} en la semana${subResuelto(f)}` },
   { clave: 'pct_derivado', etiqueta: 'Derivado a Enrique', fmt: fmtPct, sentido: 'baja',
     sub: (f) => `${fmtNum(f.derivadas)} de ${fmtNum(f.conversaciones)} chats` },
   { clave: 'recompras', etiqueta: 'Recompras', fmt: fmtNum, sentido: 'sube',
@@ -87,6 +151,8 @@ export const KPIS = [
 /** Variación contra la semana anterior: {texto, tono: 'green'|'red'|null} o null. */
 export function variacion(kpi, actual, anterior) {
   if (!anterior) return null
+  // 12-10: semanas sin resolver no se comparan (serían proyecciones o parciales).
+  if (kpi.comparable && (!kpi.comparable(actual) || !kpi.comparable(anterior))) return null
   const a = Number(actual?.[kpi.clave]); const b = Number(anterior?.[kpi.clave])
   if (esNulo(actual?.[kpi.clave]) || esNulo(anterior?.[kpi.clave])) return null
   const d = a - b

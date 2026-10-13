@@ -22,6 +22,8 @@ import { interpretarEscaneo } from '../../lib/barcode'
 import { beep } from '../../lib/beep'
 import { hoyLocal } from '../../lib/fechas'
 import { getTienda } from '../../lib/tienda'
+import { normalizarRef } from '../../lib/referencias'
+import { esRetiroEnPersona } from '../../lib/pedidosVoltra'
 import { ScanLine, CheckCircle, AlertTriangle, X, Truck, Clock, ListChecks } from 'lucide-react'
 
 const DIAS_OLVIDADO = 3
@@ -58,6 +60,33 @@ export function filtrarSalida(ventas, { transportadora = 'todas', tienda = 'toda
     (tienda === 'todas' || (v.tienda || 'fw') === tienda))
 }
 
+// 12-10: referencias que YA están en manos del courier: tienen fila en
+// `entregas` con un estado real (PaP "Asignado a ruta", Lucero "Aceptado"…).
+// despachado_at solo se escribe escaneando acá, así que sin este cruce lo que
+// salió sin escanear seguía figurando como pendiente (y "olvidado").
+// El placeholder de Lucero (estado_pap vacío) se crea al CARGAR la venta, antes
+// de que salga: ese no cuenta.
+export function refsEnCourier(entregas) {
+  const s = new Set()
+  for (const e of entregas || []) {
+    if (!String(e?.estado_pap ?? '').trim()) continue
+    const k = normalizarRef(e?.n_referencia)
+    if (k) s.add(k)
+  }
+  return s
+}
+
+// ¿Esta venta todavía tiene que salir por courier? Pendiente, sin salida
+// registrada, sin fila real en `entregas` y que no sea retiro en persona.
+export const pendienteDeSalir = (v, enCourier = new Set()) =>
+  v.estado === 'pendiente' && !v.despachado_at && !esRetiroEnPersona(v)
+  && !enCourier.has(normalizarRef(v.n_referencia))
+
+// 12-10: lo que el courier cobra en la puerta. Un pago anticipado va en 0
+// (en la cabecera y la guía ya salen con importe 0).
+export const aCobrar = (v) => (v?.pago_anticipado ? 0 : Number(v?.total || 0))
+export const totalACobrar = (filas) => (filas || []).reduce((s, t) => s + aCobrar(t), 0)
+
 const COLS_BASE = 'id, n_referencia, cliente_nombre, ciudad, producto_nombre, cantidad, total, estado, fecha, despachado_at'
 const FILTROS_TRANSP = [
   { id: 'todas', label: 'Todas' }, { id: 'pap', label: 'PaP' },
@@ -74,6 +103,7 @@ export default function ModalSalida({ onClose, onConfirmado }) {
   const [tanda, setTanda] = useState([])
   const [ultimo, setUltimo] = useState(null)
   const [filtroTransp, setFiltroTransp] = useState('todas')
+  const [enCourier, setEnCourier] = useState(new Set())   // 12-10: refs con fila real en entregas
   const tienda = getTienda()
 
   const cargar = useCallback(async () => {
@@ -84,12 +114,21 @@ export default function ModalSalida({ onClose, onConfirmado }) {
       // se reintenta sin ellas (todo cae en PaP / sin filtro de tienda).
       const traer = (cols) => fetchAll(() => supabase.from('ventas').select(cols).is('deleted_at', null))
       let data
-      try { data = await traer(`${COLS_BASE}, transportadora, tienda`) }
+      try { data = await traer(`${COLS_BASE}, transportadora, tienda, pago_anticipado, metodo_envio_nombre`) }
       catch (e) {
         if (!/does not exist|Could not find|42703/i.test(`${e?.message} ${e?.code}`)) throw e
         data = await traer(COLS_BASE)
       }
       setVentas(data || [])
+      // 12-10: si falla, no se bloquea el escaneo: solo se avisa que la lista
+      // de pendientes puede incluir cajas que ya salieron.
+      try {
+        const ents = await fetchAll(() => supabase.from('entregas').select('n_referencia, estado_pap'), { columnaOrden: 'nro_guia_pap' })
+        setEnCourier(refsEnCourier(ents))
+      } catch (e) {
+        setEnCourier(new Set())
+        toast('No se pudo cruzar con Entregas: la lista puede incluir pedidos que ya salieron (' + (e?.message || '') + ')', 'error')
+      }
     } catch (e) {
       toast('Error cargando pedidos: ' + e.message, 'error')
     } finally {
@@ -115,8 +154,8 @@ export default function ModalSalida({ onClose, onConfirmado }) {
   // elegidos: así "Marcar todos" no mezcla la pila de PaP con la de Lucero.
   const esperados = useMemo(
     () => filtrarSalida(ventas, { transportadora: filtroTransp, tienda })
-      .filter(v => v.estado === 'pendiente' && !v.despachado_at),
-    [ventas, filtroTransp, tienda]
+      .filter(v => pendienteDeSalir(v, enCourier)),
+    [ventas, filtroTransp, tienda, enCourier]
   )
   // Couriers distintos entre los pendientes visibles (para no mezclar en "Marcar todos")
   const couriersEsperados = useMemo(
@@ -233,7 +272,8 @@ export default function ModalSalida({ onClose, onConfirmado }) {
     }
   }
 
-  const totalCobrar = tanda.reduce((s, t) => s + Number(t.total || 0), 0)
+  // 12-10: los pagos anticipados suman 0 (el courier no cobra nada de esos).
+  const totalCobrar = totalACobrar(tanda)
   // Cajas reales de la tanda (un pedido multiproducto es UNA caja)
   const paquetesTanda = contarPaquetes(tanda)
   // Con varios couriers mezclados, "Marcar todos" pediría elegir uno antes
@@ -440,7 +480,7 @@ export default function ModalSalida({ onClose, onConfirmado }) {
                     <td data-label="Cliente" style={{ fontSize: 12 }}>{t.cliente_nombre || '—'}</td>
                     <td data-label="Ciudad" className="muted" style={{ fontSize: 12 }}>{t.ciudad || '—'}</td>
                     <td data-label="Producto" style={{ fontSize: 12 }}>{t.producto_nombre} ×{t.cantidad || 1}</td>
-                    <td data-label="A cobrar" style={{ fontWeight: 600 }}>{fmtGs(t.total)}</td>
+                    <td data-label="A cobrar" style={{ fontWeight: 600 }}>{t.pago_anticipado ? 'Ya pagó' : fmtGs(t.total)}</td>
                     <td>
                       <button className="btn btn-ghost btn-sm btn-icon" onClick={() => quitar(t)} title="Quitar" style={{ color: 'var(--red)' }}>
                         <X size={13} />

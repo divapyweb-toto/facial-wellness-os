@@ -42,6 +42,10 @@ export function filasCsvDesdePedidoShopify(fila) {
     'Created at': s(raw.created_at).replace('T', ' ').slice(0, 19),
     'Cancelled at': s(raw.cancelled_at),
     'Tags': s(raw.tags),
+    // 12-10: con estos dos se decide el pago anticipado igual que con el CSV
+    // (antes el botón no los traía y el CSV tomaba 'paid' como prepago).
+    'Financial Status': s(raw.financial_status),
+    'Fulfillment Status': s(raw.fulfillment_status),
     'Note Attributes': notaAtributos(raw),
     'Total': s(raw.total_price),
     'Subtotal': s(raw.subtotal_price),
@@ -60,3 +64,37 @@ export function filasCsvDesdePedidoShopify(fila) {
     'Vendor': vendor,
   }))
 }
+
+// ─── Pago anticipado (12-10) ────────────────────────────────
+// En contra entrega Shopify marca 'paid' AL ENTREGAR (VT-1007, VT-1014): 'paid'
+// solo NO es prepago. Es pago anticipado si:
+//   · tiene el tag PAGO_VERIFICADO (botón "Verifiqué el pago"), o
+//   · mandó comprobante (PAGO_ANTICIPADO_COMPROBANTE) y figura 'paid', o
+//   · figura 'paid' y todavía no se preparó el envío (sin fulfillment).
+// Misma regla para el CSV y para "Traer pedidos de Voltra".
+export function esPagoAnticipado({ financial, fulfillment, tags } = {}) {
+  const t = s(tags).toLowerCase()
+  if (t.includes('pago_verificado')) return true
+  if (s(financial).trim().toLowerCase() !== 'paid') return false
+  if (t.includes('pago_anticipado_comprobante')) return true
+  const ff = s(fulfillment).trim().toLowerCase()
+  return ff === '' || ff === 'unfulfilled' || ff === 'null'
+}
+
+// ─── Retiro en persona (12-10) ──────────────────────────────
+// RETIRO_EN_CASA confirmado: es una venta, pero sin courier. Se guarda con
+// transportadora 'otra' (la columna no acepta null), flete 0 y este método de
+// envío, que es la marca para dejarla fuera de la planilla y las guías.
+export const METODO_ENVIO_RETIRO = 'Retiro en persona'
+export const esRetiroEnPersona = (venta) => venta?.metodo_envio_nombre === METODO_ENVIO_RETIRO
+
+export function esRetiroConfirmado(tags, cancelledAt) {
+  const t = s(tags).toLowerCase()
+  if (cancelledAt || t.includes('cancelado') || t.includes('anterior_al_corte')) return false
+  return t.includes('retiro_en_casa') && t.includes('confirmado')
+}
+
+// Estados de `shopify_pedidos.estado_envio` que significan "ya salió del
+// depósito" (o ya terminó). EN_PREPARACION y CANCELADO no cuentan.
+export const ENVIO_YA_SALIO = ['DESPACHADO', 'INTENTO_FALLIDO', 'ENTREGADO', 'NO_ENTREGADO_RESCATABLE', 'NO_ENTREGADO', 'RENDIDO']
+export const envioEntregado = (fila) => ['ENTREGADO', 'RENDIDO'].includes(fila?.estado_envio) || !!fila?.entregado_en

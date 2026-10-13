@@ -80,12 +80,19 @@ export function alertaRecompra(cantidad) {
   }
 }
 
-// Plata de PaP sin rendir (cobrada pero no depositada aún).
-export function alertaSinRendir(monto, cantidad) {
+// Plata cobrada por la transportadora y no depositada aún.
+// porCourier (12-10): { pap: monto, lucero: monto }. Antes decía siempre
+// "PaP te debe", aunque la deuda fuera de Lucero.
+const NOMBRE_COURIER = { pap: 'PaP', lucero: 'Lucero' }
+export function alertaSinRendir(monto, cantidad, porCourier = null) {
   if (!monto || monto <= 0) return null
+  const deudores = Object.entries(porCourier || {}).filter(([, m]) => m > 0)
+  const nombre = (k) => NOMBRE_COURIER[k] || k
+  const quien = deudores.length === 1 ? `${nombre(deudores[0][0])} te debe` : 'Las transportadoras te deben'
+  const detalle = deudores.length > 1 ? ` (${deudores.map(([k, m]) => `${nombre(k)} ${fmt(m)}`).join(', ')})` : ''
   return {
     tipo: 'rendicion', color: 'yellow', ruta: '/rendicion', accion: 'Ver',
-    msg: `PaP te debe ${fmt(monto)} de ${cantidad} entrega(s) sin rendir. Seguí el cobro.`,
+    msg: `${quien} ${fmt(monto)}${detalle} de ${cantidad} entrega(s) sin rendir. Seguí el cobro.`,
   }
 }
 
@@ -96,7 +103,7 @@ export function construirAlertasNegocio(datos) {
     alertaTasaEntrega(datos.tasaEntregaActual, datos.tasaEntregaAnterior, datos.entregasResueltas),
     alertaCampanaPierde(datos.campanas),
     alertaRecompra(datos.recompraPendientes),
-    alertaSinRendir(datos.montoSinRendir, datos.cantSinRendir),
+    alertaSinRendir(datos.montoSinRendir, datos.cantSinRendir, datos.sinRendirPorCourier),
   ].filter(Boolean)
   const orden = { red: 0, yellow: 1, green: 2 }
   return lista.sort((a, b) => (orden[a.color] ?? 3) - (orden[b.color] ?? 3))

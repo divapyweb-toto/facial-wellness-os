@@ -110,14 +110,17 @@ export default function RendicionPage() {
 
     const umbralDemora = diasMediana != null ? Math.max(15, diasMediana * 2) : 15
     const demoradas = listaSinRendir.filter(m => m.diasSinRendir != null && m.diasSinRendir > umbralDemora)
-    const montoDemorado = demoradas.reduce((s, m) => s + (m.importe || 0), 0)
+    // 12-10: depositoReal (neto) para que cuadre con "Te debe", que ya es neto.
+    const montoDemorado = demoradas.reduce((s, m) => s + (m.depositoReal ?? m.importe ?? 0), 0)
 
     const porFecha = {}
     rendidos.forEach(m => {
       if (m.fecha_rendido) {
         const f = String(m.fecha_rendido).slice(0, 10)
         if (!porFecha[f]) porFecha[f] = { fecha: f, monto: 0, count: 0 }
-        porFecha[f].monto += (m.importe || 0)
+        // 12-10: lo que CAYÓ al banco (neto de Lucero), no el bruto: el gráfico
+        // se llama "Depositado" y tiene que cuadrar con "Ya te depositaron".
+        porFecha[f].monto += (m.depositoReal ?? m.importe ?? 0)
         porFecha[f].count++
       }
     })
@@ -228,7 +231,7 @@ export default function RendicionPage() {
 
   const montoSeleccionado = stats.listaSinRendir
     .filter(m => seleccionados.has(m.nro_guia_pap))
-    .reduce((s, m) => s + (m.importe || 0), 0)
+    .reduce((s, m) => s + (m.depositoReal ?? m.importe ?? 0), 0)   // 12-10: neto, igual que "Te debe"
 
   // Fecha REAL del depósito. Antes se usaba siempre "hoy": si subías la
   // rendición del martes un jueves, todos los paquetes quedaban cobrados el
@@ -761,7 +764,7 @@ export default function RendicionPage() {
       {stats.datosGrafico.length > 0 && (
         <div className="card">
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Histórico de depósitos · {NOMBRE_TRANSP[vista]}</div>
-          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>Cuánto te rindió PaP en cada fecha.</p>
+          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>Cuánto te depositó {NOMBRE_TRANSP[vista]} en cada fecha (neto, lo que cayó al banco).</p>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={stats.datosGrafico} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />

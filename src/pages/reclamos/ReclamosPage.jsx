@@ -25,7 +25,7 @@ import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { telefonoWhatsApp } from '../../lib/seguimiento'
 import {
-  construirIndice, buscarPedidos, guiaCourier, despachoPedido,
+  construirIndice, buscarPedidos, guiaCourier, despachoPedido, estadoEnvioPorRef,
   estadoPedido, cobroPedido, fechaCorta, refMostrar,
 } from '../../lib/buscadorPedidos'
 import { MOTIVOS, mensajeReclamo, copiarTexto } from '../../lib/reclamos'
@@ -324,11 +324,16 @@ export default function ReclamosPage() {
       // Paginado: sin esto Supabase corta en 1.000 filas y un pedido podría
       // "no existir" justo cuando lo estás buscando con el cliente esperando.
       // `entregas` no tiene columna id — se ordena por su clave real.
-      const [vts, ents] = await Promise.all([
+      // 12-10: + estado de envío de Shopify (Voltra) para que un intento de
+      // entrega fallido no figure "En tránsito". Si esa lectura falla, el
+      // buscador sigue funcionando sin ese dato.
+      const [vts, ents, sp] = await Promise.all([
         fetchAll(() => supabase.from('ventas').select(COL_VENTAS).is('deleted_at', null)),
         fetchAll(() => supabase.from('entregas').select(COL_ENTREGAS), { columnaOrden: 'nro_guia_pap' }),
+        fetchAll(() => supabase.from('shopify_pedidos').select('shopify_order_id, nombre, estado_envio')
+          .not('estado_envio', 'is', null), { columnaOrden: 'shopify_order_id' }).catch(() => []),
       ])
-      const idx = construirIndice(vts || [], ents || [])
+      const idx = construirIndice(vts || [], ents || [], estadoEnvioPorRef(sp))
       _cacheIndice = { indice: idx, at: Date.now() }
       setIndice(idx)
     } catch (e) {

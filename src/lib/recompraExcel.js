@@ -13,6 +13,14 @@ export function nombreArchivoRecompra(tienda = getTienda(), d = new Date()) {
   return `Recompra_${NOMBRE_TIENDA[tienda] || 'Voltra'}_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.xlsx`
 }
 
+// Título de la banda de marca según la tienda (12-10). Antes decía siempre
+// "FACIAL WELLNESS", también en el Excel de Voltra. En "Todas" va un título
+// neutro porque la lista mezcla clientes de las dos tiendas.
+const TITULO_TIENDA = { voltra: 'VOLTRA', fw: 'FACIAL WELLNESS', todas: 'RECOMPRA · TODAS LAS TIENDAS' }
+export function tituloExcelRecompra(tienda = getTienda()) {
+  return TITULO_TIENDA[tienda] || 'VOLTRA'
+}
+
 const GRUPOS_META = {
   g1: { num: '1', tab: '1 · Reponer',     color: 'FF3B86C9', nombre: 'Reponer consumible' },
   g2: { num: '2', tab: '2 · Combo Sueño', color: 'FF2BB673', nombre: 'Completar combo sueño' },
@@ -33,6 +41,7 @@ export async function generarExcelRecompra(segmentado) {
   wb.creator = 'Voltra OS'
   wb.created = new Date()
   const fecha = fechaHoy()
+  const titulo = tituloExcelRecompra()
 
   for (const key of ['g1', 'g2', 'g3']) {
     const meta = GRUPOS_META[key]
@@ -43,7 +52,7 @@ export async function generarExcelRecompra(segmentado) {
     // ── Banda de marca (filas 1-2 fusionadas, fondo casi negro) ──
     ws.mergeCells('A1:G1'); ws.mergeCells('A2:G2')
     const t1 = ws.getCell('A1')
-    t1.value = 'FACIAL WELLNESS'
+    t1.value = titulo
     t1.font = { name: FUENTE, size: 20, bold: true, color: { argb: 'FFFFFFFF' } }
     t1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A0A0A' } }
     t1.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 }

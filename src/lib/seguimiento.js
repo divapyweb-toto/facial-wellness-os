@@ -24,7 +24,7 @@
 // ═══════════════════════════════════════════════════════════
 import { normalizarCiudad } from './ciudades'
 import { linkTrackingLucero } from './transportadoras'
-import { normTexto } from './buscadorPedidos'
+import { normTexto, despachoPedido, codigoLuceroDeRef, ENVIO_FALLIDO } from './buscadorPedidos'
 
 // Días desde el despacho antes de escribir por primera vez.
 export const DIAS_SEGUIMIENTO_DEFAULT = 4
@@ -97,28 +97,44 @@ export const RESPUESTAS = [
   { id: 'rechaza',      label: 'Ya no lo quiere',   estado: 'rechazado',     color: 'var(--red)' },
 ]
 
+// ─── Marca según la tienda de la venta ──────────────────────
+// 12-10: todos los mensajes decían "Facial Wellness", también a clientes de
+// Voltra (que nunca oyeron esa marca). La marca sale de `ventas.tienda`; sin
+// tienda (filas viejas) es Facial Wellness, que es de donde vienen.
+export function marcaTienda(tienda) {
+  return tienda === 'voltra' ? 'Voltra' : 'Facial Wellness'
+}
+
+// Marca para un mensaje que junta varios pedidos (reclamo agrupado): si
+// mezcla las dos tiendas se nombran las dos, para no mentirle al courier.
+function marcaDePedidos(pedidos) {
+  const marcas = [...new Set((pedidos || []).map(p => marcaTienda(p?.tienda)))].sort((a, b) => b.localeCompare(a))
+  return marcas.length ? marcas.join(' y ') : marcaTienda(null)
+}
+
 // ─── Plantillas al CLIENTE ──────────────────────────────────
 // Cortas y con pregunta cerrada: un mensaje largo se lee en diagonal y uno
 // abierto no se contesta.
+// 12-10: la marca ya no está fija — sale de la tienda de la venta.
 export const PLANTILLAS = {
   consulta: {
     id: 'consulta', label: 'Primera consulta',
-    texto: ({ nombre, producto }) =>
-      `Hola${nombre ? ' ' + nombre : ''}! Te escribo de Facial Wellness. ` +
+    texto: ({ nombre, producto, marca = 'Facial Wellness' }) =>
+      `Hola${nombre ? ' ' + nombre : ''}! Te escribo de ${marca}. ` +
       `Queria consultarte si ya recibiste tu pedido${producto ? ` de ${producto}` : ''}. ` +
       `Respondeme si o no asi lo verifico. Gracias!`,
   },
   demorado: {
     id: 'demorado', label: 'Ya lleva varios días',
-    texto: ({ nombre, producto, dias }) =>
-      `Hola${nombre ? ' ' + nombre : ''}! Te escribo de Facial Wellness. ` +
+    texto: ({ nombre, producto, dias, marca = 'Facial Wellness' }) =>
+      `Hola${nombre ? ' ' + nombre : ''}! Te escribo de ${marca}. ` +
       `Tu pedido${producto ? ` de ${producto}` : ''} salio hace ${dias} dias y todavia no me figura como entregado. ` +
       `Lo recibiste? Si no, avisame y lo reclamo con la transportadora hoy mismo.`,
   },
   reintento: {
     id: 'reintento', label: 'Segundo intento',
-    texto: ({ nombre }) =>
-      `Hola${nombre ? ' ' + nombre : ''}! Te escribi hace unos dias por tu pedido de Facial Wellness. ` +
+    texto: ({ nombre, marca = 'Facial Wellness' }) =>
+      `Hola${nombre ? ' ' + nombre : ''}! Te escribi hace unos dias por tu pedido de ${marca}. ` +
       `Necesito saber si te llego para cerrar el envio. Un si o un no me alcanza. Gracias!`,
   },
   reclamado: {
@@ -126,6 +142,15 @@ export const PLANTILLAS = {
     texto: ({ nombre }) =>
       `Hola${nombre ? ' ' + nombre : ''}! Ya reclame tu pedido con la transportadora y me confirmaron que lo van a priorizar. ` +
       `Cualquier cosa avisame. Gracias por la paciencia!`,
+  },
+  // 12-10: para INTENTO_FALLIDO. No pregunta si llegó (no llegó): pide día y
+  // horario para coordinar el reintento, que es lo que rescata la venta.
+  intento_fallido: {
+    id: 'intento_fallido', label: 'Intento fallido: coordinar',
+    texto: ({ nombre, producto, marca = 'Facial Wellness' }) =>
+      `Hola${nombre ? ' ' + nombre : ''}! Te escribo de ${marca}. ` +
+      `La transportadora fue a entregarte tu pedido${producto ? ` de ${producto}` : ''} y no pudo concretar la entrega. ` +
+      `Que dia y en que horario te queda bien recibirlo? Asi lo coordino hoy mismo.`,
   },
 }
 
@@ -150,7 +175,19 @@ export function construirBandeja(ventas, { diasMin = DIAS_SEGUIMIENTO_DEFAULT, h
     .filter(v => !v.pago_anticipado)   // prepago: ya cobraste, no hay nada que rescatar
     .filter(v => ['pendiente', 'en_tramite', 'en_camino'].includes(v.estado))
     .map(v => {
-      const dias = diasDesde(v.fecha, hoy)
+      // 12-10: los días se cuentan desde que el paquete entró al courier
+      // (`entregas.fecha_ingreso`), después `despachado_at`. Antes se usaba la
+      // fecha del PEDIDO y despachado_at está vacío en todas las ventas nuevas.
+      // Sin ninguna de las dos, se cuenta desde el pedido pero marcado como
+      // "sin rastro del courier": puede que ni haya salido.
+      const desp = despachoPedido({
+        entrega: v.fecha_ingreso ? { fecha_ingreso: v.fecha_ingreso } : null,
+        despachado_at: v.despachado_at, fecha: v.fecha,
+      }, hoy)
+      const dias = desp.dias
+      const sinRastro = desp.fuente === 'venta'
+      // 12-10: intento de entrega fallido según Shopify (solo Voltra).
+      const envioFallido = ENVIO_FALLIDO[v.estado_envio] || null
       const estado = v.seguimiento_estado || 'pendiente'
       const cfg = ESTADOS_SEG[estado] || ESTADOS_SEG.pendiente
       const diasDesdeContacto = v.seguimiento_at ? diasDesde(v.seguimiento_at, hoy) : null
@@ -160,7 +197,8 @@ export function construirBandeja(ventas, { diasMin = DIAS_SEGUIMIENTO_DEFAULT, h
       const esperandoFecha = estado === 'reprogramado' && v.seguimiento_fecha_prometida
         && v.seguimiento_fecha_prometida > hoyStr
 
-      const puedeContactar = !!wa && (dias ?? 0) >= diasMin && intentos < MAX_INTENTOS
+      // Un intento fallido se contacta YA: no hay que esperar los días mínimos.
+      const puedeContactar = !!wa && (envioFallido || (dias ?? 0) >= diasMin) && intentos < MAX_INTENTOS
         && !esperandoFecha
         && (diasDesdeContacto == null || diasDesdeContacto >= DIAS_REINTENTO)
 
@@ -168,7 +206,8 @@ export function construirBandeja(ventas, { diasMin = DIAS_SEGUIMIENTO_DEFAULT, h
       // botón muerto sin razón visible.
       let motivoBloqueo = null
       if (!wa) motivoBloqueo = 'Sin celular válido'
-      else if ((dias ?? 0) < diasMin) motivoBloqueo = `Recién despachado (${dias}d)`
+      else if (!envioFallido && (dias ?? 0) < diasMin)
+        motivoBloqueo = sinRastro ? `Sin rastro del courier (pedido hace ${dias}d)` : `Recién despachado (${dias}d)`
       else if (esperandoFecha) motivoBloqueo = `Reprogramado para el ${v.seguimiento_fecha_prometida}`
       else if (intentos >= MAX_INTENTOS) motivoBloqueo = `Ya van ${intentos} mensajes`
       else if (diasDesdeContacto != null && diasDesdeContacto < DIAS_REINTENTO)
@@ -177,13 +216,18 @@ export function construirBandeja(ventas, { diasMin = DIAS_SEGUIMIENTO_DEFAULT, h
       return {
         ...v, dias, estado, cfg, intentos, diasDesdeContacto, wa,
         telefonoValido: !!wa, puedeContactar, motivoBloqueo, esperandoFecha,
+        sinRastro, fechaDespacho: desp.fecha, envioFallido,
         // Plantilla según el historial: no repetir el mismo texto dos veces.
-        plantillaSugerida: estado === 'escalado' ? 'reclamado'
+        // Intento fallido: nunca "¿ya lo recibiste?", siempre coordinar.
+        plantillaSugerida: envioFallido ? 'intento_fallido'
+          : estado === 'escalado' ? 'reclamado'
           : intentos >= 1 ? 'reintento'
           : (dias ?? 0) >= diasMin + 3 ? 'demorado' : 'consulta',
         // Orden de trabajo: primero lo que hay que reclamar (es lo que más
         // rescata), después lo nuevo, y dentro de cada grupo lo más viejo.
-        prioridad: estado === 'sin_contacto' ? 0 : estado === 'pendiente' ? 1
+        // 12-10: los intentos fallidos van antes que todo: el courier ya fue
+        // una vez y cada día que pasa es más probable que lo devuelva.
+        prioridad: envioFallido ? -1 : estado === 'sin_contacto' ? 0 : estado === 'pendiente' ? 1
           : estado === 'sin_respuesta' ? 2 : estado === 'esperando' ? 3 : 4,
       }
     })
@@ -197,6 +241,7 @@ export function mensajeCliente(venta, plantillaId) {
     nombre: String(venta?.cliente_nombre || '').trim().split(/\s+/)[0] || '',
     producto: venta?.producto_nombre || '',
     dias: venta?.dias ?? DIAS_SEGUIMIENTO_DEFAULT,
+    marca: marcaTienda(venta?.tienda),
   })
 }
 
@@ -211,7 +256,9 @@ export function linkWhatsApp(venta, plantillaId) {
 // equivocado hace que el reclamo no sirva para nada:
 //
 //   PaP    → su número de guía (ej. 26280786), el que ellos generan.
-//   Lucero → el código FW-XXXX que les mandamos en la cabecera. OJO: en la
+//   Lucero → el código FW-XXXX que les mandamos en la cabecera; Voltra va
+//            tal cual (VT-1004), igual que en Despacho. 12-10: antes salía
+//            'FW-VT-1004' y Lucero no lo encontraba. OJO: en la
 //            tabla `entregas` guardamos 'L-2025' como clave INTERNA nuestra —
 //            Lucero no conoce ese formato, buscarlo en su sistema no da nada.
 //            Si además tenemos su EnvioID (del export), se agrega porque es
@@ -222,7 +269,7 @@ export function codigoCourier(venta) {
   const ref = venta?.n_referencia
   if (t === 'lucero') {
     const envioId = venta?.guia_transportadora
-    return ref ? `FW-${ref}${envioId ? ` (ID ${envioId})` : ''}` : null
+    return ref ? `${codigoLuceroDeRef(ref)}${envioId ? ` (ID ${envioId})` : ''}` : null
   }
   if (t === 'pap') {
     const g = venta?.nro_guia
@@ -369,7 +416,7 @@ function lineaPedido(p) {
 export function mensajeReclamo(pedidos) {
   const sinContacto = pedidos.filter(p => p.estado === 'sin_contacto')
   const reprogramados = pedidos.filter(p => p.estado === 'reprogramado')
-  const l = ['Hola! Necesito ayuda con estos envios de Facial Wellness:']
+  const l = [`Hola! Necesito ayuda con estos envios de ${marcaDePedidos(pedidos)}:`]
   if (sinContacto.length) {
     l.push('', 'NO LOS CONTACTARON todavia (el cliente confirma que nadie lo llamo):')
     sinContacto.forEach(p => l.push(lineaPedido(p)))
@@ -384,7 +431,7 @@ export function mensajeReclamo(pedidos) {
 
 // Mensaje para UN pedido puntual (cuando no se quiere esperar a agrupar).
 export function mensajeReclamoIndividual(p) {
-  const l = ['Hola! Consulta por este envio de Facial Wellness:', '', lineaPedido(p)]
+  const l = [`Hola! Consulta por este envio de ${marcaTienda(p?.tienda)}:`, '', lineaPedido(p)]
   if (p.estado === 'reprogramado' && p.seguimiento_fecha_prometida)
     l.push('', `El cliente pidio que se lo entreguen el ${fechaCorta(p.seguimiento_fecha_prometida)}.`)
   else if (p.estado === 'sin_contacto')
@@ -395,14 +442,19 @@ export function mensajeReclamoIndividual(p) {
 
 export function resumenBandeja(bandeja) {
   const r = { total: bandeja.length, montoEnJuego: 0, porEstado: {},
-    porContactar: 0, paraReclamar: 0, sinTelefono: 0, masViejo: 0 }
+    porContactar: 0, paraReclamar: 0, sinTelefono: 0, masViejo: 0,
+    sinRastro: 0, intentosFallidos: 0 }
   bandeja.forEach(v => {
     r.montoEnJuego += (v.total || 0)
     r.porEstado[v.estado] = (r.porEstado[v.estado] || 0) + 1
     if (v.puedeContactar) r.porContactar++
     if (v.estado === 'sin_contacto' || (v.estado === 'reprogramado' && v.seguimiento_fecha_prometida)) r.paraReclamar++
     if (!v.telefonoValido) r.sinTelefono++
-    if ((v.dias ?? 0) > r.masViejo) r.masViejo = v.dias
+    if (v.envioFallido) r.intentosFallidos++
+    // 12-10: "más viejo desde el despacho" solo con fecha real del courier;
+    // los sin rastro se cuentan aparte (sus días son desde el pedido).
+    if (v.sinRastro) r.sinRastro++
+    else if ((v.dias ?? 0) > r.masViejo) r.masViejo = v.dias
   })
   return r
 }

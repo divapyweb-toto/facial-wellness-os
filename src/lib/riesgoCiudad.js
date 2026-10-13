@@ -137,16 +137,19 @@ export function evaluarCiudad(historial, ciudad, transportadora = null) {
 // ─── Tasa de entrega por transportadora (global, para KPIs) ──
 // Devuelve { pap: {resueltos, entregados, devueltos, tasa}, lucero: {...}, total: {...} }
 // transpPorRef: { [normalizarRef(ref)]: 'pap' | 'lucero' }
+// 12-10: también cuenta `enCamino` (categoria en_proceso) para mostrar el rango
+// realista (src/lib/tasaEntrega.js) y no un 100% con pocos resueltos.
 export function tasaPorTransportadora(entregas, transpPorRef = {}) {
   const acc = {}
   const sumar = (k, cat) => {
-    if (!acc[k]) acc[k] = { resueltos: 0, entregados: 0, devueltos: 0 }
+    if (!acc[k]) acc[k] = { resueltos: 0, entregados: 0, devueltos: 0, enCamino: 0 }
+    if (cat === 'en_proceso') { acc[k].enCamino++; return }
     acc[k].resueltos++
     if (cat === 'entregado') acc[k].entregados++; else acc[k].devueltos++
   }
   ;(entregas || []).forEach(e => {
     const cat = e.categoria
-    if (cat !== 'entregado' && cat !== 'devuelto') return
+    if (cat !== 'entregado' && cat !== 'devuelto' && cat !== 'en_proceso') return
     // Primero lo que dice la entrega; respaldo: la venta, cruzada con
     // normalizarRef (solo dígitos hacía chocar VT-1003 con el 1003 de FW).
     const t = e.transportadora || transpPorRef[normalizarRef(e.n_referencia)] || 'pap'

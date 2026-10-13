@@ -87,6 +87,10 @@ async function moverStock(producto_id, producto_nombre, delta, motivo, tipo = nu
 export async function aplicarStockNuevaVenta(venta) {
   if (!venta?.id) return
   if (venta.stock_descontado === true) return // ya descontada
+  // 12-10: desde la migración 20261012000003 la base descuenta al insertar y marca stock_descontado. Se relee la fila
+  // para no descontar dos veces con una copia vieja del objeto.
+  const { data: fila } = await supabase.from('ventas').select('stock_descontado').eq('id', venta.id).maybeSingle()
+  if (fila?.stock_descontado === true) return
   if (!estaFueraDelDeposito(venta)) return    // nació ya reingresada (imposible en la práctica)
 
   const items = await resolverItemsFisicos(venta)
@@ -238,7 +242,12 @@ export async function previsualizarStockLote(ventas) {
 }
 
 export async function aplicarStockLoteNuevasVentas(ventas) {
-  const aDescontar = (ventas || []).filter(v => v?.id && v?.producto_id && v?.stock_descontado !== true && estaFueraDelDeposito(v))
+  let aDescontar = (ventas || []).filter(v => v?.id && v?.producto_id && v?.stock_descontado !== true && estaFueraDelDeposito(v))
+  if (!aDescontar.length) return { descontadas: 0, productos: 0 }
+  // 12-10: la base ya descuenta al insertar (migración 20261012000003): se relee la marca para no repetir.
+  const { data: marcas } = await supabase.from('ventas').select('id, stock_descontado').in('id', aDescontar.map(v => v.id))
+  const yaDescontadas = new Set((marcas || []).filter(m => m.stock_descontado === true).map(m => m.id))
+  aDescontar = aDescontar.filter(v => !yaDescontadas.has(v.id))
   if (!aDescontar.length) return { descontadas: 0, productos: 0 }
 
   // 1) Cargar los productos involucrados (con campos de combo) en una query
@@ -301,7 +310,14 @@ export async function registrarReingresoLote(ventas) {
   if (!aReingresar.length) return { reingresadas: 0, productos: 0, unidades: 0 }
 
   const ahora = new Date().toISOString()
-  const conProducto = aReingresar.filter(v => v.producto_id && v.stock_descontado === true)
+  // 12-10: las que el trigger viejo ya repuso al pasar a 'devuelto' (movimiento "Devolución <ref>") se marcan como
+  // reingresadas pero NO vuelven a sumar stock.
+  const refs = aReingresar.map(v => v.n_referencia).filter(Boolean)
+  const { data: movs } = refs.length
+    ? await supabase.from('stock_movimientos').select('motivo').eq('tipo', 'devolucion').in('motivo', refs.map(r => `Devolución ${r}`))
+    : { data: [] }
+  const yaRepuestas = new Set((movs || []).map(m => m.motivo.replace(/^Devolución /, '')))
+  const conProducto = aReingresar.filter(v => v.producto_id && v.stock_descontado === true && !yaRepuestas.has(v.n_referencia))
 
   let fisicoIds = []
   if (conProducto.length) {

@@ -1,4 +1,6 @@
 import { getFlete } from './config'
+import { sanearEntrega } from './estadosPaP'
+import { tasaEntregaRealista } from './tasaEntrega'
 // src/lib/inteligenciaEntrega.js
 // ═══════════════════════════════════════════════════════════
 // INTELIGENCIA DE ENTREGA
@@ -122,6 +124,58 @@ export function tasaPorMes(entregas) {
   return Object.values(map)
     .map(m => ({ ...m, tasa: (m.entregados + m.devueltos) ? m.entregados / (m.entregados + m.devueltos) : 0 }))
     .sort((a, b) => a.mes.localeCompare(b.mes))
+}
+
+// ── Lectura de la base para Inteligencia (12-10) ─────────────
+// Antes la pantalla filtraba por fecha_entrega: las filas de Lucero en
+// tránsito y las devueltas/canceladas NO tienen esa fecha (solo la tienen las
+// entregadas), así que Lucero salía con 100 % de entrega. Ahora:
+//   · el período se filtra por fecha_ingreso (cuándo salió el paquete), que
+//     tienen todas las filas;
+//   · la categoría sale de sanearEntrega (fuente única): respeta la categoría
+//     propia de Lucero (Cancelado = devuelto) y aplica las reglas de PaP;
+//   · lo que nunca salió (borrador / no ingresó) se descarta: no es ni
+//     entregado, ni devuelto, ni "en camino".
+export const COLUMNAS_INTELIGENCIA = 'ciudad, producto, mensajero, motivo, estado_pap, categoria, transportadora, fecha_ingreso, fecha_entrega'
+export const COLUMNA_FECHA_PERIODO = 'fecha_ingreso'
+
+export function normalizarParaInteligencia(filas) {
+  return (filas || [])
+    .map(sanearEntrega)
+    .filter(e => e.categoria !== 'no_despachado')
+    .map(e => ({
+      categoria: e.categoria,
+      ciudad: e.ciudad, producto: e.producto, mensajero: e.mensajero,
+      motivo: e.motivo, transportadora: e.transportadora,
+      fecha: e.fecha_ingreso || e.fecha_entrega || null,
+    }))
+}
+
+// Serie mensual con la regla común (por mes de INGRESO): entregados,
+// devueltos, en camino y la tasa realista. El último mes casi siempre tiene
+// mucho en camino; con muestra chica no sirve para marcar tendencia.
+export function serieRealista(entregas, hist = null) {
+  const map = {}
+  for (const e of (entregas || [])) {
+    if (!e.fecha) continue
+    const mes = String(e.fecha).slice(0, 7)
+    if (!map[mes]) map[mes] = { mes, entregados: 0, devueltos: 0, enCamino: 0 }
+    if (e.categoria === 'entregado') map[mes].entregados++
+    else if (e.categoria === 'devuelto') map[mes].devueltos++
+    else map[mes].enCamino++
+  }
+  return Object.values(map)
+    .map(m => ({ ...m, t: tasaEntregaRealista({ ...m, hist }) }))
+    .sort((a, b) => a.mes.localeCompare(b.mes))
+}
+
+// Tendencia último mes vs anterior, solo si los dos tienen resueltos
+// suficientes (si no, se compararían proyecciones). null = no mostrar.
+export function tendenciaRealista(serie) {
+  if (!serie || serie.length < 2) return null
+  const ult = serie[serie.length - 1].t, prev = serie[serie.length - 2].t
+  if (!ult || !prev || ult.muestraChica || prev.muestraChica || ult.esperada == null || prev.esperada == null) return null
+  return { sube: ult.esperada >= prev.esperada, delta: Math.round(ult.esperada - prev.esperada) }
 }
 
 export { TASA_CRITICA, TASA_VIGILAR, MIN_PEDIDOS }
