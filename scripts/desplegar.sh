@@ -44,6 +44,7 @@ Uso: bash scripts/desplegar.sh [opciones]
   --saltar-secretos    No carga secretos de funciones ni de Vault.
   --saltar-funciones   No despliega funciones.
   --saltar-webhooks    No registra webhooks (Meta, Shopify, Telegram).
+  --saltar-app         No publica la app web en GitHub Pages.
   --saltar-e2e         No corre la prueba de punta a punta.
   --ayuda              Muestra esto.
 EOF
@@ -60,6 +61,7 @@ for arg in "$@"; do
     --saltar-secretos) SALTAR_SECRETOS=1 ;;
     --saltar-funciones) SALTAR_FUNCIONES=1 ;;
     --saltar-webhooks) SALTAR_WEBHOOKS=1 ;;
+    --saltar-app) SALTAR_APP=1 ;;
     --saltar-e2e) SALTAR_E2E=1 ;;
     --ayuda|-h|--help) ayuda; exit 0 ;;
     *) echo "Opción desconocida: $arg" >&2; ayuda >&2; exit 2 ;;
@@ -274,6 +276,8 @@ if command -v node >/dev/null 2>&1; then
   for s in registrar-webhooks.mjs prueba-e2e.mjs crear-plantillas-wa.mjs; do
     node --check "$RAIZ/scripts/$s" 2>/dev/null || PROBLEMAS+=("Error de sintaxis en scripts/$s")
   done
+  # 12-10: las funciones usan una copia del ruteo de la web (src/lib/transportadoras.js): no desplegar una vieja.
+  node "$RAIZ/scripts/sincronizar-ruteo.mjs" --verificar >/dev/null 2>&1 || PROBLEMAS+=("La copia del ruteo en supabase/functions/_shared quedó vieja: corré node scripts/sincronizar-ruteo.mjs")
 fi
 
 if [ "${#PROBLEMAS[@]}" -gt 0 ]; then
@@ -327,11 +331,13 @@ if [ "$SALTAR_DB" = 0 ]; then
   ok "${#SEMILLAS[@]} semillas cargadas"
 
   if [ "$SALTAR_SECRETOS" = 0 ]; then
-    paso "Creo o actualizo los secretos de Vault project_url y service_role_key (los usan los crons)"
+    paso "Creo o actualizo los secretos de Vault project_url, service_role_key y cron_secret (los usan los crons)"
     SQL_VAULT="$(temporal)"
     {
       printf 'do $vault$\nbegin\n'
-      for par in "project_url|$SUPABASE_URL" "service_role_key|$SUPABASE_SERVICE_ROLE_KEY"; do
+      PARES=("project_url|$SUPABASE_URL" "service_role_key|$SUPABASE_SERVICE_ROLE_KEY")
+      [ -n "${CRON_SECRET:-}" ] && PARES+=("cron_secret|$CRON_SECRET")   # llave propia del cron (migración 0014)
+      for par in "${PARES[@]}"; do
         nombre="${par%%|*}"; valor="${par#*|}"
         printf "  if exists (select 1 from vault.secrets where name = '%s') then\n" "$nombre"
         printf "    perform vault.update_secret((select id from vault.secrets where name = '%s'), %s);\n" "$nombre" "$(sql_literal "$valor")"
@@ -342,6 +348,13 @@ if [ "$SALTAR_DB" = 0 ]; then
     correr_sql "$SQL_VAULT" 1
     rm -f "$SQL_VAULT"
     ok "Vault actualizado (valores no mostrados)"
+  fi
+
+  paso "Activo el prompt del vendedor si cambió (supabase/vendedor/prompt_sistema.md)"
+  node scripts/activar-prompt.mjs
+  if [ -f "$RAIZ/logs/enviar_recompra_fw.py" ] && [ -f "$RAIZ/logs/recompra_fw_envio.csv" ] && [ -f "$HOME/Downloads/Recompra_FacialWellness_2026-10-07.xlsx" ]; then
+    paso "Actualizo el contexto de clientes de Facial Wellness de la recompra (solo en la base)"
+    ( cd "$RAIZ" && python3 logs/enviar_recompra_fw.py --solo-contexto ) || aviso "No pude actualizar el contexto de recompra"
   fi
 else
   paso "Salteo migraciones, semillas y Vault (--saltar-db)"
@@ -405,6 +418,13 @@ if [ "$SALTAR_E2E" = 0 ]; then
     paso "Prueba de punta a punta en modo seguro (no manda nada)"
     node scripts/prueba-e2e.mjs
   fi
+fi
+
+# ── 9. app web (Bandeja, KPI) en GitHub Pages ────────────────────────────────
+# 07-10: un solo comando para todo. deploy.sh compila la app y sube solo index.html, assets/ y src/.
+if [ "${SALTAR_APP:-0}" = 0 ] && [ -f "$RAIZ/deploy.sh" ]; then
+  paso "Publico la app web (Bandeja y KPI) en GitHub Pages"
+  ( cd "$RAIZ" && bash deploy.sh "App: despliegue $(date +%d-%m-%Y)" ) || aviso "No pude publicar la app web: corré 'bash deploy.sh' a mano"
 fi
 
 printf '\nDespliegue terminado.\n'

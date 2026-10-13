@@ -12,7 +12,6 @@ import {
   type MensajeMeta,
   PAGO_ANTICIPADO_DEFAULT,
   type Pedido,
-  pedidoYaPagado,
   procesarEventos,
   recibirPayload,
   renderizar,
@@ -23,6 +22,7 @@ import {
   esRespuestaAutomatica,
   leerBotonMarketing,
   contextoOfertaAceptada,
+  conContextoRecompraFw,
 } from "./procesar.ts";
 
 const TEL = "595981000000";
@@ -193,6 +193,10 @@ function crearMock(over: Partial<Estado> = {}): { deps: Deps; st: Estado } {
     registrarConsentimiento: (clienteId, estado, origen) => (st.consentimientos.push({ cliente_id: clienteId, estado, origen }), Promise.resolve()),
     marcarLeidoYEscribiendo: (id) => (st.leidos.push(id), Promise.resolve({ ok: true })),
     normalizarTelefono: (x) => (/^5959\d{8}$/.test(x) ? `+${x}` : null),
+    // 12-10: comprobante ya recibido (marca en el mensaje) y permiso para ofertas ya pedido (botón cons_si enviado).
+    comprobanteRecibido: (orderId) =>
+      Promise.resolve([...st.mensajes.values()].some((m) => (m.contenido as Record<string, unknown> | undefined)?.comprobante_pago_anticipado === orderId)),
+    permisoOfertasPedido: (clienteId) => Promise.resolve(st.botones.some((b) => b.botones.some((x) => x.id === `cons_si:${clienteId}`))),
   };
   return { deps, st };
 }
@@ -241,7 +245,7 @@ Deno.test("leerBotonConfirmacion: interactivo y botón de plantilla", () => {
 
 Deno.test("esAceptacion: sí/ok/dale/ya/katu, sin falsos positivos", () => {
   const l = ["si", "sí", "ok", "dale", "ya", "katu", "mandame katu", "si luego"];
-  for (const t of ["Sí", "si!!", "OK", "dale", "Ya", "mandame katu", "si dale", "Si luego 👍"]) assert(esAceptacion(t, l), t);
+  for (const t of ["Sí", "si!!", "OK", "dale", "Ya", "mandame katu", "si dale", "Si luego 👍", "Siiii", "sii dale", "Dale amigo", "ya confirmé"]) assert(esAceptacion(t, l), t);
   for (const t of ["no", "si pero cambien la dirección", "ya pagué", "", "🙂"]) assertFalse(esAceptacion(t, l), t);
 });
 
@@ -346,7 +350,7 @@ Deno.test("conf_si: confirma, tag, respuesta con plazo del courier, Telegram y c
   assertEquals(st.tagsAgregados, [[`gid://shopify/Order/${ORDER}`, ["CONFIRMADO"]]]);
   assertEquals(st.enviados.length, 1);
   assertEquals(st.enviados[0].to, `+${TEL}`);
-  assertEquals(st.enviados[0].texto, "Listo Ana, quedó confirmado. Te llega en 1 a 3 días hábiles; te avisamos cuando lo preparemos.");
+  assertEquals(st.enviados[0].texto, "Listo Ana, quedó confirmado. Te llega en 2 a 5 días hábiles; te avisamos cuando lo preparemos.");
   assertEquals(st.leidos, ["wamid.IN1"]);
   assertEquals(st.avisos.length, 1);
   assert(st.avisos[0].texto.includes("#1001"));
@@ -521,16 +525,14 @@ Deno.test("leerBotonPostventa: pedido y consentimiento", () => {
   assertEquals(leerBotonPostventa(botonInteractivo("ayuda:abc") as MensajeMeta), null);
 });
 
-Deno.test("ayuda: conversación a humano, respuesta y aviso con resumen", async () => {
+Deno.test("ayuda (12-10): sigue con el bot, le pregunta qué necesita y NO avisa a Enrique", async () => {
   const { deps, st } = crearMock();
   st.pedidos.set(ORDER, pedidoPendiente({ estado_confirmacion: "confirmado", estado_envio: "DESPACHADO" }));
   await correr(deps, payloadMensajes([botonInteractivo(`ayuda:${ORDER}`)]));
-  assertEquals(st.conversaciones[0].estado, "humano");
+  assertEquals(st.conversaciones[0].estado === "humano", false);
   assertEquals(st.enviados.length, 1);
-  assert(st.enviados[0].texto.includes("#1001"));
-  assertEquals(st.avisos.length, 1);
-  assert(st.avisos[0].texto.includes("Necesito ayuda") && st.avisos[0].texto.includes("DESPACHADO"));
-  assert(JSON.stringify(st.avisos[0].botones).includes(`escribo:${ORDER}`));
+  assert(st.enviados[0].texto.includes("#1001") && st.enviados[0].texto.includes("te ayudo"));
+  assertEquals(st.avisos.length, 0);
 });
 
 Deno.test("ne_reintentar: aviso para coordinar con el courier, conversación sigue en ia", async () => {
@@ -542,11 +544,11 @@ Deno.test("ne_reintentar: aviso para coordinar con el courier, conversación sig
   assert(st.avisos[0].texto.includes("volver a intentar") && st.avisos[0].texto.includes("lucero"));
 });
 
-Deno.test("ne_direccion: pide la dirección, humano y aviso", async () => {
+Deno.test("ne_direccion: pide la dirección, sigue con el bot (10-10) y aviso", async () => {
   const { deps, st } = crearMock();
   st.pedidos.set(ORDER, pedidoPendiente({ estado_confirmacion: "confirmado" }));
   await correr(deps, payloadMensajes([botonInteractivo(`ne_direccion:${ORDER}`)]));
-  assertEquals(st.conversaciones[0].estado, "humano");
+  assertEquals(st.conversaciones[0].estado === "humano", false);
   assert(st.enviados[0].texto.includes("dirección nueva"));
   assert(st.avisos[0].texto.includes("cambiar la dirección"));
 });
@@ -559,14 +561,13 @@ Deno.test("ne_cancelar: aviso con botón cancelar:<id> y respuesta", async () =>
   assert(JSON.stringify(st.avisos[0].botones).includes(`cancelar:${ORDER}`));
 });
 
-Deno.test("seg_problema: reclamo, humano, botones reponer y escribo", async () => {
+Deno.test("seg_problema (12-10): el bot pide el detalle; no pasa a humano ni avisa (deriva el vendedor si hace falta)", async () => {
   const { deps, st } = crearMock();
   st.pedidos.set(ORDER, pedidoPendiente({ estado_confirmacion: "confirmado", estado_envio: "ENTREGADO" }));
   await correr(deps, payloadMensajes([botonInteractivo(`seg_problema:${ORDER}`)]));
-  assertEquals(st.conversaciones[0].estado, "humano");
-  assert(st.avisos[0].texto.startsWith("⚠️ Reclamo"));
-  const b = JSON.stringify(st.avisos[0].botones);
-  assert(b.includes(`reponer:${ORDER}`) && b.includes(`escribo:${ORDER}`));
+  assertEquals(st.conversaciones[0].estado === "humano", false);
+  assertEquals(st.avisos.length, 0);
+  assertEquals(st.enviados.length, 1);
 });
 
 Deno.test("seg_bien sin consentimiento previo: pregunta con botones cons_si/cons_no; cons_si registra marketing por botón", async () => {
@@ -617,7 +618,7 @@ Deno.test("respuestas_confirmacion con claves confirmado/a_corregir/cancelado y 
   st.config.respuestas_confirmacion = { confirmado: "OK {nombre}, llega en {plazo}.", a_corregir: "x", cancelado: "y" };
   st.pedidos.set(ORDER, pedidoPendiente());
   await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
-  assertEquals(st.enviados[0].texto, "OK Ana, llega en 1 a 3 días hábiles.");
+  assertEquals(st.enviados[0].texto, "OK Ana, llega en 2 a 5 días hábiles.");
 });
 
 Deno.test("cambios que no son messages se guardan en eventos_crudos con id chg:<field>:<sha256>", async () => {
@@ -650,9 +651,9 @@ Deno.test("cambios que no son messages se guardan en eventos_crudos con id chg:<
   assertEquals(r2.nuevos.length, 0);
 });
 
-// ---------- pago anticipado por transferencia (07-10) ----------
+// ---------- pago anticipado con prioridad (12-10: la oferta sale al pasar a "preparado", no al confirmar) ----------
 
-const PA = { activo: true }; // sin textos: usa PAGO_ANTICIPADO_DEFAULT
+const PRIORIDAD_ON = { activo: true, alias: "alias@ejemplo.com", titular: "Voltra E.A.S." };
 
 const imagen = (wamid = "wamid.IMG1", extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   from: TEL,
@@ -668,98 +669,114 @@ function pedidoConOferta(extra: Partial<Pedido> = {}): Pedido {
   return pedidoPendiente({ estado_confirmacion: "confirmado", tags: ["CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"], total: 112000, ...extra });
 }
 
-Deno.test("pago anticipado: tras conf_si con activo true manda la oferta con el total formateado y deja el tag", async () => {
+const textosCliente = (st: Estado) => [...st.enviados.map((e) => e.texto), ...st.botones.map((b) => b.texto)];
+
+Deno.test("conf_si: ya no se ofrece pagar al confirmar (aunque la oferta vieja y el descuento estén prendidos en config)", async () => {
   const { deps, st } = crearMock();
-  st.config.pago_anticipado = PA;
+  st.config.pago_anticipado = { activo: true, texto: "Pagá Gs {total} a la cuenta 0000000000" };
+  st.config.pago_anticipado_descuento = { activo: true, descuento_pct: 5, metodos: ["alias"] };
+  st.config.pago_prioridad = PRIORIDAD_ON;
   st.pedidos.set(ORDER, pedidoPendiente({ total: "112000" }));
   await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
-  assertEquals(st.enviados.length, 2);
-  assertEquals(st.enviados[1].texto, PAGO_ANTICIPADO_DEFAULT.texto.replace("{total}", "112.000").replace("{pedido}", "#1001"));
-  assert(st.enviados[1].texto.includes("Total: Gs 112.000"));
-  assert(st.enviados[1].texto.includes("6193162880"));
-  assertEquals(st.pedidos.get(ORDER)!.tags, ["CONFIRMADO", TAG_OFERTA_PAGO]);
-  assertEquals(st.pedidos.get(ORDER)!.estado_confirmacion, "confirmado");
-  assertEquals(st.tagsAgregados, [[`gid://shopify/Order/${ORDER}`, ["CONFIRMADO"]], [`gid://shopify/Order/${ORDER}`, [TAG_OFERTA_PAGO]]]);
-  assertEquals(st.avisos.length, 1);
-  assert(st.avisos[0].texto.includes("transferencia (Gs 112.000)"));
+  assertEquals(st.enviados.length, 1); // solo "Listo …, quedó confirmado"
+  for (const t of textosCliente(st)) assertFalse(/0000000000|transfer|alias|menos|Gs 112/i.test(t), t);
+  assertEquals(st.pedidos.get(ORDER)!.tags, ["CONFIRMADO"]);
+  assertEquals(st.tagsAgregados, [[`gid://shopify/Order/${ORDER}`, ["CONFIRMADO"]]]);
+  assertFalse(st.avisos[0].texto.includes("ofreció"));
 });
 
-Deno.test("pago anticipado: texto de config con {nombre} y {pedido}", async () => {
-  const { deps, st } = crearMock();
-  st.config.pago_anticipado = { activo: true, texto: "Hola {nombre}, tu pedido {pedido} sale Gs {total}." };
-  st.pedidos.set(ORDER, pedidoPendiente({ total: 249000 }));
-  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
-  assertEquals(st.enviados[1].texto, "Hola Ana, tu pedido #1001 sale Gs 249.000.");
-});
-
-Deno.test("pago anticipado: no se manda con activo false, sin config, ya pagado o sin total", async () => {
-  for (const caso of [
-    { cfg: { activo: false }, extra: {} },
-    { cfg: null, extra: {} },
-    { cfg: PA, extra: { tags: ["PAGO_ANTICIPADO_COMPROBANTE"] } },
-    { cfg: PA, extra: { tags: ["PAGADO_QR"] } },
-  ]) {
+Deno.test("QR al confirmar: con pago_prioridad prendido no sale (un solo ofrecimiento de pago); apagado o sin alias, vuelve", async () => {
+  for (const [prioridad, esperado] of [[PRIORIDAD_ON, 0], [{ activo: false, alias: "alias@ejemplo.com" }, 1], [{ activo: true, alias: null }, 1], [null, 1]] as const) {
+    const qr: number[] = [];
     const { deps, st } = crearMock();
-    if (caso.cfg) st.config.pago_anticipado = caso.cfg;
-    st.pedidos.set(ORDER, pedidoPendiente({ total: 112000, ...caso.extra }));
+    deps.ofrecerCobroQR = (id) => (qr.push(id), Promise.resolve({ ok: true, texto: "Pagá con QR: https://ejemplo.test/qr" }));
+    if (prioridad) st.config.pago_prioridad = prioridad;
+    st.config["ola4.qr"] = { activo: true };
+    st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
     await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
-    assertEquals(st.enviados.length, 1, JSON.stringify(caso));
-    assertFalse(st.pedidos.get(ORDER)!.tags!.includes(TAG_OFERTA_PAGO));
-    assertEquals(st.tagsAgregados.length, 1);
+    assertEquals(qr.length, esperado, JSON.stringify(prioridad));
   }
-  // Sin total: no se manda y Enrique se entera.
-  const { deps, st } = crearMock();
-  st.config.pago_anticipado = PA;
-  st.pedidos.set(ORDER, pedidoPendiente());
-  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
-  assertEquals(st.enviados.length, 1);
-  assert(st.avisos[0].texto.includes("no tiene total"));
 });
 
-Deno.test("pago anticipado: conf_corregir y conf_cancelar no ofrecen pago", async () => {
+Deno.test("permiso para ofertas: después de la respuesta a conf_si (botón Confirmo o 'sí' escrito), con los botones cons_si / cons_no, una sola vez", async () => {
+  // Botón (v4 "Confirmo" manda conf_si:<id>).
+  const { deps, st } = crearMock();
+  st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
+  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
+  const cli = st.clientes[0].id;
+  assertEquals(st.enviados.length, 1);
+  assertEquals(st.botones.length, 1);
+  assertEquals(st.botones[0].texto, "¿Querés que Voltra te avise por acá cuando haya ofertas y novedades? Podés darte de baja cuando quieras.");
+  assertEquals(st.botones[0].botones, [{ id: `cons_si:${cli}`, titulo: "Sí, avisame" }, { id: `cons_no:${cli}`, titulo: "No, gracias" }]);
+  // Toque repetido: nada nuevo. Otro pedido confirmado del mismo cliente sin responder el permiso: no se repite.
+  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`, "wamid.IN2")]));
+  st.pedidos.set("5550009990001", pedidoPendiente({ shopify_order_id: "5550009990001", nombre: "#1002", total: 112000 }));
+  await correr(deps, payloadMensajes([botonInteractivo("conf_si:5550009990001", "wamid.IN3")]));
+  assertEquals(st.botones.length, 1);
+
+  // "sí" escrito con un solo pedido pendiente: igual, después de la respuesta.
+  const m2 = crearMock();
+  m2.st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
+  await correr(m2.deps, payloadMensajes([{ from: TEL, id: "wamid.SI", timestamp: "1791300100", type: "text", text: { body: "Confirmo" } }]));
+  assertEquals(m2.st.pedidos.get(ORDER)!.estado_confirmacion, "confirmado");
+  assertEquals(m2.st.botones.length, 1);
+  assert(m2.st.botones[0].botones[0].id.startsWith("cons_si:"));
+});
+
+Deno.test("permiso para ofertas: con enviarInteractivo va botonesPermisoOfertas(clienteId) tal cual", async () => {
+  const { deps, st } = crearMock();
+  const interactivos: unknown[] = [];
+  deps.enviarInteractivo = (_to, i) => (interactivos.push(i), Promise.resolve({ ok: true }));
+  st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
+  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
+  const { botonesPermisoOfertas } = await import("../_shared/wa_interactivos.ts");
+  assertEquals(interactivos, [botonesPermisoOfertas(st.clientes[0].id)]);
+  assertEquals(st.botones.length, 0);
+});
+
+Deno.test("permiso para ofertas: no sale si ya respondió (sí, no o baja), si ya se le preguntó, si no se puede saber, ni en Corregir / Cancelar", async () => {
+  for (const previo of ["si", "no", "baja"]) {
+    const { deps, st } = crearMock();
+    deps.consentimientoMarketing = () => Promise.resolve(previo as "si" | "no" | "baja");
+    st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
+    await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
+    assertEquals(st.botones.length, 0, previo);
+  }
+  for (const pedido of [() => Promise.resolve(true), () => Promise.reject(new Error("db caída"))]) {
+    const { deps, st } = crearMock();
+    deps.permisoOfertasPedido = pedido;
+    st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
+    await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
+    assertEquals(st.botones.length, 0);
+  }
   for (const accion of ["conf_corregir", "conf_cancelar"]) {
     const { deps, st } = crearMock();
-    st.config.pago_anticipado = PA;
     st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
     await correr(deps, payloadMensajes([botonInteractivo(`${accion}:${ORDER}`)]));
-    assertEquals(st.enviados.length, 1, accion);
+    assertEquals(st.botones.length, 0, accion);
   }
-});
-
-Deno.test("pago anticipado activo: la oferta QR no se manda (un solo ofrecimiento); apagado, vuelve el QR", async () => {
-  const qr: number[] = [];
-  let { deps, st } = crearMock();
-  deps.ofrecerCobroQR = (id) => (qr.push(id), Promise.resolve({ ok: true, texto: "Pagá con QR: https://ejemplo.test/qr" }));
-  st.config.pago_anticipado = PA;
-  st.config["ola4.qr"] = { activo: true };
+  // Si la respuesta de la confirmación no salió, tampoco el permiso (nunca como primer mensaje nuestro).
+  const { deps, st } = crearMock();
+  deps.enviarTexto = () => Promise.resolve({ ok: false, error: "131047" });
   st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
   await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
-  assertEquals(qr, []);
-  assertEquals(st.enviados.length, 2);
-  assertFalse(st.enviados.some((e) => e.texto.includes("QR")));
-
-  ({ deps, st } = crearMock());
-  deps.ofrecerCobroQR = (id) => (qr.push(id), Promise.resolve({ ok: true, texto: "Pagá con QR: https://ejemplo.test/qr" }));
-  st.config.pago_anticipado = { activo: false };
-  st.config["ola4.qr"] = { activo: true };
-  st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
-  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
-  assertEquals(qr, [Number(ORDER)]);
-  assertEquals(st.enviados[1].texto, "Pagá con QR: https://ejemplo.test/qr");
+  assertEquals(st.botones.length, 0);
 });
 
-Deno.test("comprobante: imagen tras la oferta → tags DB + Shopify, copia a Storage, respuesta y aviso; no va al vendedor", async () => {
+Deno.test("comprobante: imagen tras la oferta → el pedido NO cambia; copia a Storage, respuesta y Telegram con la foto, el monto y Recibido; no va al vendedor", async () => {
   const { deps, st } = crearMock();
   const vendedor: string[] = [];
   const copias: string[] = [];
+  const archivos: { texto: string; botones: unknown; archivo: Record<string, unknown> }[] = [];
   deps.pasarAlVendedor = (d) => (vendedor.push(d.texto), Promise.resolve());
   deps.copiarMedia = (id, ruta) => (copias.push(`${id}->${ruta}`), Promise.resolve({ ok: true, ruta, mime: "image/jpeg" }));
+  deps.avisarConArchivo = (texto, botones, archivo) => (archivos.push({ texto, botones, archivo }), Promise.resolve({ ok: true }));
   st.pedidos.set(ORDER, pedidoConOferta());
   await correr(deps, payloadMensajes([imagen()]));
   const p = st.pedidos.get(ORDER)!;
-  assertEquals(p.tags, ["CONFIRMADO", TAG_OFERTA_PAGO, TAG_COMPROBANTE_PAGO, TAG_PRIORIDAD]);
+  assertEquals(p.tags, ["CONFIRMADO", TAG_OFERTA_PAGO]); // nada cambia hasta "Recibido"
   assertEquals(p.estado_confirmacion, "confirmado");
-  assertEquals(st.tagsAgregados, [[`gid://shopify/Order/${ORDER}`, [TAG_COMPROBANTE_PAGO, TAG_PRIORIDAD]]]);
+  assertEquals(st.tagsAgregados, []);
   const ruta = `comprobantes/${st.clientes[0].id}/wamid.IMG1.jpg`;
   assertEquals(copias, [`MEDIA_IMG->${ruta}`]);
   const contenido = st.mensajes.get("wamid.IMG1")!.contenido as Record<string, unknown>;
@@ -767,44 +784,79 @@ Deno.test("comprobante: imagen tras la oferta → tags DB + Shopify, copia a Sto
   assertEquals(contenido.comprobante_pago_anticipado, ORDER);
   assertEquals(st.enviados.map((e) => e.texto), [PAGO_ANTICIPADO_DEFAULT.texto_recibido]);
   assertEquals(st.leidos, ["wamid.IMG1"]);
-  assertEquals(st.avisos.length, 1);
-  assert(st.avisos[0].texto.startsWith("💸 #1001: el cliente mandó comprobante de pago anticipado (Gs 112.000). Verificalo en ueno y despachalo primero."));
-  assert(st.avisos[0].texto.includes(`wa-media/${ruta}`));
+  assertEquals(st.avisos, []); // va con el archivo, no como texto
+  assertEquals(archivos.length, 1);
+  assertEquals(archivos[0].texto, [
+    "💸 #1001: el cliente mandó el comprobante del pago anticipado (prioridad).",
+    "Monto a verificar: Gs 112.000 (total del pedido).",
+    "Verificalo en el banco y tocá Recibido. Hasta que lo toques, el pedido no cambia.",
+  ].join("\n"));
+  assertEquals(archivos[0].archivo, { mediaId: "MEDIA_IMG", ruta, mime: "image/jpeg", nombre: "comprobante-1001.jpg" });
+  assertEquals(JSON.stringify(archivos[0].botones), JSON.stringify([
+    [{ texto: "Recibido", callback: `pagado:${ORDER}` }],
+    [{ texto: "Le escribo yo", callback: `escribo:${ORDER}` }],
+  ]));
   assertEquals(vendedor, []);
 
-  // Una segunda imagen ya no es comprobante (ya tiene PAGO_ANTICIPADO_COMPROBANTE): va al vendedor.
+  // Una segunda imagen del mismo pedido ya no es comprobante: va al vendedor.
   await correr(deps, payloadMensajes([imagen("wamid.IMG2")]));
-  assertEquals(st.avisos.length, 1);
+  assertEquals(archivos.length, 1);
   assertEquals(vendedor.length, 1);
 });
 
-Deno.test("comprobante: PDF sin copiarMedia → aviso con el media id; texto_recibido de config", async () => {
+Deno.test("comprobante: si no se puede mandar el archivo a Telegram, va el aviso de texto con la ruta y la falla", async () => {
   const { deps, st } = crearMock();
-  st.config.pago_anticipado = { activo: true, texto_recibido: "Gracias {nombre}, recibimos el de {pedido}." };
+  deps.copiarMedia = (_id, ruta) => Promise.resolve({ ok: true, ruta, mime: "image/jpeg" });
+  deps.avisarConArchivo = () => Promise.resolve({ ok: false, error: "Bad Request: file too big" });
   st.pedidos.set(ORDER, pedidoConOferta());
-  await correr(deps, payloadMensajes([imagen("wamid.PDF1", { type: "document", image: undefined, document: { id: "MEDIA_PDF", mime_type: "application/pdf", filename: "comprobante.pdf" } })]));
-  assert(st.pedidos.get(ORDER)!.tags!.includes(TAG_COMPROBANTE_PAGO));
-  assertEquals(st.enviados[0].texto, "Gracias Ana, recibimos el de #1001.");
-  assert(st.avisos[0].texto.includes("MEDIA_PDF"));
+  await correr(deps, payloadMensajes([imagen()]));
+  assertEquals(st.avisos.length, 1);
+  const t = st.avisos[0].texto;
+  assert(t.startsWith("💸 #1001: el cliente mandó el comprobante del pago anticipado (prioridad)."), t);
+  assert(t.includes(`Comprobante: Storage wa-media/comprobantes/${st.clientes[0].id}/wamid.IMG1.jpg`), t);
+  assert(t.includes("Falla: no pude mandarte el archivo a Telegram: Bad Request: file too big"), t);
+  assertEquals(JSON.stringify(st.avisos[0].botones), JSON.stringify([
+    [{ texto: "Recibido", callback: `pagado:${ORDER}` }],
+    [{ texto: "Le escribo yo", callback: `escribo:${ORDER}` }],
+  ]));
 });
 
-Deno.test("comprobante con el chat en 'humano' que Enrique atiende: registra y avisa, sin responder al cliente", async () => {
+Deno.test("comprobante: PDF sin copiarMedia → el archivo sale de Meta (media id); texto_recibido de config", async () => {
   const { deps, st } = crearMock();
+  const archivos: Record<string, unknown>[] = [];
+  deps.avisarConArchivo = (_t, _b, a) => (archivos.push(a), Promise.resolve({ ok: true }));
+  st.config.pago_anticipado = { texto_recibido: "Gracias {nombre}, recibimos el de {pedido}." };
+  st.pedidos.set(ORDER, pedidoConOferta());
+  await correr(deps, payloadMensajes([imagen("wamid.PDF1", { type: "document", image: undefined, document: { id: "MEDIA_PDF", mime_type: "application/pdf", filename: "comprobante.pdf" } })]));
+  assertEquals(st.enviados[0].texto, "Gracias Ana, recibimos el de #1001.");
+  assertEquals(archivos, [{ mediaId: "MEDIA_PDF", ruta: null, mime: "application/pdf", nombre: "comprobante-1001.pdf" }]);
+  assertEquals((st.mensajes.get("wamid.PDF1")!.contenido as Record<string, unknown>).comprobante_pago_anticipado, ORDER);
+});
+
+Deno.test("comprobante con el chat en 'humano' que Enrique atiende: avisa con el archivo, sin responder al cliente", async () => {
+  const { deps, st } = crearMock();
+  const archivos: string[] = [];
+  deps.avisarConArchivo = (t) => (archivos.push(t), Promise.resolve({ ok: true }));
   st.pedidos.set(ORDER, pedidoConOferta());
   deps.actividadHumana = () => Promise.resolve({ salidasManuales: 1, escribo: false, derivaciones: [], entrantes: [] });
   await correr(deps, payloadMensajes([{ from: TEL, id: "wamid.T0", timestamp: "1791300100", type: "text", text: { body: "hola" } }]));
   st.conversaciones[0].estado = "humano";
   await correr(deps, payloadMensajes([imagen()]));
-  assert(st.pedidos.get(ORDER)!.tags!.includes(TAG_PRIORIDAD));
+  assertEquals(st.pedidos.get(ORDER)!.tags, ["CONFIRMADO", TAG_OFERTA_PAGO]);
   assertEquals(st.enviados.length, 0);
-  assert(st.avisos.at(-1)!.texto.includes("no le respondí"));
+  assert(archivos.at(-1)!.includes("no le respondí"));
 });
 
-Deno.test("imagen sin oferta previa, vieja o de pedido no confirmado: pasa al flujo normal", async () => {
+Deno.test("imagen sin oferta, vieja, de pedido no confirmado, ya pagado, entregado o con comprobante viejo: pasa al flujo normal", async () => {
   for (const ped of [
     pedidoPendiente({ estado_confirmacion: "confirmado", tags: ["CONFIRMADO"], total: 112000 }), // sin oferta
     pedidoConOferta({ creado_en: "2026-09-20T00:00:00.000Z" }), // más de 7 días
     pedidoConOferta({ estado_confirmacion: "cancelado_cliente" }),
+    pedidoConOferta({ tags: ["CONFIRMADO", TAG_OFERTA_PAGO, "PAGADO"] }),
+    pedidoConOferta({ tags: ["CONFIRMADO", TAG_OFERTA_PAGO, "PAGO_VERIFICADO"] }),
+    pedidoConOferta({ raw: { financial_status: "paid" } }),
+    pedidoConOferta({ estado_envio: "ENTREGADO" }),
+    pedidoConOferta({ tags: ["CONFIRMADO", TAG_OFERTA_PAGO, TAG_COMPROBANTE_PAGO, TAG_PRIORIDAD] }), // flujo viejo
     null, // sin pedidos
   ]) {
     const { deps, st } = crearMock();
@@ -824,23 +876,28 @@ Deno.test("mediaDeComprobante: imagen y PDF sí; audio y documento de otro tipo 
   assertEquals(mediaDeComprobante({ id: "x", type: "document", document: { id: "D", mime_type: "application/pdf" } }), { id: "D", mime: "application/pdf" });
   assertEquals(mediaDeComprobante({ id: "x", type: "document", document: { id: "D", mime_type: "application/zip" } }), null);
   assertEquals(mediaDeComprobante({ id: "x", type: "audio", audio: { id: "A" } }), null);
-  assert(pedidoYaPagado(["PAGO_ANTICIPADO_CONFIRMADO"]));
-  assertFalse(pedidoYaPagado(["OFERTA_PAGO_ANTICIPADO", "CONFIRMADO"]));
 });
 
-Deno.test("seed_pago_anticipado.sql: JSON válido, activo, textos = defaults del código, banco y on conflict seguro", async () => {
+Deno.test("sin datos de la cuenta en el código: el texto por defecto no trae banco, cuenta ni RUC", async () => {
+  assertEquals(Object.keys(PAGO_ANTICIPADO_DEFAULT).sort(), ["dias_comprobante", "texto_recibido"]);
+  const fuente = await Deno.readTextFile(new URL("./procesar.ts", import.meta.url));
+  assertFalse(/caja de ahorro|RUC \d|UNIPERSONAL|\b\d{10}\b/i.test(fuente));
+});
+
+Deno.test("seed_pago_anticipado.sql: JSON válido, sin datos reales de la cuenta (null), textos sin palabras prohibidas y on conflict seguro", async () => {
   const sql = await Deno.readTextFile(new URL("../../seed_pago_anticipado.sql", import.meta.url));
   const json = /\('pago_anticipado',\s*'([\s\S]*?)'::jsonb\)/.exec(sql);
   assert(json);
   const v = JSON.parse(json[1]);
-  assertEquals(v.activo, true);
-  assertEquals(v.texto, PAGO_ANTICIPADO_DEFAULT.texto);
+  assertEquals(v.activo, false);
+  assertEquals(v.texto, null);
   assertEquals(v.texto_recibido, PAGO_ANTICIPADO_DEFAULT.texto_recibido);
-  assertEquals(v.banco, { entidad: "ueno bank", tipo: "caja de ahorro", cuenta: "6193162880", titular: "VOLTRA E.A.S. UNIPERSONAL", ruc: "80177762-3" });
+  assertEquals(v.dias_comprobante, PAGO_ANTICIPADO_DEFAULT.dias_comprobante);
+  assertEquals(v.banco, { entidad: null, tipo: null, cuenta: null, titular: null, ruc: null, alias: null });
+  assertFalse(/\b\d{8,}\b|\d{6,}-\d/.test(sql)); // ningún número de cuenta ni RUC
   assert(sql.includes("on conflict (clave) do nothing"));
   const { contienePalabraProhibida } = await import("../_shared/filtro.ts");
-  for (const t of [v.texto, v.texto_recibido]) assertEquals(contienePalabraProhibida(t, PROHIBIDAS), null, t);
-  assertFalse(/alta demanda|[uú]ltimas unidades|urgente/i.test(v.texto));
+  assertEquals(contienePalabraProhibida(v.texto_recibido, PROHIBIDAS), null);
 });
 
 Deno.test("respuestas automáticas del WhatsApp Business del cliente: se detectan sin confundir mensajes reales", () => {
@@ -888,4 +945,11 @@ Deno.test("bandeja: mediaDeChat reconoce imagen, sticker, video y documento (no 
   assertEquals(mediaDeChat({ id: "a", type: "document", document: { id: "D1", mime_type: "application/pdf" } }), { id: "D1", mime: "application/pdf" });
   assertEquals(mediaDeChat({ id: "a", type: "text", text: { body: "hola" } }), null);
   assertEquals(mediaDeChat({ id: "a", type: "audio", audio: { id: "A1" } }), null);
+});
+
+Deno.test("recompra FW: el vendedor sabe que es cliente de Facial Wellness y qué compró", async () => {
+  const deps = { contextoRecompraFw: (t: string | null) => Promise.resolve(t === "+595981000000" ? { producto: "tiras nasales", dias: 45 } : null) } as never;
+  const t = await conContextoRecompraFw(deps, "+595981000000", "me quedan aún");
+  assert(t.startsWith("[cliente de Facial Wellness: compró tiras nasales hace ~45 días"), t);
+  assertEquals(await conContextoRecompraFw(deps, "+595981999999", "hola"), "hola");
 });

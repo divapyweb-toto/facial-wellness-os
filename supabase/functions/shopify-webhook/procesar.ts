@@ -2,9 +2,10 @@
 // Todo el I/O (base de datos, reloj, normalizador de teléfono) entra por `Deps`,
 // así los tests no tocan Supabase ni Shopify.
 
-import { inicioDespacho, plazoParaEnDesdeHoy, plazoPorCiudad } from "../_shared/plazo_zona.ts";
+import { alas8HabilDespues, diaEntrega, horaLocal, inicioDespacho, plazoParaEnDesdeHoy, plazoPorCiudad, rangoEntrega, visperaEntrega } from "../_shared/plazo_zona.ts";
 import { verificarHmacShopify } from "../_shared/shopify.ts";
-import { envioTerminal } from "../procesar-envios/procesar.ts";
+import { motivoSinOfertaPrioridad, pedidoPagado, PLANTILLA_PAGO_PRIORIDAD, preparadoReciente } from "../_shared/pago_anticipado.ts";
+import { CONFIG_DEFECTO, envioTerminal, PLANTILLA_ENTREGA_MANANA } from "../procesar-envios/procesar.ts";
 
 export const TAG_BORRADOR_RELEASIT = "abandoned_checkout_releasit_cod_form";
 
@@ -33,6 +34,26 @@ export const PLANTILLAS = {
 
 /** 10-10: la cancelación automática nunca sale antes de 24 h desde el pedido. */
 export const CANCELAR_MIN_H = 24;
+
+// ---------- 12-10: plantillas nuevas que salen solo después de que Meta las aprueba ----------
+// config_wa.plantillas_activas = {"voltra_confirmacion_pedido_v4": false, "voltra_entrega_manana": false}
+// (también vale una lista de nombres). Sin la clave, apagada o si falla la lectura, sigue lo de siempre (v3 y
+// voltra_entrega_hoy). Enrique (o el implementador) la prende cuando Meta aprueba cada una.
+
+/** Confirmación con el día de entrega ("Te llega: …") y botones Confirmo / Corregir / Cancelar pedido. */
+export const PLANTILLA_CONF_V4 = "voltra_confirmacion_pedido_v4";
+// PLANTILLA_ENTREGA_MANANA (procesar-envios): aviso de la víspera para Asunción y Central con Ok, lo espero / Reprogramar.
+
+export type PlantillasActivas = Record<string, boolean>;
+
+/** config_wa.plantillas_activas → {nombre: true}. Acepta objeto de booleanos o lista de nombres; lo demás, apagado. */
+export function plantillasActivasDesde(v: unknown): PlantillasActivas {
+  if (Array.isArray(v)) return Object.fromEntries(v.filter((x): x is string => typeof x === "string").map((x) => [x.trim(), true]));
+  if (!v || typeof v !== "object") return {};
+  return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, x]) => x === true).map(([k]) => [k, true]));
+}
+
+export const plantillaActiva = (a: PlantillasActivas | undefined, nombre: string) => a?.[nombre] === true;
 
 /** Tags de Shopify que fijan estado_confirmacion (si alguien los pone a mano o desde otro módulo). */
 const TAG_A_ESTADO: Array<[string, string]> = [
@@ -143,6 +164,8 @@ export interface Deps {
   avisar?(textoHtml: string): Promise<unknown>;
   /** Transportadora que se le asignó en Despacho (ventas.transportadora: 'lucero' | 'pap' | …), o null. Opcional (08-10). */
   courierDePedido?(nombrePedido: string | null): Promise<string | null>;
+  /** 12-10: config_wa.plantillas_activas ya parseada. Opcional: sin esto (o si falla) van las plantillas de siempre. */
+  leerPlantillasActivas?(): Promise<PlantillasActivas>;
 }
 
 export type ResultadoProceso = {
@@ -300,9 +323,12 @@ export function armarEnvios(
   telefono: string,
   cfg: ConfigConfirmacion,
   ahora: Date,
+  activas?: PlantillasActivas,
 ): FilaEnvio[] {
   const base = ahora.getTime();
   const min = 60_000, h = 3_600_000;
+  // 12-10: con la v4 aprobada, la confirmación dice el día de entrega ("Te llega: hoy o mañana martes 13/10").
+  const v4 = plantillaActiva(activas, PLANTILLA_CONF_V4);
   const variables = {
     // Plantilla voltra_confirmacion_pedido_v2: pedido, nombre, productos, total_texto, direccion, ciudad.
     nombre: conMayuscula(ped.nombreCliente),
@@ -314,14 +340,16 @@ export function armarEnvios(
     pedido: ped.nombre,
     telefono,
     order_gid: ped.gid,
+    ...(v4 ? { dia_entrega: diaEntrega(ped.ciudad, ahora).texto } : {}),
   };
   const fila = (tipo: keyof typeof PLANTILLAS, ms: number): FilaEnvio => ({
     cliente_id: clienteId,
     shopify_order_id: ped.shopifyOrderId,
-    plantilla: PLANTILLAS[tipo],
+    plantilla: tipo === "conf" && v4 ? PLANTILLA_CONF_V4 : PLANTILLAS[tipo],
     variables,
     categoria: "utilidad",
-    enviar_desde: new Date(base + ms).toISOString(),
+    // 10-10: el pedido de prueba del despliegue no puede salir antes de que la prueba lo cancele (le llegaba a Enrique).
+    enviar_desde: new Date(base + ms + ((ped.tags ?? []).some((t) => t.toUpperCase() === "PRUEBA_E2E") ? 30 * 60_000 : 0)).toISOString(),
     clave_unica: `${tipo}:${ped.shopifyOrderId}`,
   });
   // 10-10: conf → rec (+recordatorio_min) → avi (Telegram a Enrique) → ult (último aviso) → canc (≥ 24 h).
@@ -342,10 +370,16 @@ export function motivoParaNoDespachar(ped: PedidoNormalizado, estadoConfirmacion
   const t = ped.tags.map((x) => x.toUpperCase());
   if (t.includes("FALTAN_DATOS")) return "le faltan datos de la dirección";
   if (estadoConfirmacion !== "confirmado" && !t.includes("CONFIRMADO")) return "el cliente todavía no confirmó";
-  const r = obj(ped.raw);
-  const pagado = s(r.financial_status)?.toLowerCase() === "paid" || s(r.displayFinancialStatus)?.toUpperCase() === "PAID" || t.includes("PAGO_VERIFICADO");
-  if (t.includes("PAGO_ANTICIPADO_COMPROBANTE") && !pagado) return "mandó comprobante de pago y todavía no lo verificaste en ueno";
+  if (t.includes("PAGO_ANTICIPADO_COMPROBANTE") && !estaPagado(ped)) return "mandó comprobante de pago y todavía no lo verificaste en ueno";
   return null;
+}
+
+/**
+ * Pagado antes de la entrega: Shopify "paid" (REST o GraphQL) o tag PAGO_VERIFICADO (transferencia verificada).
+ * 12-10: también PAGADO (botón "Recibido" del pago con prioridad) y PAGADO_QR (_shared/pago_anticipado.ts).
+ */
+export function estaPagado(ped: PedidoNormalizado): boolean {
+  return pedidoPagado({ tags: ped.tags, raw: ped.raw });
 }
 
 /** El pedido figura como preparado (fulfilled) en Shopify: REST (webhook) o GraphQL (conciliación). */
@@ -359,7 +393,7 @@ const NOMBRE_COURIER: Record<string, string> = { lucero: "Lucero del Este", pap:
 export function armarAvisoPreparado(ped: PedidoNormalizado, clienteId: string, courier: string | null, ahora: Date): FilaEnvio {
   const c = courier?.toLowerCase() ?? "";
   // 10-10: días reales desde el despacho (sin sábados ni domingos), igual que lo que dice el vendedor.
-  const plazo = plazoParaEnDesdeHoy(ped.ciudad, inicioDespacho(ahora));
+  const plazo = plazoParaEnDesdeHoy(ped.ciudad, inicioDespacho(ahora), courier);
   return {
     cliente_id: clienteId,
     shopify_order_id: ped.shopifyOrderId,
@@ -380,26 +414,82 @@ export function armarAvisoPreparado(ped: PedidoNormalizado, clienteId: string, c
 }
 
 /**
+ * 12-10: pasó a "preparado" → oferta de pagar antes por transferencia y salir con prioridad (sin descuento, nunca
+ * obligatoria). Una sola vez por pedido (clave `prio:<id>`); null si no corresponde (pagado, retiro, prueba,
+ * mayorista, cancelado, ya salió con el courier, oferta vieja ya enviada) o si el fulfillment no es reciente (un
+ * orders/updated de un pedido preparado hace días no la dispara). procesar-envios decide al mandarla: config
+ * pago_prioridad (activo + alias), ventana de 24 h (texto) o plantilla aprobada; si no, no sale.
+ * Sale 1 s antes que el "ya salió" del mismo lote: primero "listo para salir", después "ya salió".
+ */
+export function armarOfertaPrioridad(
+  ped: PedidoNormalizado,
+  clienteId: string,
+  ahora: Date,
+  estadoEnvio?: string | null,
+): FilaEnvio | null {
+  if (!preparadoReciente(ped.raw, ahora)) return null;
+  if (motivoSinOfertaPrioridad({ tags: ped.tags, raw: ped.raw, estado_envio: estadoEnvio })) return null;
+  return {
+    cliente_id: clienteId,
+    shopify_order_id: ped.shopifyOrderId,
+    plantilla: PLANTILLA_PAGO_PRIORIDAD,
+    variables: { pedido: ped.nombre },
+    categoria: "utilidad",
+    // Fin de semana sale igual (el "ya salió" espera al lunes): le da tiempo a pagar antes del primer despacho.
+    enviar_desde: new Date(ahora.getTime() - 1000).toISOString(),
+    clave_unica: `prio:${ped.shopifyOrderId}`,
+  };
+}
+
+/**
  * 09-10: un aviso más después del "ya salió", para bajar los "no estaba / no tenía la plata". Todas las ciudades,
  * contando desde el despacho (fin de semana → lunes 8:00):
  * - CDE y alrededores (hoy o mañana): "ya está por llegar" (voltra_entrega_proxima) 2 h después del despacho.
  * - Asunción y Central: "hoy te llega" (voltra_entrega_hoy) a las 8:00 de Asunción del día siguiente.
  * - Interior (no se sabe el día exacto): "ya está por llegar" a las 8:00 del segundo día.
+ * 12-10: con voltra_entrega_manana aprobada (plantillas_activas), Asunción y Central reciben en cambio el aviso de la
+ * víspera a las 18:00 del día de despacho ("mañana martes 13/10" / el viernes "el lunes 19/10") con Ok / Reprogramar.
+ * Misma clave: no se duplica y se cancela igual si se cancela el pedido. Pedidos ya pagados siguen con el de antes
+ * (el nuevo dice "Tené Gs …"). Si el despacho se marca después del horario de avisos, también sigue el de antes.
  */
-export function armarRecordatorioEntrega(ped: PedidoNormalizado, clienteId: string, ahoraReal: Date): FilaEnvio | null {
+export function armarRecordatorioEntrega(
+  ped: PedidoNormalizado,
+  clienteId: string,
+  ahoraReal: Date,
+  activas?: PlantillasActivas,
+  courier?: string | null,
+): FilaEnvio | null {
   const ahora = inicioDespacho(ahoraReal);
   const plazo = plazoPorCiudad(ped.ciudad);
-  // 8:00 de Asunción (UTC−3) = 11:00 UTC, `dias` días después.
-  const local = new Date(ahora.getTime() - 3 * 3_600_000);
-  const alas8 = (dias: number) => new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + dias, 11, 0, 0));
+  // 10-10: 8:00 de Asunción del n-ésimo día HÁBIL (antes contaba días corridos y un despacho del viernes avisaba
+  // "hoy te llega" el sábado, que la transportadora no trabaja).
+  const alas8 = (dias: number) => alas8HabilDespues(ahora, dias);
   const cde = plazo === "hoy mismo o en 24 h";
-  const metro = plazo === "24 a 48 h" || plazo === "24 a 72 h";
+  // 12-10: solo si el courier entrega al día siguiente (Itá, Guarambaré, Ypacaraí van con Lucero programada: sin
+  // "mañana / hoy te llega").
+  const metro = (plazo === "24 a 48 h" || plazo === "24 a 72 h") && rangoEntrega(ped.ciudad, courier).rango[0] === 1;
+  const nombre = conMayuscula(ped.nombreCliente?.trim().split(/\s+/)[0] ?? null);
+  if (metro && plantillaActiva(activas, PLANTILLA_ENTREGA_MANANA) && !estaPagado(ped)) {
+    const v = visperaEntrega(ahoraReal);
+    if (horaLocal(v.enviar) < CONFIG_DEFECTO.horarioAvisosEnvio.hasta) {
+      return {
+        cliente_id: clienteId,
+        shopify_order_id: ped.shopifyOrderId,
+        plantilla: PLANTILLA_ENTREGA_MANANA,
+        // fecha_entrega: procesar-envios no lo manda si ya llegó ese día (un "mañana" atrasado sería falso).
+        variables: { nombre, dia_entrega: v.dia, total: formatoGs(ped.total), fecha_entrega: v.entrega },
+        categoria: "utilidad",
+        enviar_desde: v.enviar.toISOString(),
+        clave_unica: `courier:${ped.shopifyOrderId}:ENTREGA_HOY`,
+      };
+    }
+  }
   const enviar = cde ? new Date(ahora.getTime() + 2 * 3_600_000) : metro ? alas8(1) : alas8(2);
   return {
     cliente_id: clienteId,
     shopify_order_id: ped.shopifyOrderId,
     plantilla: metro ? "voltra_entrega_hoy" : "voltra_entrega_proxima",
-    variables: { nombre: conMayuscula(ped.nombreCliente?.trim().split(/\s+/)[0] ?? null), total: formatoGs(ped.total) },
+    variables: { nombre, total: formatoGs(ped.total) },
     categoria: "utilidad",
     enviar_desde: enviar.toISOString(),
     clave_unica: `courier:${ped.shopifyOrderId}:ENTREGA_HOY`,
@@ -418,6 +508,15 @@ export function armarRecordatorioEntrega(ped: PedidoNormalizado, clienteId: stri
 export function creadoHaceMenosDe(creadoEn: string | null | undefined, ahora: Date, min: number): boolean {
   const t = creadoEn ? Date.parse(creadoEn) : NaN;
   return Number.isFinite(t) && ahora.getTime() - t < min * 60_000;
+}
+
+/** 12-10: plantillas aprobadas; si no se puede leer, ninguna nueva (sigue lo de siempre) y no frena el webhook. */
+async function plantillasActivas(deps: Deps): Promise<PlantillasActivas> {
+  if (!deps.leerPlantillasActivas) return {};
+  return await deps.leerPlantillasActivas().catch((e) => {
+    console.warn("plantillas_activas:", e instanceof Error ? e.message : e);
+    return {};
+  });
 }
 
 export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promise<ResultadoProceso> {
@@ -485,8 +584,14 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   }
   if (!motivoNoDespachar && !ped.cancelado && !esPruebaE2E && !retira && clienteId && estaPreparado(ped.raw) && !envioTerminal(existente?.estado_envio)) {
     const courier = deps.courierDePedido ? await deps.courierDePedido(ped.nombre).catch(() => null) : null;
-    const recordatorio = armarRecordatorioEntrega(ped, clienteId, deps.ahora());
-    await deps.programarEnvios([armarAvisoPreparado(ped, clienteId, courier, deps.ahora()), ...(recordatorio ? [recordatorio] : [])]);
+    const recordatorio = armarRecordatorioEntrega(ped, clienteId, deps.ahora(), await plantillasActivas(deps), courier);
+    // 12-10: oferta de pago con prioridad (una sola vez por pedido; ver armarOfertaPrioridad).
+    const oferta = armarOfertaPrioridad(ped, clienteId, deps.ahora(), existente?.estado_envio);
+    await deps.programarEnvios([
+      ...(oferta ? [oferta] : []),
+      armarAvisoPreparado(ped, clienteId, courier, deps.ahora()),
+      ...(recordatorio ? [recordatorio] : []),
+    ]);
     if (deps.dispararEnvios) await deps.dispararEnvios().catch((e) => console.warn("dispararEnvios:", e instanceof Error ? e.message : e));
   }
 
@@ -517,7 +622,7 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   }
 
   const cfg = await deps.leerConfigConfirmacion();
-  const envios = armarEnvios(ped, clienteId, telefono, cfg, deps.ahora());
+  const envios = armarEnvios(ped, clienteId, telefono, cfg, deps.ahora(), await plantillasActivas(deps));
   await deps.programarEnvios(envios); // on conflict do nothing → idempotente
   // Confirmación lo más rápido posible: no espera al cron. El pedido de prueba del despliegue (PRUEBA_E2E)
   // no dispara nada: esa prueba cancela sus envíos antes de que salgan.

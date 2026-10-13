@@ -199,7 +199,8 @@ async function main() {
   if (!envios.length) mal('no apareció ningún envío programado en 30 s (mirá los logs de shopify-webhook y eventos_crudos.error)');
   for (const e of envios) info(`${e.clave_unica.split(':')[0].padEnd(5)} ${e.plantilla.padEnd(34)} ${e.estado.padEnd(10)} ${e.enviar_desde}`);
   const tipos = new Set(envios.map((e) => e.clave_unica.split(':')[0]));
-  for (const t of ['conf', 'rec', 'ret', 'canc']) (tipos.has(t) ? ok : mal)(`envío ${t} programado`);
+  // 10-10: secuencia nueva (FUNCIONES): confirmación, recordatorio 1 h, aviso a Enrique 3 h, último aviso 24 h, cancelación 48 h.
+  for (const t of ['conf', 'rec', 'avi', 'ult', 'canc']) (tipos.has(t) ? ok : mal)(`envío ${t} programado`);
 
   // 6. Cancelar / limpiar
   if (REAL) {

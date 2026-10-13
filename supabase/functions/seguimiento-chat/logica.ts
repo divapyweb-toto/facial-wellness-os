@@ -2,22 +2,29 @@
 // Hasta 2 recontactos automáticos a clientes que dejaron en visto, SIEMPRE dentro de la ventana de 24 h de
 // WhatsApp (gratis: texto libre o interactivos, nunca plantillas). El mensaje lo escribe el vendedor con IA con
 // un turno de seguimiento (orquestador.ts, entrada "[seguimiento N]" con origen "seguimiento").
+// 12-10 (plan de ventas por WhatsApp, fase 2): hasta 3 toques por conversación. El 3 es una plantilla de marketing
+// (toque3.ts) dentro de las 72 h gratis del anuncio; los 1 y 2 siguen acá.
 //
 // Cuándo toca (config_wa.vendedor_seguimiento, hora de Asunción):
-//   · Recontacto 1: el bot habló último, hace ≥ horas_1 (2 h) que no responde y su última entrada fue hace
-//     < ventana_1_h (23 h).
-//   · Recontacto 2: ya se hizo el 1, el bot sigue hablando último, pasaron ≥ horas_2 (20 h) desde la última
-//     entrada del cliente y < ventana_max_h (23,5 h), y ≥ separacion_min_h (2 h) desde el recontacto 1.
-//   · Fuera de [horario_desde, horario_hasta) no se manda: se espera. Si la ventana se cierra antes, se pierde.
+//   · Recontacto 1: el bot habló último, hace ≥ horas_1 (1,5 h; 2 h hasta el 12-10) que no responde y su última
+//     entrada fue hace < ventana_1_h (23 h).
+//   · Recontacto 2: ya se hizo el 1, el bot sigue hablando último, a las horas_2 (20 h) de la última entrada del
+//     cliente, < ventana_max_h (23,5 h) y ≥ separacion_min_h (2 h) desde el recontacto 1 (momentoRecontacto2).
+//     12-10: si esperar lo deja fuera de la ventana (ej.: escribió a las 3:00 → las 20 h caen a las 23:00), se
+//     adelanta al último momento en horario que deja margen_2_h (0,5 h) para el cron, nunca antes de horas_2_min
+//     (8 h) desde su última entrada. Si no hay ningún momento válido, el 2 se saltea.
+//   · Fuera de [horario_desde, horario_hasta) = [12, 21) (8 a 21 hasta el 12-10) no se manda: se espera.
 // Nunca si: la conversación no está en 'ia'; hay un pedido del cliente en los últimos 7 días (Shopify o chat);
 // el cliente dijo que no (perfil_vendedor.rechazo); pidió la baja de ofertas; ya se hicieron `max` en el ciclo;
 // la última respuesta del bot fue una derivación. El contador NO se reinicia cuando el cliente escribe: vuelve a
 // cero solo si el último recontacto fue hace más de `dias_reinicio` (7) días.
 // Sin I/O: todo entra por DepsSeguimiento (io.ts en producción).
 import { partesAsuncion } from "../_shared/horario.ts";
-import { escaparHtml } from "../_shared/telegram_formato.ts";
+import { type BotonTelegram, enlaceWaMe, escaparAtributo, escaparHtml, recortar } from "../_shared/telegram_formato.ts";
 import { type EntradaTurno, type ResultadoTurno, textoSeguimiento } from "../_shared/vendedor/orquestador.ts";
 import { normalizarPerfil } from "../_shared/vendedor/perfil.ts";
+import { diaLocalMas, instanteLocal } from "../recompra/calendario.ts";
+import { correrToque3, type DepsToque3, type ResumenToque3 } from "./toque3.ts";
 
 export type CfgSeguimiento = {
   activo: boolean;
@@ -43,21 +50,28 @@ export type CfgSeguimiento = {
   dias_reinicio: number;
   /** Días hacia atrás en que un pedido del cliente bloquea el recontacto. */
   dias_pedido: number;
+  /** 12-10: el recontacto 2 adelantado nunca sale antes de estas horas desde la última entrada del cliente. */
+  horas_2_min: number;
+  /** 12-10: margen (horas) que tiene que quedar antes de que cierre la franja o la ventana (el cron corre cada 10 min). */
+  margen_2_h: number;
 };
 
+// 12-10: horas_1 2 → 1,5 y horario_desde 8 → 12 (plan de ventas por WhatsApp, fase 2).
 export const CFG_SEGUIMIENTO_DEFAULT: CfgSeguimiento = {
   activo: true,
-  horas_1: 2,
+  horas_1: 1.5,
   horas_2: 20,
   max: 2,
   ventana_1_h: 23,
   ventana_max_h: 23.5,
-  horario_desde: 8,
+  horario_desde: 12,
   horario_hasta: 21,
   lote_max: 20,
   separacion_min_h: 2,
   dias_reinicio: 7,
   dias_pedido: 7,
+  horas_2_min: 8,
+  margen_2_h: 0.5,
 };
 
 const esObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -85,6 +99,52 @@ export function dentroHorario(ahora: Date, cfg: CfgSeguimiento): boolean {
   return hora >= cfg.horario_desde && hora < cfg.horario_hasta;
 }
 
+/**
+ * 12-10: tramos en horario de Asunción dentro de [t0, t1) (ms), en orden. Mismo criterio que dentroHorario (horas
+ * enteras: desde 12 = 12:00, hasta 21 = hasta las 20:59).
+ */
+export function franjasHorario(t0: number, t1: number, cfg: Pick<CfgSeguimiento, "horario_desde" | "horario_hasta">): Array<[number, number]> {
+  const tramos: Array<[number, number]> = [];
+  const desde = Math.ceil(cfg.horario_desde), hasta = Math.ceil(cfg.horario_hasta);
+  if (!(t1 > t0) || desde >= hasta) return tramos;
+  const dias = Math.ceil((t1 - t0) / (24 * H)) + 1;
+  for (let n = -1; n <= dias; n++) {
+    const dia = diaLocalMas(new Date(t0), n);
+    const s = Math.max(instanteLocal(dia, desde).getTime(), t0);
+    const e = Math.min(instanteLocal(dia, hasta).getTime(), t1);
+    if (s < e) tramos.push([s, e]);
+  }
+  return tramos;
+}
+
+/**
+ * 12-10: instante (ms) en que sale el recontacto 2, o null si no hay ningún momento válido (se saltea).
+ *   · ideal = horas_2 desde la última entrada y ≥ separacion_min_h desde el recontacto anterior. Sale en el ideal
+ *     (o en el primer momento en horario después) si quedan ≥ margen_2_h antes de que cierre la franja o la
+ *     ventana de WhatsApp (ventana_max_h).
+ *   · Si no: se adelanta al último momento en horario que deja margen_2_h, nunca antes de horas_2_min desde la
+ *     última entrada ni de separacion_min_h desde el recontacto anterior.
+ *   · Si ningún tramo en horario llega al margen: el más largo, desde que empieza.
+ */
+export function momentoRecontacto2(entradaMs: number, ultimoSegMs: number | null, cfg: CfgSeguimiento): number | null {
+  const sep = ultimoSegMs != null && Number.isFinite(ultimoSegMs) ? ultimoSegMs + cfg.separacion_min_h * H : -Infinity;
+  const piso = Math.max(entradaMs + cfg.horas_2_min * H, sep);
+  const ideal = Math.max(entradaMs + cfg.horas_2 * H, sep);
+  const techo = entradaMs + cfg.ventana_max_h * H;
+  const margen = cfg.margen_2_h * H;
+  const tramos = franjasHorario(piso, techo, cfg);
+  for (const [s, e] of tramos) {
+    const a = Math.max(s, ideal);
+    if (e - a >= margen) return a;
+  }
+  let adelantado: number | null = null;
+  for (const [s, e] of tramos) if (e - s >= margen) adelantado = e - margen; // en orden: queda el último
+  if (adelantado != null) return adelantado;
+  let mejor: [number, number] | null = null;
+  for (const t of tramos) if (!mejor || t[1] - t[0] > mejor[1] - mejor[0]) mejor = t;
+  return mejor ? mejor[0] : null;
+}
+
 /** Lo que hace falta saber de una conversación para decidir (lo arma io.ts). */
 export type Candidato = {
   conversacion_id: string;
@@ -93,14 +153,35 @@ export type Candidato = {
   ultima_entrada_en: string | null;
   /** wa_conversaciones.perfil_vendedor (rechazo, seguimientos, ultimo_seguimiento_en). */
   perfil: unknown;
-  /** Último mensaje no fallido de la conversación (entrante o saliente). */
-  ultimo_mensaje: { direccion: "in" | "out"; creado_en: string } | null;
+  /** Último mensaje no fallido de la conversación (entrante o saliente). `manual`: lo mandó Enrique desde la bandeja. */
+  ultimo_mensaje: { direccion: "in" | "out"; creado_en: string; manual?: boolean } | null;
   /** La última respuesta del vendedor fue una derivación a Enrique. */
   ultima_respuesta_derivada: boolean;
   /** Hay un pedido del cliente en los últimos `dias_pedido` días (shopify_pedidos o wa_pedidos_chat creado). */
   pedido_reciente: boolean;
   /** El consentimiento de marketing vigente es 'baja'. */
   baja_marketing: boolean;
+  // ── Para el aviso de intención de compra (08-10). Opcionales: los recontactos no los usan. ──
+  /** wa_clientes.nombre / telefono (E.164). */
+  nombre?: string | null;
+  telefono?: string | null;
+  /** Textos entrantes del cliente dentro de la ventana (los más nuevos primero). */
+  entradas_recientes?: Array<{ texto: string; creado_en: string }>;
+  /** Último pedido del cliente (Shopify no borrador o wa_pedidos_chat creado) en los últimos `dias_pedido` días. */
+  ultimo_pedido_en?: string | null;
+  // ── Para el toque 3 (12-10, toque3.ts). Opcionales: los recontactos 1 y 2 no los usan. ──
+  /** wa_conversaciones.origen_anuncio_id: anuncio click-to-WhatsApp por el que entró. */
+  origen_anuncio_id?: string | null;
+  /** Primer mensaje saliente no fallido desde `desdeISO` (en una conversación nueva: la primera respuesta del bot). */
+  primera_respuesta_en?: string | null;
+  /** Nombres de las plantillas salientes no fallidas desde `desdeISO`. */
+  plantillas_enviadas?: string[];
+  /** Consentimiento de marketing vigente (la fila más reciente de wa_consentimientos), o null si no hay. */
+  consentimiento_marketing?: "si" | "no" | "baja" | null;
+  /** wa_clientes.wa_user_id (BSUID), para escribirle si no hay teléfono. */
+  wa_user_id?: string | null;
+  /** Handle del producto del anuncio (config_wa.anuncios_producto), si se sabe. */
+  handle_anuncio?: string | null;
 };
 
 export type Decision =
@@ -119,6 +200,12 @@ export function seguimientosVigentes(perfil: unknown, ahora: Date, cfg: CfgSegui
   return n;
 }
 
+/** YYYY-MM-DD en Asunción. */
+function fechaAsuncion(d: Date): string {
+  const p = partesAsuncion(d);
+  return `${p.anio}-${String(p.mes).padStart(2, "0")}-${String(p.dia).padStart(2, "0")}`;
+}
+
 export function decidirSeguimiento(c: Candidato, cfg: CfgSeguimiento, ahora: Date): Decision {
   const nada = (motivo: string): Decision => ({ tipo: "nada", motivo });
   if (c.estado !== "ia") return nada("no_esta_en_ia");
@@ -128,6 +215,8 @@ export function decidirSeguimiento(c: Candidato, cfg: CfgSeguimiento, ahora: Dat
   if (hEntrada >= cfg.ventana_max_h) return nada("ventana_cerrada");
   const perfil = normalizarPerfil(c.perfil);
   if (perfil.rechazo) return nada("rechazo");
+  // 10-10: pidió que le escribamos otro día (recontactar_el a futuro) → los recontactos esperan esa fecha.
+  if (perfil.recontactar_el && perfil.recontactar_el > fechaAsuncion(ahora)) return nada("espera_fecha_pedida");
   if (c.baja_marketing) return nada("baja_marketing");
   if (c.pedido_reciente) return nada("pedido_reciente");
   if (!c.ultimo_mensaje || c.ultimo_mensaje.direccion !== "out") return nada("cliente_hablo_ultimo");
@@ -142,9 +231,11 @@ export function decidirSeguimiento(c: Candidato, cfg: CfgSeguimiento, ahora: Dat
     if (hEntrada >= cfg.ventana_1_h) return nada("ventana_1_cerrada");
     return { tipo: "seguimiento", numero: 1, previo };
   }
-  if (hEntrada < cfg.horas_2) return nada("esperando");
+  // 12-10: horas_2 desde la entrada (o antes, si esperar lo deja fuera de la ventana o del horario).
   const ultimoSeg = perfil.ultimo_seguimiento_en ? Date.parse(perfil.ultimo_seguimiento_en) : NaN;
-  if (Number.isFinite(ultimoSeg) && (ahora.getTime() - ultimoSeg) / H < cfg.separacion_min_h) return nada("separacion");
+  const objetivo = momentoRecontacto2(entrada, Number.isFinite(ultimoSeg) ? ultimoSeg : null, cfg);
+  if (objetivo == null) return nada("sin_momento_valido");
+  if (ahora.getTime() < objetivo) return nada("esperando");
   return { tipo: "seguimiento", numero: n + 1, previo };
 }
 
@@ -161,11 +252,23 @@ export type DepsSeguimiento = {
   marcar(conversacionId: string, seguimientos: number, enISO: string | null): Promise<void>;
   /** Turno de seguimiento del vendedor (procesarTurno con origen "seguimiento"). */
   turno(entrada: EntradaTurno): Promise<ResultadoTurno>;
-  avisar(textoHtml: string): Promise<unknown>;
+  avisar(textoHtml: string, botones?: BotonTelegram[][]): Promise<unknown>;
+  /**
+   * Guarda (enISO) o borra (null) perfil_vendedor.aviso_intencion_en sin pisar el resto del perfil.
+   * Opcional: sin esta función no corre el aviso de intención de compra.
+   */
+  marcarAvisoIntencion?(conversacionId: string, enISO: string | null): Promise<void>;
+  /**
+   * Conversaciones en 'ia' con perfil_vendedor.recontactar_el <= hoyYMD (Asunción) y sin recontacto_cobro_en.
+   * Opcional (junto con marcarCobro): sin estas funciones no corre el recontacto el día que cobra.
+   */
+  candidatosCobro?(hoyYMD: string, cfg: CfgSeguimiento): Promise<Candidato[]>;
+  /** Guarda (enISO) o borra (null) perfil_vendedor.recontacto_cobro_en sin pisar el resto del perfil. */
+  marcarCobro?(conversacionId: string, enISO: string | null): Promise<void>;
   ahora(): Date;
   /** Turnos en paralelo (default 4). */
   paralelo?: number;
-};
+} & Partial<DepsToque3>;
 
 export type ResumenSeguimiento = {
   accion: "inactivo" | "fuera_de_horario" | "tope_gasto" | "corrido";
@@ -176,6 +279,12 @@ export type ResumenSeguimiento = {
   fallas?: number;
   motivos?: Record<string, number>;
   resultados?: Array<{ conversacion_id: string; numero: number; accion: string; motivo?: string }>;
+  /** Aviso a Enrique de clientes listos para comprar que no mandaron los datos (corre aparte de los recontactos). */
+  avisos_intencion?: ResumenAvisoIntencion;
+  /** Recontacto el día que el cliente dijo que cobra (corre después del aviso de intención). */
+  recontactos_cobro?: ResumenRecontactoCobro;
+  /** 12-10: toque 3, plantilla de oferta dentro de las 72 h gratis del anuncio (toque3.ts). */
+  toque3?: ResumenToque3;
 };
 
 /** Resultado del turno que cuenta como falla (se avisa a Enrique, una vez por corrida). */
@@ -191,9 +300,39 @@ async function enLotes<T>(items: T[], n: number, f: (x: T) => Promise<void>): Pr
   await Promise.all(trabajadores);
 }
 
+/**
+ * Recontactos + aviso de intención de compra + recontacto el día que cobra + toque 3. Los últimos corren DESPUÉS
+ * (así leen el perfil ya guardado por los turnos) y una falla de uno no frena a los demás.
+ */
 export async function correrSeguimientos(deps: DepsSeguimiento): Promise<ResumenSeguimiento> {
+  const crudo = await deps.config();
+  const r: ResumenSeguimiento = await correrRecontactos(deps, crudo);
+  const aparte = async <T>(nombre: string, f: () => Promise<T>, error: T): Promise<T> => {
+    try {
+      return await f();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`seguimiento-chat: ${nombre} falló:`, msg);
+      await deps.avisar(`<b>${nombre}: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`).catch(() => {});
+      return error;
+    }
+  };
+  if (deps.marcarAvisoIntencion) {
+    r.avisos_intencion = await aparte<ResumenAvisoIntencion>("Aviso de intención de compra", () => correrAvisosIntencion(deps, crudo), { accion: "error" });
+  }
+  if (deps.candidatosCobro && deps.marcarCobro) {
+    r.recontactos_cobro = await aparte<ResumenRecontactoCobro>("Recontacto el día que cobra", () => correrRecontactosCobro(deps, crudo), { accion: "error" });
+  }
+  // 12-10: toque 3 (plantilla). No gasta IA: no mira el tope de gasto; se apaga con toque3.activo o con activo.
+  if (deps.candidatosToque3 && deps.marcarToque3 && deps.enviarPlantilla) {
+    r.toque3 = await aparte<ResumenToque3>("Toque 3 (plantilla de oferta)", () => correrToque3(deps, crudo, leerCfgSeguimiento(crudo)), { accion: "error" });
+  }
+  return r;
+}
+
+async function correrRecontactos(deps: DepsSeguimiento, crudo: unknown): Promise<ResumenSeguimiento> {
   const ahora = deps.ahora();
-  const cfg = leerCfgSeguimiento(await deps.config());
+  const cfg = leerCfgSeguimiento(crudo);
   if (!cfg.activo || cfg.max <= 0 || cfg.lote_max <= 0) return { accion: "inactivo" };
   if (!dentroHorario(ahora, cfg)) return { accion: "fuera_de_horario" };
   if (await deps.topeGastoSuperado(ahora)) return { accion: "tope_gasto" };
@@ -264,4 +403,363 @@ export async function correrSeguimientos(deps: DepsSeguimiento): Promise<Resumen
     motivos,
     resultados,
   };
+}
+
+// ---------- aviso de intención de compra (08-10-2026) ----------
+// El 07-10 hubo 6 chats que dijeron "3 unidades", "voy a querer una tira", "te mando todo enseguida" y no
+// terminaron en pedido. Cuando un cliente quedó listo para comprar y se calla ≥ aviso_intencion_min (15; 30 hasta el
+// 12-10, plan de conversión: 27 interesados se perdieron al pedirles los datos; el cron corre cada 10 min) minutos
+// sin pedido, se le avisa a Enrique por Telegram UNA vez (perfil_vendedor.aviso_intencion_en; no se repite en
+// aviso_intencion_repetir_h = 24 h). Convive con los recontactos (no los reemplaza).
+// Horario: puede salir a cualquier hora salvo 0-7 de Asunción; lo que se junte de noche sale a las 7 en un solo
+// mensaje. No gasta IA: no mira el tope de gasto ni `activo` de los recontactos (se apaga con aviso_intencion_min: 0).
+
+export type CfgAvisoIntencion = {
+  /** Minutos sin mensaje del cliente para avisar. 0 = apagado. */
+  aviso_intencion_min: number;
+  /** Hora de Asunción desde la que se avisa (antes se junta). */
+  aviso_intencion_desde: number;
+  /** Horas en que no se repite el aviso para la misma conversación. */
+  aviso_intencion_repetir_h: number;
+  /** Solo chats cuya última entrada fue hace menos de esto (dentro de la ventana de 24 h de WhatsApp). */
+  aviso_intencion_max_h: number;
+};
+
+export const CFG_AVISO_INTENCION_DEFAULT: CfgAvisoIntencion = {
+  aviso_intencion_min: 15,
+  aviso_intencion_desde: 7,
+  aviso_intencion_repetir_h: 24,
+  aviso_intencion_max_h: 23.5,
+};
+
+/** Lee las claves aviso_intencion_* del mismo config_wa.vendedor_seguimiento (lo que falte toma el default). */
+export function leerCfgAvisoIntencion(v: unknown): CfgAvisoIntencion {
+  const c: CfgAvisoIntencion = { ...CFG_AVISO_INTENCION_DEFAULT };
+  if (!esObj(v)) return c;
+  for (const k of Object.keys(CFG_AVISO_INTENCION_DEFAULT) as (keyof CfgAvisoIntencion)[]) {
+    const x = v[k];
+    if (typeof x === "number" && Number.isFinite(x) && x >= 0) c[k] = x;
+  }
+  return c;
+}
+
+function norm(s: string): string {
+  return String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+const NUM = "(?:\\d{1,2}|un[ao]?|dos|tres|cuatro|cinco|seis)";
+/** Señales de compra en un texto del cliente (normalizado: minúsculas, sin tildes). */
+const RE_SENAL: RegExp[] = [
+  new RegExp(`\\b${NUM} ?(?:unidades?|u|tiras?|parches?|bolsas?|bolsitas?|packs?|paquetes?|cajas?|cajitas?|kits?|de esas?|de esos?)\\b`, "u"),
+  /(?:^|\s)x ?\d\b/u,
+  /\b(?:el|la|los|las) de (?:\d|dos|tres)\b/u,
+  /\b(?:quiero|quisiera|queria|voy a querer|vamos a querer|me llevo|voy a llevar|lo llevo|la llevo|lo compro|la compro|quiero comprar)\b/u,
+  // 10-10: "dale" solo cuenta como respuesta suelta ("dale", "si dale", "dale armalo"), no "dale te aviso".
+  /^(?:si+ |ok )?dale(?: si+| nomas| armalo| mandalo| mandame| porfa| por favor)?[.! ]*$/u,
+  /\b(?:mandame|mandamelo|mandamela|enviame|envialo|enviamelo|anotame|reservame|haceme el pedido)\b/u,
+  /\bte (?:paso|mando|envio) (?:los |mis )?(?:datos|direccion|ubicacion|todo)\b/u,
+  /\bkatu\b/u,
+];
+/** "No quiero", "todavía no" anulan la señal del mismo texto. */
+const RE_NEGACION = /\b(?:no (?:lo |la )?(?:quiero|voy a querer|me llevo)|todavia no|ahora no|por ahora no|te aviso|despues|mas adelante|la semana que viene|el mes que viene|lo voy a pensar|lo pienso|cuando cobre|otro dia)\b/u;
+/** "Quiero saber / info / consultar" es una pregunta, no una compra: se saca antes de buscar señales. */
+// 10-10: también "quiero MÁS información" (el texto automático de los anuncios) y "me gustaría conseguir más información".
+const RE_CONSULTA = /\b(?:quiero|quisiera|queria|me gustaria|necesito)(?: conseguir| tener| recibir| saber)? (?:(?:mas|un poco mas de|un poco de|algo de) )?(?:saber|info|informacion|consultar|preguntar|ver|averiguar|detalles|datos)\b/gu;
+
+export function tieneSenalCompra(texto: string): boolean {
+  const t = norm(texto);
+  if (!t || RE_NEGACION.test(t)) return false;
+  const limpio = t.replace(RE_CONSULTA, " ");
+  return RE_SENAL.some((r) => r.test(limpio));
+}
+
+export type DecisionAviso =
+  | { tipo: "avisar"; minutos: number; producto: string | null; cantidad: number | null; texto_senal: string }
+  | { tipo: "nada"; motivo: string };
+
+const MIN = 60_000;
+
+/** aviso_intencion_en crudo del perfil (normalizarPerfil lo descarta: es una marca de esta función). */
+export function avisoIntencionEn(perfil: unknown): string | null {
+  const v = esObj(perfil) ? perfil.aviso_intencion_en : null;
+  return typeof v === "string" && Number.isFinite(Date.parse(v)) ? v : null;
+}
+
+export function decidirAvisoIntencion(c: Candidato, cfg: CfgAvisoIntencion, ahora: Date): DecisionAviso {
+  const nada = (motivo: string): DecisionAviso => ({ tipo: "nada", motivo });
+  if (c.estado !== "ia") return nada("no_esta_en_ia");
+  const entrada = c.ultima_entrada_en ? Date.parse(c.ultima_entrada_en) : NaN;
+  if (!Number.isFinite(entrada)) return nada("sin_entrada_del_cliente");
+  const minutos = Math.floor((ahora.getTime() - entrada) / MIN);
+  if (minutos < cfg.aviso_intencion_min) return nada("esperando");
+  if (minutos >= cfg.aviso_intencion_max_h * 60) return nada("ventana_cerrada");
+  const perfil = normalizarPerfil(c.perfil);
+  if (perfil.rechazo) return nada("rechazo");
+  if (c.ultima_respuesta_derivada) return nada("derivado");
+  if (!perfil.producto && !perfil.cantidad) return nada("sin_producto_ni_cantidad");
+  const previo = avisoIntencionEn(c.perfil);
+  if (previo && ahora.getTime() - Date.parse(previo) < cfg.aviso_intencion_repetir_h * 60 * MIN) return nada("ya_avisado");
+  const conSenal = (c.entradas_recientes ?? []).filter((e) => tieneSenalCompra(e.texto));
+  if (!conSenal.length) return nada("sin_senal_de_compra");
+  // Un pedido creado después de la primera señal de compra (o hasta 5 min antes) = ya compró.
+  const primera = Math.min(...conSenal.map((e) => Date.parse(e.creado_en)).filter(Number.isFinite));
+  const pedido = c.ultimo_pedido_en ? Date.parse(c.ultimo_pedido_en) : NaN;
+  if (Number.isFinite(pedido) && (!Number.isFinite(primera) || pedido >= primera - 5 * MIN)) return nada("ya_hizo_pedido");
+  return {
+    tipo: "avisar",
+    minutos,
+    producto: perfil.producto ?? null,
+    cantidad: perfil.cantidad ?? null,
+    texto_senal: conSenal[0].texto,
+  };
+}
+
+/** Una línea por cliente: "🛒 <nombre> quiere comprar (<producto> x<cantidad>) pero no mandó los datos hace <N> min." */
+export function textoAvisoIntencion(c: Candidato, d: Extract<DecisionAviso, { tipo: "avisar" }>): string {
+  const nombre = c.nombre?.trim() || c.telefono || "Un cliente";
+  const que = [d.producto ?? "producto sin definir", d.cantidad ? `x${d.cantidad}` : null].filter(Boolean).join(" ");
+  const l = [`🛒 <b>${escaparHtml(nombre)}</b> quiere comprar (${escaparHtml(que)}) pero no mandó los datos hace ${d.minutos} min.`];
+  const enlace = enlaceWaMe(c.telefono);
+  if (enlace) l.push(`Teléfono: ${escaparHtml(c.telefono)} · <a href="${escaparAtributo(enlace)}">escribirle</a>`);
+  else l.push("Sin teléfono: respondele desde la bandeja de Voltra OS.");
+  l.push(`Dijo: «${escaparHtml(d.texto_senal.replace(/\s+/g, " ").slice(0, 120))}»`);
+  return l.join("\n");
+}
+
+export type ResumenAvisoIntencion = {
+  accion: "inactivo" | "de_noche" | "corrido" | "error";
+  candidatos?: number;
+  avisados?: number;
+  fallas?: number;
+  motivos?: Record<string, number>;
+};
+
+/** Máximo de clientes por mensaje de Telegram (el resto sale en mensajes siguientes). */
+const POR_MENSAJE = 10;
+
+export async function correrAvisosIntencion(deps: DepsSeguimiento, crudo: unknown): Promise<ResumenAvisoIntencion> {
+  const marcar = deps.marcarAvisoIntencion;
+  const cfg = leerCfgAvisoIntencion(crudo);
+  if (!marcar || cfg.aviso_intencion_min <= 0) return { accion: "inactivo" };
+  const ahora = deps.ahora();
+  if (partesAsuncion(ahora).hora < cfg.aviso_intencion_desde) return { accion: "de_noche" };
+  const cfgSeg = leerCfgSeguimiento(crudo);
+  const desde = new Date(ahora.getTime() - cfg.aviso_intencion_max_h * H).toISOString();
+  const hasta = new Date(ahora.getTime() - cfg.aviso_intencion_min * MIN).toISOString();
+  const candidatos = await deps.candidatos(desde, hasta, cfgSeg);
+
+  const motivos: Record<string, number> = {};
+  const elegidos: Array<{ c: Candidato; d: Extract<DecisionAviso, { tipo: "avisar" }> }> = [];
+  for (const c of candidatos) {
+    const d = decidirAvisoIntencion(c, cfg, ahora);
+    if (d.tipo === "nada") motivos[d.motivo] = (motivos[d.motivo] ?? 0) + 1;
+    else elegidos.push({ c, d });
+  }
+
+  // Se marca ANTES de avisar (si dos corridas se pisan, la segunda ya lo ve avisado); si Telegram falla, se desmarca.
+  const enISO = ahora.toISOString();
+  const marcados: typeof elegidos = [];
+  let fallas = 0;
+  for (const e of elegidos) {
+    try {
+      await marcar(e.c.conversacion_id, enISO);
+      marcados.push(e);
+    } catch (err) {
+      fallas++;
+      console.error("seguimiento-chat: no se pudo marcar aviso_intencion_en", e.c.conversacion_id, err);
+    }
+  }
+
+  let avisados = 0;
+  for (let i = 0; i < marcados.length; i += POR_MENSAJE) {
+    const grupo = marcados.slice(i, i + POR_MENSAJE);
+    const cuerpo = grupo.map(({ c, d }) => textoAvisoIntencion(c, d)).join("\n\n");
+    // No hay pedido (por definición), así que "Le escribo yo" (escribo:<order_id>) no aplica: botón wa.me por cliente.
+    const botones: BotonTelegram[][] = grupo.flatMap(({ c }) => {
+      const url = enlaceWaMe(c.telefono);
+      const quien = (c.nombre?.trim() || c.telefono || "cliente").slice(0, 30);
+      return url ? [[{ texto: `Escribirle a ${quien}`, url }]] : [];
+    });
+    let ok = false;
+    try {
+      const r = await deps.avisar(recortar(cuerpo), botones.length ? botones : undefined) as { ok?: boolean } | undefined;
+      ok = r?.ok !== false;
+    } catch (err) {
+      console.error("seguimiento-chat: Telegram falló en el aviso de intención:", err);
+    }
+    if (ok) {
+      avisados += grupo.length;
+      continue;
+    }
+    fallas += grupo.length;
+    for (const { c } of grupo) {
+      const previo = avisoIntencionEn(c.perfil);
+      await marcar(c.conversacion_id, previo).catch(() => {});
+    }
+  }
+
+  return { accion: "corrido", candidatos: candidatos.length, avisados, fallas, motivos };
+}
+
+// ---------- recontacto el día que cobra (08-10-2026) ----------
+// El cliente dice "todavía no cobré, otro día te aviso": el vendedor le pregunta qué día cobra y lo guarda en
+// perfil_vendedor.recontactar_el (YYYY-MM-DD de Asunción, registrar_perfil). Ese día (o después, si el cron no
+// corrió) se lo recontacta UNA vez (marca perfil_vendedor.recontacto_cobro_en; se borra sola si cambia la fecha):
+//   · Si su última entrada fue hace < ventana_max_h (23,5 h): escribe el bot (turno "[seguimiento cobro]", gratis
+//     dentro de la ventana de 24 h de WhatsApp).
+//   · Si no (o si el gasto de IA del mes llegó al tope): aviso a Enrique por Telegram para que le escriba él (fuera
+//     de la ventana la API no deja mandar texto libre).
+// Mismo horario que los recontactos [horario_desde, horario_hasta) y se apaga con `activo: false`.
+// Nunca si: la conversación no está en 'ia', rechazo, baja de marketing o pedido reciente del cliente.
+
+/** Texto exacto de la entrada del turno de recontacto por cobro (contrato con el prompt del vendedor). */
+export const TEXTO_SEGUIMIENTO_COBRO = "[seguimiento cobro]";
+
+export type DecisionCobro =
+  | { tipo: "turno" }
+  | { tipo: "avisar" }
+  | { tipo: "nada"; motivo: string };
+
+export function decidirRecontactoCobro(c: Candidato, cfg: CfgSeguimiento, ahora: Date): DecisionCobro {
+  const nada = (motivo: string): DecisionCobro => ({ tipo: "nada", motivo });
+  if (!dentroHorario(ahora, cfg)) return nada("fuera_de_horario");
+  if (c.estado !== "ia") return nada("no_esta_en_ia");
+  const perfil = normalizarPerfil(c.perfil);
+  if (!perfil.recontactar_el) return nada("sin_fecha");
+  if (perfil.recontactar_el > partesAsuncion(ahora).diaISO) return nada("todavia_no");
+  if (perfil.recontacto_cobro_en) return nada("ya_recontactado");
+  if (perfil.rechazo) return nada("rechazo");
+  if (c.baja_marketing) return nada("baja_marketing");
+  if (c.pedido_reciente) return nada("pedido_reciente");
+  const entrada = c.ultima_entrada_en ? Date.parse(c.ultima_entrada_en) : NaN;
+  if (Number.isFinite(entrada) && (ahora.getTime() - entrada) / H < cfg.ventana_max_h) return { tipo: "turno" };
+  return { tipo: "avisar" };
+}
+
+/** Un bloque por cliente para Telegram. `porTope`: el bot podía escribir pero el gasto de IA del mes llegó al tope. */
+export function textoAvisoCobro(c: Candidato, porTope = false): string {
+  const perfil = normalizarPerfil(c.perfil);
+  const nombre = c.nombre?.trim() || c.telefono || "Un cliente";
+  const que = [perfil.producto ?? "producto sin definir", perfil.cantidad ? `x${perfil.cantidad}` : null].filter(Boolean).join(" ");
+  const por = porTope
+    ? "El bot no le puede escribir (el gasto de IA del mes llegó al tope): escribile vos."
+    : "Ya pasaron más de 24 h desde su último mensaje: escribile vos.";
+  const l = [`💰 <b>${escaparHtml(nombre)}</b> dijo que hoy cobraba (${escaparHtml(que)}). ${por}`];
+  const enlace = enlaceWaMe(c.telefono);
+  if (enlace) l.push(`Teléfono: ${escaparHtml(c.telefono)} · <a href="${escaparAtributo(enlace)}">escribirle</a>`);
+  else l.push("Sin teléfono: respondele desde la bandeja de Voltra OS.");
+  return l.join("\n");
+}
+
+export type ResumenRecontactoCobro = {
+  accion: "inactivo" | "fuera_de_horario" | "corrido" | "error";
+  candidatos?: number;
+  /** Turnos del bot que salieron (respondido / terminal / derivado). */
+  enviados?: number;
+  omitidos?: number;
+  /** Clientes avisados a Enrique por Telegram. */
+  avisados?: number;
+  fallas?: number;
+  motivos?: Record<string, number>;
+};
+
+export async function correrRecontactosCobro(deps: DepsSeguimiento, crudo: unknown): Promise<ResumenRecontactoCobro> {
+  const buscar = deps.candidatosCobro, marcar = deps.marcarCobro;
+  const cfg = leerCfgSeguimiento(crudo);
+  if (!buscar || !marcar || !cfg.activo) return { accion: "inactivo" };
+  const ahora = deps.ahora();
+  if (!dentroHorario(ahora, cfg)) return { accion: "fuera_de_horario" };
+  const candidatos = await buscar(partesAsuncion(ahora).diaISO, cfg);
+
+  const motivos: Record<string, number> = {};
+  let turnos: Candidato[] = [];
+  let avisos: Array<{ c: Candidato; porTope: boolean }> = [];
+  for (const c of candidatos) {
+    const d = decidirRecontactoCobro(c, cfg, ahora);
+    if (d.tipo === "nada") motivos[d.motivo] = (motivos[d.motivo] ?? 0) + 1;
+    else if (d.tipo === "turno") turnos.push(c);
+    else avisos.push({ c, porTope: false });
+  }
+  // Tope de gasto de IA: el bot no escribe; se le pasa a Enrique.
+  if (turnos.length && await deps.topeGastoSuperado(ahora)) {
+    avisos = [...avisos, ...turnos.map((c) => ({ c, porTope: true }))];
+    turnos = [];
+  }
+  if (turnos.length > cfg.lote_max) {
+    motivos.lote_lleno = turnos.length - cfg.lote_max;
+    turnos = turnos.slice(0, cfg.lote_max);
+  }
+
+  const fallas: string[] = [];
+  let enviados = 0, omitidos = 0;
+  await enLotes(turnos, deps.paralelo ?? 4, async (c) => {
+    const id = c.conversacion_id;
+    const enISO = deps.ahora().toISOString();
+    try {
+      // Se marca ANTES del turno: si dos corridas se pisan, la segunda ya lo ve recontactado.
+      await marcar(id, enISO);
+    } catch (e) {
+      fallas.push(`${id}: no se pudo marcar (${e instanceof Error ? e.message : e})`);
+      return;
+    }
+    let r: ResultadoTurno;
+    try {
+      r = await deps.turno({ conversacion_id: id, wa_message_id: `seguimiento:cobro:${id}:${enISO}`, texto: TEXTO_SEGUIMIENTO_COBRO, origen: "seguimiento" });
+    } catch (e) {
+      r = { accion: "error_envio", motivo: e instanceof Error ? e.message : String(e) };
+    }
+    if (r.accion === "respondido" || r.accion === "terminal" || r.accion === "derivado") enviados++;
+    else omitidos++;
+    if (esFalla(r)) fallas.push(`${id}: recontacto por cobro → ${r.accion}${r.motivo ? ` (${r.motivo})` : ""}`);
+    // No salió nada y no se gastó: se desmarca (se intenta en la próxima corrida).
+    if (r.accion === "omitido" && !esFalla(r) && !(Number(r.costo_usd) > 0)) {
+      await marcar(id, null).catch((e) => fallas.push(`${id}: no se pudo desmarcar (${e instanceof Error ? e.message : e})`));
+    }
+  });
+
+  // Avisos a Enrique: se marca ANTES de mandar; si Telegram falla, se desmarca.
+  const enISO = ahora.toISOString();
+  const marcados: typeof avisos = [];
+  for (const a of avisos) {
+    try {
+      await marcar(a.c.conversacion_id, enISO);
+      marcados.push(a);
+    } catch (e) {
+      fallas.push(`${a.c.conversacion_id}: no se pudo marcar (${e instanceof Error ? e.message : e})`);
+    }
+  }
+  let avisados = 0;
+  for (let i = 0; i < marcados.length; i += POR_MENSAJE) {
+    const grupo = marcados.slice(i, i + POR_MENSAJE);
+    const cuerpo = grupo.map(({ c, porTope }) => textoAvisoCobro(c, porTope)).join("\n\n");
+    const botones: BotonTelegram[][] = grupo.flatMap(({ c }) => {
+      const url = enlaceWaMe(c.telefono);
+      const quien = (c.nombre?.trim() || c.telefono || "cliente").slice(0, 30);
+      return url ? [[{ texto: `Escribirle a ${quien}`, url }]] : [];
+    });
+    let ok = false;
+    try {
+      const r = await deps.avisar(recortar(cuerpo), botones.length ? botones : undefined) as { ok?: boolean } | undefined;
+      ok = r?.ok !== false;
+    } catch (err) {
+      console.error("seguimiento-chat: Telegram falló en el recontacto por cobro:", err);
+    }
+    if (ok) {
+      avisados += grupo.length;
+      continue;
+    }
+    for (const { c } of grupo) {
+      fallas.push(`${c.conversacion_id}: Telegram falló (sale en la próxima corrida)`);
+      await marcar(c.conversacion_id, null).catch(() => {});
+    }
+  }
+
+  if (fallas.length) {
+    const lista = fallas.slice(0, 10).map((f) => `• ${escaparHtml(f)}`).join("\n");
+    await deps.avisar(
+      `<b>Recontacto el día que cobra: ${fallas.length} con problemas</b>\n${lista}${fallas.length > 10 ? `\n… y ${fallas.length - 10} más` : ""}`,
+    ).catch((e) => console.error("seguimiento-chat: no se pudo avisar:", e));
+  }
+
+  return { accion: "corrido", candidatos: candidatos.length, enviados, omitidos, avisados, fallas: fallas.length, motivos };
 }

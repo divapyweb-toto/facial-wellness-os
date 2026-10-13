@@ -6,7 +6,8 @@
 import { db, guardarEventoCrudo } from "../_shared/db.ts";
 import { normalizarTelefonoPY } from "../_shared/telefono.ts";
 import { agregarTags, quitarTags } from "../_shared/shopify.ts";
-import { avisar } from "../_shared/telegram.ts";
+import { avisar, avisarConArchivo } from "../_shared/telegram.ts";
+import { enviarInteractivo } from "../_shared/wa_interactivos.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { descargarMedia, enviarBotones, enviarTexto, marcarLeidoYEscribiendo, verificarFirmaMeta } from "../_shared/wa.ts";
 import { transcribirAudio } from "../_shared/transcripcion.ts";
@@ -87,12 +88,12 @@ export const depsReales: Deps = {
   },
 
   async conversacionActiva(clienteId, origenAnuncioId) {
-    const { data, error } = await db().from("wa_conversaciones").select("id,estado").eq("cliente_id", clienteId)
+    const { data, error } = await db().from("wa_conversaciones").select("id,estado,origen_anuncio_id").eq("cliente_id", clienteId)
       .neq("estado", "cerrada").order("creado_en", { ascending: false }).limit(1).maybeSingle();
     falla("buscar conversación", error);
     if (data) return data;
     const { data: nueva, error: e2 } = await db().from("wa_conversaciones")
-      .insert({ cliente_id: clienteId, estado: "ia", origen_anuncio_id: origenAnuncioId }).select("id,estado").single();
+      .insert({ cliente_id: clienteId, estado: "ia", origen_anuncio_id: origenAnuncioId }).select("id,estado,origen_anuncio_id").single();
     falla("crear conversación", e2);
     return nueva!;
   },
@@ -226,6 +227,31 @@ export const depsReales: Deps = {
   // ---- integración olas 3-4 ----
   registrarBaja: (clienteId, origen) => registrarBaja(clienteId, origen),
 
+  async bloquearSeguimientos(conversacionId) {
+    const { error } = await db().rpc("vendedor_marcar_seguimiento", { p_conversacion: conversacionId, p_seguimientos: 2, p_en: new Date().toISOString() });
+    if (error) throw new Error(error.message);
+  },
+
+  async contextoRecompraFw(telefono) {
+    if (!telefono) return null;
+    const { data } = await db().from("config_wa").select("valor").eq("clave", "recompra_fw_contexto").maybeSingle();
+    const v = (data?.valor ?? {}) as Record<string, { producto?: string; dias?: number; enviado_en?: string }>;
+    const c = v[telefono.replace(/^\+/, "")] ?? v[telefono];
+    if (!c?.producto) return null;
+    // Solo durante 30 días desde el envío de la recompra.
+    if (c.enviado_en && Date.now() - Date.parse(c.enviado_en) > 30 * 86_400_000) return null;
+    const extra = c.enviado_en ? Math.floor((Date.now() - Date.parse(c.enviado_en)) / 86_400_000) : 0;
+    // 08-10: datos de su última entrega de Facial Wellness (ventas), para armarle el resumen sin pedirle nada.
+    const local = "0" + telefono.replace(/\D/g, "").replace(/^595/, "").replace(/^0/, "");
+    const { data: v2 } = await db().from("ventas").select("cliente_nombre,ciudad,cliente_direccion")
+      .eq("cliente_telefono", local).eq("estado", "entregado").is("deleted_at", null)
+      .order("fecha", { ascending: false }).limit(1).maybeSingle();
+    const entrega = v2?.cliente_nombre && v2?.ciudad && v2?.cliente_direccion
+      ? { nombre: String(v2.cliente_nombre), ciudad: String(v2.ciudad), direccion: String(v2.cliente_direccion) }
+      : undefined;
+    return { producto: c.producto, dias: Number(c.dias ?? 0) + extra, ...(entrega ? { entrega } : {}) };
+  },
+
   async ofertaMarketing(clienteId, orderId) {
     let q = db().from("envios_programados").select("plantilla,variables").eq("cliente_id", clienteId)
       .eq("categoria", "marketing").eq("estado", "enviado").like("plantilla", "voltra_mk_%");
@@ -282,6 +308,75 @@ export const depsReales: Deps = {
   // Pago anticipado: comprobante (imagen o PDF) a Storage wa-media/comprobantes/...
   copiarMedia: (mediaId, ruta) => copiarAStorage(mediaId, ruta),
   copiarMediaChat: (mediaId, ruta) => copiarAStorage(mediaId, ruta),
+
+  // 08-10: perfil del vendedor (marca del anuncio una sola vez). Sin la columna (migración 0011) tira error y
+  // procesar.ts deja la marca solo en el mensaje con referral.
+  async perfilConversacion(conversacionId) {
+    const { data, error } = await db().from("wa_conversaciones").select("perfil_vendedor").eq("id", conversacionId).maybeSingle();
+    falla("perfil de la conversación", error);
+    const p = data?.perfil_vendedor;
+    return p && typeof p === "object" && !Array.isArray(p) ? p as { producto?: unknown } : null;
+  },
+
+  async ultimoTextoNuestro(conversacionId) {
+    const { data, error } = await db().from("wa_mensajes").select("texto").eq("conversacion_id", conversacionId)
+      .eq("direccion", "out").order("creado_en", { ascending: false }).limit(1).maybeSingle();
+    falla("último mensaje nuestro", error);
+    return (data?.texto as string | null) ?? null;
+  },
+
+  async marcarPerfil(conversacionId, clave, valor) {
+    const sb = db();
+    const { data, error } = await sb.from("wa_conversaciones").select("perfil_vendedor").eq("id", conversacionId).maybeSingle();
+    falla("leer perfil", error);
+    const p = data?.perfil_vendedor && typeof data.perfil_vendedor === "object" && !Array.isArray(data.perfil_vendedor)
+      ? { ...(data.perfil_vendedor as Record<string, unknown>) } : {};
+    if (valor === null) delete p[clave];
+    else p[clave] = valor;
+    const r = await sb.from("wa_conversaciones").update({ perfil_vendedor: p }).eq("id", conversacionId);
+    falla("marcar perfil", r.error);
+  },
+
+  // 12-10: permiso para ofertas después de la confirmación (botones de _shared/wa_interactivos.ts).
+  enviarInteractivo: (to, interactivo, opts) => enviarInteractivo(to, interactivo, opts),
+
+  // 12-10: ¿ya se le mandaron los botones cons_si:<cliente_id> alguna vez? (vendedor, "Todo bien" o una confirmación)
+  async permisoOfertasPedido(clienteId) {
+    const { count, error } = await db().from("wa_mensajes").select("id", { count: "exact", head: true })
+      .eq("cliente_id", clienteId).eq("direccion", "out").eq("tipo", "interactive").neq("estado", "fallido")
+      .like("contenido->>interactive", `%cons_si:${clienteId}%`);
+    falla("permiso de ofertas ya pedido", error);
+    return (count ?? 0) > 0;
+  },
+
+  // 12-10: comprobante ya recibido para el pedido (marca que deja aplicarComprobantePago en el mensaje entrante).
+  async comprobanteRecibido(orderId) {
+    const { count, error } = await db().from("wa_mensajes").select("id", { count: "exact", head: true })
+      .eq("direccion", "in").eq("contenido->>comprobante_pago_anticipado", orderId);
+    falla("comprobantes previos", error);
+    return (count ?? 0) > 0;
+  },
+
+  // 12-10: el comprobante va a Telegram como foto o documento (copia de Storage o, si no hay, de Meta).
+  async avisarConArchivo(texto, botones, a) {
+    let bytes: Uint8Array | null = null;
+    let mime = a.mime;
+    if (a.ruta) {
+      const { data, error } = await db().storage.from("wa-media").download(a.ruta);
+      if (!error && data) {
+        bytes = new Uint8Array(await data.arrayBuffer());
+        mime = data.type || mime;
+      }
+    }
+    if (!bytes) {
+      const m = await descargarMedia(a.mediaId);
+      if (!m.ok) return { ok: false, error: m.error };
+      bytes = m.bytes;
+      mime = m.mime;
+    }
+    const r = await avisarConArchivo(escaparHtml(texto), { bytes, mime, nombre: a.nombre }, botones);
+    return r.ok ? { ok: true } : { ok: false, error: r.error };
+  },
 
   async clienteDeMensaje(waMessageId) {
     const { data, error } = await db().from("wa_mensajes").select("cliente_id").eq("wa_message_id", waMessageId).maybeSingle();

@@ -499,12 +499,12 @@ Deno.test("ritmo: respuesta larga → 2 burbujas (la pregunta sola), con 'escrib
   assert(e.leidos.length >= 3, "marca leído y 'escribiendo…' antes de cada burbuja");
 });
 
-Deno.test("ritmo: 3 líneas cortas del modelo → 3 burbujas, cada una con su pausa y 'escribiendo…'", async () => {
+Deno.test("ritmo: 3 líneas cortas del modelo → 2 burbujas (la tercera va con la segunda), con su pausa y 'escribiendo…'", async () => {
   const t = "Dale Ana.\nLas tiras abren la nariz.\n¿Es para vos?";
   const e = escenario(() => texto(t), { azar: 0.5 });
   await procesarTurno({ ...ENTRADA, texto: "para qué sirven?" }, e.deps);
-  assertEquals(e.reg.textos.map((x) => x.texto), ["Dale Ana.", "Las tiras abren la nariz.", "¿Es para vos?"]);
-  assertEquals(e.esperas.length, 3, "demora inicial + una pausa antes de cada burbuja extra");
+  assertEquals(e.reg.textos.map((x) => x.texto), ["Dale Ana.", "Las tiras abren la nariz.\n¿Es para vos?"]);
+  assertEquals(e.esperas.length, 2, "demora inicial + una pausa antes de cada burbuja extra");
   for (const p of e.esperas.slice(1)) assert(p >= 1500 && p <= 7000, String(e.esperas));
   assertEquals(e.turnos[0].respuesta, t);
 });
@@ -595,4 +595,165 @@ Deno.test("seguimiento: error de envío no avisa por turno (avisa la corrida)", 
   assertEquals(r.accion, "error_envio");
   assertEquals(e.reg.avisos, []);
   assertEquals(e.turnos[0].accion, "seguimiento_error_envio:131047");
+});
+
+Deno.test("armarHistorial: nunca termina en un mensaje del asistente (Sonnet 5.5 no admite prefill)", () => {
+  const filas = [
+    { direccion: "in", wa_message_id: "w1", texto: "quiero las tiras", contenido: null, estado: "recibido", tipo: "text" },
+    { direccion: "out", wa_message_id: "w2", texto: "Gracias por tu pedido #1003", contenido: null, estado: "enviado", tipo: "template" },
+  ] as never;
+  const h = armarHistorial(filas, { conversacion_id: "c", cliente_id: "k", wa_message_id: "w1", texto: "quiero las tiras" } as never);
+  assertEquals(h[h.length - 1].role, "user");
+  assert(String(h[h.length - 1].content).includes("CONTROL INTERNO"));
+});
+
+// ---------- 08-10: fotos del cliente y marca del anuncio ----------
+
+const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+const filaFoto = (id: string, ruta: string, caption?: string): FilaHistorial => ({
+  direccion: "in",
+  texto: null,
+  tipo: "image",
+  contenido: { type: "image", image: { id: "M", mime_type: "image/jpeg", ...(caption ? { caption } : {}) }, storage_path: ruta, mime: "image/jpeg" },
+  estado: "recibido",
+  wa_message_id: id,
+});
+
+Deno.test("turno: la foto del mensaje actual va como bloque de imagen base64 antes del texto", async () => {
+  const historial = [filaFoto("wamid.IN1", "media/cli/wamid.IN1.jpg", "¿tienen este?")];
+  const e = escenario(() => texto("Sí, ese es el raspador de lengua. ¿Te paso el precio con envío?"), { historial });
+  const bajadas: string[] = [];
+  e.deps.descargarImagen = (ruta) => (bajadas.push(ruta), Promise.resolve({ ok: true, bytes: JPG, mime: "image/jpeg" }));
+  const r = await procesarTurno({ ...ENTRADA, texto: "[imagen] ¿tienen este?", imagen: { ruta: "media/cli/wamid.IN1.jpg", mime: "image/jpeg" } }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(bajadas, ["media/cli/wamid.IN1.jpg"]);
+  const ultimo = e.pedidos[0].mensajes.at(-1)!;
+  assertEquals(ultimo.role, "user");
+  const c = ultimo.content as Bloque[];
+  assertEquals(c[0], { type: "image", source: { type: "base64", media_type: "image/jpeg", data: btoa(String.fromCharCode(...JPG)) } });
+  assertEquals(c[1], { type: "text", text: "[imagen] ¿tienen este?" });
+});
+
+Deno.test("turno: si la foto no se puede bajar, el texto dice \"(no se pudo ver)\" y no va imagen", async () => {
+  const historial = [filaFoto("wamid.IN1", "media/cli/wamid.IN1.jpg")];
+  const e = escenario(() => texto("No la pude abrir, ¿me la reenviás?"), { historial });
+  e.deps.descargarImagen = () => Promise.resolve({ ok: false, error: "404" });
+  await procesarTurno({ ...ENTRADA, texto: "[imagen]", imagen: { ruta: "media/cli/wamid.IN1.jpg", mime: "image/jpeg" } }, e.deps);
+  assertEquals(e.pedidos[0].mensajes.at(-1)!.content, "[imagen] (no se pudo ver)");
+  // Sin dependencia de descarga: igual.
+  const s = escenario(() => texto("No la pude abrir, ¿me la reenviás?"), { historial });
+  await procesarTurno({ ...ENTRADA, texto: "[imagen]", imagen: { ruta: "media/cli/wamid.IN1.jpg", mime: "image/jpeg" } }, s.deps);
+  assertEquals(s.pedidos[0].mensajes.at(-1)!.content, "[imagen] (no se pudo ver)");
+});
+
+Deno.test("turno: fotos agrupadas sin responder sí van; las del historial viejo quedan como [imagen]", async () => {
+  const historial: FilaHistorial[] = [
+    filaFoto("wamid.VIEJA", "media/cli/vieja.jpg"),
+    { direccion: "out", texto: "¡Lindo! ¿Te paso precio?", tipo: "text", contenido: {}, estado: "enviado", wa_message_id: "wamid.OUT1" },
+    filaFoto("wamid.FOTO", "media/cli/foto.jpg"),
+    { direccion: "in", texto: "tienen esto?", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" },
+  ];
+  const e = escenario(() => texto("Sí, lo tenemos. Sale Gs 79.000 + envío. ¿Te lo preparo?"), { historial });
+  const bajadas: string[] = [];
+  e.deps.descargarImagen = (ruta) => (bajadas.push(ruta), Promise.resolve({ ok: true, bytes: JPG, mime: "image/jpeg" }));
+  await procesarTurno({ ...ENTRADA, texto: "tienen esto?" }, e.deps);
+  assertEquals(bajadas, ["media/cli/foto.jpg"]);
+  const msgs = e.pedidos[0].mensajes;
+  assertEquals(msgs[0], { role: "user", content: "[image]" });
+  const c = msgs.at(-1)!.content as Bloque[];
+  assertEquals(c.length, 2);
+  assertEquals(c[0].type, "image");
+  assertEquals(c[1], { type: "text", text: "[image]\ntienen esto?" });
+});
+
+Deno.test("turno: un seguimiento no baja fotos", async () => {
+  const historial = [filaFoto("wamid.IN1", "media/cli/wamid.IN1.jpg")];
+  const e = escenario(() => texto("¿Pudiste ver lo de las tiras? Te las preparo cuando quieras."), { historial, ultimo: "wamid.IN1" });
+  let bajadas = 0;
+  e.deps.descargarImagen = () => (bajadas++, Promise.resolve({ ok: true, bytes: JPG, mime: "image/jpeg" }));
+  await procesarTurno({ conversacion_id: CONV, wa_message_id: "seguimiento:1", texto: "[seguimiento 1]", origen: "seguimiento" }, e.deps);
+  assertEquals(bajadas, 0);
+});
+
+const MARCA = "[vino del anuncio de tiras nasales, handle tiras-nasales-gudair-30-unidades]";
+
+Deno.test("turno: marca del anuncio → producto en el perfil y en el contexto del system", async () => {
+  const historial: FilaHistorial[] = [
+    { direccion: "in", texto: "¡Hola! Quiero más información", tipo: "text", contenido: { marca_anuncio: MARCA }, estado: "recibido", wa_message_id: "wamid.IN1" },
+  ];
+  const e = escenario(() => texto("Las tiras nasales salen Gs 79.000 + envío. ¿Te las preparo?"), { historial });
+  await procesarTurno({ ...ENTRADA, texto: `${MARCA}\n¡Hola! Quiero más información` }, e.deps);
+  assertEquals(e.perfiles.at(-1)?.producto, "tiras nasales");
+  const sys = e.pedidos[0].system as { text: string }[];
+  assert(sys[1].text.includes("PRODUCTO ELEGIDO: tiras nasales"), sys[1].text);
+  assertEquals(e.pedidos[0].mensajes.at(-1)!.content, `${MARCA}\n¡Hola! Quiero más información`);
+});
+
+Deno.test("turno: la marca guardada en un mensaje agrupado se conserva y no se repite", async () => {
+  const historial: FilaHistorial[] = [
+    { direccion: "in", texto: "¡Hola! Quiero más información", tipo: "text", contenido: { marca_anuncio: MARCA }, estado: "recibido", wa_message_id: "wamid.A" },
+    { direccion: "in", texto: "cuánto sale?", tipo: "text", contenido: { marca_anuncio: MARCA }, estado: "recibido", wa_message_id: "wamid.IN1" },
+  ];
+  const e = escenario(() => texto("Las tiras nasales salen Gs 79.000 + envío. ¿Te las preparo?"), { historial, perfil: { producto: "parches bucales" } });
+  await procesarTurno({ ...ENTRADA, texto: `${MARCA}\ncuánto sale?` }, e.deps);
+  assertEquals(e.pedidos[0].mensajes.at(-1)!.content, `${MARCA}\n¡Hola! Quiero más información\ncuánto sale?`);
+  // Un producto ya elegido en el perfil no se pisa con el del anuncio.
+  assertFalse(e.perfiles.some((p) => p.producto === "tiras nasales"));
+});
+
+Deno.test("armarHistorial: marca de mensajes viejos adelante, una sola vez en toda la conversación", () => {
+  const filas: FilaHistorial[] = [
+    { direccion: "in", texto: "hola", tipo: "text", contenido: { marca_anuncio: MARCA }, estado: "recibido", wa_message_id: "w1" },
+    { direccion: "out", texto: "Las tiras salen Gs 79.000.", tipo: "text", contenido: {}, estado: "enviado", wa_message_id: "o1" },
+    { direccion: "in", texto: "y el envío?", tipo: "text", contenido: { marca_anuncio: MARCA }, estado: "recibido", wa_message_id: "w2" },
+  ];
+  const m = armarHistorial(filas, { conversacion_id: CONV, wa_message_id: "w3", texto: "dale" });
+  assertEquals(m.map((x) => x.content), [`${MARCA}\nhola`, "Las tiras salen Gs 79.000.", "y el envío?\ndale"]);
+  assertEquals(bloquePendiente(filas, { conversacion_id: CONV, wa_message_id: "w2", texto: "y el envío?" }), ["y el envío?"]);
+});
+
+Deno.test("armarHistorial: lo que Enrique escribió a mano queda marcado como suyo para que el bot no lo contradiga", () => {
+  const filas = [
+    { direccion: "in", wa_message_id: "w1", texto: "cuánto tarda?", contenido: null, estado: "recibido", tipo: "text" },
+    { direccion: "out", wa_message_id: "w2", texto: "si sos de cde hoy mismo te llega", contenido: { origen: "manual" }, estado: "leido", tipo: "text" },
+    { direccion: "in", wa_message_id: "w3", texto: "dale", contenido: null, estado: "recibido", tipo: "text" },
+  ] as never;
+  const h = armarHistorial(filas, { conversacion_id: "c", cliente_id: "k", wa_message_id: "w3", texto: "dale" } as never);
+  assert(String(h[1].content).startsWith("(Esto lo escribió Enrique"), String(h[1].content));
+});
+
+Deno.test("filtro: el total del pedido de la tienda que trae la marca del sistema se puede decir (09-10)", async () => {
+  const t = "Tu pedido sale 112.000 en total y pagás al recibir.\n¿Me confirmás con un sí?";
+  const e = escenario(() => texto(t));
+  await procesarTurno({ ...ENTRADA, texto: "[pedido #1010 de la tienda, PENDIENTE DE CONFIRMAR: 1 Raspador, total Gs 112000, dirección \"x\", ciudad Asunción.]\nhola" }, e.deps);
+  assertEquals(e.reg.textos.length, 2, JSON.stringify(e.turnos.map((x) => x.filtro)));
+});
+
+Deno.test("acuse con el pedido creado (10-10): 'dale gracias' / 👍 no se contestan", async () => {
+  for (const t of ["Dale sin problema", "👍👍👍", "ok"]) {
+    const hist = [fila("out", "Te llega en 3 a 5 días y pagás cuando lo tenés en la mano.", "o1"), fila("in", t, "wamid.IN1")];
+    const e = escenario(() => texto("no debería"), { historial: hist });
+    e.reg.pedidosChat.push(pedidoChat("creado"));
+    const r = await procesarTurno({ ...ENTRADA, texto: t }, e.deps);
+    assertEquals(r.accion, "omitido", t);
+    assertEquals(e.reg.textos.length, 0, t);
+  }
+});
+
+Deno.test("12-10: pedido creado en el turno → después de la respuesta, el permiso para ofertas (solo si nunca respondió)", async () => {
+  for (const [consent, espera] of [[null, 1], ["si", 0]] as const) {
+    const e = escenario((_p, n) =>
+      n === 1
+        ? herramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "CDE", direccion: "Calle 1", items: [{ handle: "tiras-prueba", cantidad: 1 }] })
+        : n === 2
+        ? herramienta("crear_pedido_cod", { confirmar: true })
+        : texto("Listo Ana, quedó confirmado tu pedido 🙌")
+    );
+    e.deps.herramientas = { ...e.deps.herramientas, consentimiento: () => Promise.resolve(consent) };
+    await procesarTurno(ENTRADA, e.deps); // resumen
+    await procesarTurno({ ...ENTRADA, texto: "si dale" }, e.deps); // confirma
+    const permisos = e.reg.interactivos.filter((i) => JSON.stringify(i.interactive).includes("cons_si:"));
+    assertEquals(permisos.length, espera, `consentimiento ${consent}`);
+    if (espera) assert(JSON.stringify(permisos[0].interactive).includes("Voltra te avise"));
+  }
 });

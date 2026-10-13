@@ -1,0 +1,47 @@
+{
+  "name": "voltra_entrega_manana",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, {{2}} te llega tu pedido de Voltra 📦\nTené Gs {{3}} listos para pagar al recibir. El repartidor te contacta antes de salir.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "mañana martes 13/10",
+            "129.000"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Ok, lo espero"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Reprogramar"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "origen": "12-10: aviso de la víspera para Asunción y Central: 18:00 del día de despacho con el próximo día hábil (despacho del viernes → 'el lunes 19/10'). CDE e interior siguen con sus avisos. Pedidos ya pagados siguen con el aviso de antes (este dice 'Tené Gs …').",
+    "variables": [
+      "nombre",
+      "día de entrega: 'mañana martes 13/10' o 'el lunes 19/10' (visperaEntrega de _shared/plazo_zona.ts)",
+      "total sin 'Gs'"
+    ],
+    "botones_payload": [
+      "ent_ok",
+      "reprogramar"
+    ],
+    "payload_completo": "ent_ok:<shopify_order_id> (gracias corto, nada más) y reprogramar:<shopify_order_id> (el vendedor coordina el día nuevo). procesar-envios agrega el id.",
+    "activacion": "Sale solo con config_wa.plantillas_activas.voltra_entrega_manana = true (después de que Meta la apruebe). Mientras tanto sigue voltra_entrega_hoy."
+  }
+}

@@ -5,9 +5,10 @@
 // en config.toml porque Telegram no manda JWT de Supabase.)
 // Responde 200 enseguida y procesa con EdgeRuntime.waitUntil.
 import { db, guardarEventoCrudo } from "../_shared/db.ts";
-import { cancelarPedido, orderGid } from "../_shared/shopify.ts";
+import { agregarTags, cancelarPedido, orderGid } from "../_shared/shopify.ts";
+import { marcarPagado } from "../_shared/shopify_pagos.ts";
 import { enviarTexto } from "../_shared/wa.ts";
-import { avisar, editarMensaje, responderCallback, verificarSecretoTelegram } from "../_shared/telegram.ts";
+import { avisar, editarLeyenda, editarMensaje, responderCallback, verificarSecretoTelegram } from "../_shared/telegram.ts";
 import type { CicloDecision, DepsDecision, EstadoVersion, VersionMin } from "../mejora-mensual/aprobacion.ts";
 import {
   type ClaveTextoCliente,
@@ -28,7 +29,7 @@ function enSegundoPlano(p: Promise<unknown>) {
 async function obtenerPedido(id: number): Promise<PedidoContexto | null> {
   const { data: p, error } = await db()
     .from("shopify_pedidos")
-    .select("shopify_order_id, nombre, estado_confirmacion, estado_envio, cliente_id")
+    .select("shopify_order_id, nombre, estado_confirmacion, estado_envio, tags, cliente_id, raw, courier, telefono")
     .eq("shopify_order_id", id)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -51,13 +52,25 @@ async function obtenerPedido(id: number): Promise<PedidoContexto | null> {
       .maybeSingle();
     conversacion = conv ?? null;
   }
+  // 12-10: courier del pedido (para el texto "YA PAGADO"): shopify_pedidos.courier o la transportadora de la venta.
+  let courier = (p.courier as string | null) ?? null;
+  const n = String(p.nombre ?? "").replace(/\D/g, "");
+  if (!courier && n) {
+    const { data: v } = await db().from("ventas").select("transportadora").eq("n_referencia", `VT-${n}`)
+      .is("deleted_at", null).limit(1).maybeSingle();
+    courier = (v?.transportadora as string | undefined) ?? null;
+  }
   return {
     shopify_order_id: Number(p.shopify_order_id),
     nombre: p.nombre,
     estado_confirmacion: p.estado_confirmacion,
     estado_envio: p.estado_envio,
+    tags: (p.tags as string[] | null) ?? null,
     cliente,
     conversacion,
+    raw: (p.raw as Record<string, unknown> | null) ?? null,
+    courier,
+    telefono: (p.telefono as string | null) ?? null,
   };
 }
 
@@ -173,6 +186,16 @@ function dependencias(chatId: string): Dependencias {
         .eq("id", conversacionId);
       if (error) throw new Error(error.message);
     },
+    // Pago anticipado verificado en ueno (botón pagado:<id>). orderMarkAsPaid requiere write_orders.
+    marcarPagadoEnShopify: (id) => marcarPagado(id),
+    agregarTagsShopify: (id, tags) => agregarTags(orderGid(id), tags),
+    guardarTagsPedido: async (id, tags) => {
+      const { error } = await db()
+        .from("shopify_pedidos")
+        .update({ tags, actualizado_en: new Date().toISOString() })
+        .eq("shopify_order_id", id);
+      if (error) throw new Error(error.message);
+    },
     textoCliente: async (clave: ClaveTextoCliente) => {
       const { data } = await db().from("config_wa").select("valor").eq("clave", "textos_decisiones").maybeSingle();
       const v = (data?.valor as Record<string, unknown> | undefined)?.[clave];
@@ -189,6 +212,25 @@ function dependencias(chatId: string): Dependencias {
     editarMensaje: async (chat, messageId, html, botones) => {
       const r = await editarMensaje(chat, messageId, html, botones);
       if (!r.ok) console.error("editMessageText:", r.error);
+    },
+    // 12-10: el aviso del comprobante es una foto o un PDF: se edita la leyenda.
+    editarLeyenda: async (chat, messageId, html, botones) => {
+      const r = await editarLeyenda(chat, messageId, html, botones);
+      if (!r.ok) console.error("editMessageCaption:", r.error);
+    },
+    avisar: (html) => avisar(html),
+    // 12-10: "Recibido" → la venta (VT-<n>) queda como pago anticipado: Despacho "Desde Ventas" sale con cobro 0 y la
+    // rendición no espera ese cobro del courier. Si todavía no está en Ventas, entra pagada (tags PAGO_VERIFICADO/PAGADO).
+    marcarVentaPagada: async (pedido) => {
+      const n = String(pedido.nombre ?? "").replace(/\D/g, "");
+      if (!n) return 0;
+      const actualizar = (cambios: Record<string, unknown>) =>
+        db().from("ventas").update(cambios).eq("n_referencia", `VT-${n}`).is("deleted_at", null).select("id");
+      let { data, error } = await actualizar({ pago_anticipado: true, metodo_pago_nombre: "Transferencia (anticipado)" });
+      // Sin la columna del nombre del método (base vieja), lo importante es pago_anticipado.
+      if (error && /metodo_pago_nombre/.test(error.message)) ({ data, error } = await actualizar({ pago_anticipado: true }));
+      if (error) throw new Error(error.message);
+      return data?.length ?? 0;
     },
   };
 }

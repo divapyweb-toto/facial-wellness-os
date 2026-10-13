@@ -204,6 +204,20 @@ async function telegram() {
   if (f.length) return mal(`faltan variables: ${f.join(', ')}`);
   if (!/^[A-Za-z0-9_-]{1,256}$/.test(env('TELEGRAM_WEBHOOK_SECRET'))) return mal('TELEGRAM_WEBHOOK_SECRET: solo letras, números, _ y -');
   const base = `https://api.telegram.org/bot${env('TELEGRAM_BOT_TOKEN')}`; // nunca se imprime
+  // 07-10: la conexión a api.telegram.org a veces se corta desde la Mac de Enrique. Se reintenta y, si la red
+  // sigue caída, solo se avisa: el webhook ya quedó registrado en despliegues anteriores y no frena el resto.
+  for (let intento = 1; intento <= 3; intento++) {
+    try {
+      await pedir(`${base}/getMe`);
+      break;
+    } catch (e) {
+      if (intento === 3) {
+        info(`no pude conectar con Telegram (${e.message}); sigo igual: el webhook ya estaba registrado. Revisalo después con getWebhookInfo.`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
   try {
     const r = await pedir(`${base}/setWebhook`, {
       method: 'POST',

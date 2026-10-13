@@ -95,8 +95,9 @@ export interface Resumen {
 // despacho automático"). Las variables van en orden ({{1}}, {{2}}, ...).
 export const PLANTILLA_POR_ESTADO: Partial<Record<EstadoEnvio, string>> = {
   DESPACHADO: 'voltra_pedido_despachado',
-  INTENTO_FALLIDO: 'voltra_no_entregado',
-  NO_ENTREGADO_RESCATABLE: 'voltra_no_entregado',
+  // 10-10: se reintenta siempre, sin preguntarle al cliente (antes: voltra_no_entregado con botón Cancelar).
+  INTENTO_FALLIDO: 'voltra_reintento_entrega_v2',
+  NO_ENTREGADO_RESCATABLE: 'voltra_reintento_entrega_v2',
   ENTREGADO: 'voltra_seguimiento_entrega',
 }
 

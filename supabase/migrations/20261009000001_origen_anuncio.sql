@@ -82,6 +82,8 @@ grant select on public.pedidos_origen_anuncio to authenticated, service_role;
 -- por origen (web / whatsapp) con los pedidos que no traen el ID del conjunto.
 -- costo_por_entregado = gasto total del conjunto ÷ entregados atribuidos por UTM (no incluye los
 -- entregados que Meta atribuye sin UTM, así que es un techo del costo real).
+-- 09-10: la vista ya existía en la base con otras columnas ("anuncio"); create or replace no puede renombrarlas.
+drop view if exists public.costo_entregado_por_anuncio;
 create or replace view public.costo_entregado_por_anuncio
 with (security_invoker = true) as
 with gasto as (

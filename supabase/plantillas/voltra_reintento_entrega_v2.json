@@ -1,0 +1,38 @@
+{
+  "name": "voltra_reintento_entrega_v2",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, hoy el repartidor no pudo entregarte tu pedido de Voltra ({{2}}).\nLo vuelve a intentar el próximo día hábil y te contacta antes de salir. Si necesitás cambiar la dirección o el horario, respondé este mensaje.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "1 Tiras nasales"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cambiar dirección"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "productos"
+    ],
+    "botones_payload": [
+      "ne_direccion"
+    ],
+    "origen": "10-10: reintento automático sin preguntar. v2: botón de 17 caracteres (la regla del proyecto pide máx. 20; la v1 aprobada tenía 24)."
+  }
+}

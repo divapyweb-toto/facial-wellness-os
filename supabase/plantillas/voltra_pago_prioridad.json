@@ -1,0 +1,29 @@
+{
+  "name": "voltra_pago_prioridad",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "📦 ¡Tu pedido {{1}} ya está listo para salir!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Alias: {{2}} — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍",
+      "example": {
+        "body_text": [
+          [
+            "#1001",
+            "alias@ejemplo.com"
+          ]
+        ]
+      }
+    }
+  ],
+  "_notas": {
+    "origen": "12-10: oferta de pago anticipado SIN descuento, con prioridad en el despacho (palabras del dueño). Sale una sola vez por pedido, cuando pasa a 'preparado' en Despacho, y solo si la ventana de 24 h está cerrada (abierta va como texto libre, mismo texto sin el número de pedido).",
+    "variables": [
+      "pedido (#1001)",
+      "alias de la cuenta: config_wa.pago_prioridad.alias (solo en la base, nunca en Git)"
+    ],
+    "botones_payload": [],
+    "comprobante": "Si el cliente manda la foto o el PDF del comprobante, wa-webhook se lo reenvía a Enrique por Telegram con el botón Recibido (pagado:<shopify_order_id>).",
+    "activacion": "Sale solo con config_wa.plantillas_activas.voltra_pago_prioridad = true (después de que Meta la apruebe) y config_wa.pago_prioridad.activo = true con alias. Mientras tanto, con la ventana cerrada no sale la oferta."
+  }
+}

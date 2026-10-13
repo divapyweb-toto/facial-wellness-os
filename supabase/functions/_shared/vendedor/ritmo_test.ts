@@ -53,17 +53,17 @@ Deno.test("burbujas: una línea corta va entera; una línea larga → corta en l
   assertEquals(partirEnBurbujas("  ", 90), []);
 });
 
-Deno.test("burbujas: con saltos de línea cada línea es una burbuja (aunque sea corta), máximo 3", () => {
+Deno.test("burbujas: con saltos de línea cada línea es una burbuja (aunque sea corta), máximo 2", () => {
   assertEquals(partirEnBurbujas("Hola Ana.\n¿Es para vos?", 90), ["Hola Ana.", "¿Es para vos?"]);
   assertEquals(
     partirEnBurbujas("Las tiras abren la nariz para que entre más aire.\nTe llega en 2 a 5 días hábiles y pagás al recibir.\n¿Te armo 1?", 90),
-    ["Las tiras abren la nariz para que entre más aire.", "Te llega en 2 a 5 días hábiles y pagás al recibir.", "¿Te armo 1?"],
+    ["Las tiras abren la nariz para que entre más aire.", "Te llega en 2 a 5 días hábiles y pagás al recibir.\n¿Te armo 1?"],
   );
   // Líneas vacías y espacios no cuentan.
   assertEquals(partirEnBurbujas("  Dale.\n\n\n  ¿A qué ciudad?  \n", 90), ["Dale.", "¿A qué ciudad?"]);
-  // Más de 3 líneas: las sobrantes van juntas en la tercera.
-  assertEquals(partirEnBurbujas("a.\nb.\nc.\nd " + "x".repeat(100), 90), ["a.", "b.", "c.\nd " + "x".repeat(100)]);
-  for (let n = 1; n <= 8; n++) assert(partirEnBurbujas(Array.from({ length: n }, (_, i) => `línea ${i}`).join("\n"), 90).length <= 3);
+  // Más de 2 líneas: las sobrantes van juntas en la segunda.
+  assertEquals(partirEnBurbujas("a.\nb.\nc.\nd " + "x".repeat(100), 90), ["a.", "b.\nc.\nd " + "x".repeat(100)]);
+  for (let n = 1; n <= 8; n++) assert(partirEnBurbujas(Array.from({ length: n }, (_, i) => `línea ${i}`).join("\n"), 90).length <= 2);
 });
 
 Deno.test("burbujas: la pausa antes de cada burbuja extra está acotada", () => {

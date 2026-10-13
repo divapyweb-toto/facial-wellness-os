@@ -18,6 +18,8 @@ export interface BotonTelegram {
 
 /** Límite de texto de sendMessage / editMessageText: 4096 caracteres. */
 export const LIMITE_TEXTO_TELEGRAM = 4096;
+/** 12-10: límite de la leyenda de sendPhoto / sendDocument / editMessageCaption: 1024 caracteres. */
+export const LIMITE_LEYENDA_TELEGRAM = 1024;
 /** Límite de callback_data: 64 bytes. */
 export const LIMITE_CALLBACK_BYTES = 64;
 
@@ -180,11 +182,18 @@ export function horaCortaAsuncion(d: Date): string {
  * Texto del mensaje original (llega sin formato en el callback) + la decisión.
  * Se re-escapa todo porque el mensaje editado vuelve a salir en modo HTML.
  */
-export function textoConDecision(textoOriginal: string, decision: string, notas: string[], cuando: Date): string {
+export function textoConDecision(
+  textoOriginal: string,
+  decision: string,
+  notas: string[],
+  cuando: Date,
+  limite = LIMITE_TEXTO_TELEGRAM, // 12-10: LIMITE_LEYENDA_TELEGRAM para un aviso con foto o documento
+): string {
   const l = [escaparHtml(textoOriginal), "", `<b>Decisión (${horaCortaAsuncion(cuando)}):</b> ${escaparHtml(decision)}`];
   for (const n of notas) l.push(`• ${escaparHtml(n)}`);
-  // Se recorta el original, nunca la decisión.
+  // Se recorta el original, nunca la decisión (salvo que la decisión sola ya no entre en el límite).
   const cola = l.slice(1).join("\n");
-  const espacio = LIMITE_TEXTO_TELEGRAM - cola.length - 1;
-  return recortar(l[0], Math.max(espacio, 0)) + "\n" + cola;
+  const espacio = limite - cola.length - 1;
+  const original = espacio >= 20 ? recortar(l[0], espacio) : "";
+  return recortar(original + "\n" + cola, limite);
 }

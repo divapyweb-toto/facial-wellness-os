@@ -2,7 +2,7 @@
 // Única puerta a la Telegram Bot API. Secretos (los carga Enrique):
 // TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET.
 // Verificado contra core.telegram.org/bots/api (Bot API 10.3, 24-08-2026).
-import { type BotonTelegram, recortar } from "./telegram_formato.ts";
+import { type BotonTelegram, LIMITE_LEYENDA_TELEGRAM, recortar } from "./telegram_formato.ts";
 
 export type { BotonTelegram } from "./telegram_formato.ts";
 
@@ -68,6 +68,74 @@ export async function avisar(texto: string, botones?: BotonTelegram[][]): Promis
   });
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, message_id: (r.result as { message_id?: number })?.message_id };
+}
+
+/** 12-10: llamada con multipart/form-data (subir un archivo). Nunca tira excepción. */
+export async function llamarTelegramArchivo(
+  metodo: string,
+  form: FormData,
+): Promise<{ ok: boolean; result?: unknown; error?: string }> {
+  const token = env("TELEGRAM_BOT_TOKEN");
+  if (!token) return { ok: false, error: "Falta el secreto TELEGRAM_BOT_TOKEN" };
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${token}/${metodo}`, { method: "POST", body: form });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j?.ok) return { ok: false, error: j?.description ?? `HTTP ${r.status}` };
+    return { ok: true, result: j.result };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Fotos que Telegram muestra como foto (sendPhoto); el resto (PDF, webp, …) va como documento. */
+const MIME_FOTO = new Set(["image/jpeg", "image/jpg", "image/png"]);
+
+/** sendPhoto o sendDocument según el tipo (10 MB máximo para fotos: más grande va como documento). */
+export function metodoArchivo(mime: string, bytes: number): "sendPhoto" | "sendDocument" {
+  const base = mime.split(";")[0].trim().toLowerCase();
+  return MIME_FOTO.has(base) && bytes <= 10_000_000 ? "sendPhoto" : "sendDocument";
+}
+
+/**
+ * 12-10: manda a Enrique (TELEGRAM_CHAT_ID) una foto o un documento con leyenda HTML (máx. 1024) y botones.
+ * Lo usa el comprobante del pago con prioridad: Enrique ve la imagen y toca "Recibido".
+ */
+export async function avisarConArchivo(
+  leyendaHtml: string,
+  archivo: { bytes: Uint8Array; mime: string; nombre: string },
+  botones?: BotonTelegram[][],
+): Promise<ResultadoTelegram> {
+  const chatId = env("TELEGRAM_CHAT_ID");
+  if (!chatId) return { ok: false, error: "Falta el secreto TELEGRAM_CHAT_ID" };
+  const metodo = metodoArchivo(archivo.mime, archivo.bytes.byteLength);
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  form.append("caption", recortar(leyendaHtml, LIMITE_LEYENDA_TELEGRAM));
+  form.append("parse_mode", "HTML");
+  const teclado = aInlineKeyboard(botones);
+  if (teclado) form.append("reply_markup", JSON.stringify(teclado));
+  const blob = new Blob([new Uint8Array(archivo.bytes)], { type: archivo.mime.split(";")[0].trim() || "application/octet-stream" });
+  form.append(metodo === "sendPhoto" ? "photo" : "document", blob, archivo.nombre);
+  const r = await llamarTelegramArchivo(metodo, form);
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, message_id: (r.result as { message_id?: number })?.message_id };
+}
+
+/** 12-10: reemplaza la leyenda y los botones de un aviso con foto o documento (editMessageCaption). */
+export async function editarLeyenda(
+  chatId: number | string,
+  messageId: number,
+  leyendaHtml: string,
+  botones?: BotonTelegram[][] | null,
+): Promise<ResultadoTelegram> {
+  const r = await llamarTelegram("editMessageCaption", {
+    chat_id: chatId,
+    message_id: messageId,
+    caption: recortar(leyendaHtml, LIMITE_LEYENDA_TELEGRAM),
+    parse_mode: "HTML",
+    reply_markup: aInlineKeyboard(botones) ?? { inline_keyboard: [] },
+  });
+  return { ok: r.ok, error: r.error };
 }
 
 /** Comparación de tiempo constante, para no filtrar el secreto por timing. */

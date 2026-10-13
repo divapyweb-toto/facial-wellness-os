@@ -3,6 +3,7 @@
 //
 //   node scripts/crear-plantillas-wa.mjs            → solo valida e imprime
 //   node scripts/crear-plantillas-wa.mjs --enviar   → valida y manda a aprobación de Meta
+//   node scripts/crear-plantillas-wa.mjs --enviar --solo a,b → manda solo esas (12-10: las ya aprobadas dan error de duplicado)
 //
 // Con --enviar usa WA_TOKEN y WA_WABA_ID desde variables de entorno (nunca desde un archivo).
 // Lee supabase/plantillas/*.json. Las claves que empiezan con "_" (notas) no se mandan a Meta.
@@ -120,13 +121,16 @@ export function validarPlantilla(p, palabras, archivo = '') {
     if (!t.trim()) e.push('botón sin texto');
     if (t.length > LIMITES.etiquetaMeta) e.push(`botón "${t}" de más de ${LIMITES.etiquetaMeta} caracteres (límite de Meta)`);
     else if (t.length > LIMITES.etiquetaProyecto) e.push(`botón "${t}" de más de ${LIMITES.etiquetaProyecto} caracteres`);
+    // Meta (07-10, error 2388060): los botones no aceptan emojis, saltos de línea, variables ni formato.
+    if (/\p{Extended_Pictographic}|\n|\{\{|[*_~]/u.test(t)) e.push(`botón "${t}": Meta no acepta emojis, saltos de línea, variables ni formato`);
     if (etiquetas.has(t)) e.push(`botón repetido "${t}"`);
     etiquetas.add(t);
     textos.push(t);
   }
   const payloads = p._notas?.botones_payload ?? [];
   if (payloads.length !== botones.length) e.push('_notas.botones_payload no coincide con los botones');
-  payloads.forEach((x) => { if (!/^[a-z_]+$/.test(x)) e.push(`payload "${x}" inválido`); });
+  // 12-10: se aceptan dígitos (vend_p1: botones del primer turno, también en el toque 3 de seguimiento).
+  payloads.forEach((x) => { if (!/^[a-z][a-z0-9_]*$/.test(x)) e.push(`payload "${x}" inválido`); });
   if ((p._notas?.variables ?? []).length !== unicos.length) e.push('_notas.variables no coincide con las variables');
 
   for (const t of [...textos, ...(cuerpo.example?.body_text?.[0] ?? [])]) {
@@ -184,7 +188,10 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  const iSolo = process.argv.indexOf('--solo');
+  const solo = iSolo >= 0 ? new Set((process.argv[iSolo + 1] ?? '').split(',').filter(Boolean)) : null;
   for (const { plantilla } of resultados) {
+    if (solo && !solo.has(plantilla.name)) continue;
     console.log(`${plantilla.name}: ${await enviar(plantilla, token, waba)}`);
   }
 }

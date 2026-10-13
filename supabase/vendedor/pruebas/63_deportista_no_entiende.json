@@ -1,0 +1,70 @@
+{
+  "id": "63_deportista_no_entiende",
+  "titulo": "Deportista confundido: precio de entrada, explicación simple, sin repetir el ×2",
+  "cobertura": [
+    "precio_primero",
+    "confundido"
+  ],
+  "cliente": {
+    "nombre": "Diego Ortiz",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "soy deportista, no se que hay",
+    "como es",
+    "no entiendo muy bien",
+    "y cuanto cuesta?"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "max_caracteres": 220,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "112.000"
+    ],
+    "max_una_vez": [
+      "125.000"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Para entrenar van bien las tiras nasales, abren la nariz para que entre más aire.\nSale 112.000 con envío, pagás al recibir.\n¿Te paso el video de cómo se usa?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "tiras"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Te pegás una arriba de la nariz antes de entrenar o dormir.\n¿Querés que te mande el video?",
+      "herramientas": []
+    },
+    {
+      "texto": "Es una tira que te abre la nariz para respirar mejor.\nNada más que eso.",
+      "herramientas": []
+    },
+    {
+      "texto": "112.000 con envío, pagás cuando te llega.\n¿Te armo 1 o aprovechás 2 por 158.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "tiras"
+          }
+        }
+      ]
+    }
+  ]
+}

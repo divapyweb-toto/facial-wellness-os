@@ -92,8 +92,8 @@ export function pausaBurbujaMs(texto: string, ritmo: CfgRitmo, azar: number): nu
   return Math.round(acotar(ms, ritmo.pausa_burbuja_min_s * 1000, ritmo.pausa_burbuja_max_s * 1000));
 }
 
-/** Máximo de burbujas por respuesta (el prompt le pide al modelo lo mismo: una idea por línea, hasta 3). */
-export const MAX_BURBUJAS = 3;
+/** Máximo de burbujas por respuesta (el prompt le pide al modelo lo mismo: una idea por línea, hasta 2; 08-10, antes 3). */
+export const MAX_BURBUJAS = 2;
 
 /**
  * Parte una respuesta en burbujas como haría una persona:

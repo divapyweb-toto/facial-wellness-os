@@ -90,6 +90,8 @@ export type ConfigTurno = {
   ritmo: CfgRitmo;
   respuestasFijas: CfgRespuestasFijas;
   estilo: CfgEstilo;
+  /** Datos de la cuenta para transferir (config_wa.pago_anticipado.banco), ya armados en líneas. null = no hay. */
+  transferencia?: string | null;
 };
 
 /** Datos del turno que conocen las herramientas. */
@@ -108,6 +110,8 @@ export type CtxTurno = {
   cfg: ConfigTurno;
   /** Revisa un texto que el modelo quiere mandar dentro de un interactivo (mismo filtro que la respuesta). */
   revisar: (texto: string) => { ok: boolean; motivos: string[] };
+  /** 12-10: pausa con "escribiendo…" entre dos burbujas que manda una herramienta (ausente en pruebas = sin pausa). */
+  pausa?: (ms: number) => Promise<void>;
 };
 
 export type ProductoShopify = {
@@ -161,6 +165,12 @@ export type DatosPedidoChat = {
   envio: number;
   total: number;
   factura?: string | null;
+  /** 10-10: factura validada ("4012344-3") y razón social; facturaInvalida = el cliente insistió con un RUC que no da. */
+  facturaRuc?: string | null;
+  facturaRazon?: string | null;
+  facturaInvalida?: boolean;
+  /** 09-10: retira en la oficina de CDE (sin envío; no va al courier). */
+  retiro?: boolean;
 };
 
 export type ResultadoOrden = {
@@ -178,6 +188,14 @@ export type DepsHerramientas = {
   pedidosDeCliente(clienteId: string, telefono: string | null): Promise<PedidoCliente[]>;
   guardarPedidoChat(fila: Omit<PedidoChat, "id" | "creado_en"> & { id?: string }): Promise<PedidoChat>;
   ultimoPedidoChat(conversacionId: string): Promise<PedidoChat | null>;
+  /** Textos del cliente (texto_vendedor o texto) en la conversación desde `desdeISO`, del más viejo al más nuevo (08-10). */
+  entradasDesde?(conversacionId: string, desdeISO: string): Promise<string[]>;
+  /** Cambia la dirección de envío de un pedido ya creado en Shopify (solo los campos que vienen). 08-10. */
+  actualizarDireccionOrden?(orderId: number, d: { direccion?: string; referencia?: string }): Promise<{ ok: boolean; error?: string }>;
+  /** Último pedido de la tienda del cliente sin despachar ni cancelar (≤ 72 h), aunque no lo haya creado el bot. 09-10. */
+  pedidoTiendaAbierto?(clienteId: string): Promise<{ shopify_order_id: number; creado_en: string } | null>;
+  /** Pedido guardado + courier asignado (para el texto que se reenvía al courier). 10-10. */
+  pedidoParaCourier?(orderId: number): Promise<{ nombre: string; telefono: string | null; raw: Record<string, unknown> | null; courier: string | null; despachado: boolean } | null>;
   crearOrdenShopify(input: Record<string, unknown>): Promise<ResultadoOrden>;
   /** Mismo camino que un pedido de Releasit: upsert en shopify_pedidos + confirmación programada. */
   registrarComoReleasit(nodo: Record<string, unknown>): Promise<void>;
@@ -185,6 +203,8 @@ export type DepsHerramientas = {
   avisar(textoHtml: string, botones?: BotonTelegram[][]): Promise<{ ok: boolean; error?: string }>;
   enviarTexto(to: string, texto: string, opts: OpcionesEnvio): Promise<ResultadoEnvio>;
   enviarInteractivo(to: string, interactive: Record<string, unknown>, opts: OpcionesEnvio): Promise<ResultadoEnvio>;
+  /** 12-10: último consentimiento de marketing del cliente (null = nunca respondió). Ausente en pruebas viejas. */
+  consentimiento?(clienteId: string): Promise<"si" | "no" | "baja" | "preguntado" | null>;
   enviarMedia(to: string, tipo: "image" | "video", link: string, caption: string | null, opts: OpcionesEnvio): Promise<ResultadoEnvio>;
   normalizarTelefono(x: string): string | null;
   /** Reloj en ms para la caché del catálogo (tests). */

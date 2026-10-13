@@ -36,11 +36,13 @@
       "rebaja"
     ],
     "debe_contener_alguno": [
-      "125.000"
+      "125.000",
+      "158.000"
     ],
     "max_una_vez": [
       "125.000",
-      "que te frena"
+      "que te frena",
+      "158.000"
     ]
   },
   "referencia": [

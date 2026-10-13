@@ -121,7 +121,7 @@ Deno.test('fallido, devuelto, cancelado, preparación', async () => {
   await procesarFilas('lucero', [{ referencia: 'VT-1001', estado_crudo: 'Aceptado' }], repo, cfg)
   assertEquals(log.envios.length, 0)
   await procesarFilas('lucero', [{ referencia: 'VT-1001', estado_crudo: 'Fallido' }], repo, cfg)
-  assertEquals(log.envios.at(-1)?.plantilla, 'voltra_no_entregado')
+  assertEquals(log.envios.at(-1)?.plantilla, 'voltra_reintento_entrega_v2')
   await procesarFilas('lucero', [{ referencia: 'VT-1001', estado_crudo: 'Devuelto' }], repo, cfg)
   assertEquals(log.envios.length, 1) // NO_ENTREGADO: nada al cliente
   assertEquals(log.tags.at(-1), '9001:NO_ENTREGADO')
@@ -137,7 +137,7 @@ Deno.test('PaP: Devolucion en proceso → "¿lo reprogramamos?"; Asignado a ruta
     { referencia: '1502', estado_crudo: 'Custodio', telefono: '0981000002' },
   ], repo, cfg)
   assertEquals(r.avisos_programados, 2)
-  assertEquals(log.envios.map((e) => e.plantilla), ['voltra_no_entregado', 'voltra_pedido_despachado'])
+  assertEquals(log.envios.map((e) => e.plantilla), ['voltra_reintento_entrega_v2', 'voltra_pedido_despachado'])
   assertEquals(log.envios[1].variables[2], 'Punto a Punto')
   assertEquals(r.estado_no_reconocido, 1)
   assertEquals(r.estados_no_reconocidos, ['Custodio'])
@@ -264,6 +264,6 @@ Deno.test('fallido y después rescatable → un solo "no entregado" por pedido',
   await procesarFilas('lucero', [{ referencia: 'VT-1001', estado_crudo: 'Fallido' }], repo, cfg)
   const r = await procesarFilas('pap', [{ referencia: '1001', estado_crudo: 'Devolucion en proceso' }], repo, cfg)
   assertEquals(r.avisos_programados, 0)
-  assertEquals(log.envios.filter((e) => e.plantilla === 'voltra_no_entregado').length, 1)
+  assertEquals(log.envios.filter((e) => e.plantilla === 'voltra_reintento_entrega_v2').length, 1)
   assert(log.notificados.includes('9001:NO_ENTREGADO_RESCATABLE'))
 })

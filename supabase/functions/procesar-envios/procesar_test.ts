@@ -27,6 +27,7 @@ import pProx from "../../plantillas/voltra_entrega_proxima.json" with { type: "j
 import pDir from "../../plantillas/voltra_completar_direccion.json" with { type: "json" };
 import pUlt from "../../plantillas/voltra_ultimo_aviso_confirmacion.json" with { type: "json" };
 import pBaja from "../../plantillas/voltra_pedido_cancelado_sin_respuesta.json" with { type: "json" };
+import pReint from "../../plantillas/voltra_reintento_entrega_v2.json" with { type: "json" };
 import pNo from "../../plantillas/voltra_no_entregado.json" with { type: "json" };
 import pSeg from "../../plantillas/voltra_seguimiento_entrega.json" with { type: "json" };
 import pRecup from "../../plantillas/voltra_recuperar_borrador.json" with { type: "json" };
@@ -34,6 +35,9 @@ import pMkRep from "../../plantillas/voltra_mk_reposicion.json" with { type: "js
 import pMkPack from "../../plantillas/voltra_mk_pack.json" with { type: "json" };
 import pMkCru from "../../plantillas/voltra_mk_cruzada.json" with { type: "json" };
 import pMkLan from "../../plantillas/voltra_mk_lanzamiento.json" with { type: "json" };
+import pConfV4 from "../../plantillas/voltra_confirmacion_pedido_v4.json" with { type: "json" };
+import pManana from "../../plantillas/voltra_entrega_manana.json" with { type: "json" };
+import pPrio from "../../plantillas/voltra_pago_prioridad.json" with { type: "json" };
 
 const AHORA = new Date("2026-10-06T15:00:00Z"); // 12:00 en Asunción (UTC-3)
 const horario: Horario = {
@@ -284,7 +288,7 @@ Deno.test("formato de guaraníes y config desde config_wa", () => {
 });
 
 Deno.test("el catálogo coincide con los JSON de supabase/plantillas (botones, payloads, variables)", () => {
-  for (const p of [pConf, pRec, pDesp, pHoy, pProx, pDir, pUlt, pBaja, pNo, pSeg, pRecup, pMkRep, pMkPack, pMkCru, pMkLan]) {
+  for (const p of [pConf, pRec, pDesp, pHoy, pProx, pDir, pUlt, pBaja, pReint, pNo, pSeg, pRecup, pMkRep, pMkPack, pMkCru, pMkLan, pConfV4, pManana, pPrio]) {
     const def = PLANTILLAS[p.name];
     assert(def, p.name);
     const botones = (p.components as { type: string; buttons?: { text: string }[] }[])
@@ -294,7 +298,7 @@ Deno.test("el catálogo coincide con los JSON de supabase/plantillas (botones, p
     assertEquals(def.vars.length, p._notas.variables.length, p.name);
     assertEquals(p.language, "es");
   }
-  assertEquals(Object.keys(PLANTILLAS).length, 17); // + v2 y v3 (07-10), entrega_proxima y completar_direccion (09-10)
+  assertEquals(Object.keys(PLANTILLAS).length, 21); // + v2 y v3 (07-10), entrega_proxima y completar_direccion (09-10), v4, entrega_manana y pago_prioridad (12-10)
 });
 
 Deno.test("armarParametros: objeto con claves numéricas", () => {

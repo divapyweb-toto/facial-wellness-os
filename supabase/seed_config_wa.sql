@@ -10,7 +10,7 @@ insert into public.config_wa (clave, valor) values
   ('tarifas_usd',
    '{"utilidad": 0.0113, "marketing": 0.074}'::jsonb),
   ('confirmacion',
-   '{"recordatorio_h": 4, "retener_h": 48, "cancelar_h": 72}'::jsonb)
+   '{"recordatorio_h": 1, "retener_h": 48, "cancelar_h": 72}'::jsonb)
 on conflict (clave) do nothing;
 
 -- ─── Integración ola 1 (06-10-2026) ─────────────────────────────────────────
@@ -71,10 +71,36 @@ on conflict (clave) do nothing;
 -- shopify-webhook lee confirmacion.confirmar_min (demora de la confirmación, en minutos).
 -- Se agrega sin pisar las otras claves ni un valor que Enrique ya haya cambiado.
 update public.config_wa
-   set valor = jsonb_build_object('confirmar_min', 2) || valor,
+   set valor = jsonb_build_object('confirmar_min', 0) || valor,
        actualizado_en = now()
  where clave = 'confirmacion'
    and not (valor ? 'confirmar_min');
+
+-- ─── 12-10: entrega (fase 3) ────────────────────────────────────────────────
+-- plantillas_activas: shopify-webhook usa voltra_confirmacion_pedido_v4 (con "Te llega: …") y voltra_entrega_manana
+-- (aviso de la víspera, Asunción y Central) SOLO con true. Prender cada una cuando Meta la apruebe:
+--   update public.config_wa set valor = valor || '{"voltra_confirmacion_pedido_v4": true}'::jsonb where clave = 'plantillas_activas';
+-- pago_anticipado_descuento: pago antes opcional con descuento (_shared/pago_anticipado.ts). APAGADO. Clave aparte:
+-- 'pago_anticipado' ya existe (oferta sin descuento + datos del banco) y no se pisa.
+insert into public.config_wa (clave, valor) values
+  ('plantillas_activas',
+   '{"voltra_confirmacion_pedido_v4": false, "voltra_entrega_manana": false}'::jsonb),
+  ('pago_anticipado_descuento',
+   '{"activo": false, "descuento_pct": 5, "metodos": ["alias", "qr"]}'::jsonb)
+on conflict (clave) do nothing;
+
+-- ─── 12-10: pago anticipado con prioridad (sin descuento) ───────────────────
+-- pago_prioridad: cuando el pedido pasa a "preparado" en Despacho se le ofrece al cliente pagar por transferencia
+-- y salir primero (_shared/pago_anticipado.ts). Sale SOLO con activo true y alias cargado. El alias es un dato de
+-- la cuenta: va únicamente en la base (nunca en Git); acá queda null. Para prenderla (en la base, no en este archivo):
+--   update public.config_wa set valor = valor || '{"activo": true, "alias": "<alias>"}'::jsonb where clave = 'pago_prioridad';
+-- Con la ventana de 24 h cerrada usa la plantilla voltra_pago_prioridad, solo después de que Meta la apruebe:
+--   update public.config_wa set valor = valor || '{"voltra_pago_prioridad": true}'::jsonb where clave = 'plantillas_activas';
+-- pago_anticipado_descuento ya no se lee (12-10: el descuento quedó retirado).
+insert into public.config_wa (clave, valor) values
+  ('pago_prioridad',
+   '{"activo": false, "alias": null, "titular": "Voltra E.A.S."}'::jsonb)
+on conflict (clave) do nothing;
 
 -- Claves que NO van en la semilla (las escribe el sistema):
 --   salud_ultimo_aviso → salud-canal guarda cuándo avisó cada cosa.

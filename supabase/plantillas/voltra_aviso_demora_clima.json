@@ -1,0 +1,13 @@
+{
+  "name": "voltra_aviso_demora_clima",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, te escribimos de Voltra por tu pedido {{2}}.\nPor las lluvias fuertes de estos días en el país, la entrega puede demorar un poco más de lo previsto. Tu pedido sigue en pie: el repartidor te contacta antes de llegar y pagás al recibir.\nSi cambia tu dirección o tu horario, respondé este mensaje. ¡Gracias por la paciencia!",
+      "example": { "body_text": [["Ana", "#1001"]] }
+    }
+  ],
+  "_notas": { "variables": ["nombre", "pedido"], "botones_payload": [], "origen": "12-10: aviso preventivo por lluvias (posible demora), pedido por Enrique; foco en sostener la entrega." }
+}

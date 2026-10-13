@@ -39,7 +39,17 @@ export function esStickerOEmoji(texto: string): boolean {
 }
 
 const RE_GRACIAS = /^(?:(?:muchas|mil|muchisimas) )?(?:gracias+|grax|grs|graciass+|thanks)(?: (?:che|nde|amigo|amiga|genio|crack|igual|nomas|eh|por todo|por la info|por la informacion))*$/u;
-const RE_OK = /^(?:ok+|oki|okey|okay|dale|listo|perfecto|genial|buenisimo|joya|barbaro|de una|ya|si|sii+|bueno|bien|excelente|ok gracias|dale gracias|listo gracias|perfecto gracias|ya gracias)$/u;
+const RE_OK = /^(?:ok+|oki|okis|okey|okay|dale|listo|perfecto|genial|buenisimo|joya|barbaro|de una|ya|si|sii+|bueno|bien|excelente|correcto|entendido|de acuerdo|claro|va|vale|ta bien|esta bien|asi mismo|ok gracias|dale gracias|listo gracias|perfecto gracias|ya gracias|bueno gracias|genial gracias|dale sin problema|dale tranqui|tranqui|sin problema|dale nomas|ok dale|dale ok|okok|ok ok|buenisimo gracias|joya gracias)$/u;
+
+/**
+ * 09-10: nuestro último mensaje ya cerró la charla ("cuando quieras escribime", "te avisamos cuando salga"): a un
+ * "ok"/"gracias"/👍 después de eso una persona no contesta. Antes el bot respondía cada "ok" (hasta 13 veces seguidas).
+ */
+const RE_CIERRE = /te llega|pagas (?:al recibir|cuando)|anotado|quedo anotad|cuando quieras|escribime|escribinos|quedamos|te avisamos|te aviso|te escribo|cualquier (?:duda|cosa|novedad)|aca estoy|aca estamos|por aca estoy|que andes bien|sin problema|quedo atento|quedo atenta|ya esta todo|quedo todo|quedo confirmado|esta confirmado/u;
+export function esCierreNuestro(texto: string | null | undefined): boolean {
+  const t = normalizar(texto ?? "");
+  return !!t && !t.includes("?") && RE_CIERRE.test(t);
+}
 
 function limpiar(texto: string): string {
   return normalizar(texto).replace(/[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}]/gu, " ")

@@ -10,6 +10,7 @@ import {
   manejarWebhook,
   normalizarDesdeGraphQL,
   normalizarDesdeWebhook,
+  plantillasActivasDesde,
   procesarPedido,
   TAG_BORRADOR_RELEASIT,
 } from "./procesar.ts";
@@ -510,4 +511,103 @@ Deno.test("marcado preparado sin poder despacharse (faltan datos / sin confirmar
   await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest({ tags: "CONFIRMADO, PAGO_ANTICIPADO_COMPROBANTE, PAGO_VERIFICADO", fulfillment_status: "fulfilled" })), f.deps);
   assertEquals(revertidos, []);
   assert(f.envios.has("courier:5550001:DESPACHADO"));
+});
+
+Deno.test("despachado el viernes → 'hoy te llega' el lunes 8:00 (no el sábado) e interior el martes (10-10)", async () => {
+  for (const [ciudad, cuando] of [["Capiatá", "2026-10-12T11:00:00.000Z"], ["Encarnación", "2026-10-13T11:00:00.000Z"]] as const) {
+    const f = dbFalsa();
+    f.deps.ahora = () => new Date("2026-10-09T17:13:00.000Z"); // viernes 14:13 Asunción
+    const p = pedidoRest({ tags: "CONFIRMADO", fulfillment_status: "fulfilled", shipping_address: { ...pedidoRest().shipping_address, city: ciudad } });
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", p), f.deps);
+    assertEquals(f.envios.get("courier:5550001:ENTREGA_HOY")!.enviar_desde, cuando, ciudad);
+  }
+});
+
+// ---------- 12-10: confirmación v4 y aviso de la víspera, solo con config_wa.plantillas_activas ----------
+
+Deno.test("plantillasActivasDesde: objeto de booleanos o lista de nombres; lo demás, ninguna", () => {
+  assertEquals(plantillasActivasDesde({ voltra_confirmacion_pedido_v4: true, voltra_entrega_manana: false }), { voltra_confirmacion_pedido_v4: true });
+  assertEquals(plantillasActivasDesde(["voltra_entrega_manana"]), { voltra_entrega_manana: true });
+  assertEquals(plantillasActivasDesde({ voltra_entrega_manana: "true" }), {});
+  for (const v of [null, "voltra_entrega_manana", 1]) assertEquals(plantillasActivasDesde(v), {});
+});
+
+Deno.test("confirmación: con la v4 activa va con el día de entrega; sin la clave, apagada o si falla la lectura, la v3 de siempre", async () => {
+  const con = dbFalsa();
+  con.deps.leerPlantillasActivas = () => Promise.resolve({ voltra_confirmacion_pedido_v4: true });
+  await procesarPedido(normalizarDesdeWebhook("orders/create", pedidoRest()), con.deps);
+  const c = con.envios.get("conf:5550001")!;
+  assertEquals(c.plantilla, "voltra_confirmacion_pedido_v4");
+  assertEquals(c.variables.dia_entrega, "hoy o mañana miércoles 07/10"); // martes 06/10 12:00, Ciudad del Este
+  assertEquals(con.envios.get("rec:5550001")!.plantilla, "voltra_recordatorio_confirmacion");
+  const casos: Array<Deps["leerPlantillasActivas"]> = [undefined, () => Promise.resolve({}), () => Promise.reject(new Error("db caída"))];
+  for (const leer of casos) {
+    const f = dbFalsa();
+    f.deps.leerPlantillasActivas = leer;
+    const r = await procesarPedido(normalizarDesdeWebhook("orders/create", pedidoRest()), f.deps);
+    assertEquals(r.accion, "programado");
+    assertEquals(f.envios.get("conf:5550001")!.plantilla, "voltra_confirmacion_pedido_v3");
+    assertEquals("dia_entrega" in f.envios.get("conf:5550001")!.variables, false);
+  }
+});
+
+const despachado = (ciudad: string, extra: Record<string, unknown> = {}) =>
+  pedidoRest({ tags: "CONFIRMADO", fulfillment_status: "fulfilled", shipping_address: { ...pedidoRest().shipping_address, city: ciudad }, ...extra });
+
+Deno.test("víspera activa: Asunción y Central a las 18:00 del despacho con el día; CDE e interior siguen igual", async () => {
+  const casos = [
+    ["Asunción", "voltra_entrega_manana", "2026-10-06T21:00:00.000Z"],
+    ["Luque", "voltra_entrega_manana", "2026-10-06T21:00:00.000Z"],
+    ["Ciudad del Este", "voltra_entrega_proxima", "2026-10-06T17:00:00.000Z"],
+    ["Encarnación", "voltra_entrega_proxima", "2026-10-08T11:00:00.000Z"],
+  ] as const;
+  for (const [ciudad, plantilla, cuando] of casos) {
+    const f = dbFalsa();
+    f.deps.leerPlantillasActivas = () => Promise.resolve({ voltra_entrega_manana: true });
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", despachado(ciudad)), f.deps);
+    const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+    assertEquals([r.plantilla, r.enviar_desde], [plantilla, cuando], ciudad);
+    if (plantilla === "voltra_entrega_manana") {
+      assertEquals(r.variables, { nombre: "Ana", dia_entrega: "mañana miércoles 07/10", total: "129.000", fecha_entrega: "2026-10-07" });
+    } else assertEquals(r.variables, { nombre: "Ana", total: formatoGs(129000) });
+  }
+});
+
+Deno.test("víspera activa: viernes → viernes 18:00 'el lunes'; sábado → lunes 18:00; cancelado el pedido, se cancela", async () => {
+  for (const [ahora, cuando, dia] of [
+    ["2026-10-09T17:13:00.000Z", "2026-10-09T21:00:00.000Z", "el lunes 12/10"],
+    ["2026-10-10T15:00:00.000Z", "2026-10-12T21:00:00.000Z", "mañana martes 13/10"],
+  ] as const) {
+    const f = dbFalsa();
+    f.deps.ahora = () => new Date(ahora);
+    f.deps.leerPlantillasActivas = () => Promise.resolve({ voltra_entrega_manana: true });
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", despachado("Asunción")), f.deps);
+    const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+    assertEquals([r.enviar_desde, r.variables.dia_entrega], [cuando, dia], ahora);
+    assert(!String(r.variables.dia_entrega).includes("sale"));
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", despachado("Asunción", { cancelled_at: ahora })), f.deps);
+    assertEquals(f.envios.get("courier:5550001:ENTREGA_HOY")!.estado, "cancelado");
+  }
+});
+
+Deno.test("víspera activa: pedido ya pagado o despacho marcado de noche → el aviso de siempre (voltra_entrega_hoy 8:00)", async () => {
+  const casos = [
+    [despachado("Asunción", { tags: "CONFIRMADO, PAGO_VERIFICADO" }), AHORA],
+    [despachado("Asunción", { financial_status: "paid" }), AHORA],
+  ] as const;
+  for (const [p, ahora] of casos) {
+    const f = dbFalsa();
+    f.deps.ahora = () => ahora;
+    f.deps.leerPlantillasActivas = () => Promise.resolve({ voltra_entrega_manana: true });
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", p), f.deps);
+    const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+    assertEquals([r.plantilla, r.enviar_desde], ["voltra_entrega_hoy", "2026-10-07T11:00:00.000Z"], JSON.stringify(p.tags));
+  }
+  // 12-10 corte 15:00: marcado el martes 20:30 sale el miércoles → víspera miércoles 18:00 por el jueves.
+  const f = dbFalsa();
+  f.deps.ahora = () => new Date("2026-10-06T23:30:00.000Z");
+  f.deps.leerPlantillasActivas = () => Promise.resolve({ voltra_entrega_manana: true });
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", despachado("Asunción")), f.deps);
+  const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+  assertEquals([r.plantilla, r.enviar_desde, r.variables.dia_entrega], ["voltra_entrega_manana", "2026-10-07T21:00:00.000Z", "mañana jueves 08/10"]);
 });

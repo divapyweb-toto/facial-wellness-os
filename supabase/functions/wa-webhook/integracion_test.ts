@@ -11,6 +11,8 @@ import {
   type Pedido,
   procesarEstado,
   procesarMensaje,
+  conPedidoAbierto,
+  esNoAConfirmacion,
 } from "./procesar.ts";
 
 const TEL = "595981000000";
@@ -181,4 +183,56 @@ Deno.test("estado 'failed' con 131050: baja de marketing del cliente del mensaje
   const otro = mock();
   await procesarEstado({ id: "wamid.OUT2", status: "failed", errors: [{ code: 131026 }] }, otro.deps);
   assertEquals(otro.st.bajas.length, 0);
+});
+
+Deno.test("recompra FW mk_si:p-<handle> con entrega conocida: el vendedor recibe los datos para armar el resumen al toque", async () => {
+  const { deps, st } = mock();
+  deps.contextoRecompraFw = () => Promise.resolve({ producto: "tiras nasales", dias: 80, entrega: { nombre: "Ana Prueba", ciudad: "Luque", direccion: "Calle Falsa 123" } });
+  await procesarMensaje(botonPlantilla("mk_si:p-tiras-nasales-gudair-30-unidades", "Sí, mandame"), contacto, deps);
+  assertEquals(st.pasados.length, 1);
+  const t = st.pasados[0].texto;
+  assertMatch(t, /Ya decidió comprar/);
+  assertMatch(t, /nombre Ana Prueba, ciudad Luque, dirección Calle Falsa 123/);
+  assertMatch(t, /crear_pedido_cod con confirmar=false, 1 unidad del handle tiras-nasales-gudair-30-unidades/);
+});
+
+Deno.test("conPedidoAbierto: el vendedor se entera del pedido de la tienda pendiente (no pregunta qué producto)", async () => {
+  const { deps } = mock();
+  deps.pedidosPorEstado = (_c, _t, estado) => Promise.resolve(estado === "pendiente" ? [{
+    shopify_order_id: 1, nombre: "#1010", estado_confirmacion: "pendiente", creado_en: "2026-10-09T10:54:00Z",
+    raw: { total_price: "112000", line_items: [{ quantity: 1, title: "Raspador" }], shipping_address: { address1: "Calle 4337", city: "Asunción" } },
+  }] : []);
+  const t = await conPedidoAbierto(deps, "cli-1", "+595981000000", "Dirección casa nro 4237");
+  assertMatch(t, /^\[pedido #1010 de la tienda, PENDIENTE DE CONFIRMAR: 1 Raspador, total Gs 112000, dirección "Calle 4337", ciudad Asunción/);
+  assertMatch(t, /actualizar_direccion/);
+  assertMatch(t, /Dirección casa nro 4237$/);
+  deps.pedidosPorEstado = () => Promise.resolve([]);
+  assertEquals(await conPedidoAbierto(deps, "cli-1", null, "hola"), "hola");
+});
+
+Deno.test("testimonio: tras 'Todo bien' se pide foto/video; la foto que llega en 7 días se agradece, avisa y no va al vendedor", async () => {
+  const { deps, st } = mock();
+  const perfil: Record<string, unknown> = {};
+  deps.perfilConversacion = () => Promise.resolve(perfil as never);
+  deps.marcarPerfil = (_c, k, v) => { if (v === null) delete perfil[k]; else perfil[k] = v; return Promise.resolve(); };
+  await procesarMensaje({ id: "wamid.F1", from: "595981000000", timestamp: "1", type: "image", image: { id: "img1", mime_type: "image/jpeg" } } as never, contacto, deps);
+  assertEquals(st.pasados.length, 1, "sin pedido de testimonio, la foto va al vendedor");
+  perfil.pidio_testimonio_en = new Date(deps.ahora().getTime() - 3_600_000).toISOString();
+  await procesarMensaje({ id: "wamid.F2", from: "595981000000", timestamp: "2", type: "image", image: { id: "img2", mime_type: "image/jpeg" } } as never, contacto, deps);
+  assertEquals(st.pasados.length, 1, "la foto de testimonio no va al vendedor");
+  assertMatch(st.enviados[st.enviados.length - 1], /Gracias/);
+  assertMatch(st.avisos[st.avisos.length - 1], /testimonio/);
+  assertEquals(perfil.pidio_testimonio_en, undefined);
+});
+
+Deno.test("secuencia de confirmación: 'no' tras la plantilla cancela; 'Lo quiero igual' pasa al vendedor con el pedido (10-10)", async () => {
+  assert(esNoAConfirmacion("No"));
+  assert(esNoAConfirmacion("ya no quiero"));
+  assertEquals(esNoAConfirmacion("no sé cuándo llega"), false);
+  const { deps, st } = mock();
+  deps.buscarPedido = () => Promise.resolve({ shopify_order_id: 77, nombre: "#1077", estado_confirmacion: "cancelado_cliente",
+    raw: { line_items: [{ quantity: 1, title: "Tiras" }], shipping_address: { first_name: "Ana", address1: "Calle 1", city: "Luque" } } } as never);
+  await procesarMensaje(botonPlantilla("reactivar:77", "Lo quiero igual"), contacto, deps);
+  assertEquals(st.pasados.length, 1);
+  assertMatch(st.pasados[0].texto, /^\[reactivar\].*#1077.*1 Tiras.*Luque/);
 });

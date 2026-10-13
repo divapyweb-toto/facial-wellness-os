@@ -1,0 +1,14 @@
+{
+  "name": "voltra_ultimo_aviso_confirmacion",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, tu pedido de {{2}} (Gs {{3}}, pagás al recibir) todavía no está confirmado.\nSi lo querés, tocá Confirmar y te lo despachamos. Si no nos respondés, mañana lo damos de baja.",
+      "example": { "body_text": [["Ana", "1 Tiras nasales", "112.000"]] }
+    },
+    { "type": "BUTTONS", "buttons": [{ "type": "QUICK_REPLY", "text": "Confirmar pedido" }, { "type": "QUICK_REPLY", "text": "Cancelar pedido" }] }
+  ],
+  "_notas": { "variables": ["nombre", "productos", "total sin 'Gs'"], "botones_payload": ["conf_si", "conf_cancelar"], "origen": "10-10: último aviso a las 24 h (contrato con FUNCIONES)." }
+}

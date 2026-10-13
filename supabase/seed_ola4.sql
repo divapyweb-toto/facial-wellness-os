@@ -12,7 +12,7 @@
 insert into public.config_wa (clave, valor) values
   ('ola4.factura',
    '{"activo": false, "establecimiento": 1, "punto": "001", "numero_inicial": 1, "iva": 10, "formato_kude": "a4", "dias_url_pdf": 7,
-     "claves_datos_fiscales": ["factura", "ruc", "datos de factura", "ruc y razon social"],
+     "claves_datos_fiscales": ["factura", "ruc", "datos de factura", "ruc y razon social", "razon social", "razón social"],
      "maximo_intentos": 3, "tolerancia_gs": 1, "tag_pagado_qr": "PAGADO_QR", "plantilla_seguimiento": "voltra_seguimiento_factura"}'::jsonb),
   ('ola4.qr',
    '{"activo": false, "validez_horas": 48, "etiqueta": "Pedido Voltra {pedido}", "tag_shopify": "PAGADO_QR", "tolerancia_gs": 0,

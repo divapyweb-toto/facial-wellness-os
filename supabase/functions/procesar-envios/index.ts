@@ -15,6 +15,7 @@ import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { registrarBaja } from "../recompra/baja.ts";
 import { envioSeguimientoParaPedido } from "../factura/io.ts";
+import { TAG_OFERTA_PAGO } from "../_shared/pago_anticipado.ts";
 import { type CambioEnvio, configDesdeFilas, type Contexto, type Deps, type Envio, procesarLote } from "./procesar.ts";
 
 const CLAVES_CONFIG = [
@@ -24,6 +25,9 @@ const CLAVES_CONFIG = [
   "textos_libres",
   "procesar_envios",
   "ola4.factura",
+  // 12-10: oferta de pago con prioridad (activo + alias) y plantillas aprobadas por Meta.
+  "pago_prioridad",
+  "plantillas_activas",
 ];
 const COLUMNAS =
   "id,cliente_id,shopify_order_id,plantilla,variables,categoria,enviar_desde,estado,clave_unica,intentos,ultimo_error";
@@ -131,6 +135,18 @@ const deps = (cfg: Deps["cfg"]): Deps => ({
   escapar: escaparHtml,
   registrarBaja: (clienteId) => registrarBaja(clienteId, "meta_131050"),
   seguimientoConFactura: (orderId, variables) => envioSeguimientoParaPedido(orderId, variables),
+  // 12-10: salió la oferta de pago con prioridad → tag OFERTA_PAGO_ANTICIPADO en Shopify y en la base (lo lee
+  // wa-webhook para reconocer el comprobante). La base se marca aunque Shopify falle; el error vuelve para avisar.
+  marcarOfertaPrioridad: async (id) => {
+    const r = await agregarTags(orderGid(id), [TAG_OFERTA_PAGO]);
+    const { data, error: e1 } = await db().from("shopify_pedidos").select("tags").eq("shopify_order_id", id).maybeSingle();
+    if (e1) return { ok: false, error: `shopify_pedidos: ${e1.message}` };
+    const tags = new Set<string>((data?.tags as string[] | null) ?? []);
+    tags.add(TAG_OFERTA_PAGO);
+    const { error: e2 } = await db().from("shopify_pedidos").update({ tags: [...tags] }).eq("shopify_order_id", id);
+    if (e2) return { ok: false, error: `shopify_pedidos: ${e2.message}` };
+    return r.ok ? { ok: true } : { ok: false, error: `Shopify: ${r.error}` };
+  },
   // 10-10: cmsg:<id> tras cancelar sin respuesta. Idempotente por clave_unica.
   programarEnvio: async (fila) => {
     const { error } = await db().from("envios_programados").upsert(fila, { onConflict: "clave_unica", ignoreDuplicates: true });

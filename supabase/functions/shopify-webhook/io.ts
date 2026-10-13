@@ -5,7 +5,7 @@ import { gql } from "../_shared/shopify.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { configLead, enviarEventoLead } from "../_shared/meta_capi.ts";
 import { type DepsLeadMeta, notificarLeadMeta } from "./lead_meta.ts";
-import { type ConfigConfirmacion, configConfirmacionValida, type Deps } from "./procesar.ts";
+import { type ConfigConfirmacion, configConfirmacionValida, type Deps, plantillasActivasDesde } from "./procesar.ts";
 
 /** I/O real del evento temprano a Meta (lead_meta.ts). */
 export function depsLeadMetaReales(): DepsLeadMeta {
@@ -60,6 +60,13 @@ export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
       // 10-10: acepta la config nueva (recordatorio_min, aviso_enrique_h, ultimo_aviso_h) y la vieja (recordatorio_h, retener_h).
       if (!configConfirmacionValida(data?.valor)) throw new Error("config_wa.confirmacion falta o está incompleta");
       return data!.valor as ConfigConfirmacion;
+    },
+
+    async leerPlantillasActivas() {
+      // 12-10: v4 de la confirmación y aviso de la víspera, solo cuando Meta los aprueba (procesar.ts: plantillasActivasDesde).
+      const { data, error } = await sb.from("config_wa").select("valor").eq("clave", "plantillas_activas").maybeSingle();
+      if (error) throw new Error(`config_wa.plantillas_activas: ${error.message}`);
+      return plantillasActivasDesde(data?.valor ?? null);
     },
 
     async buscarPedido(id) {

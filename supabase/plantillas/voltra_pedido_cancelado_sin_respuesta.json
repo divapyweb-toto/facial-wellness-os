@@ -1,0 +1,14 @@
+{
+  "name": "voltra_pedido_cancelado_sin_respuesta",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, dimos de baja tu pedido de {{2}} porque no pudimos confirmarlo.\nSi todavía lo querés, tocá el botón y lo reactivamos. Pagás al recibir.",
+      "example": { "body_text": [["Ana", "1 Tiras nasales"]] }
+    },
+    { "type": "BUTTONS", "buttons": [{ "type": "QUICK_REPLY", "text": "Lo quiero igual" }] }
+  ],
+  "_notas": { "variables": ["nombre", "productos"], "botones_payload": ["reactivar"], "origen": "10-10: aviso al cancelar a las 48 h (contrato con FUNCIONES)." }
+}

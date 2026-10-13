@@ -1,0 +1,26 @@
+{
+  "name": "voltra_mk_seguimiento_oferta",
+  "language": "es",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, ¿seguís con ganas de probar {{2}}? Llevando 2 el envío te sale gratis: Gs {{3}} en total y pagás recién cuando lo tenés en la mano.",
+      "example": { "body_text": [["Ana", "las tiras nasales", "158.000"]] }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Quiero pedirlo" },
+        { "type": "QUICK_REPLY", "text": "No me escribas más" }
+      ]
+    }
+  ],
+  "_notas": {
+    "origen": "12-10: toque 3 de seguimiento-chat (toque3.ts). A quien vino de un anuncio y no compró, entre 48 y 70 h después de la primera respuesta del bot (72 h gratis del anuncio), en horario 12 a 21. Una vez por conversación. Arranca apagado: config_wa.vendedor_seguimiento.toque3.activo.",
+    "variables": ["primer nombre (si no hay: toque3.nombre_si_falta, 'de nuevo')", "producto corto con artículo ('las tiras nasales')", "total de 2 unidades con envío, sin 'Gs' (config_wa.vendedor_ofertas ×2 + vendedor_envio)"],
+    "botones_payload": ["vend_p1", "mk_baja"],
+    "botones_payload_completo": ["vend_p1:pedir:<handle>", "mk_baja:0"],
+    "aviso": "Los payloads se ponen al mandar. 'Quiero pedirlo' le llega al vendedor como [botón] (igual que el primer turno). 'No me escribas más' usa el payload de la baja de recompra: wa-webhook llama a registrarBaja sin código nuevo. Sale solo si con 2 el envío queda gratis (si no, el texto mentiría)."
+  }
+}

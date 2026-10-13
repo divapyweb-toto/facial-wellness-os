@@ -1,0 +1,36 @@
+{
+  "id": "61_solo_hola",
+  "titulo": "Solo saluda: saludo corto y pregunta qué producto vio, sin adivinar el problema",
+  "cobertura": [
+    "saludo"
+  ],
+  "cliente": {
+    "nombre": "Diego Ortiz",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "Hola"
+  ],
+  "expectativas": {
+    "max_lineas": 2,
+    "una_pregunta": true,
+    "max_caracteres": 90,
+    "no_debe_contener": [
+      "ronc",
+      "pareja",
+      "en qué puedo ayudarte"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Buenas!\n¿Qué producto viste?",
+      "herramientas": []
+    }
+  ]
+}

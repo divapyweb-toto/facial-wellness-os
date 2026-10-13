@@ -1,0 +1,27 @@
+{
+  "name": "voltra_completar_direccion",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, para despachar tu pedido {{2}} de Voltra nos falta la dirección escrita para el repartidor.\n¿Nos pasás por acá la calle o barrio, el número de casa y una referencia?",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "#1001"
+          ]
+        ]
+      }
+    }
+  ],
+  "_notas": {
+    "variables": [
+      "nombre",
+      "pedido"
+    ],
+    "origen": "09-10: pedidos confirmados con solo el pin; la respuesta la toma el vendedor (actualizar_direccion).",
+    "botones_payload": []
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "voltra_confirmacion_pedido_v2",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Gracias por tu pedido {{1}}, {{2}} 🙌\n\nSoy el asistente de Voltra ✨\nTu compra fue recibida con éxito en nuestra tienda online.\n\n📦 *Detalles del pedido:*\nProductos: *{{3}}*\nTotal a pagar al recibir: Gs {{4}} (envío incluido)\nDirección: {{5}}\nCiudad: {{6}}\n\nPor favor confirmá si los datos son correctos antes del despacho 🚚\n\nEl asistente de Voltra queda atento a tu confirmación 😄",
+      "example": {
+        "body_text": [
+          [
+            "#1001",
+            "Ana Benítez",
+            "1 Tiras nasales",
+            "112.000",
+            "Calle Falsa 123 casi Ruta 7",
+            "Ciudad del Este"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Confirmar pedido" },
+        { "type": "QUICK_REPLY", "text": "Cancelar pedido" },
+        { "type": "QUICK_REPLY", "text": "Necesito ayuda" }
+      ]
+    }
+  ],
+  "_notas": {
+    "origen": "07-10: Enrique pidió el formato de la confirmación de Facial Wellness (la encuesta no existe en la API: van 3 botones con los mismos textos; Meta no deja emojis en botones).",
+    "variables": ["pedido (#1001)", "nombre", "productos y cantidad", "total con envío, sin 'Gs'", "dirección", "ciudad"],
+    "botones_payload": ["conf_si", "conf_cancelar", "ayuda"],
+    "ventaja": "No fija la tarifa de envío en el texto (dice 'envío incluido')."
+  }
+}

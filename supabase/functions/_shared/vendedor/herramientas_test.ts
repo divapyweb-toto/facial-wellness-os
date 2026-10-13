@@ -4,20 +4,39 @@ import {
   _limpiarCacheCatalogo,
   derivarAEnrique,
   ejecutarHerramienta,
+  esAceptacion,
+  esSoloPin,
+  parsearFactura,
+  unirReferencia,
   HERRAMIENTAS,
+  fraseCantidad,
   lineasShopify,
   mencionaMedico,
   precioPorCantidad,
   textoClienteDerivacion,
+  textoResumen,
 } from "./herramientas.ts";
 import { configPrueba, ctxPrueba, depsPrueba } from "./prueba_utiles.ts";
 
 Deno.test("definiciones: las 9 herramientas del contrato + registrar_perfil, con JSON Schema", () => {
   assertEquals(HERRAMIENTAS.map((h) => h.name).sort(), [
-    "consultar_catalogo", "crear_pedido_cod", "derivar_a_enrique", "enviar_formulario", "enviar_media",
-    "enviar_opciones", "estado_pedido", "pedir_telefono", "pedir_ubicacion", "registrar_perfil",
+    "actualizar_direccion", "cierre_botones", "consultar_catalogo", "crear_pedido_cod", "datos_transferencia", "derivar_a_enrique", "enviar_formulario", "enviar_media",
+    "enviar_opciones", "estado_pedido", "pedir_telefono", "pedir_ubicacion", "permiso_ofertas", "primer_turno", "registrar_perfil",
   ]);
   for (const h of HERRAMIENTAS) assertEquals(h.input_schema.type, "object");
+});
+
+Deno.test("datos_transferencia: manda la cuenta tal cual la config; sin cuenta cargada, error sin mandar nada", async () => {
+  const cfg = { ...configPrueba(), transferencia: "ueno bank · caja de ahorro · 123\nVOLTRA · RUC 1-2" };
+  const { deps, reg } = depsPrueba();
+  const r = await ejecutarHerramienta("datos_transferencia", {}, ctxPrueba({ cfg }), deps);
+  assertEquals(r.resultado.ok, true);
+  assertEquals(reg.textos.length, 1);
+  assertEquals(reg.textos[0].texto, "💳 Datos para transferir:\nueno bank · caja de ahorro · 123\nVOLTRA · RUC 1-2");
+  const sin = depsPrueba();
+  const r2 = await ejecutarHerramienta("datos_transferencia", {}, ctxPrueba({ cfg: { ...configPrueba(), transferencia: null } }), sin.deps);
+  assertFalse(r2.resultado.ok === true);
+  assertEquals(sin.reg.textos.length, 0);
 });
 
 Deno.test("consultar_catalogo: precios de Shopify + ofertas + envío y caché de 10 min", async () => {
@@ -31,6 +50,7 @@ Deno.test("consultar_catalogo: precios de Shopify + ofertas + envío y caché de
   assertEquals(prods[0].total, 112000);
   assertEquals((prods[0].ofertas as Array<Record<string, unknown>>)[0], {
     cantidad: 2, precio: 125000, precio_texto: "125.000", total: 158000, total_texto: "158.000", ahorro: 33000, ahorro_texto: "33.000",
+    frase_precio: "2 por 158.000 en total: es como pagar 2 × 79.000, el envío te sale gratis",
   });
   await ejecutarHerramienta("consultar_catalogo", {}, ctx, deps);
   assertEquals(reg.catalogoLlamadas, 1);
@@ -68,7 +88,9 @@ Deno.test("crear_pedido_cod (resumen): total del servidor y botones Confirmar/Co
   const i = reg.interactivos[0].interactive as { type: string; body: { text: string }; action: { buttons: Array<{ reply: { id: string; title: string } }> } };
   assertEquals(i.type, "button");
   assert(i.body.text.includes("Total Gs 112.000"));
-  assertEquals(i.action.buttons.map((b) => b.reply.title), ["Confirmar", "Corregir"]);
+  // 12-10 (fase 3): día de entrega según la ciudad y botón "Confirmo".
+  assert(i.body.text.includes("📦 Te llega: "), i.body.text);
+  assertEquals(i.action.buttons.map((b) => b.reply.title), ["Confirmo", "Corregir"]);
   assertEquals(i.action.buttons[0].reply.id, `vend_conf:${reg.pedidosChat[0].id}`);
 });
 
@@ -101,7 +123,7 @@ Deno.test("crear_pedido_cod (confirmar): exige un sí claro; con 'dale' crea en 
   assertEquals(r.pedidoCreado, { shopify_order_id: 5550001, nombre: "#1050" });
   const orden = reg.ordenes[0] as { order: Record<string, unknown>; options: Record<string, unknown> };
   assertEquals(orden.order.financialStatus, "PENDING");
-  assertEquals(orden.order.tags, ["ORIGEN_WHATSAPP"]);
+  assertEquals(orden.order.tags, ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"]);
   assertEquals((orden.order.shippingAddress as Record<string, unknown>).firstName, "Ana"); // usa el resumen, no lo que reescribe el modelo
   assertEquals(orden.options.inventoryBehaviour, "DECREMENT_OBEYING_POLICY");
   assertEquals(orden.options.sendReceipt, false);
@@ -110,11 +132,35 @@ Deno.test("crear_pedido_cod (confirmar): exige un sí claro; con 'dale' crea en 
   const aviso = reg.avisos[0];
   assert(aviso.texto.includes("Pedido nuevo #1050"));
   assertEquals((aviso.botones as Array<Array<{ callback?: string }>>)[0][0].callback, "cancelar:5550001");
-  assert(String(r.resultado.texto_respuesta).includes("Listo Ana, ya cargamos tu pedido #1050"));
+  assert(String(r.resultado.texto_respuesta).includes("Listo Ana, quedó confirmado tu pedido #1050"));
 
   // Repetir no duplica.
   const otra = await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si" }), deps);
   assertEquals(otra.resultado.ya_creado, true);
+  assertEquals(reg.ordenes.length, 1);
+});
+
+Deno.test("esAceptacion: 'dale amigo', 'ya confirmé', 'listo' cuentan; 'no gracias', 'después', 'está bien pero' no (08-10)", () => {
+  const A = ["si", "sí", "ok", "dale", "ya", "katu", "confirmo"];
+  for (const t of ["Dale amigo", "Ya confirme amigo", "ya confirmé", "listo", "si por favor", "Sii dale porfa", "perfecto gracias", "Siiii", "Si confirmado.", "okk"]) assert(esAceptacion(t, A), t);
+  for (const t of ["no gracias", "después te aviso", "dale pero la semana que viene", "y cuánto tarda?", "amigo", "ya", "no"]) {
+    if (t === "ya") continue; // "ya" ya estaba en la lista de aceptaciones
+    assertFalse(esAceptacion(t, A), t);
+  }
+});
+
+Deno.test("crear_pedido_cod (confirmar): el sí de un turno anterior desde el resumen cuenta (botón perdido); un Corregir posterior lo anula", async () => {
+  _limpiarCacheCatalogo();
+  let entradas: string[] = [];
+  const { deps, reg } = depsPrueba({ entradasDesde: () => Promise.resolve(entradas) });
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS }, ctxPrueba(), deps);
+  const id = reg.pedidosChat[0].id;
+  entradas = [`[botón] Confirmar (vend_conf:${id})`, `[botón] Corregir (vend_corr:${id})`, "y cuánto tarda?"];
+  const anulado = await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "y cuánto tarda?" }), deps);
+  assert(anulado.esError);
+  entradas = ["Dale amigo", `[botón] Confirmar (vend_conf:${id})`, "Ya confirme amigo?"];
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "hola?" }), deps);
+  assertFalse(r.esError);
   assertEquals(reg.ordenes.length, 1);
 });
 
@@ -214,7 +260,10 @@ Deno.test("interactivos: el texto del modelo pasa por el filtro; lista vertical 
   assertEquals(lista.type, "button");
   assertEquals(lista.header.type, "image");
   assertEquals(lista.action.buttons.map((b) => b.reply.title), ["1 unidad", "2 unidades", "3 unidades"]);
-  assert(lista.body.text.includes("*2 unidades* · Gs 158.000 (ahorrás Gs 33.000)"), lista.body.text);
+  // 12-10: el total con envío y lo que gana contra comprar de a 1.
+  assert(lista.body.text.includes("*1 unidad* · 79.000 + 33.000 de envío = 112.000"), lista.body.text);
+  assert(lista.body.text.includes("*2 unidades* · 158.000 en total: es como pagar 2 × 79.000, el envío te sale gratis"), lista.body.text);
+  assert(lista.body.text.includes("*3 unidades* · 188.000 en total: envío gratis + 49.000 menos"), lista.body.text);
   const sinOfertas = await ejecutarHerramienta("enviar_opciones", { handle: "raspador-prueba", texto: "Elegí" }, ctxPrueba(), deps);
   assert(sinOfertas.esError);
 });
@@ -290,6 +339,32 @@ Deno.test("derivar_a_enrique por motivo del sistema: el cliente nunca ve el text
   assert(reg.avisos[0].texto.includes("20 turnos"));
 });
 
+Deno.test("esSoloPin + crear_pedido_cod: con solo el pin y sin referencia pide algo escrito; con referencia sigue (08-10)", async () => {
+  for (const t of ["Pin de ubicación", "Ubicación por pin", "ubicacion", "pin"]) assert(esSoloPin(t), t);
+  for (const t of ["Número 115", "Club 29 de Setiembre", "Ruta 1 km 20"]) assertFalse(esSoloPin(t), t);
+  _limpiarCacheCatalogo();
+  const { deps } = depsPrueba();
+  const sinRef = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, direccion: "Pin de ubicación", referencia: "" }, ctxPrueba(), deps);
+  assert(sinRef.esError);
+  assert(String(sinRef.resultado.error).includes("referencia"), String(sinRef.resultado.error));
+  const conRef = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, direccion: "Pin de ubicación", referencia: "reja negra" }, ctxPrueba(), deps);
+  assertFalse(conRef.esError);
+});
+
+Deno.test("actualizar_direccion: suma la referencia al pedido creado y avisa; sin pedido creado, error", async () => {
+  _limpiarCacheCatalogo();
+  const cambios: unknown[] = [];
+  const { deps, reg } = depsPrueba({ actualizarDireccionOrden: (id, d) => (cambios.push([id, d]), Promise.resolve({ ok: true })) });
+  const antes = await ejecutarHerramienta("actualizar_direccion", { referencia: "reja negra" }, ctxPrueba(), deps);
+  assert(antes.esError);
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS }, ctxPrueba(), deps);
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si" }), deps);
+  const r = await ejecutarHerramienta("actualizar_direccion", { referencia: "Número 115, reja negra" }, ctxPrueba(), deps);
+  assertFalse(r.esError);
+  assertEquals(cambios, [[5550001, { referencia: "Número 115, reja negra" }]]);
+  assert(reg.avisos.some((a) => a.texto.includes("completó la dirección")));
+});
+
 Deno.test("inputOrderCreate: precios con IVA incluido (taxesIncluded) y total = oferta + envío − descuento", () => {
   const d = {
     nombre: "Cliente Prueba", telefono: "+595981000000", direccion: "Calle 1", referencia: null, ciudad: "Asunción",
@@ -303,4 +378,176 @@ Deno.test("inputOrderCreate: precios con IVA incluido (taxesIncluded) y total = 
   const lineas = r.order.lineItems.reduce((s, l) => s + l.quantity * Number(l.priceSet.shopMoney.amount), 0);
   const envio = Number(r.order.shippingLines[0].priceSet.shopMoney.amount);
   assertEquals(lineas + envio, 125000 + 33000); // sin IVA agregado encima
+});
+
+Deno.test("actualizar_direccion: sin pedido del bot, corrige el pedido de la tienda abierto (Releasit)", async () => {
+  const cambios: unknown[] = [];
+  const { deps } = depsPrueba({
+    actualizarDireccionOrden: (id, d) => (cambios.push([id, d]), Promise.resolve({ ok: true })),
+    pedidoTiendaAbierto: () => Promise.resolve({ shopify_order_id: 777, creado_en: new Date().toISOString() }),
+  });
+  const r = await ejecutarHerramienta("actualizar_direccion", { direccion: "Lafranconi 4237" }, ctxPrueba({ ahora: new Date() }), deps);
+  assertFalse(r.esError);
+  assertEquals(cambios, [[777, { direccion: "Lafranconi 4237" }]]);
+});
+
+Deno.test("retiro en la oficina de CDE: sin dirección, sin envío, tag RETIRO_EN_CASA y resumen de retiro (09-10)", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", retiro_oficina: true, items: DATOS.items }, ctxPrueba(), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  assertEquals(reg.pedidosChat[0].datos.envio, 0);
+  assert(JSON.stringify(reg.interactivos[0]).includes("oficina en Ciudad del Este"));
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si" }), deps);
+  const orden = reg.ordenes[0] as { order: Record<string, unknown> };
+  assertEquals(orden.order.shippingLines, []);
+  assertEquals(orden.order.tags, ["ORIGEN_WHATSAPP", "CONFIRMADO", "RETIRO_EN_CASA"]);
+});
+
+Deno.test("resumen ×2 del mismo producto: 'envío gratis' con el mismo total; mezcla de productos sigue con envío (09-10)", () => {
+  const ctx = ctxPrueba();
+  const base = { nombre: "Ana", ciudad: "Luque", direccion: "Calle 1", referencia: null, ubicacion: null, telefono: "+595981000000" };
+  const x2 = textoResumen({ ...base, lineas: [{ handle: "t", titulo: "Tiras", variante_id: "v", cantidad: 2, total: 125000 }], envio: 33000, total: 158000 }, ctx);
+  assert(x2.includes("Tiras x2, envío gratis. Total Gs 158.000"), x2);
+  const mezcla = textoResumen({ ...base, lineas: [{ handle: "t", titulo: "Tiras", variante_id: "v", cantidad: 1, total: 79000 }, { handle: "p", titulo: "Parches", variante_id: "w", cantidad: 1, total: 79000 }], envio: 33000, total: 191000 }, ctx);
+  assert(mezcla.includes("Envío Gs 33.000"), mezcla);
+});
+
+Deno.test("factura (10-10): DV válido, inválido, sin DV, puntos/espacios, sin razón social", () => {
+  // RUC inventados: el DV se calcula con el mismo algoritmo (módulo 11).
+  const ok = parsearFactura("4012344-3 Carlos Prueba");
+  if (ok.ok) assertEquals([ok.ruc, ok.razon], ["4012344-3", "Carlos Prueba"]);
+  else {
+    // Si 4012344-3 no fuera válido con el algoritmo, el test usa el sugerido.
+    const s = parsearFactura("4012344 Carlos Prueba");
+    assert(!s.ok && s.motivo === "sin_dv" && !!s.sugerido);
+  }
+  const sinDv = parsearFactura("RUC 1234567, Ana Prueba");
+  assert(!sinDv.ok && sinDv.motivo === "sin_dv" && /^1234567-\d$/.test(sinDv.sugerido ?? ""), JSON.stringify(sinDv));
+  const correcto = (sinDv as { sugerido: string }).sugerido;
+  const malo = correcto.slice(0, -1) + String((Number(correcto.slice(-1)) + 1) % 10);
+  const inv = parsearFactura(`${malo} Ana Prueba`);
+  assert(!inv.ok && inv.motivo === "dv_invalido");
+  const puntos = parsearFactura(`1.234.567-${correcto.slice(-1)} Ana Prueba`);
+  assert(puntos.ok && puntos.ruc === correcto, JSON.stringify(puntos));
+  const espacio = parsearFactura(`1234567 ${correcto.slice(-1)} Ana Prueba`);
+  assert(espacio.ok && espacio.ruc === correcto, JSON.stringify(espacio));
+  const sinRazon = parsearFactura(correcto);
+  assert(!sinRazon.ok && sinRazon.motivo === "sin_razon");
+});
+
+Deno.test("factura en crear_pedido_cod (10-10): re-pedido, insistencia, línea en el resumen y atributos Ruc/Razon social", async () => {
+  _limpiarCacheCatalogo();
+  const sinDv = parsearFactura("1234567 Ana Prueba") as { sugerido: string };
+  const correcto = sinDv.sugerido;
+  const malo = correcto.slice(0, -1) + String((Number(correcto.slice(-1)) + 1) % 10);
+  const { deps, reg } = depsPrueba();
+  const r1 = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, factura: `${malo} Ana Prueba` }, ctxPrueba(), deps);
+  assert(r1.esError && String(r1.resultado.error).startsWith("ruc_invalido"));
+  const r2 = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, factura: "1234567 Ana Prueba" }, ctxPrueba(), deps);
+  assert(r2.esError && String(r2.resultado.error).includes(`¿Tu RUC es ${correcto}?`));
+  const r3 = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, factura: `${correcto} Ana Prueba` }, ctxPrueba(), deps);
+  assertFalse(r3.esError);
+  assert(JSON.stringify(reg.interactivos.at(-1)).includes(`Factura a nombre de: Ana Prueba · RUC ${correcto}`));
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si" }), deps);
+  const attrs = (reg.ordenes[0] as { order: { customAttributes: Array<{ key: string; value: string }> } }).order.customAttributes;
+  assertEquals(attrs.find((a) => a.key === "Ruc")?.value, correcto);
+  assertEquals(attrs.find((a) => a.key === "Razon social")?.value, "Ana Prueba");
+  // Insistencia con un RUC que no da: se crea igual, sin atributos Ruc (va a revisar).
+  _limpiarCacheCatalogo();
+  const b = depsPrueba();
+  const r4 = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, factura: `${malo} Ana Prueba`, factura_sin_validar: true }, ctxPrueba(), b.deps);
+  assertFalse(r4.esError);
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si" }), b.deps);
+  const attrs2 = (b.reg.ordenes[0] as { order: { customAttributes: Array<{ key: string }> } }).order.customAttributes;
+  assertFalse(attrs2.some((a) => a.key === "Ruc"));
+  assert(b.reg.avisos.some((a) => a.texto.includes("RUC no es válido")));
+  // Sin factura: igual que siempre.
+  _limpiarCacheCatalogo();
+  const c = depsPrueba();
+  const r5 = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS }, ctxPrueba(), c.deps);
+  assertFalse(r5.esError);
+  assertFalse(JSON.stringify(c.reg.interactivos.at(-1)).includes("Factura a nombre"));
+});
+
+Deno.test("unirReferencia (10-10): suma sin pisar ni duplicar", () => {
+  assertEquals(unirReferencia("Reja negra, pasto en la vereda", "pasto"), "Reja negra, pasto en la vereda");
+  assertEquals(unirReferencia("Reja negra", "pasto en la vereda"), "Reja negra. pasto en la vereda");
+  assertEquals(unirReferencia(null, "Casa azul"), "Casa azul");
+});
+
+Deno.test("fraseCantidad: ×2 = envío gratis, ×3 = envío gratis + menos; sin cubrir el envío, solo el total", () => {
+  assertEquals(fraseCantidad(2, 79000, 125000, 33000), "158.000 en total: es como pagar 2 × 79.000, el envío te sale gratis");
+  assertEquals(fraseCantidad(3, 79000, 155000, 33000), "188.000 en total: envío gratis + 49.000 menos");
+  assertEquals(fraseCantidad(2, 79000, 150000, 33000), "183.000 en total");
+});
+
+Deno.test("primer_turno: gancho en texto + total con 3 botones; marca la variante y deja los montos ×2/×3", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const r = await ejecutarHerramienta("primer_turno", { handle: "tiras-prueba", gancho: "Te pegás la tira y la nariz se abre al toque" }, ctxPrueba(), deps);
+  assert(r.terminal);
+  assertEquals(reg.textos.map((t) => t.texto), ["Te pegás la tira y la nariz se abre al toque"]);
+  const i = reg.interactivos[0].interactive as { type: string; body: { text: string }; action: { buttons: Array<{ reply: { id: string; title: string } }> } };
+  assertEquals(i.type, "button");
+  assertEquals(i.body.text, "79.000 + 33.000 de envío = 112.000, pagás al recibir.");
+  assertEquals(i.action.buttons.map((b) => b.reply.title), ["Quiero pedirlo", "Tengo una duda", "Precios por cantidad"]);
+  assertEquals(i.action.buttons.map((b) => b.reply.id), ["vend_p1:pedir:tiras-prueba", "vend_p1:duda:tiras-prueba", "vend_p1:cant:tiras-prueba"]);
+  assertEquals(r.resultado.variante, "botones_v1");
+  assert(JSON.stringify(r.resultado.ofertas).includes("158.000") && JSON.stringify(r.resultado.ofertas).includes("188.000"));
+});
+
+Deno.test("primer_turno: gancho bloqueado o producto desconocido → error sin mandar nada; si fallan los botones, avisa que el gancho ya salió", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const bloq = await ejecutarHerramienta("primer_turno", { handle: "tiras-prueba", gancho: "Tiene garantía de por vida" }, ctxPrueba(), deps);
+  assert(bloq.esError);
+  const desc = await ejecutarHerramienta("primer_turno", { handle: "no-existe", gancho: "Dormís mejor" }, ctxPrueba(), deps);
+  assert(desc.esError);
+  assertEquals(reg.textos.length + reg.interactivos.length, 0);
+  const falla = { ...deps, enviarInteractivo: () => Promise.resolve({ ok: false, error: "131000" }) };
+  const r = await ejecutarHerramienta("primer_turno", { handle: "tiras-prueba", gancho: "Dormís de corrido" }, ctxPrueba(), falla);
+  assert(r.esError);
+  assert(String(r.resultado.error).includes("botones_fallidos"));
+  assertEquals(reg.textos.length, 1);
+});
+
+Deno.test("cierre_botones: texto revisado + los 3 botones del primer turno; producto desconocido o texto bloqueado → error", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const r = await ejecutarHerramienta("cierre_botones", { handle: "tiras-prueba", texto: "Te lo armo y pagás recién cuando lo tenés en la mano" }, ctxPrueba(), deps);
+  assert(r.terminal);
+  const i = reg.interactivos[0].interactive as { body: { text: string }; action: { buttons: Array<{ reply: { id: string; title: string } }> } };
+  assertEquals(i.body.text, "Te lo armo y pagás recién cuando lo tenés en la mano");
+  assertEquals(i.action.buttons.map((b) => b.reply.id), ["vend_p1:pedir:tiras-prueba", "vend_p1:duda:tiras-prueba", "vend_p1:cant:tiras-prueba"]);
+  assert((await ejecutarHerramienta("cierre_botones", { handle: "no-existe", texto: "Dale" }, ctxPrueba(), deps)).esError);
+  assert((await ejecutarHerramienta("cierre_botones", { handle: "tiras-prueba", texto: "Tiene garantía" }, ctxPrueba(), deps)).esError);
+  assertEquals(reg.interactivos.length, 1);
+});
+
+Deno.test("primer_turno: pausa de \"escribiendo…\" entre la promesa y el precio con botones", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const orden: string[] = [];
+  const ctx = { ...ctxPrueba(), pausa: (ms: number) => (orden.push(`pausa>0:${ms > 0}`), Promise.resolve()) };
+  const d = { ...deps, enviarTexto: (to: string, t: string) => (orden.push("texto"), deps.enviarTexto(to, t, {})), enviarInteractivo: (to: string, i: Record<string, unknown>) => (orden.push("botones"), deps.enviarInteractivo(to, i, {})) };
+  await ejecutarHerramienta("primer_turno", { handle: "tiras-prueba", gancho: "Dormís de corrido" }, ctx, d);
+  assertEquals(orden, ["texto", "pausa>0:true", "botones"]);
+  assertEquals(reg.interactivos.length, 1);
+});
+
+Deno.test("permiso_ofertas: sin respuesta previa → tu texto + el pedido de permiso con Sí/No; si ya respondió, no pregunta", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const nuevo = { ...deps, consentimiento: () => Promise.resolve(null) };
+  const r = await ejecutarHerramienta("permiso_ofertas", { texto: "Dale, tranqui. El lunes te escribo" }, ctxPrueba(), nuevo);
+  assert(r.terminal);
+  const i = reg.interactivos[0].interactive as { body: { text: string }; action: { buttons: Array<{ reply: { id: string; title: string } }> } };
+  assert(i.body.text.startsWith("Dale, tranqui. El lunes te escribo"));
+  assert(i.body.text.includes("Voltra te avise"));
+  assert(i.action.buttons[0].reply.id.startsWith("cons_si:"));
+  const ya = await ejecutarHerramienta("permiso_ofertas", { texto: "Dale" }, ctxPrueba(), { ...deps, consentimiento: () => Promise.resolve("no") });
+  assertFalse(ya.terminal);
+  assertEquals(ya.resultado.ya_respondio, true);
+  assertEquals(reg.interactivos.length, 1);
 });

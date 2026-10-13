@@ -17,7 +17,25 @@
 //     marketing (recompra/baja.ts) y no se reintenta; otros → espera creciente; al máximo, 'fallido'.
 //   - voltra_seguimiento_entrega: con config_wa['ola4.factura'].activo, antes se pregunta a factura/io.ts
 //     si hay factura emitida con PDF; si la hay, sale esa plantilla en lugar del seguimiento normal.
+//   - 12-10: voltra_pago_prioridad (prio:<id>, la programa shopify-webhook al pasar a "preparado"): oferta de pagar
+//     antes y salir con prioridad, sin descuento. Solo con config_wa.pago_prioridad activo + alias; ventana abierta →
+//     texto libre; cerrada → la plantilla solo si plantillas_activas.voltra_pago_prioridad; si no, se cancela (no se
+//     repite). Si salió: tag OFERTA_PAGO_ANTICIPADO (marcarOfertaPrioridad) para reconocer el comprobante.
+//   - 12-10: pedido ya pagado → los avisos de entrega ("Tené Gs …") salen como texto sin monto dentro de la ventana;
+//     con la ventana cerrada no salen (mejor nada que pedirle plata a quien ya pagó).
 
+import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
+import { fechaLocal } from "../_shared/plazo_zona.ts";
+import {
+  CLAVE_CONFIG_PRIORIDAD,
+  type CfgPagoPrioridad,
+  leerConfigPagoPrioridad,
+  motivoSinOfertaPrioridad,
+  pedidoPagado,
+  PLANTILLA_PAGO_PRIORIDAD,
+  TAG_OFERTA_PAGO,
+  textoOfertaPrioridad,
+} from "../_shared/pago_anticipado.ts";
 import { PLANTILLAS_RECOMPRA } from "../recompra/calendario.ts";
 
 export type Categoria = "utilidad" | "marketing";
@@ -80,6 +98,10 @@ export interface Config {
   reintento131049H: number;
   /** config_wa['ola4.factura'].activo: seguimiento con la factura adjunta (mejora 7). */
   facturaActiva: boolean;
+  /** 12-10: config_wa.pago_prioridad (activo + alias; el alias vive solo en la base). */
+  pagoPrioridad: CfgPagoPrioridad;
+  /** 12-10: config_wa.plantillas_activas ya parseada (plantillas aprobadas por Meta). */
+  plantillasActivas: Record<string, boolean>;
 }
 
 export const CONFIG_DEFECTO: Config = {
@@ -93,6 +115,8 @@ export const CONFIG_DEFECTO: Config = {
   esperasMin: [5, 30],
   reintento131049H: 24,
   facturaActiva: false,
+  pagoPrioridad: { activo: false, alias: null, titular: "Voltra E.A.S." },
+  plantillasActivas: {},
 };
 
 export const IDIOMA = "es"; // Meta no tiene es_PY; "es" es el español genérico
@@ -120,6 +144,12 @@ const CONF_V2 = [
   { prefijo: "conf_cancelar", titulo: "Cancelar pedido" },
   { prefijo: "ayuda", titulo: "Necesito ayuda" },
 ];
+// 12-10: v4 con el día de entrega. "Corregir" (corregir:<id>) deja el chat con el vendedor; no pasa a humano.
+const CONF_V4 = [
+  { prefijo: "conf_si", titulo: "Confirmo" },
+  { prefijo: "corregir", titulo: "Corregir" },
+  { prefijo: "conf_cancelar", titulo: "Cancelar pedido" },
+];
 
 export const PLANTILLAS: Record<string, DefPlantilla> = {
   voltra_confirmacion_pedido: {
@@ -138,9 +168,20 @@ export const PLANTILLAS: Record<string, DefPlantilla> = {
     botones: CONF_V2,
     soloPendiente: true,
   },
+  // 12-10: v3 + "Te llega: {{7}}" (diaEntrega). Sale solo con config_wa.plantillas_activas (shopify-webhook).
+  voltra_confirmacion_pedido_v4: {
+    vars: ["pedido", "nombre", "productos", "total", "direccion", "ciudad", "dia_entrega"],
+    botones: CONF_V4,
+    soloPendiente: true,
+  },
   voltra_recordatorio_confirmacion: { vars: ["nombre", "productos"], botones: CONF, soloPendiente: true },
   voltra_pedido_despachado: { vars: ["nombre", "productos", "courier", "plazo", "total"], botones: AYUDA },
   voltra_entrega_hoy: { vars: ["nombre", "total"], botones: AYUDA },
+  // 12-10: víspera de la entrega (Asunción y Central), 18:00 del día de despacho. Botones ent_ok / reprogramar.
+  voltra_entrega_manana: {
+    vars: ["nombre", "dia_entrega", "total"],
+    botones: [{ prefijo: "ent_ok", titulo: "Ok, lo espero" }, { prefijo: "reprogramar", titulo: "Reprogramar" }],
+  },
   // 10-10: secuencia de confirmación (contrato con FUNCIONES): último aviso a las 24 h y aviso al cancelar a las 48 h.
   voltra_ultimo_aviso_confirmacion: {
     vars: ["nombre", "productos", "total"],
@@ -150,6 +191,8 @@ export const PLANTILLAS: Record<string, DefPlantilla> = {
   voltra_pedido_cancelado_sin_respuesta: { vars: ["nombre", "productos"], botones: [{ prefijo: "reactivar", titulo: "Lo quiero igual" }] },
   // 09-10: recordatorio de entrega del interior y pedido de dirección escrita (pedidos con solo el pin).
   voltra_entrega_proxima: { vars: ["nombre", "total"], botones: AYUDA },
+  // 10-10: no entregado → se reintenta siempre, sin preguntar (sin botón de cancelar).
+  voltra_reintento_entrega_v2: { vars: ["nombre", "productos"], botones: [{ prefijo: "ne_direccion", titulo: "Cambiar dirección" }] },
   voltra_completar_direccion: { vars: ["nombre", "pedido"], botones: [] },
   voltra_no_entregado: {
     vars: ["nombre", "productos"],
@@ -166,6 +209,8 @@ export const PLANTILLAS: Record<string, DefPlantilla> = {
       { prefijo: "seg_problema", titulo: "Tuve un problema" },
     ],
   },
+  // 12-10: oferta de pago con prioridad (sin descuento, sin botones). {{2}} = alias, se lee de config al mandar.
+  [PLANTILLA_PAGO_PRIORIDAD]: { vars: ["pedido", "alias"], botones: [] },
   // Ola 4 (I1). Hoy la manda recuperar-borradores directo; queda acá por si se programa por cola.
   voltra_recuperar_borrador: { vars: ["nombre", "producto"], botones: [] },
   // Ola 3 (H1): marketing de recompra. Botones mk_* (los atiende wa-webhook; mk_baja → registrarBaja).
@@ -179,16 +224,42 @@ export const esPlantillaMarketing = (nombre: string) => nombre.startsWith("voltr
 export const AVISOS_ENVIO_CON_HORARIO = new Set([
   "voltra_pedido_despachado",
   "voltra_entrega_hoy",
+  "voltra_entrega_manana",
   "voltra_entrega_proxima",
+  "voltra_reintento_entrega_v2",
+  "voltra_completar_direccion",
   "voltra_no_entregado",
+  PLANTILLA_PAGO_PRIORIDAD,
 ]);
 
 /** 09-10: avisos previos a la entrega ("ya salió", "hoy te llega", "ya está por llegar"). */
 export const AVISOS_PREVIOS_ENTREGA = new Set([
   "voltra_pedido_despachado",
   "voltra_entrega_hoy",
+  "voltra_entrega_manana",
   "voltra_entrega_proxima",
 ]);
+
+/**
+ * 12-10: los avisos previos a la entrega dicen "Tené Gs … para pagar al recibir". A un pedido ya pagado le van estos
+ * textos (dentro de la ventana de 24 h), con los mismos botones. {clave} = variable de la plantilla.
+ */
+export const TEXTOS_AVISO_PAGADO: Record<string, string> = {
+  voltra_pedido_despachado: "Hola {nombre}, tu pedido de Voltra ({productos}) ya salió con {courier}.\nTe llega en {plazo}. Ya está pagado ✅ no pagás nada al recibir.",
+  voltra_entrega_hoy: "Hola {nombre}, hoy te llega tu pedido de Voltra.\nYa está pagado ✅ no pagás nada al recibir.",
+  voltra_entrega_manana: "Hola {nombre}, {dia_entrega} te llega tu pedido de Voltra 📦\nYa está pagado ✅ no pagás nada al recibir. El repartidor te contacta antes de salir.",
+  voltra_entrega_proxima: "Hola {nombre}, tu pedido de Voltra ya está por llegar.\nYa está pagado ✅ no pagás nada al recibir. Tené el teléfono a mano para cuando te llame el repartidor.",
+};
+
+/** 12-10: "mañana te llega": dice un día concreto (variables.fecha_entrega); el día de la entrega o después ya no sale. */
+export const PLANTILLA_ENTREGA_MANANA = "voltra_entrega_manana";
+
+/** true si el aviso de la víspera ya no sirve en `momento` (en Asunción ya es el día de la entrega o después). */
+export function visperaVencida(e: Pick<Envio, "plantilla" | "variables">, momento: Date): boolean {
+  if (nombrePlantilla(e.plantilla) !== PLANTILLA_ENTREGA_MANANA) return false;
+  const f = str(obj(e.variables).fecha_entrega);
+  return !!f && fechaLocal(momento) >= f;
+}
 
 /** 09-10: estados de _shared/tipos.ts EstadoEnvio en los que el paquete ya no está en camino al cliente. */
 export const ESTADOS_ENVIO_TERMINALES = new Set([
@@ -452,6 +523,7 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
   const nombre = nombrePlantilla(e.plantilla);
   const def = PLANTILLAS[nombre];
   if (!def) return { accion: "fallar", motivo: `plantilla_desconocida:${nombre}` };
+  if (nombre === PLANTILLA_PAGO_PRIORIDAD) return decidirOfertaPrioridad(e, def, ctx, cfg, ahora, horario);
 
   // 10-10: "dimos de baja tu pedido" solo si lo canceló la acción canc (cancelado_sin_respuesta).
   if (nombre === PLANTILLA_CANCELADO_SIN_RESPUESTA && estadoPedido !== "cancelado_sin_respuesta") {
@@ -468,6 +540,8 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
   if (AVISOS_PREVIOS_ENTREGA.has(nombre) && envioTerminal(ctx.pedido?.estado_envio)) {
     return { accion: "cancelar", motivo: `envio_${ctx.pedido?.estado_envio}` };
   }
+  // 12-10: un "mañana te llega" que no salió a tiempo (error, reintento) ya no se manda: sería falso.
+  if (visperaVencida(e, ahora)) return { accion: "cancelar", motivo: "vispera_vencida" };
 
   const to = ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? null;
   if (!to) return { accion: "fallar", motivo: "cliente_sin_telefono" };
@@ -483,15 +557,30 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
 
   // 10-10: el último aviso de confirmación tampoco sale de noche (se corre a las 8:00, como los avisos de envío).
   if ((AVISOS_ENVIO_CON_HORARIO.has(nombre) || nombre === PLANTILLA_ULTIMO_AVISO) && !horario.dentro(ahora, cfg.horarioAvisosEnvio)) {
+    const proxima = horario.proxima(ahora, cfg.horarioAvisosEnvio);
+    // 12-10: si la próxima apertura ya es el día de la entrega, el "mañana te llega" no se corre: se cancela.
+    if (visperaVencida(e, proxima)) return { accion: "cancelar", motivo: "vispera_fuera_de_horario" };
     return {
       accion: "reprogramar",
-      enviar_desde: horario.proxima(ahora, cfg.horarioAvisosEnvio),
+      enviar_desde: proxima,
       motivo: "fuera_de_horario_avisos_envio",
     };
   }
 
   const p = armarParametros(def, e.variables, ctx.pedido, ctx.cliente);
   if (!p.ok) return { accion: "fallar", motivo: `falta_variable:${p.falta}` };
+
+  // 12-10: pedido ya pagado (pago con prioridad, QR o transferencia): el aviso no le pide plata.
+  if (AVISOS_PREVIOS_ENTREGA.has(nombre) && ctx.pedido && pedidoPagado(ctx.pedido)) {
+    const base = TEXTOS_AVISO_PAGADO[nombre];
+    if (!base || !ventanaAbierta(ctx.ultimaEntrada, ahora)) return { accion: "cancelar", motivo: "pedido_pagado_sin_ventana" };
+    const vals: Record<string, string> = Object.fromEntries(def.vars.map((k, i) => [k, p.valores[i]]));
+    const texto = base.replace(/\{(\w+)\}/g, (_, k: string) => vals[k] ?? "");
+    if (def.botones.length && e.shopify_order_id != null) {
+      return { accion: "botones", to, texto, botones: def.botones.map((b) => ({ id: `${b.prefijo}:${e.shopify_order_id}`, titulo: b.titulo })) };
+    }
+    return { accion: "texto", to, texto };
+  }
 
   const textoLibre = cfg.textosLibres[nombre];
   if (
@@ -522,6 +611,30 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
     ),
     valores: p.valores,
   };
+}
+
+/**
+ * 12-10: oferta de pago con prioridad (prio:<id>). Apagada o sin alias, pedido que ya no corresponde (pagado,
+ * cancelado, retiro, prueba, mayorista, ya salió) o ventana cerrada sin la plantilla aprobada → se cancela: no se
+ * repite nunca. De noche se corre a las 8:00 (como los avisos de envío).
+ */
+function decidirOfertaPrioridad(e: Envio, def: DefPlantilla, ctx: Contexto, cfg: Config, ahora: Date, horario: Horario): Decision {
+  const pp = cfg.pagoPrioridad;
+  if (!pp.activo) return { accion: "cancelar", motivo: pp.alias ? "pago_prioridad_apagado" : "pago_prioridad_sin_alias_o_apagado" };
+  if (!ctx.pedido) return { accion: "cancelar", motivo: "pedido_no_encontrado" };
+  const motivo = motivoSinOfertaPrioridad(ctx.pedido);
+  if (motivo) return { accion: "cancelar", motivo: `sin_oferta:${motivo}` };
+  const to = ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? null;
+  if (!to) return { accion: "fallar", motivo: "cliente_sin_telefono" };
+  if (!horario.dentro(ahora, cfg.horarioAvisosEnvio)) {
+    return { accion: "reprogramar", enviar_desde: horario.proxima(ahora, cfg.horarioAvisosEnvio), motivo: "fuera_de_horario_avisos_envio" };
+  }
+  // Ventana de 24 h abierta: texto libre (gratis), con las palabras del dueño.
+  if (ventanaAbierta(ctx.ultimaEntrada, ahora)) return { accion: "texto", to, texto: textoOfertaPrioridad(pp) };
+  if (cfg.plantillasActivas[PLANTILLA_PAGO_PRIORIDAD] !== true) return { accion: "cancelar", motivo: "ventana_cerrada_sin_plantilla_aprobada" };
+  const pedido = str(obj(e.variables).pedido) ?? ctx.pedido.nombre ?? `#${e.shopify_order_id}`;
+  const valores = [limpiarParametro(pedido), limpiarParametro(pp.alias)];
+  return { accion: "plantilla", to, nombre: PLANTILLA_PAGO_PRIORIDAD, idioma: IDIOMA, componentes: construirComponentes(def, valores, null), valores };
 }
 
 // ─── Errores y reintentos ───
@@ -604,6 +717,8 @@ export interface Deps {
   esperar?(ms: number): Promise<void>;
   /** 10-10: insert en envios_programados (on conflict clave_unica do nothing). Lo usa la cancelación para el cmsg. */
   programarEnvio?(fila: FilaNueva): Promise<void>;
+  /** 12-10: salió la oferta de pago con prioridad → tag OFERTA_PAGO_ANTICIPADO en Shopify y en shopify_pedidos. */
+  marcarOfertaPrioridad?(orderId: number): Promise<Resultado>;
 }
 
 export type FilaNueva = {
@@ -754,6 +869,28 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
         : await d.enviarTexto(dec.to, dec.texto, op);
       if (!res.ok) return aplicarError(e, res.error ?? "error_desconocido", d, r, pedidoTxt);
       r.enviados++;
+      // 12-10: oferta de pago con prioridad → primero se marca enviada (no se repite) y después el tag del pedido,
+      // que es lo que hace que wa-webhook reconozca el comprobante.
+      if (nombrePlantilla(e.plantilla) === PLANTILLA_PAGO_PRIORIDAD && e.shopify_order_id != null) {
+        await marcarEnviado(e, res.wa_message_id, d, pedidoTxt);
+        if (d.marcarOfertaPrioridad) {
+          const t = await d.marcarOfertaPrioridad(e.shopify_order_id)
+            .catch((err) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+          if (!t.ok) {
+            await d.avisar(
+              `Salió la oferta de pago con prioridad del pedido ${pedidoTxt} pero no se pudo poner el tag ${TAG_OFERTA_PAGO} ` +
+                `(${d.escapar(t.error ?? "error")}). Si manda el comprobante no lo reconozco solo: agregá el tag en Shopify.`,
+            ).catch(() => {});
+          }
+        }
+        return;
+      }
+      // 10-10: reintento de entrega → a Enrique le llega el texto listo para reenviar al courier.
+      if (nombrePlantilla(e.plantilla) === "voltra_reintento_entrega_v2" && ctx.pedido) {
+        const dc = datosCourierDesdeRaw(ctx.pedido.nombre ?? pedidoTxt, (ctx.pedido.raw ?? null) as Record<string, unknown> | null, ctx.cliente?.telefono ?? null);
+        await d.avisar(avisoParaCourier(dc, "No se pudo entregar: volver a intentar el próximo día hábil. Coordinar día, hora y lugar con el cliente.", null))
+          .catch(() => {});
+      }
       return marcarEnviado(e, res.wa_message_id, d, pedidoTxt);
     }
   }
@@ -835,6 +972,12 @@ export function configDesdeFilas(filas: { clave: string; valor: unknown }[]): Co
   cfg.maxIntentos = num(pe.max_intentos, cfg.maxIntentos);
   cfg.reintento131049H = num(pe.reintento_131049_h, cfg.reintento131049H);
   cfg.facturaActiva = obj(m.get("ola4.factura")).activo === true;
+  // 12-10: pago con prioridad y plantillas aprobadas (objeto de booleanos o lista de nombres, como shopify-webhook).
+  cfg.pagoPrioridad = leerConfigPagoPrioridad(m.get(CLAVE_CONFIG_PRIORIDAD));
+  const pa = m.get("plantillas_activas");
+  cfg.plantillasActivas = Array.isArray(pa)
+    ? Object.fromEntries(pa.filter((x): x is string => typeof x === "string").map((x) => [nombrePlantilla(x), true]))
+    : Object.fromEntries(Object.entries(obj(pa)).filter(([, v]) => v === true).map(([k]) => [nombrePlantilla(k), true]));
   if (Array.isArray(pe.esperas_min) && pe.esperas_min.every((x) => typeof x === "number")) {
     cfg.esperasMin = pe.esperas_min as number[];
   }

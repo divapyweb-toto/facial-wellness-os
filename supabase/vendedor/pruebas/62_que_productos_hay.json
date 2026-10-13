@@ -1,0 +1,54 @@
+{
+  "id": "62_que_productos_hay",
+  "titulo": "Pregunta qué hay: productos en una línea con precio, sin explicar cada uno",
+  "cobertura": [
+    "catalogo",
+    "precio_primero"
+  ],
+  "cliente": {
+    "nombre": "Diego Ortiz",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "Hola",
+    "Que productos hay"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "una_pregunta": true,
+    "max_caracteres": 260,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "79.000",
+      "112.000"
+    ],
+    "no_debe_contener": [
+      "ronc"
+    ],
+    "debe_derivar": false
+  },
+  "referencia": [
+    {
+      "texto": "Buenas!\n¿Qué producto viste?",
+      "herramientas": []
+    },
+    {
+      "texto": "Tiras nasales, parches bucales y raspador a 79.000 cada uno, y el pack a 120.000.\nEl envío es 33.000 y pagás al recibir.\n¿Cuál te interesa?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": ""
+          }
+        }
+      ]
+    }
+  ]
+}

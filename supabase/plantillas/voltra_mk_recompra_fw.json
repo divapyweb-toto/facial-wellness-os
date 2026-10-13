@@ -1,0 +1,25 @@
+{
+  "name": "voltra_mk_recompra_fw",
+  "language": "es",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, te escribimos de Voltra, el equipo detrás de Facial Wellness 🙌\nHace un tiempo compraste {{2}} con nosotros.\n¿Te preparo {{3}}? Sale Gs {{4}} con envío incluido y pagás al recibir.",
+      "example": { "body_text": [["Ana", "tiras nasales", "otra bolsa", "112.000"]] }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, mandame" },
+        { "type": "QUICK_REPLY", "text": "Más adelante" },
+        { "type": "QUICK_REPLY", "text": "No quiero ofertas" }
+      ]
+    }
+  ],
+  "_notas": {
+    "origen": "07-10: recompra a clientes de Facial Wellness desde el número de Voltra (prueba de 50). Dice quién escribe para que no lo tomen como spam.",
+    "variables": ["nombre", "producto que compró", "oferta", "total con envío, sin 'Gs'"],
+    "botones_payload": ["mk_si", "mk_luego", "mk_baja"]
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "name": "voltra_confirmacion_pedido_v4",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Gracias por tu pedido *{{1}}*, {{2}} 🙌\n\nSoy el asistente de Voltra ✨\nTu compra fue recibida con éxito en nuestra tienda online.\n\n📦 *Detalles del pedido:*\n*Productos:* {{3}}\n*Total a pagar al recibir:* Gs {{4}} (envío incluido)\n*Dirección:* {{5}}\n*Ciudad:* {{6}}\n*Te llega:* {{7}}\n\nPor favor confirmá si los datos son correctos antes del despacho 🚚\n\nEl asistente de Voltra queda atento a tu confirmación 😄",
+      "example": {
+        "body_text": [
+          [
+            "#1001",
+            "Ana Prueba",
+            "1 Tiras nasales",
+            "129.000",
+            "Calle Falsa 123 casi Ruta 7",
+            "Ciudad del Este",
+            "hoy o mañana martes 13/10"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Confirmo"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Corregir"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cancelar pedido"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "origen": "12-10: la v3 más el día de entrega (Te llega). Botones del plan: Confirmo / Corregir; Cancelar pedido queda porque el código lo usa (conf_cancelar). Necesito ayuda sale: el cliente puede escribir y le contesta el vendedor.",
+    "variables": [
+      "pedido (#1001)",
+      "nombre",
+      "productos y cantidad",
+      "total con envío, sin 'Gs'",
+      "dirección",
+      "ciudad",
+      "día de entrega: diaEntrega(ciudad, ahora).texto de _shared/plazo_zona.ts"
+    ],
+    "botones_payload": [
+      "conf_si",
+      "corregir",
+      "conf_cancelar"
+    ],
+    "corregir": "corregir:<shopify_order_id> → wa-webhook deja el chat con el vendedor (estado ia) y le pasa el contexto; el pedido sigue pendiente. No pasa a humano ni avisa a Enrique.",
+    "activacion": "Sale solo con config_wa.plantillas_activas.voltra_confirmacion_pedido_v4 = true (después de que Meta la apruebe). Mientras tanto sigue la v3."
+  }
+}

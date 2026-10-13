@@ -7,14 +7,17 @@ import {
 } from '../scripts/crear-plantillas-wa.mjs';
 
 const ESPERADAS = [
-  'voltra_confirmacion_pedido', 'voltra_entrega_hoy', 'voltra_no_entregado',
+  'voltra_confirmacion_pedido',
+  'voltra_confirmacion_pedido_v2',
+  'voltra_confirmacion_pedido_v3', 'voltra_entrega_hoy', 'voltra_no_entregado',
   'voltra_pedido_despachado', 'voltra_recordatorio_confirmacion', 'voltra_seguimiento_entrega',
-  'voltra_recuperar_borrador', 'voltra_factura',
-  'voltra_mk_cruzada', 'voltra_mk_lanzamiento', 'voltra_mk_pack', 'voltra_mk_reposicion'
+  'voltra_recuperar_borrador', 'voltra_reintento_entrega_v2', 'voltra_factura', 'voltra_aviso_demora_clima', 'voltra_completar_direccion', 'voltra_entrega_proxima', 'voltra_ultimo_aviso_confirmacion', 'voltra_pedido_cancelado_sin_respuesta',
+  'voltra_mk_cruzada', 'voltra_mk_recompra_fw', 'voltra_mk_lanzamiento', 'voltra_mk_pack', 'voltra_mk_reposicion', 'voltra_mk_seguimiento_oferta',
+  'voltra_confirmacion_pedido_v4', 'voltra_entrega_manana', 'voltra_pago_prioridad'
 ].sort();
 const palabras = cargarPalabrasProhibidas();
 
-test('las 12 plantillas (8 de utilidad + 4 voltra_mk_ de marketing) existen y pasan la validación', () => {
+test('las 19 plantillas (14 de utilidad + 5 voltra_mk_ de marketing) existen y pasan la validación', () => {
   const r = validarTodas();
   assert.deepEqual(r.map((x) => x.plantilla.name).sort(), ESPERADAS);
   for (const { archivo, errores } of r) assert.deepEqual(errores, [], archivo);
@@ -22,11 +25,20 @@ test('las 12 plantillas (8 de utilidad + 4 voltra_mk_ de marketing) existen y pa
 });
 
 test('la confirmación y el recordatorio llevan Confirmar / Corregir datos / Cancelar con los payloads del contrato', () => {
-  for (const x of validarTodas().filter((x) => /confirmacion/.test(x.plantilla.name))) {
+  // La v2 (07-10, formato Facial Wellness) tiene sus propios botones: se prueba aparte.
+  for (const x of validarTodas().filter((x) => /confirmacion/.test(x.plantilla.name) && !/_v[234]$/.test(x.plantilla.name) && !/ultimo_aviso/.test(x.plantilla.name))) {
     const botones = x.plantilla.components.find((c) => c.type === 'BUTTONS').buttons.map((b) => b.text);
     assert.deepEqual(botones, ['Confirmar', 'Corregir datos', 'Cancelar']);
     assert.deepEqual(x.plantilla._notas.botones_payload, ['conf_si', 'conf_corregir', 'conf_cancelar']);
   }
+});
+
+test('la confirmación v2 (formato Facial Wellness) lleva Confirmar pedido / Cancelar pedido / Necesito ayuda, sin emojis en botones', () => {
+  const x = validarTodas().find((x) => x.plantilla.name === 'voltra_confirmacion_pedido_v2');
+  const botones = x.plantilla.components.find((c) => c.type === 'BUTTONS').buttons.map((b) => b.text);
+  assert.deepEqual(botones, ['Confirmar pedido', 'Cancelar pedido', 'Necesito ayuda']);
+  assert.deepEqual(x.plantilla._notas.botones_payload, ['conf_si', 'conf_cancelar', 'ayuda']);
+  for (const b of botones) assert.equal(/\p{Extended_Pictographic}/u.test(b), false, b);
 });
 
 test('lo que se manda a Meta no lleva las notas internas', () => {
@@ -133,4 +145,10 @@ test('seed_integracion.sql trae las claves del contrato y el link de la bandeja 
   assert.deepEqual(f.transcripcion, { proveedor: 'elevenlabs_scribe_v2', usd_por_hora: 0.27, con_palabras_clave: true });
   assert.equal(f.auditoria.url_bandeja, 'https://divapyweb-toto.github.io/facial-wellness-os/#/bandeja');
   assert.deepEqual(Object.keys(f.textos_marketing).sort(), ['baja_confirmada', 'mas_adelante']);
+});
+
+test('último aviso: Confirmar / Cancelar con los mismos payloads que la confirmación v3', () => {
+  const x = validarTodas().find((x) => x.plantilla.name === 'voltra_ultimo_aviso_confirmacion');
+  assert.ok(x);
+  assert.deepEqual(x.plantilla._notas.botones_payload, ['conf_si', 'conf_cancelar']);
 });

@@ -23,6 +23,7 @@ export const CLAVES_CONFIG_VENDEDOR = [
   "vendedor_estilo",
   "aceptaciones",
   "palabras_prohibidas",
+  "pago_anticipado",
 ] as const;
 
 export const ACEPTACIONES_DEFAULT = ["si", "sí", "ok", "okay", "dale", "ya", "katu", "mandame katu", "si luego", "confirmo"];
@@ -94,14 +95,24 @@ export function armarConfigTurno(filas: Record<string, unknown>): { cfg: ConfigT
         niega_ia: listaStrings(v.niega_ia) ?? NIEGA_IA_DEFAULT,
       }
       : null, { muletillas: MULETILLAS_DEFAULT, urgencia: URGENCIA_DEFAULT, niega_ia: NIEGA_IA_DEFAULT });
+  // Cuenta para transferencias (la misma que usa el pago anticipado). Opcional: no cuenta como faltante.
+  const pa = filas["pago_anticipado"];
+  const b = esObj(pa) && esObj(pa.banco) ? pa.banco : null;
+  const transferencia = b && typeof b.cuenta === "string" && b.cuenta.trim()
+    ? [
+      [b.entidad, b.tipo, b.cuenta].filter((x) => typeof x === "string" && x.trim()).join(" · "),
+      [b.titular, typeof b.ruc === "string" && b.ruc ? `RUC ${b.ruc}` : null].filter((x) => typeof x === "string" && x.trim()).join(" · "),
+      ...(typeof b.alias === "string" && b.alias.trim() ? [`Alias: ${b.alias.trim()}`] : []),
+    ].filter(Boolean).join("\n")
+    : null;
   const p = filas["vendedor_prompt"];
   const plantillaPrompt = typeof p === "string" && p.trim() ? p : null; // opcional: no cuenta como faltante
 
   return {
     cfg: {
       vendedor, envio, glosario, fichas, afirmaciones, aceptaciones, prohibidas, promesasSalud, ofertas, media, textos, plantillaPrompt,
-      ritmo, respuestasFijas, estilo,
+      ritmo, respuestasFijas, estilo, transferencia,
     },
-    faltantes: faltantes.filter((k) => k !== "vendedor_prompt"),
+    faltantes: faltantes.filter((k) => k !== "vendedor_prompt" && k !== "pago_anticipado"),
   };
 }

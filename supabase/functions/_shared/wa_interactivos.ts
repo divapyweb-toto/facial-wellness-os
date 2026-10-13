@@ -180,6 +180,29 @@ export function botonesSiNo(
   };
 }
 
+/** 12-10: pedido de permiso para ofertas (opt-in de Meta: nombra a Voltra y dice qué recibe). Lo registra wa-webhook (cons_si/cons_no). */
+export const TEXTO_PERMISO_OFERTAS = "¿Querés que Voltra te avise por acá cuando haya ofertas y novedades? Podés darte de baja cuando quieras.";
+export function botonesPermisoOfertas(clienteId: string, texto: string = TEXTO_PERMISO_OFERTAS): Interactivo {
+  return botonesSiNo(texto, `cons_si:${clienteId}`, `cons_no:${clienteId}`, { si: "Sí, avisame", no: "No, gracias" });
+}
+
+/** 1 a 3 botones de respuesta sin cabecera (12-10: primer turno con "Quiero pedirlo" / "Tengo una duda" / …). */
+export function botonesRespuesta(texto: string, opciones: { id: string; titulo: string }[]): Interactivo {
+  exigirTexto(texto, LIMITE_CUERPO, "cuerpo");
+  if (!Array.isArray(opciones) || opciones.length < 1 || opciones.length > 3) throw new ErrorInteractivo("opciones_1_a_3");
+  const ids = new Set<string>();
+  for (const o of opciones) {
+    exigirBoton(o.id, o.titulo);
+    if (ids.has(o.id)) throw new ErrorInteractivo(`id_boton_repetido:${o.id}`);
+    ids.add(o.id);
+  }
+  return {
+    type: "button",
+    body: { text: texto },
+    action: { buttons: opciones.map((o) => ({ type: "reply", reply: { id: o.id, title: o.titulo } })) },
+  };
+}
+
 /** Textos que ve el cliente (para el filtro de palabras prohibidas y la bandeja). */
 export function textosVisibles(i: Interactivo): string[] {
   const out: string[] = [];

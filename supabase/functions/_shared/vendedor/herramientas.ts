@@ -8,18 +8,24 @@
 //     un sí claro del cliente en el mensaje actual o el botón Confirmar; se usan los datos del resumen guardado,
 //     no lo que el modelo reescriba.
 //   - Todo texto que el modelo pone dentro de un interactivo pasa por el mismo filtro que su respuesta.
-import { normalizarRuc } from "../facturacion.ts";
+import { avisoParaCourier, datosCourierDesdeRaw } from "../texto_courier.ts";
+import { digitoVerificadorRuc, normalizarRuc } from "../facturacion.ts";
 import type { Herramienta } from "../claude.ts";
 import {
+  botonesPermisoOfertas,
+  botonesRespuesta,
+  TEXTO_PERMISO_OFERTAS,
   botonesSiNo,
   listaVertical,
   flowFormulario,
   pedirContacto,
   ubicacionRequest,
 } from "../wa_interactivos.ts";
-import { enlaceWaMe, formatoChatNecesitaEnrique, formatoPedidoNuevo } from "../telegram_formato.ts";
+import { enlaceWaMe, escaparHtml, formatoChatNecesitaEnrique, formatoPedidoNuevo } from "../telegram_formato.ts";
 import { botonEnlace } from "./interactivos.ts";
 import { NECESIDADES, normalizarPerfil, PERFILES } from "./perfil.ts";
+import { pausaBurbujaMs } from "./ritmo.ts";
+import { diaEntrega } from "../plazo_zona.ts";
 import type { CtxTurno, DatosPedidoChat, DepsHerramientas, LineaPedido, PedidoChat, ProductoShopify } from "./tipos.ts";
 
 // ---------- utilidades puras ----------
@@ -33,13 +39,22 @@ function normalizar(s: string): string {
 }
 
 /** "si dale", "ok", "mandame katu"… (misma regla que wa-webhook: todas las palabras en la lista). */
+// 08-10: "Dale amigo" y "Ya confirmé amigo" no contaban como sí y se perdió un pedido. Palabras que confirman solas
+// y relleno que acompaña sin cambiar el sentido. "no", "después", "pero" no están: siguen sin contar.
+const CONFIRMAN = new Set(["confirmo", "confirme", "confirmado", "confirmada", "listo", "perfecto", "joya", "va", "vale", "bueno", "sii", "siii", "sip"]);
+const RELLENO = new Set(["amigo", "amiga", "amor", "che", "nomas", "por", "favor", "porfa", "gracias", "ya", "claro", "obvio", "de", "una", "todo", "bien", "esta", "eso", "asi", "el", "pedido", "senor", "senora", "hermano", "bro", "nde", "lo", "que", "si"]);
+
 export function esAceptacion(texto: string, aceptaciones: string[]): boolean {
   const n = normalizar(texto);
   if (!n) return false;
   const frases = new Set(aceptaciones.map(normalizar).filter(Boolean));
   if (frases.has(n)) return true;
   const palabras = new Set([...frases].flatMap((f) => f.split(" ")));
-  return n.split(" ").every((w) => palabras.has(w));
+  // "siiii", "sii", "okk", "daleee": letras estiradas cuentan como la palabra.
+  const ws = n.split(" ").map((w) => /^si+$/.test(w) ? "si" : /^ok+$/.test(w) ? "ok" : /^dale+$/.test(w) ? "dale" : w);
+  if (ws.every((w) => palabras.has(w))) return true;
+  return ws.length <= 6 && ws.every((w) => palabras.has(w) || CONFIRMAN.has(w) || RELLENO.has(w))
+    && ws.some((w) => palabras.has(w) || CONFIRMAN.has(w));
 }
 
 function texto(t: Record<string, string>, clave: string, porDefecto: string, vars: Record<string, string> = {}): string {
@@ -50,9 +65,11 @@ function texto(t: Record<string, string>, clave: string, porDefecto: string, var
 
 export const TEXTOS_DEFAULT: Record<string, string> = {
   resumen: "Te resumo: {lineas}. Envío Gs {envio}. Total Gs {total}, pagás al recibir. Lo entregamos en {direccion}, {ciudad}.",
-  boton_confirmar: "Confirmar",
+  resumen_envio_gratis: "Te resumo: {lineas}, envío gratis. Total Gs {total}, pagás al recibir. Lo entregamos en {direccion}, {ciudad}.",
+  resumen_retiro: "Te resumo: {lineas}. Sin costo de envío: lo retirás en nuestra oficina en Ciudad del Este (coordinamos día y hora por acá). Total Gs {total}, pagás al retirar.",
+  boton_confirmar: "Confirmo",
   boton_corregir: "Corregir",
-  pedido_creado: "Listo {nombre}, ya cargamos tu pedido {pedido}. En unos minutos te llega la confirmación por acá.",
+  pedido_creado: "Listo {nombre}, quedó confirmado tu pedido {pedido} 🙌 Te avisamos por acá cuando salga y pagás al recibir.",
   derivacion: "Te paso con Enrique para que lo vea personalmente. Tocá el botón y le llega tu caso ya escrito.",
   derivacion_sin_boton: "Le paso tu caso a Enrique y te escribe por acá apenas lo vea.",
   // Cuando el texto del modelo ya dice que lo pasa con Enrique, solo se agrega la llamada a la acción.
@@ -154,9 +171,17 @@ export const HERRAMIENTAS: Herramienta[] = [
             required: ["handle", "cantidad"],
           },
         },
+        retiro_oficina: {
+          type: "boolean",
+          description: "true si retira en nuestra oficina de Ciudad del Este (solo clientes de CDE y alrededores): sin envío y sin dirección.",
+        },
         factura: {
           type: "string",
           description: "Solo si el cliente QUIERE factura: RUC con guion y razón social, ej. \"4012344-3 Carlos Benítez\". Si no quiere o no contestó, no lo mandes.",
+        },
+        factura_sin_validar: {
+          type: "boolean",
+          description: "Solo si ya le volviste a pedir el RUC una vez y sigue sin dar: true para crear el pedido igual (Enrique lo revisa antes de facturar).",
         },
       },
       required: ["confirmar"],
@@ -177,6 +202,38 @@ export const HERRAMIENTAS: Herramienta[] = [
     },
   },
   {
+    name: "primer_turno",
+    description:
+      "PRIMER MENSAJE a quien viene de un anuncio (o la primera vez que se habla de un producto): manda 2 burbujas, tu gancho y el precio total calculado por el sistema con 3 botones (Quiero pedirlo / Tengo una duda / Precios por cantidad). Una sola vez por conversación. Después no escribas nada más.",
+    input_schema: {
+      type: "object",
+      properties: {
+        handle: { type: "string" },
+        gancho: { type: "string", description: "El gancho del producto (1 línea, el beneficio). Sin precio ni pregunta: eso lo pone el sistema." },
+      },
+      required: ["handle", "gancho"],
+    },
+  },
+  {
+    name: "cierre_botones",
+    description:
+      "Cierre con los mismos 3 botones del primer turno (Quiero pedirlo / Tengo una duda / Precios por cantidad) debajo de tu texto. Para el [seguimiento 1] después del video, o cuando quieras que elija con un toque. Después no escribas nada más.",
+    input_schema: {
+      type: "object",
+      properties: {
+        handle: { type: "string" },
+        texto: { type: "string", description: "1 o 2 líneas cortas que cierran (ej. \"Te lo armo y pagás recién cuando lo tenés en la mano\")." },
+      },
+      required: ["handle", "texto"],
+    },
+  },
+  {
+    name: "permiso_ofertas",
+    description:
+      "Cuando el cliente posterga (\"no por ahora\", \"después\", \"cuando cobre\"): tu respuesta corta va arriba y abajo el sistema le pregunta si quiere que Voltra le avise de ofertas (botones Sí / No). Una sola vez por cliente; nunca en el primer turno ni ante un no rotundo. Después no escribas nada más.",
+    input_schema: { type: "object", properties: { texto: { type: "string", description: "Tu respuesta corta a la postergación (ej. \"Dale, tranqui. El lunes te escribo\")." } }, required: ["texto"] },
+  },
+  {
     name: "enviar_media",
     description: "Manda la foto o el video real de un producto (prueba concreta ante dudas o desconfianza, o el video de uso en un reclamo de uso).",
     input_schema: {
@@ -191,7 +248,7 @@ export const HERRAMIENTAS: Herramienta[] = [
   },
   {
     name: "pedir_ubicacion",
-    description: "Le pide al cliente el pin de su casa con un toque (menos rechazos por dirección mal cargada). Después no escribas nada más.",
+    description: "Pide los datos de entrega en UN mensaje (texto = el pedido completo: nombre, ciudad, dirección con referencia, teléfono alternativo) con el botón para mandar el pin de su casa (menos rechazos por dirección mal cargada). Después no escribas nada más.",
     input_schema: { type: "object", properties: { texto: { type: "string" } }, required: ["texto"] },
   },
   {
@@ -220,12 +277,35 @@ export const HERRAMIENTAS: Herramienta[] = [
         nota: { type: "string", description: "Dato corto útil para después, sin datos personales sensibles (máx. 120 caracteres)." },
         producto: { type: "string", description: "Producto que eligió o por el que pregunta, como figura en el catálogo (ej. \"tiras nasales\")." },
         cantidad: { type: "integer", minimum: 1, maximum: 10, description: "Cantidad que eligió." },
+        recontactar_el: {
+          type: "string",
+          description: "Fecha YYYY-MM-DD en que el cliente dijo que cobra o que puede comprar (\"cobro el viernes\", \"el 15\"). Ese día le escribimos.",
+        },
         rechazo: {
           type: "boolean",
           description: "true solo si el cliente dijo claramente que no quiere comprar (\"no me interesa\", \"no gracias\"). No le vamos a volver a escribir por nuestra cuenta.",
         },
       },
     },
+  },
+  {
+    name: "actualizar_direccion",
+    description:
+      "Suma al pedido YA CREADO los datos de entrega que el cliente mandó después (número de casa, referencia, calle). No hace falta derivar a Enrique por esto. Mandá solo lo que agregó o corrigió.",
+    input_schema: {
+      type: "object",
+      properties: {
+        direccion: { type: "string", description: "Calle, número o barrio (solo si lo corrigió o lo agregó)" },
+        referencia: { type: "string", description: "Referencia para el courier: color de casa, portón, comercio cerca" },
+        ubicacion: { type: "string", description: "Pin que mandó el cliente, \"lat,lng\" (de un mensaje [ubicación] o link de Maps)" },
+      },
+    },
+  },
+  {
+    name: "datos_transferencia",
+    description:
+      "Le manda al cliente los datos de la cuenta para transferir (cuando pide alias, cuenta o quiere pagar por transferencia). Después escribí UNA línea pidiendo los datos del envío que falten y la foto del comprobante; no repitas el número de cuenta.",
+    input_schema: { type: "object", properties: {} },
   },
   {
     name: "pedir_telefono",
@@ -277,6 +357,8 @@ export type OfertaCatalogo = {
   total_texto: string;
   ahorro: number;
   ahorro_texto: string;
+  /** Texto listo para el cliente, igual que el anuncio: "125.000 + 33.000 de envío = 158.000" (08-10). */
+  frase_precio: string;
 };
 export type ItemCatalogo = {
   handle: string;
@@ -289,7 +371,27 @@ export type ItemCatalogo = {
   total_texto: string;
   ofertas: OfertaCatalogo[];
   imagen: string | null;
+  /** "79.000 + 33.000 de envío = 112.000": el precio del anuncio con el envío aparte (08-10). */
+  frase_precio: string;
 };
+
+/** 08-10: el anuncio dice "Gs 79.000"; decir "112.000 con envío" parecía otro precio. Siempre precio + envío = total. */
+export const frasePrecio = (precio: number, envio: number) => `${gs(precio)} + ${gs(envio)} de envío = ${gs(precio + envio)}`;
+/**
+ * 12-10 (Enrique): siempre el total con envío y lo que gana contra comprar de a 1 (unidad + envío).
+ * ×2 → "158.000 en total: es como pagar 2 × 79.000, el envío te sale gratis"; ×3 → "188.000 en total: envío gratis
+ * + 49.000 menos". Si la oferta no llega a cubrir el envío, solo el total (no se promete envío gratis).
+ */
+export function fraseCantidad(cantidad: number, precioUnidad: number, precioOferta: number, envio: number): string {
+  const total = precioOferta + envio;
+  const menos = cantidad * precioUnidad - total;
+  if (menos > 0) return `${gs(total)} en total: envío gratis + ${gs(menos)} menos`;
+  if (menos === 0) return `${gs(total)} en total: es como pagar ${cantidad} × ${gs(precioUnidad)}, el envío te sale gratis`;
+  return `${gs(total)} en total`;
+}
+/** 09-10: 2 o más del mismo producto → "envío gratis" (mismo total de siempre: oferta + envío). */
+export const frasePrecioOferta = (cantidad: number, precio: number, envio: number, precioUnidad: number) =>
+  `${cantidad} por ${fraseCantidad(cantidad, precioUnidad, precio, envio)}`;
 
 /** Precio total de `cantidad` unidades: la oferta por cantidad si existe; si no, lista × cantidad. */
 export function precioPorCantidad(precio: number, cantidad: number, ofertas: Record<string, number> | undefined): number {
@@ -308,7 +410,10 @@ export function itemsCatalogo(productos: ProductoShopify[], ctx: CtxTurno): Item
       .sort((a, b) => a.cantidad - b.cantidad)
       .map((o) => {
         const ahorro = Math.max(0, v.price * o.cantidad - o.precio);
-        return { ...o, precio_texto: gs(o.precio), total: o.precio + envio, total_texto: gs(o.precio + envio), ahorro, ahorro_texto: gs(ahorro) };
+        return {
+          ...o, precio_texto: gs(o.precio), total: o.precio + envio, total_texto: gs(o.precio + envio), ahorro, ahorro_texto: gs(ahorro),
+          frase_precio: frasePrecioOferta(o.cantidad, o.precio, envio, v.price),
+        };
       });
     return {
       handle: p.handle,
@@ -321,6 +426,7 @@ export function itemsCatalogo(productos: ProductoShopify[], ctx: CtxTurno): Item
       total_texto: gs(v.price + envio),
       ofertas,
       imagen: p.imagen,
+      frase_precio: frasePrecio(v.price, envio),
     };
   }).filter((x): x is ItemCatalogo => x !== null);
 }
@@ -354,7 +460,7 @@ async function consultarCatalogo(input: Record<string, unknown>, ctx: CtxTurno, 
       envio_texto: gs(ctx.cfg.envio.costo_gs),
       plazo: ctx.cfg.envio.plazo,
       productos: items.map(({ imagen: _i, ...resto }) => resto),
-      nota: "total = precio + envío; ahorro = lo que ahorra la oferta contra comprar por unidad (además paga un solo envío). Usá solo estos montos.",
+      nota: "Decí el precio SIEMPRE con frase_precio (precio del anuncio + envío aparte = total), nunca solo el total. ahorro = lo que ahorra la oferta contra comprar por unidad. Usá solo estos montos.",
     },
   };
 }
@@ -380,6 +486,45 @@ async function estadoPedido(_i: Record<string, unknown>, ctx: CtxTurno, deps: De
   };
 }
 
+/**
+ * 10-10: RUC + razón social que manda el cliente → validado con el dígito verificador (módulo 11).
+ * Acepta puntos y espacios ("4.012.344-3", "4012344 3"). Sin DV propone el correcto para que el cliente lo confirme.
+ */
+export type FacturaParseada =
+  | { ok: true; ruc: string; razon: string }
+  | { ok: false; motivo: "sin_ruc" | "sin_razon" | "sin_dv" | "dv_invalido"; sugerido?: string; razon?: string };
+export function parsearFactura(texto: string): FacturaParseada {
+  const t = String(texto ?? "").trim();
+  const m = /(\d{1,3}(?:[.\s]\d{3})+|\d{3,9})(?:\s*[-–]\s*(\d)(?!\d)|\s(\d)(?=\s|$))?/.exec(t);
+  if (!m) return { ok: false, motivo: "sin_ruc" };
+  const base = m[1].replace(/[.\s]/g, "");
+  const dv = m[2] ?? m[3];
+  const razon = t.replace(m[0], " ").replace(/\b(?:r\.?u\.?c\.?|raz[oó]n social|a nombre de|nombre)\s*[:\-]?/giu, " ")
+    .replace(/[,;:|]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!/^\d{3,9}$/.test(base)) return { ok: false, motivo: "sin_ruc" };
+  if (dv === undefined) return { ok: false, motivo: "sin_dv", sugerido: `${base}-${digitoVerificadorRuc(base)}`, razon };
+  const ruc = normalizarRuc(`${base}-${dv}`);
+  if (!ruc) return { ok: false, motivo: "dv_invalido", razon };
+  if (!razon) return { ok: false, motivo: "sin_razon" };
+  return { ok: true, ruc, razon };
+}
+
+/** 10-10: la referencia nueva se SUMA a la que ya había (antes la pisaba: "Reja negra, pasto en la vereda" → "pasto"). */
+export function unirReferencia(actual: string | null | undefined, nueva: string): string {
+  const a = String(actual ?? "").trim(), n = nueva.trim();
+  if (!a) return n;
+  const norm = (x: string) => normalizar(x);
+  if (norm(a).includes(norm(n))) return a;
+  if (norm(n).includes(norm(a))) return n;
+  return `${a}. ${n}`.slice(0, 250);
+}
+
+/** "Pin de ubicación", "Ubicación por pin", "ubicación enviada…": dirección sin nada escrito para el courier. */
+export function esSoloPin(direccion: string): boolean {
+  const n = normalizar(direccion);
+  return /^(?:el )?(?:pin|ubicacion)(?: (?:de|por|del|enviada|en|el|mapa|maps|google|ubicacion|pin|link|whatsapp))*$/.test(n);
+}
+
 /** Valida los datos y arma las líneas con los precios del catálogo. Puro (salvo el catálogo ya leído). */
 export function armarPedido(
   input: Record<string, unknown>,
@@ -389,8 +534,14 @@ export function armarPedido(
   const s = (k: string) => (typeof input[k] === "string" ? (input[k] as string).trim() : "");
   const faltan: string[] = [];
   if (!s("nombre")) faltan.push("nombre");
-  if (!s("ciudad")) faltan.push("ciudad");
-  if (!s("direccion")) faltan.push("direccion");
+  const retiro = input.retiro_oficina === true;
+  if (!retiro && !s("ciudad")) faltan.push("ciudad");
+  if (retiro) { /* retira en la oficina de CDE: no hace falta dirección */ }
+  else if (!s("direccion")) faltan.push("direccion");
+  // 08-10: con solo el pin ("Pin de ubicación") el pedido no se despacha: hace falta algo escrito para el courier.
+  else if (esSoloPin(s("direccion")) && !s("referencia")) {
+    faltan.push("referencia escrita además del pin (calle o barrio, número de casa, color del portón o algo cerca)");
+  }
   if (!ctx.telefono) faltan.push("telefono (usá pedir_telefono)");
   const pedidos = Array.isArray(input.items) ? input.items as Array<Record<string, unknown>> : [];
   if (!pedidos.length) faltan.push("items");
@@ -415,21 +566,38 @@ export function armarPedido(
       total: precioPorCantidad(prod.precio, cantidad, ctx.cfg.ofertas[prod.handle]),
     });
   }
-  const envio = ctx.cfg.envio.costo_gs;
+  // 10-10: la factura se valida acá; si no da, el modelo se la vuelve a pedir al cliente (una vez).
+  let factura: { texto: string; ruc: string | null; razon: string | null; invalida: boolean } | null = null;
+  if (s("factura")) {
+    const f = parsearFactura(s("factura"));
+    if (f.ok) factura = { texto: `${f.ruc} ${f.razon}`, ruc: f.ruc, razon: f.razon, invalida: false };
+    else if (input.factura_sin_validar === true) factura = { texto: s("factura"), ruc: null, razon: null, invalida: true };
+    else if (f.motivo === "sin_dv") {
+      return { ok: false, faltan: [], error: `ruc_sin_dv: preguntale "¿Tu RUC es ${f.sugerido}?" y solo si confirma mandá factura "${f.sugerido} ${f.razon || "<razón social>"}".` };
+    } else if (f.motivo === "dv_invalido") {
+      return { ok: false, faltan: [], error: "ruc_invalido: el número después del guion no da. Pedíselo de nuevo UNA sola vez: \"Ese RUC no me da, ¿me lo pasás de nuevo con el número después del guion?\". Si ya se lo pediste y vuelve a fallar, llamá crear_pedido_cod con la misma factura y factura_sin_validar=true." };
+    } else if (f.motivo === "sin_razon") {
+      return { ok: false, faltan: ["razón social (a nombre de quién va la factura)"] };
+    } else return { ok: false, faltan: ["RUC con guion (ej. 1234567-8)"] };
+  }
+  const envio = retiro ? 0 : ctx.cfg.envio.costo_gs;
   const subtotal = lineas.reduce((a, l) => a + l.total, 0);
   return {
     ok: true,
     datos: {
       nombre: s("nombre"),
-      ciudad: s("ciudad"),
-      direccion: s("direccion"),
+      ciudad: retiro ? "Ciudad del Este" : s("ciudad"),
+      direccion: retiro ? "Retira en la oficina (CDE)" : s("direccion"),
       referencia: s("referencia") || null,
       ubicacion: s("ubicacion") || null,
       telefono: ctx.telefono!,
       lineas,
       envio,
       total: subtotal + envio,
-      factura: s("factura") || null,
+      factura: factura?.texto ?? null,
+      ...(factura?.ruc ? { facturaRuc: factura.ruc, facturaRazon: factura.razon } : {}),
+      ...(factura?.invalida ? { facturaInvalida: true } : {}),
+      ...(retiro ? { retiro: true } : {}),
     },
   };
 }
@@ -458,6 +626,7 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
   const [nombre, ...resto] = d.nombre.split(/\s+/);
   const notas = [`Pedido creado por el vendedor con IA (WhatsApp).`];
   if (d.ubicacion) notas.push(`Ubicación: ${d.ubicacion}`);
+  if (d.retiro) notas.push("Retira en la oficina de CDE, sin envío. Coordinar día y hora por WhatsApp.");
   if (d.factura) notas.push(`Factura: ${d.factura}`);
   return {
     order: {
@@ -469,7 +638,7 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
       phone: d.telefono,
       financialStatus: "PENDING",
       lineItems: lineasShopify(d.lineas),
-      shippingLines: [{ title: "Envío", priceSet: { shopMoney: { amount: String(d.envio), currencyCode: "PYG" } } }],
+      shippingLines: d.retiro ? [] : [{ title: "Envío", priceSet: { shopMoney: { amount: String(d.envio), currencyCode: "PYG" } } }],
       shippingAddress: {
         firstName: nombre,
         lastName: resto.join(" ") || null,
@@ -479,13 +648,18 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
         countryCode: "PY",
         phone: d.telefono,
       },
-      tags: ["ORIGEN_WHATSAPP"],
+      // RETIRO_EN_CASA: no va al courier (Despacho lo excluye) ni recibe avisos de envío.
+      // 10-10: el cliente ya confirmó en el resumen del chat → entra CONFIRMADO y no se le manda la plantilla de
+      // confirmación (antes tenía que confirmar dos veces). OFERTA_PAGO_ANTICIPADO: si manda comprobante, se detecta igual.
+      tags: d.retiro ? ["ORIGEN_WHATSAPP", "CONFIRMADO", "RETIRO_EN_CASA"] : ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"],
       note: notas.join("\n"),
       customAttributes: [
         { key: "origen", value: "whatsapp" },
         { key: "conversacion_id", value: ctx.conversacionId },
         // La función de factura lee los atributos del pedido (claves_datos_fiscales), no la nota (07-10).
         ...(d.factura ? [{ key: "factura", value: d.factura }] : []),
+        // 10-10: mismos nombres que Releasit; la facturación los lee antes que "factura". Solo con RUC válido.
+        ...(d.facturaRuc ? [{ key: "Ruc", value: d.facturaRuc }, { key: "Razon social", value: d.facturaRazon ?? "" }] : []),
       ],
     },
     options: { inventoryBehaviour: "DECREMENT_OBEYING_POLICY", sendReceipt: false, sendFulfillmentReceipt: false },
@@ -493,14 +667,22 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
 }
 
 export function textoResumen(d: DatosPedidoChat, ctx: CtxTurno): string {
-  const lineas = d.lineas.map((l) => `${l.titulo} x${l.cantidad} (Gs ${gs(l.total)})`).join(", ");
-  return texto(ctx.cfg.textos, "resumen", TEXTOS_DEFAULT.resumen, {
+  // 09-10: un solo producto ×2 o más → se muestra con envío gratis (el total es el mismo: oferta + envío).
+  const gratis = !d.retiro && d.lineas.length === 1 && d.lineas[0].cantidad >= 2;
+  const lineas = gratis
+    ? `${d.lineas[0].titulo} x${d.lineas[0].cantidad}`
+    : d.lineas.map((l) => `${l.titulo} x${l.cantidad} (Gs ${gs(l.total)})`).join(", ");
+  const clave = d.retiro ? "resumen_retiro" : gratis ? "resumen_envio_gratis" : "resumen";
+  const lineaFactura = d.facturaRuc ? `\n🧾 Factura a nombre de: ${d.facturaRazon} · RUC ${d.facturaRuc}` : "";
+  // 12-10 (fase 3): el día de entrega según la ciudad, en el mismo resumen que se confirma.
+  const lineaEntrega = d.retiro || !d.ciudad ? "" : `\n📦 Te llega: ${diaEntrega(d.ciudad, ctx.ahora).texto}`;
+  return texto(ctx.cfg.textos, clave, TEXTOS_DEFAULT[clave], {
     lineas,
     envio: gs(d.envio),
     total: gs(d.total),
     direccion: [d.direccion, d.referencia].filter(Boolean).join(", "),
     ciudad: d.ciudad,
-  });
+  }) + lineaEntrega + lineaFactura;
 }
 
 function opts(ctx: CtxTurno) {
@@ -552,8 +734,20 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
   if (previo.estado !== "resumen") return error(`resumen_en_estado_${previo.estado}: armá un resumen nuevo.`);
   const vencido = ctx.ahora.getTime() - new Date(previo.creado_en).getTime() > 24 * 3600_000;
   if (vencido) return error("resumen_vencido: mostrá el resumen de nuevo con confirmar=false.");
-  const boton = new RegExp(`\\(vend_conf:${previo.id}\\)`).test(ctx.textoEntrada);
-  if (!boton && !esAceptacion(ctx.textoEntrada, ctx.cfg.aceptaciones)) {
+  // El sí puede estar en cualquier mensaje del cliente desde el resumen (un turno que falló o quedó agrupado no lo pierde).
+  // El Confirmar de un resumen anterior del mismo chat también vale (08-10: la clienta tocó Confirmar justo cuando el
+  // bot rehacía el resumen con su nota y tuvo que confirmar 4 veces). Se crea con los datos del último resumen.
+  const reBoton = /\(vend_conf:[^)\s]+\)/;
+  const ok = (t: string) => reBoton.test(t) || esAceptacion(t, ctx.cfg.aceptaciones);
+  let confirmo = ok(ctx.textoEntrada);
+  if (!confirmo && deps.entradasDesde) {
+    const desdeISO = new Date(new Date(previo.creado_en).getTime() - 10 * 60_000).toISOString();
+    const desde = await deps.entradasDesde(ctx.conversacionId, desdeISO).catch(() => [] as string[]);
+    // El "Corregir" posterior manda: si después del sí pidió corregir, no se confirma.
+    const iCorr = desde.findLastIndex((t) => /\(vend_corr:/.test(t));
+    confirmo = desde.slice(iCorr + 1).some(ok);
+  }
+  if (!confirmo) {
     return error("falta_si_claro: el último mensaje del cliente no es un sí claro ni el botón Confirmar. Preguntá si confirma.");
   }
 
@@ -576,12 +770,13 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
     }
   } else avisos.push("Shopify no devolvió el pedido completo: la confirmación la programa el webhook o la conciliación.");
   if (d.factura) {
-    const m = /([\d.]{3,12}\s*-\s*\d)/.exec(d.factura);
-    const ruc = m ? normalizarRuc(m[1]) : null;
+    // 10-10: el RUC ya viene validado (facturaRuc); si el cliente insistió con uno que no da, va a revisar.
+    const ruc = d.facturaRuc ?? (d.facturaInvalida ? null : normalizarRuc((/([\d.]{3,12}\s*-\s*\d)/.exec(d.factura) ?? [])[1]));
     avisos.push(ruc
       ? `🧾 Pide factura electrónica: ${d.factura}. Se factura recién cuando esté cobrado (entregado o transferencia verificada), nunca antes. Si la automática está apagada, emitila a mano en ese momento.`
       : `🧾 Pide factura pero el RUC no es válido ("${d.factura}"). Pedile el dato correcto antes de facturar.`);
   }
+  if (d.retiro) avisos.push("🏠 Retira en la oficina de CDE: escribile para coordinar día y hora. No va al courier.");
   if (typeof r.total === "number" && Math.round(r.total) !== Math.round(d.total)) {
     avisos.push(`Ojo: Shopify calculó Gs ${gs(r.total)} y el chat le dijo Gs ${gs(d.total)}.`);
   }
@@ -590,7 +785,7 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
     nombre_pedido: r.nombre ?? null,
     total: d.total,
     productos: d.lineas.map((l) => `${l.titulo} x${l.cantidad}`),
-    ciudad: d.ciudad,
+    ciudad: d.retiro ? "CDE (retira en la oficina)" : d.ciudad,
     origen: "whatsapp (vendedor IA)",
     cliente: { nombre: d.nombre, telefono: d.telefono, wa_user_id: ctx.waUserId },
   });
@@ -645,6 +840,11 @@ export async function derivarAEnrique(
   ctx: CtxTurno,
   deps: DepsHerramientas,
 ): Promise<ResultadoHerramienta> {
+  // 10-10: el modelo derivó con resumen "x" justo después del video de entrada y el cliente quedó colgado.
+  // Sin un motivo real escrito (las fallas del sistema las deriva el orquestador, no pasan por acá con "otro"), no se deriva.
+  if (input.motivo === "otro" && String(input.resumen ?? "").trim().length < 25) {
+    return error("derivacion_sin_motivo: no derives sin un motivo real y un resumen claro. Seguí vos: precio con frase_precio y una pregunta corta.");
+  }
   const sigueIa = esDerivacionDeVenta(input.motivo);
   if (!sigueIa) await deps.pasarAHumano(ctx.conversacionId);
   let orderId: number | null = Number.isFinite(Number(input.shopify_order_id)) && input.shopify_order_id ? Number(input.shopify_order_id) : null;
@@ -754,6 +954,53 @@ async function enviarMediaHerr(input: Record<string, unknown>, ctx: CtxTurno, de
   return { resultado: { ok: true, enviado: true, nota: "Se mandó el archivo. Si hace falta, escribí una línea corta con una pregunta." } };
 }
 
+async function actualizarDireccion(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  const t = (k: string) => (typeof input[k] === "string" ? (input[k] as string).trim().slice(0, 200) : "");
+  const direccion = t("direccion");
+  // 12-10: el pin va como "lat,lng" en la referencia (pedidos-trabados lo reconoce como dirección utilizable).
+  const pin = /(-\d{1,2}\.\d{3,})\s*,\s*(-\d{1,2}\.\d{3,})/.exec(t("ubicacion"));
+  const referencia = [t("referencia"), pin ? `Pin: ${pin[1]},${pin[2]} https://maps.google.com/?q=${pin[1]},${pin[2]}` : ""].filter(Boolean).join(". ");
+  if (!direccion && !referencia) return error("sin_datos: mandá la dirección, la referencia o el pin nuevo.");
+  const chat = await deps.ultimoPedidoChat(ctx.conversacionId);
+  // Pedido del bot ya creado o, si no, el pedido de la tienda abierto (Releasit) del cliente.
+  const previo = chat?.estado === "creado" && chat.shopify_order_id
+    ? { shopify_order_id: chat.shopify_order_id, creado_en: chat.creado_en }
+    : deps.pedidoTiendaAbierto ? await deps.pedidoTiendaAbierto(ctx.clienteId).catch(() => null) : null;
+  if (!previo) {
+    return error("no_hay_pedido_creado: si todavía no confirmó, armá el resumen con crear_pedido_cod con estos datos.");
+  }
+  if (ctx.ahora.getTime() - new Date(previo.creado_en).getTime() > 72 * 3600_000) return error("pedido_viejo: derivá a Enrique.");
+  if (!deps.actualizarDireccionOrden) return error("no_disponible: derivá a Enrique con motivo direccion_dudosa.");
+  const d = { ...(direccion ? { direccion } : {}), ...(referencia ? { referencia } : {}) };
+  const r = await deps.actualizarDireccionOrden(previo.shopify_order_id, d);
+  if (!r.ok) return error(`no_se_pudo_actualizar: ${r.error}. Derivá a Enrique con motivo direccion_dudosa.`);
+  const quien = escaparHtml(ctx.nombreCliente ?? ctx.telefono ?? "Cliente");
+  await deps.avisar(`📍 <b>${quien}</b> completó la dirección del pedido (Shopify ${previo.shopify_order_id}): ${escaparHtml([direccion, referencia].filter(Boolean).join(" · "))}`)
+    .catch(() => {});
+  // 10-10: si el pedido ya salió, va el texto listo para reenviar al courier con el cambio.
+  const pc = deps.pedidoParaCourier ? await deps.pedidoParaCourier(previo.shopify_order_id).catch(() => null) : null;
+  if (pc?.despachado) {
+    const base = datosCourierDesdeRaw(pc.nombre, pc.raw, pc.telefono ?? ctx.telefono);
+    const datos = { ...base, ...(direccion ? { direccion } : {}), ...(referencia ? { referencia: unirReferencia(base.referencia, referencia) } : {}) };
+    await deps.avisar(avisoParaCourier(datos, `Cambio que pidió el cliente: ${[direccion, referencia].filter(Boolean).join(" · ")}`, pc.courier)).catch(() => {});
+  }
+  return { resultado: { ok: true, actualizado: true, nota: "Listo, quedó en el pedido. Confirmale corto que lo anotaste." } };
+}
+
+async function datosTransferencia(_input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  const datos = ctx.cfg.transferencia;
+  if (!datos) return error("sin_datos_de_cuenta: decile que puede pagar al recibir y seguí con el pedido.");
+  const r = await deps.enviarTexto(ctx.destino, `💳 Datos para transferir:\n${datos}`, opts(ctx));
+  if (!r.ok) return error(`envio_fallido: ${r.error}`);
+  return {
+    resultado: {
+      ok: true,
+      enviado: true,
+      nota: "Ya se le mandaron los datos de la cuenta. Pedile en una línea los datos del envío que falten y que mande la foto del comprobante por acá.",
+    },
+  };
+}
+
 async function enviarOpciones(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
   let items: ItemCatalogo[];
   try {
@@ -772,12 +1019,87 @@ async function enviarOpciones(input: Record<string, unknown>, ctx: CtxTurno, dep
   ].slice(0, 3);
   const nombre = (n: number) => n === 1 ? "1 unidad" : `${n} unidades`;
   const lineas = opciones.map((o) => {
-    const ahorro = o.cantidad * prod.precio - o.precio;
-    return `*${nombre(o.cantidad)}* · Gs ${gs(o.precio + envio)}${ahorro > 0 ? ` (ahorrás Gs ${gs(ahorro)})` : ""}`;
+    return o.cantidad === 1
+      ? `*${nombre(o.cantidad)}* · ${frasePrecio(o.precio, envio)}`
+      : `*${nombre(o.cantidad)}* · ${fraseCantidad(o.cantidad, prod.precio, o.precio, envio)}`;
   });
   const botones = opciones.map((o) => ({ id: `vend_cant:${prod.handle}:${o.cantidad}`, titulo: nombre(o.cantidad) }));
   return await enviarInteractivoRevisado(input, ctx, deps, (t) =>
-    listaVertical(`${t}\n\n${lineas.join("\n")}\nEnvío incluido, pagás al recibir.`, prod.imagen!, botones));
+    listaVertical(`${t}\n\n${lineas.join("\n")}\nPagás al recibir.`, prod.imagen!, botones));
+}
+
+/** 12-10: botones del primer turno. El id lleva el producto: `vend_p1:<pedir|duda|cant>:<handle>`. */
+export const BOTONES_PRIMER_TURNO = [
+  { clave: "pedir", titulo: "Quiero pedirlo" },
+  { clave: "duda", titulo: "Tengo una duda" },
+  { clave: "cant", titulo: "Precios por cantidad" },
+] as const;
+export const VARIANTE_PRIMER_TURNO = "botones_v1";
+
+/**
+ * 12-10 (plan de conversión, fase 1): gancho en texto + total cerrado con 3 botones. El precio lo arma el sistema
+ * (no pasa por el modelo); los datos se piden recién después de "Quiero pedirlo" (regla del prompt).
+ */
+async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  let items: ItemCatalogo[];
+  try {
+    items = itemsCatalogo(await catalogo(deps, ctx), ctx);
+  } catch (e) {
+    return error(`catalogo_no_disponible: ${e instanceof Error ? e.message : e}. Respondé con frase_precio en texto.`);
+  }
+  const prod = items.find((x) => x.handle === input.handle);
+  if (!prod) return error(`producto_desconocido:${input.handle}. Usá consultar_catalogo y el handle exacto.`);
+  const g = textoRevisado({ texto: input.gancho }, ctx);
+  if (!g.ok) return g.r;
+  const cuerpo = `${prod.frase_precio}, pagás al recibir.`;
+  let interactivo: Record<string, unknown>;
+  try {
+    interactivo = botonesRespuesta(cuerpo, BOTONES_PRIMER_TURNO.map((b) => ({ id: `vend_p1:${b.clave}:${prod.handle}`, titulo: b.titulo })));
+  } catch (e) {
+    return error(`interactivo_invalido: ${e instanceof Error ? e.message : e}. Respondé con frase_precio en texto.`);
+  }
+  const r1 = await deps.enviarTexto(ctx.destino, g.texto, opts(ctx));
+  if (!r1.ok) return error(`envio_fallido: ${r1.error}. Respondé con el gancho y frase_precio en texto.`);
+  // Pausa de "escribiendo…" proporcional a la segunda burbuja, como entre burbujas de texto (fase 4).
+  if (ctx.pausa && ctx.cfg.ritmo) await ctx.pausa(pausaBurbujaMs(cuerpo, ctx.cfg.ritmo, Math.random()));
+  const r2 = await deps.enviarInteractivo(ctx.destino, interactivo, opts(ctx));
+  if (!r2.ok) {
+    return error(`botones_fallidos: ${r2.error}. El gancho YA salió: mandá solo "${cuerpo}" y una pregunta corta, sin repetir el gancho.`);
+  }
+  return {
+    resultado: {
+      ok: true,
+      enviado: true,
+      variante: VARIANTE_PRIMER_TURNO,
+      // Quedan en vendedor_turnos: el filtro de los turnos siguientes permite estos montos (×2 / ×3 al pedir los datos).
+      frase_precio: prod.frase_precio,
+      ofertas: prod.ofertas.map((o) => o.frase_precio),
+      nota: "Ya se le mandaron el gancho y el precio con botones. No escribas nada más.",
+    },
+    terminal: true,
+  };
+}
+
+/** 12-10 (fase 2): tu texto + los 3 botones del primer turno (seguimiento 1 después del video de uso). */
+async function cierreBotones(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  let items: ItemCatalogo[];
+  try {
+    items = itemsCatalogo(await catalogo(deps, ctx), ctx);
+  } catch (e) {
+    return error(`catalogo_no_disponible: ${e instanceof Error ? e.message : e}. Cerrá en texto con una pregunta.`);
+  }
+  const prod = items.find((x) => x.handle === input.handle);
+  if (!prod) return error(`producto_desconocido:${input.handle}. Usá consultar_catalogo y el handle exacto.`);
+  return await enviarInteractivoRevisado(input, ctx, deps, (t) =>
+    botonesRespuesta(t, BOTONES_PRIMER_TURNO.map((b) => ({ id: `vend_p1:${b.clave}:${prod.handle}`, titulo: b.titulo }))),
+    { ofertas: prod.ofertas.map((o) => o.frase_precio) });
+}
+
+/** 12-10: permiso para ofertas (opt-in de Meta) al final, cuando el cliente posterga. Una vez por cliente. */
+async function permisoOfertas(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  const ya = deps.consentimiento ? await deps.consentimiento(ctx.clienteId).catch(() => "error" as const) : null;
+  if (ya !== null) return { resultado: { ok: true, ya_respondio: true, nota: "Ya respondió el permiso de ofertas (o no se pudo leer): respondé normal, sin preguntarlo." } };
+  return await enviarInteractivoRevisado(input, ctx, deps, (t) => botonesPermisoOfertas(ctx.clienteId, `${t}\n\n${TEXTO_PERMISO_OFERTAS}`));
 }
 
 /** Datos del turno que no vienen en el input de la herramienta (los pone el orquestador). */
@@ -817,6 +1139,11 @@ export const EJECUTORES: Record<string, Ejecutor> = {
       }));
   },
   enviar_opciones: enviarOpciones,
+  primer_turno: primerTurno,
+  cierre_botones: cierreBotones,
+  permiso_ofertas: permisoOfertas,
+  datos_transferencia: datosTransferencia,
+  actualizar_direccion: actualizarDireccion,
   pedir_telefono: (i, c, d) => {
     if (c.telefono) return Promise.resolve({ resultado: { ok: true, ya_tiene_telefono: true, nota: "El cliente ya tiene teléfono; seguí." } });
     return enviarInteractivoRevisado(i, c, d, (t) => pedirContacto(t));

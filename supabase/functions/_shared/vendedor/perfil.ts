@@ -35,7 +35,21 @@ export type PerfilCliente = {
   seguimientos?: number;
   /** Cuándo se hizo el último recontacto automático (ISO). Marca del sistema. */
   ultimo_seguimiento_en?: string;
+  /** Cuándo se avisó a Enrique que el cliente quiere comprar y no mandó los datos (ISO). Marca del sistema (08-10). */
+  aviso_intencion_en?: string;
+  /** Día (YYYY-MM-DD, Asunción) en que el cliente dijo que cobra / puede comprar: ese día se lo recontacta (08-10). */
+  recontactar_el?: string;
+  /** Cuándo se hizo el recontacto de ese día (ISO). Marca del sistema; se borra si cambia recontactar_el. */
+  recontacto_cobro_en?: string;
+  /** Cuándo se le pidió foto/video de testimonio tras "Todo bien" (ISO). Marca del sistema (09-10). */
+  pidio_testimonio_en?: string;
+  /** Variante del primer turno que recibió (12-10: "botones_v1" = primer_turno). Marca del sistema, para medir. */
+  variante_p1?: string;
+  /** Cuándo salió el toque 3 (plantilla de oferta de seguimiento-chat, ISO). Marca del sistema (12-10): una sola vez. */
+  toque3_en?: string;
 };
+
+const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 
 const esObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
@@ -60,12 +74,26 @@ export function normalizarPerfil(v: unknown, origen: "base" | "modelo" = "base")
   if (v.ofrecido_x2 === true) p.ofrecido_x2 = true;
   if (v.pregunto_freno === true) p.pregunto_freno = true;
   if (v.rechazo === true) p.rechazo = true;
+  if (typeof v.recontactar_el === "string" && RE_FECHA.test(v.recontactar_el) && Number.isFinite(Date.parse(v.recontactar_el))) {
+    p.recontactar_el = v.recontactar_el;
+  }
   if (origen === "base") {
     const n = Number(v.seguimientos);
     if (Number.isInteger(n) && n > 0 && n <= 20) p.seguimientos = n;
     if (typeof v.ultimo_seguimiento_en === "string" && Number.isFinite(Date.parse(v.ultimo_seguimiento_en))) {
       p.ultimo_seguimiento_en = v.ultimo_seguimiento_en;
     }
+    if (typeof v.aviso_intencion_en === "string" && Number.isFinite(Date.parse(v.aviso_intencion_en))) {
+      p.aviso_intencion_en = v.aviso_intencion_en;
+    }
+    if (typeof v.recontacto_cobro_en === "string" && Number.isFinite(Date.parse(v.recontacto_cobro_en))) {
+      p.recontacto_cobro_en = v.recontacto_cobro_en;
+    }
+    if (typeof v.pidio_testimonio_en === "string" && Number.isFinite(Date.parse(v.pidio_testimonio_en))) {
+      p.pidio_testimonio_en = v.pidio_testimonio_en;
+    }
+    if (typeof v.toque3_en === "string" && Number.isFinite(Date.parse(v.toque3_en))) p.toque3_en = v.toque3_en;
+    if (typeof v.variante_p1 === "string" && /^[a-z0-9_]{1,30}$/.test(v.variante_p1)) p.variante_p1 = v.variante_p1;
   }
   return p;
 }
@@ -83,6 +111,15 @@ export function fusionarPerfil(previo: PerfilCliente, nuevo: PerfilCliente): Per
   if (nuevo.rechazo || previo.rechazo) r.rechazo = true;
   if (nuevo.seguimientos !== undefined) r.seguimientos = nuevo.seguimientos;
   if (nuevo.ultimo_seguimiento_en !== undefined) r.ultimo_seguimiento_en = nuevo.ultimo_seguimiento_en;
+  if (nuevo.aviso_intencion_en !== undefined) r.aviso_intencion_en = nuevo.aviso_intencion_en;
+  if (nuevo.recontactar_el && nuevo.recontactar_el !== previo.recontactar_el) {
+    r.recontactar_el = nuevo.recontactar_el;
+    delete r.recontacto_cobro_en; // fecha nueva: el recontacto vuelve a quedar pendiente
+  }
+  if (nuevo.recontacto_cobro_en !== undefined) r.recontacto_cobro_en = nuevo.recontacto_cobro_en;
+  if (nuevo.pidio_testimonio_en !== undefined) r.pidio_testimonio_en = nuevo.pidio_testimonio_en;
+  if (nuevo.toque3_en !== undefined) r.toque3_en = nuevo.toque3_en;
+  if (nuevo.variante_p1 && !previo.variante_p1) r.variante_p1 = nuevo.variante_p1; // la primera queda
   return r;
 }
 
@@ -90,7 +127,8 @@ export function mismoPerfil(a: PerfilCliente, b: PerfilCliente): boolean {
   const k = (p: PerfilCliente) =>
     JSON.stringify([
       p.necesidad ?? null, p.perfil ?? null, p.nota ?? null, p.producto ?? null, p.cantidad ?? null, !!p.ofrecido_x2, !!p.pregunto_freno,
-      !!p.rechazo, p.seguimientos ?? 0, p.ultimo_seguimiento_en ?? null,
+      !!p.rechazo, p.seguimientos ?? 0, p.ultimo_seguimiento_en ?? null, p.recontactar_el ?? null, p.recontacto_cobro_en ?? null,
+      p.variante_p1 ?? null,
     ]);
   return k(a) === k(b);
 }
@@ -104,6 +142,7 @@ export function marcasDeRespuesta(texto: string, herramientasUsadas: string[] = 
   const m: PerfilCliente = {};
   if (RE_X2.test(t) || herramientasUsadas.includes("enviar_opciones")) m.ofrecido_x2 = true;
   if (RE_FRENO.test(t)) m.pregunto_freno = true;
+  if (herramientasUsadas.includes("primer_turno")) m.variante_p1 = "botones_v1";
   return m;
 }
 
@@ -174,6 +213,7 @@ export function textoPerfil(p: PerfilCliente): string {
   if (p.ofrecido_x2) l.push("YA OFRECISTE EL ×2: no lo vuelvas a ofrecer salvo que el cliente lo pida.");
   if (p.pregunto_freno) l.push("YA PREGUNTASTE QUÉ LO FRENA: no insistas; respondé solo lo que pregunte.");
   if (p.rechazo) l.push("EL CLIENTE YA DIJO QUE NO: no insistas con la venta; respondé solo lo que pregunte.");
+  if (p.recontactar_el) l.push(`DIJO QUE COMPRA CUANDO COBRE: lo recontactamos el ${p.recontactar_el}. No insistas antes.`);
   return l.join("\n");
 }
 
@@ -186,6 +226,9 @@ const RE_PREGUNTA_BOT: RegExp[] = [
   /\bme (?:atiende|responde|contesta|escribe) (?:un |una )?(?:bot|robot|ia|persona|humano|maquina)\b/u,
   /\b(?:respuesta|mensaje|contestador) automatic[oa]\b/u,
   /\bbot\s*\?/u,
+  // 10-10: "¿con quién hablo?", "¿quién me atiende?", "¿por quién estoy siendo atendido?", "¿cómo te llamás?" (pedido #1029:
+  // contestó con honestidad "asistente virtual", el filtro lo frenó y el chat terminó derivado a Enrique).
+  /\b(?:con quien (?:hablo|estoy hablando|escribo|chateo|me comunico)|quien (?:me )?(?:atiende|habla|escribe|responde)|por quien (?:estoy siendo|soy) atendid[oa]|quien sos|quien eres|como te llamas|cual es tu nombre|tu nombre)\b/u,
 ];
 
 /** true si el cliente pregunta directamente si habla con un bot o con una persona (no si pide una persona). */

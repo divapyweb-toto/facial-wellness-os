@@ -193,11 +193,9 @@ Deno.test("retomar: NO si Enrique escribió desde la bandeja o tocó 'Le escribo
   assertEquals(escribo.st.pasados.length, 0);
 });
 
-Deno.test("retomar: NO si el cliente tocó un botón que pasa a humano (ayuda, corregir) en el período", async () => {
+Deno.test("retomar: NO si el cliente tocó Corregir en el período; 'Necesito ayuda' ya no frena (12-10)", async () => {
   const ayuda = { ...base, id: "wamid.B1", type: "interactive", interactive: { type: "button_reply", button_reply: { id: "ayuda:5550001", title: "Necesito ayuda" } } };
-  const a = mock({ estado: "humano", actividad: { entrantes: [ayuda] } });
-  await procesarMensaje(texto("hola"), contacto, a.deps);
-  assertEquals(a.st.pasados.length, 0);
+  assertEquals(motivoParaNoRetomar({ salidasManuales: 0, escribo: false, derivaciones: [], entrantes: [ayuda] }), null);
   const corregir = { ...base, type: "button", button: { payload: "conf_corregir:5550001", text: "Corregir" } };
   assertEquals(motivoParaNoRetomar({ salidasManuales: 0, escribo: false, derivaciones: [], entrantes: [corregir] }), "boton_a_humano");
   const bien = { ...base, type: "interactive", interactive: { type: "button_reply", button_reply: { id: "seg_bien:5550001", title: "Todo bien" } } };

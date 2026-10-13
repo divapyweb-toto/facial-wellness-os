@@ -1,0 +1,57 @@
+{
+  "name": "voltra_confirmacion_pedido_v3",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Gracias por tu pedido *{{1}}*, {{2}} 🙌\n\nSoy el asistente de Voltra ✨\nTu compra fue recibida con éxito en nuestra tienda online.\n\n📦 *Detalles del pedido:*\n*Productos:* {{3}}\n*Total a pagar al recibir:* Gs {{4}} (envío incluido)\n*Dirección:* {{5}}\n*Ciudad:* {{6}}\n\nPor favor confirmá si los datos son correctos antes del despacho 🚚\n\nEl asistente de Voltra queda atento a tu confirmación 😄",
+      "example": {
+        "body_text": [
+          [
+            "#1001",
+            "Ana Benítez",
+            "1 Tiras nasales",
+            "112.000",
+            "Calle Falsa 123 casi Ruta 7",
+            "Ciudad del Este"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Confirmar pedido"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Cancelar pedido"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Necesito ayuda"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "origen": "07-10: igual que la v2 pero con las etiquetas en negrita (pedido de Enrique).",
+    "variables": [
+      "pedido (#1001)",
+      "nombre",
+      "productos y cantidad",
+      "total con envío, sin 'Gs'",
+      "dirección",
+      "ciudad"
+    ],
+    "botones_payload": [
+      "conf_si",
+      "conf_cancelar",
+      "ayuda"
+    ],
+    "ventaja": "No fija la tarifa de envío en el texto (dice 'envío incluido')."
+  }
+}

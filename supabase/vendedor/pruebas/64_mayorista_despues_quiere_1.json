@@ -1,0 +1,63 @@
+{
+  "id": "64_mayorista_despues_quiere_1",
+  "titulo": "Pregunta mayorista, se deriva, y cuando dice 'quiero 1' el vendedor sigue y pide los datos",
+  "cobertura": [
+    "mayorista",
+    "derivacion_suave"
+  ],
+  "cliente": {
+    "nombre": "Diego Ortiz",
+    "telefono": "+595981000000",
+    "wa_username": null
+  },
+  "contexto": {
+    "catalogo": "base",
+    "pedidos": []
+  },
+  "mensajes": [
+    "cuanto las tiras nasales?",
+    "y si quiero 10 hay precio mayorista?",
+    "quiero 1 mejor"
+  ],
+  "expectativas": {
+    "max_lineas": 3,
+    "debe_usar_herramienta": [
+      "consultar_catalogo"
+    ],
+    "debe_contener_alguno": [
+      "nombre",
+      "dirección",
+      "direccion",
+      "ciudad"
+    ]
+  },
+  "referencia": [
+    {
+      "texto": "Las tiras salen 112.000 con envío, pagás al recibir.\n¿Te armo 1 o aprovechás 2 por 125.000?",
+      "herramientas": [
+        {
+          "nombre": "consultar_catalogo",
+          "input": {
+            "busqueda": "tiras"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Para 10 te paso con Enrique que ve precio especial.",
+      "herramientas": [
+        {
+          "nombre": "derivar_a_enrique",
+          "input": {
+            "motivo": "mayorista",
+            "resumen": "Quiere 10 tiras nasales, pregunta precio mayorista"
+          }
+        }
+      ]
+    },
+    {
+      "texto": "Dale!\nPasame nomás tu nombre, ciudad y dirección con referencia.",
+      "herramientas": []
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "voltra_entrega_proxima",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, tu pedido de Voltra ya está por llegar.\nTené listo Gs {{2}} en efectivo y el teléfono a mano para cuando te llame el repartidor.",
+      "example": { "body_text": [["Ana", "112.000"]] }
+    },
+    { "type": "BUTTONS", "buttons": [{ "type": "QUICK_REPLY", "text": "Necesito ayuda" }] }
+  ],
+  "_notas": { "variables": ["nombre", "total sin 'Gs'"], "botones_payload": ["ayuda"], "origen": "09-10: recordatorio de entrega para el interior (no se sabe el día exacto)." }
+}

@@ -14,6 +14,8 @@ insert into public.config_wa (clave, valor) values
   -- historial_mensajes: mensajes que viajan al modelo (los más nuevos); el perfil del cliente va aparte, resumido.
   -- espera_agrupar_s: segundos de silencio antes de responder (junta mensajes seguidos del cliente en una respuesta).
   -- La demora de "leer + escribir" está en vendedor_ritmo.
+  -- retomar_humano_h: un chat en 'humano' vuelve a la IA si el cliente escribe y en estas horas Enrique no le
+  -- escribió desde la bandeja, no tocó "Le escribo yo" ni hubo derivación dura (reclamo, salud…). 0 = nunca.
   ('vendedor',
    '{"modelo": "claude-haiku-4-5-20251001",
      "modelo_alternativo": "claude-sonnet-5-5",
@@ -32,7 +34,8 @@ insert into public.config_wa (clave, valor) values
      "cantidad_max": 3,
      "flow_id": null,
      "flow_pantalla": "PEDIDO",
-     "max_caracteres": 500}'::jsonb),
+     "max_caracteres": 500,
+     "retomar_humano_h": 3}'::jsonb),
 
   -- Precios de Claude en USD por millón de tokens (verificados en platform.claude.com/docs/en/about-claude/pricing
   -- el 06-10-2026). lote = multiplicador del Batch API (50 % de descuento). Revisar cuando Anthropic cambie precios.
@@ -64,6 +67,14 @@ insert into public.config_wa (clave, valor) values
      {"escribe": "ha upéi?", "significa": "Saludo, \"¿y qué tal?\"", "accion": "Saludar y seguir"},
      {"escribe": "me hallo", "significa": "\"Estoy a gusto\"", "accion": "Señal de satisfacción: pedir reseña o foto"},
      {"escribe": "ahora el lunes", "significa": "\"Este lunes que viene\"", "accion": "Repetir con fecha: \"lunes 5/10\""},
+     {"escribe": "ahora (ahora te paso, ahora te aviso)", "significa": "Puede ser más tarde, no ya mismo", "accion": "No apurar: respondé lo que falte y esperá"},
+     {"escribe": "heẽ, hee", "significa": "Sí", "accion": "Tomarlo como sí"},
+     {"escribe": "nahániri, nahaniri", "significa": "No", "accion": "Respetarlo; una pregunta abierta solo si duda"},
+     {"escribe": "aipota (aipota peteĩ)", "significa": "\"Quiero\" (\"quiero uno\")", "accion": "Señal de compra: pedir los datos"},
+     {"escribe": "ko''ẽrõ", "significa": "Mañana", "accion": "Repetir con fecha"},
+     {"escribe": "upéi", "significa": "Después, luego", "accion": "Puede ser postergación: no insistir"},
+     {"escribe": "aguyje, aguyjevete", "significa": "Gracias", "accion": "Responder corto, sin repetir el cierre"},
+     {"escribe": "mba''éichapa", "significa": "¿Cómo estás?", "accion": "Saludar corto y seguir"},
      {"escribe": "q, xq, tmb, dsp, bno", "significa": "que, porque, también, después, bueno", "accion": "Entender; nunca usarlas desde la marca"}]'::jsonb),
 
   -- Afirmaciones permitidas: lista CONSERVADORA, solo lo que no es promesa de salud.
@@ -108,7 +119,7 @@ insert into public.config_wa (clave, valor) values
   -- Textos fijos del vendedor. Variables entre llaves.
   ('vendedor_textos',
    '{"resumen": "Te resumo: {lineas}. Envío Gs {envio}. Total Gs {total}, pagás al recibir. Lo entregamos en {direccion}, {ciudad}.",
-     "boton_confirmar": "Confirmar",
+     "boton_confirmar": "Confirmo",
      "boton_corregir": "Corregir",
      "pedido_creado": "Listo {nombre}, ya cargamos tu pedido {pedido}. En unos minutos te llega la confirmación por acá.",
      "derivacion": "Te paso con Enrique para que lo vea personalmente. Tocá el botón y le llega tu caso ya escrito.",
@@ -127,7 +138,8 @@ on conflict (clave) do nothing;
 --    objeciones con su respuesta corta y consejo de uso. `precios_referencia` NO va al prompt (los precios de la
 --    conversación salen siempre de consultar_catalogo): queda como control de los precios verificados por Enrique
 --    el 06-10 (×1 79.000, ×2 125.000, ×3 155.000, pack 120.000; envío 33.000).
---  · Ofertas (Releasit, no están en Shopify): ×2 y ×3 de tiras y parches, verificadas por Enrique el 06-10.
+--  · Ofertas (Releasit, no están en Shopify): ×2 y ×3 de tiras y parches, verificadas por Enrique el 06-10;
+--    raspador, botella y ejercitador con el mismo ×2/×3, verificadas en el formulario de la tienda el 07-10.
 --    [VERIFICAR] si raspador, botella y ejercitador tienen precio por cantidad antes de sumarlos.
 insert into public.config_wa (clave, valor) values
   ('vendedor_fichas',
@@ -253,7 +265,9 @@ insert into public.config_wa (clave, valor) values
        ],
        "consejo_uso": "Pasalo suave, de atrás hacia adelante, sin apretar; enjuagalo después de cada pasada",
        "precios_referencia": {
-         "x1": 79000
+         "x1": 79000,
+         "x2": 125000,
+         "x3": 155000
        }
      },
      "botella-flexible-gudair-500-ml": {
@@ -281,7 +295,9 @@ insert into public.config_wa (clave, valor) values
        ],
        "consejo_uso": "Lavala con agua y jabón y dejala secar abierta antes de enrollarla",
        "precios_referencia": {
-         "x1": 79000
+         "x1": 79000,
+         "x2": 125000,
+         "x3": 155000
        }
      },
      "ejercitador-de-mandibula-3-niveles": {
@@ -309,7 +325,9 @@ insert into public.config_wa (clave, valor) values
        ],
        "consejo_uso": "Empezá con el nivel suave y pocos minutos; lavalo con agua y jabón",
        "precios_referencia": {
-         "x1": 79000
+         "x1": 79000,
+         "x2": 125000,
+         "x3": 155000
        }
      }
    }'::jsonb),
@@ -320,6 +338,18 @@ insert into public.config_wa (clave, valor) values
        "3": 155000
      },
      "parches-bucales-gudair-30-unidades": {
+       "2": 125000,
+       "3": 155000
+     },
+     "raspador-de-lengua-de-acero-inoxidable": {
+       "2": 125000,
+       "3": 155000
+     },
+     "botella-flexible-gudair-500-ml": {
+       "2": 125000,
+       "3": 155000
+     },
+     "ejercitador-de-mandibula-3-niveles": {
        "2": 125000,
        "3": 155000
      }

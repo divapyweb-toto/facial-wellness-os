@@ -1,0 +1,30 @@
+[
+ {
+  "cliente": "Hola",
+  "vendedor": "Buenas!\n¿Qué producto viste?"
+ },
+ {
+  "cliente": "Buenas tardes, está disponible este producto? [imagen de las tiras nasales]",
+  "vendedor": "Buenasss\nSiii, disponible\nSale 79.000 + 33.000 de envío = 112.000, pagás al recibir"
+ },
+ {
+  "cliente": "que productos tienen",
+  "vendedor": "Tiras nasales, parches bucales, raspador, ejercitador y botella a 79.000 cada uno + 33.000 de envío\nPagás al recibir\n¿Cuál te interesa?"
+ },
+ {
+  "cliente": "cuanto el raspador?",
+  "vendedor": "79.000 + 33.000 de envío = 112.000, pagás cuando te llega\n¿Te armo 1 o llevás 2 con envío gratis? Son 158.000 los 2"
+ },
+ {
+  "cliente": "quiero 1",
+  "vendedor": "Dale!\nPasame nomás tu nombre, ciudad y dirección con alguna referencia"
+ },
+ {
+  "cliente": "no entiendo muy bien",
+  "vendedor": "Es una tira que te pegás en la nariz y te la abre para respirar mejor\n¿Te paso el video de cómo se usa?"
+ },
+ {
+  "cliente": "realizan envíos?",
+  "vendedor": "Siii, a todo el país\nPagás cuando te llega"
+ }
+]

@@ -41,3 +41,12 @@ Deno.test("fijas: los textos por defecto pasan el filtro de salida (humanos, sin
     for (const t of lista) assertEquals(revisarRespuesta(t, { catalogo: [], prohibidas: ["garantía"] }).motivos, [], t);
   }
 });
+
+Deno.test("esCierreNuestro + acuses: 'ok' tras 'cuando quieras escribime' no se contesta; tras una pregunta sí (09-10)", async () => {
+  const { esCierreNuestro, esOkSuelto } = await import("./respuestas_fijas.ts");
+  assert(esCierreNuestro("Cuando se te acaben, escribime y te la armo."));
+  assert(esCierreNuestro("Perfecto, tu pedido #1015 quedó confirmado."));
+  assertFalse(esCierreNuestro("Te armo 1 y pagás al recibir, ¿te lo mando?"));
+  assertFalse(esCierreNuestro("Sale 79.000 + 33.000 de envío = 112.000"));
+  for (const t of ["Correcto", "Ok", "dale", "bueno gracias", "entendido"]) assert(esOkSuelto(t), t);
+});

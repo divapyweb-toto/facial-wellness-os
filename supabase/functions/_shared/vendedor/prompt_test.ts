@@ -62,7 +62,7 @@ Deno.test("seed_vendedor.sql: JSON válido, glosario completo, modelo, topes y s
   assertEquals(v.modelo_alternativo, "claude-sonnet-5-5");
   assertEquals(v.max_turnos_conversacion, 20);
   assertEquals(v.tope_mensual_usd, 45);
-  assertEquals((filas.get("vendedor_glosario") as unknown[]).length, 17);
+  assertEquals((filas.get("vendedor_glosario") as unknown[]).length, 25);
   assertEquals((filas.get("vendedor_envio") as Record<string, unknown>).costo_gs, 33000);
   const precios = filas.get("precios_claude") as Record<string, Record<string, number>>;
   assertEquals(precios["claude-haiku-4-5-20251001"].entrada, 1);
@@ -87,9 +87,9 @@ Deno.test("prompt: diagnóstico y perfiles, estilo humano, cierre y honestidad e
     const frase of [
       "DIAGNÓSTICO", "Apurado", "Desconfiado", "Curioso", "Precio (", "Regalo", "registrar_perfil", "PERFIL YA DETECTADO",
       "La primera línea engancha", "Una sola pregunta, al final", "Nada de listas, viñetas, negritas", "Nada de frases de bot",
-      "\"¡Claro!\"", "No dudes en", "Ofrecé el ×2 una sola vez", "\"¿Qué te frena?\"", "no insistas", "Nunca inventes urgencia",
-      "HONESTIDAD (no negociable)", "nunca digas que sos una persona", "no mientas: decí que sos el asistente virtual de Voltra",
-      "ofrecé pasarlo con Enrique", "Si escribe varios mensajes seguidos", "monosílabos", "farmacia",
+      "\"¡Claro!\"", "No dudes en", "ofrecé 2 y 3 unidades", "primer_turno", "NUNCA pidas nombre, ciudad ni dirección antes", "NUNCA preguntes \"¿Qué producto viste?\"", "\"¿Qué te frena?\"", "no insistas", "Nunca inventes urgencia",
+      "HONESTIDAD (no negociable)", "nunca digas que sos una persona", "no mientas: \"Soy Sofi, la asistente virtual de Voltra",
+      "Solo si pide hablar con una persona", "Si escribe varios mensajes seguidos", "monosílabos", "farmacia",
     ]
   ) assert(PLANTILLA_PROMPT.includes(frase), frase);
   for (const p of ["cura", "oxígeno", "garantía", "100 %", "clínicamente"]) assert(PLANTILLA_PROMPT.toLowerCase().includes(p), `PROHIBIDO menciona ${p}`);

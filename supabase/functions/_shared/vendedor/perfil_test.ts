@@ -77,3 +77,32 @@ Deno.test("perfil: rechazo y marcas de seguimiento sobreviven; el modelo no pued
   assertFalse(mismoPerfil({ seguimientos: 1 }, { seguimientos: 2 }));
   assert(textoPerfil({ rechazo: true }).includes("EL CLIENTE YA DIJO QUE NO"));
 });
+
+Deno.test("perfil: la marca del aviso de intención la conserva la base y el modelo no la puede tocar", () => {
+  const iso = "2026-10-08T12:00:00.000Z";
+  assertEquals(normalizarPerfil({ aviso_intencion_en: iso }).aviso_intencion_en, iso);
+  assertEquals(normalizarPerfil({ aviso_intencion_en: iso }, "modelo").aviso_intencion_en, undefined);
+  assertEquals(fusionarPerfil({ aviso_intencion_en: iso }, { perfil: "precio" }).aviso_intencion_en, iso);
+});
+
+Deno.test("preguntaSiEsBot (10-10): '¿por quién estoy siendo atendido?', '¿con quién hablo?' cuentan como pregunta de identidad", () => {
+  for (const x of ["Por quién estoy siendo atendido en este momento?", "¿Con quién hablo?", "quien me atiende?", "Como te llamas?"]) assert(preguntaSiEsBot(x), x);
+  assertFalse(preguntaSiEsBot("quiero hablar con el encargado de envíos de mi pedido"));
+});
+
+Deno.test("toque3_en (12-10): la base la conserva, el modelo no la puede tocar y fusionar no la pierde", () => {
+  const iso = "2026-10-12T15:00:00.000Z";
+  assertEquals(normalizarPerfil({ toque3_en: iso }).toque3_en, iso);
+  assertEquals(normalizarPerfil({ toque3_en: "x" }).toque3_en, undefined);
+  assertEquals(normalizarPerfil({ toque3_en: iso }, "modelo").toque3_en, undefined);
+  assertEquals(fusionarPerfil({ toque3_en: iso }, normalizarPerfil({ perfil: "precio", toque3_en: "2026-10-13T15:00:00.000Z" }, "modelo")).toque3_en, iso);
+  assertEquals(fusionarPerfil({}, { toque3_en: iso }).toque3_en, iso);
+});
+
+Deno.test("variante_p1: la marca primer_turno, sobrevive al guardar y la primera no se pisa", () => {
+  assertEquals(marcasDeRespuesta("", ["primer_turno"]).variante_p1, "botones_v1");
+  assertEquals(marcasDeRespuesta("", ["consultar_catalogo"]).variante_p1, undefined);
+  assertEquals(normalizarPerfil({ variante_p1: "botones_v1" }).variante_p1, "botones_v1");
+  assertEquals(normalizarPerfil({ variante_p1: "botones_v1" }, "modelo").variante_p1, undefined);
+  assertEquals(fusionarPerfil({ variante_p1: "a" }, { variante_p1: "b" }).variante_p1, "a");
+});

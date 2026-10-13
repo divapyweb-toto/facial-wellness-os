@@ -16,6 +16,8 @@
 // fijas y, si el cliente escribió mientras tanto, no manda nada (ese mensaje ya tiene su propio turno). Nunca
 // deriva a Enrique por su cuenta: con tope de gasto o de turnos no hace nada; si la IA o el filtro fallan, no
 // manda nada y queda registrado. Se registra en vendedor_turnos con accion "seguimiento" (o "seguimiento_<…>").
+import { lineaPlazosHoy } from "../plazo_zona.ts";
+import { botonesPermisoOfertas, TEXTO_PERMISO_OFERTAS } from "../wa_interactivos.ts";
 import {
   type Bloque,
   type BloqueTexto,
@@ -30,8 +32,10 @@ import {
   USO_CERO,
   usosDeHerramientas,
 } from "../claude.ts";
+import { productoDeMarca } from "../anuncios.ts";
 import { partesAsuncion } from "../horario.ts";
 import { montosDeResultado, revisarRespuesta } from "./filtro_salida.ts";
+import { type BloqueImagen, cargarImagen, contenidoConImagenes, type Descarga, type ImagenEntrada, imagenesPendientes, textoImagenNoVista } from "./imagenes.ts";
 import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type MotivoDerivacion } from "./herramientas.ts";
 import {
   fusionarPerfil,
@@ -44,7 +48,7 @@ import {
   textoPerfil,
 } from "./perfil.ts";
 import { armarPrompt } from "./prompt.ts";
-import { elegirVariante, tipoRespuestaFija } from "./respuestas_fijas.ts";
+import { elegirVariante, esCierreNuestro, esGraciasSuelto, esOkSuelto, esStickerOEmoji, tipoRespuestaFija } from "./respuestas_fijas.ts";
 import { calcularDemoraMs, partirEnBurbujas, pausaBurbujaMs } from "./ritmo.ts";
 import type { ConfigTurno, CtxTurno, DepsHerramientas } from "./tipos.ts";
 
@@ -88,6 +92,8 @@ export type DepsOrquestador = {
   sumarTurno(conversacionId: string, costoUsd: number): Promise<void>;
   /** Guarda el perfil detectado (wa_conversaciones.perfil_vendedor). */
   guardarPerfil(conversacionId: string, perfil: PerfilCliente): Promise<void>;
+  /** Baja una foto del cliente de Storage wa-media (imagenes.ts). Sin esto, la foto queda como "[imagen] (no se pudo ver)". */
+  descargarImagen?(ruta: string): Promise<Descarga>;
   /** Azar en [0,1) para la variación del ritmo y las variantes fijas (tests: determinista). */
   aleatorio?: () => number;
   marcarLeidoYEscribiendo(waMessageId: string): Promise<unknown>;
@@ -104,6 +110,8 @@ export type EntradaTurno = {
   texto: string;
   /** "seguimiento": recontacto automático (seguimiento-chat). Ausente = mensaje del cliente. */
   origen?: "cliente" | "seguimiento";
+  /** 08-10: foto del mensaje actual ya copiada a Storage wa-media (wa-webhook); el modelo la ve (imagenes.ts). */
+  imagen?: ImagenEntrada;
 };
 
 /** Texto exacto de la entrada de un turno de seguimiento (contrato con el prompt). */
@@ -120,6 +128,34 @@ export type ResultadoTurno = {
 
 // ---------- piezas puras ----------
 
+/**
+ * Texto de un mensaje del cliente que no es el actual. Si el webhook le puso la marca del anuncio
+ * (contenido.marca_anuncio, _shared/anuncios.ts), va adelante: así no se pierde si el turno quedó agrupado o en
+ * los turnos siguientes (la columna texto guarda solo lo que escribió el cliente).
+ */
+function textoEntranteGuardado(f: FilaHistorial): string | null {
+  const c = (f.contenido ?? {}) as Record<string, unknown>;
+  const t = f.texto ?? (typeof c.texto_vendedor === "string" ? c.texto_vendedor : null) ?? `[${f.tipo ?? "mensaje"}]`;
+  const marca = typeof c.marca_anuncio === "string" ? c.marca_anuncio.trim() : "";
+  return marca && !(t ?? "").includes(marca) ? `${marca}\n${t ?? ""}` : t;
+}
+
+/** La marca del anuncio una sola vez en toda la conversación (dos mensajes seguidos pueden venir marcados). */
+function sinMarcasRepetidas<T extends { content: string }>(mensajes: T[]): T[] {
+  let vista: string | null = null;
+  for (const m of mensajes) {
+    const lineas = m.content.split("\n").filter((l) => {
+      const p = productoDeMarca(l);
+      if (!p || l.trim() !== `[vino del anuncio de ${p.nombre}, handle ${p.handle}]`) return true;
+      if (vista === l.trim()) return false;
+      vista = l.trim();
+      return true;
+    });
+    m.content = lineas.join("\n");
+  }
+  return mensajes;
+}
+
 /** Historial de wa_mensajes → mensajes de la Messages API (empieza con user, termina con el mensaje actual). */
 export function armarHistorial(filas: FilaHistorial[], entrada: EntradaTurno): Mensaje[] {
   const out: { role: "user" | "assistant"; content: string }[] = [];
@@ -131,11 +167,13 @@ export function armarHistorial(filas: FilaHistorial[], entrada: EntradaTurno): M
       if (f.wa_message_id && f.wa_message_id === entrada.wa_message_id) {
         t = entrada.texto;
         actualVisto = true;
-      } else {
-        const c = (f.contenido ?? {}) as Record<string, unknown>;
-        t = f.texto ?? (typeof c.texto_vendedor === "string" ? c.texto_vendedor : null) ?? `[${f.tipo ?? "mensaje"}]`;
-      }
-    } else t = f.texto;
+      } else t = textoEntranteGuardado(f);
+    } else {
+      t = f.texto;
+      // 08-10: lo que Enrique escribe a mano desde la Bandeja manda; el bot lo había contradicho ("Corrijo: 2 a 5 días").
+      const c = (f.contenido ?? {}) as Record<string, unknown>;
+      if (t && c.origen === "manual") t = `(Esto lo escribió Enrique, el dueño: es correcto, no lo corrijas ni lo contradigas) ${t}`;
+    }
     if (!t?.trim()) continue;
     const role = f.direccion === "in" ? "user" : "assistant";
     const ultimo = out[out.length - 1];
@@ -147,7 +185,18 @@ export function armarHistorial(filas: FilaHistorial[], entrada: EntradaTurno): M
     if (ultimo && ultimo.role === "user") ultimo.content += `\n${entrada.texto}`;
     else out.push({ role: "user", content: entrada.texto });
   }
+  sinMarcasRepetidas(out);
   if (out[0]?.role !== "user") out.unshift({ role: "user", content: "(La conversación la empezó Voltra con un mensaje automático.)" });
+  // 08-10: si después del mensaje del cliente ya salieron mensajes nuestros (confirmación, recompra, otra
+  // burbuja), el historial terminaba en "assistant" y Sonnet 5.5 lo rechaza (no admite prefill): 4 chats sin
+  // respuesta el 07-10. Se cierra con una nota interna para que responda sin repetir lo ya enviado.
+  if (out[out.length - 1]?.role === "assistant") {
+    out.push({
+      role: "user",
+      content: "[CONTROL INTERNO, no lo ve el cliente] Después del último mensaje del cliente ya se enviaron los mensajes de arriba. " +
+        "Respondé al cliente teniendo eso en cuenta, sin repetir lo que ya se dijo.",
+    });
+  }
   return out;
 }
 
@@ -164,12 +213,11 @@ export function bloquePendiente(filas: FilaHistorial[], entrada: EntradaTurno): 
       if (f.estado === "fallido") continue;
       break;
     }
-    const c = (f.contenido ?? {}) as Record<string, unknown>;
     let t: string | null;
     if (f.wa_message_id && f.wa_message_id === entrada.wa_message_id) {
       actualVisto = true;
       t = entrada.texto;
-    } else t = f.texto ?? (typeof c.texto_vendedor === "string" ? c.texto_vendedor : null) ?? `[${f.tipo ?? "mensaje"}]`;
+    } else t = textoEntranteGuardado(f);
     if (t?.trim()) out.unshift(t.trim());
   }
   if (!actualVisto) out.push(entrada.texto);
@@ -185,6 +233,7 @@ export function contextoDinamico(ahora: Date, cli: { nombre: string | null; tele
   const hh = String(p.hora).padStart(2, "0"), mm = String(p.minuto).padStart(2, "0");
   return [
     `AHORA: ${dia} ${p.dia}/${p.mes}/${p.anio}, ${hh}:${mm} (hora de Asunción).`,
+    lineaPlazosHoy(ahora),
     `CLIENTE: ${cli.nombre ? `se llama ${cli.nombre} en WhatsApp` : "sin nombre en WhatsApp"}; ${cli.telefono ? "el chat tiene su teléfono" : "el chat NO tiene su teléfono (pedilo con pedir_telefono antes de cerrar)"}.`,
     ...(perfil ? [textoPerfil(perfil)] : []),
   ].join("\n");
@@ -234,15 +283,34 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   if (!cli) return { accion: "omitido", motivo: "cliente_inexistente" };
 
   const filasHistorial = await deps.historial(conv.id, v.historial_mensajes);
+  // 08-10: fotos sin responder (la actual y las agrupadas) → bloques de imagen para el modelo. Si la del mensaje
+  // actual no se puede ver, el texto lo dice ("[imagen] (no se pudo ver)") y el modelo pide que la reenvíe.
+  const imagenes: BloqueImagen[] = [];
+  if (!esSeguimiento) {
+    for (const img of imagenesPendientes(filasHistorial, entrada.imagen)) {
+      const r = await cargarImagen(img, deps.descargarImagen?.bind(deps));
+      if (r.ok) imagenes.push(r.bloque);
+      else {
+        console.warn(`vendedor: no pude ver la imagen ${img.ruta}: ${r.error}`);
+        if (entrada.imagen && img.ruta === entrada.imagen.ruta) entrada = { ...entrada, texto: textoImagenNoVista(entrada.texto) };
+      }
+    }
+  }
   const bloque = bloquePendiente(filasHistorial, entrada);
   const textoCliente = bloque.join("\n");
   const perfil0 = normalizarPerfil(conv.perfil_vendedor ?? conv0.perfil_vendedor);
   let perfil: PerfilCliente = { ...perfil0 };
   // "No me interesa", "no gracias"…: queda marcado y seguimiento-chat no le vuelve a escribir por su cuenta.
   if (!esSeguimiento && !perfil.rechazo && esRechazo(textoCliente)) perfil = { ...perfil, rechazo: true };
+  // 08-10: entró por un anuncio ("[vino del anuncio de …]", wa-webhook): ese es el producto, queda en el perfil.
+  const delAnuncio = esSeguimiento ? null : productoDeMarca(textoCliente);
+  if (delAnuncio && !perfil.producto) perfil = { ...perfil, producto: delAnuncio.nombre };
   const preguntaBot = !esSeguimiento && preguntaSiEsBot(textoCliente);
 
   const permitidos: number[] = [cfg.envio.costo_gs, ...(await deps.preciosPrevios(conv.id).catch(() => [] as number[]))];
+  // 09-10: el total de un pedido real de la tienda que le pasa el sistema ("[pedido #1010 … total Gs 112000") también
+  // vale: sin esto el filtro frenaba "tu pedido de 112.000" a clientes del formulario. Solo de las marcas del sistema.
+  for (const m of entrada.texto.matchAll(/\[pedido [^\]]*?total Gs (\d{4,9})/g)) permitidos.push(Number(m[1]));
   const opcionesFiltro = () => ({
     catalogo: permitidos,
     prohibidas: cfg.prohibidas,
@@ -267,6 +335,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     ahora: deps.ahora(),
     cfg,
     revisar: (t) => revisarRespuesta(t, opcionesFiltro()),
+    pausa: (ms) => esperarEscribiendo(ms),
   };
 
   const fila: FilaTurno = {
@@ -288,7 +357,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     fila.accion = (esSeguimiento ? (r.accion === "respondido" ? "seguimiento" : `seguimiento_${r.accion}`) : r.accion) +
       (r.motivo ? `:${r.motivo}` : "");
     fila.costo_usd = Math.round(fila.costo_usd * 1e8) / 1e8;
-    const usadas = fila.herramientas.map((h) => h.nombre);
+    const usadas = fila.herramientas.filter((h) => !h.error).map((h) => h.nombre);
     const perfilFinal = fusionarPerfil(perfil, marcasDeRespuesta(fila.respuesta ?? "", usadas));
     try {
       await deps.registrarTurno(fila);
@@ -312,6 +381,17 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     const r = await derivarAEnrique({ motivo, resumen }, ctx, deps.herramientas);
     fila.herramientas.push({ nombre: "derivar_a_enrique(sistema)", input: { motivo, resumen }, resultado: r.resultado, error: !!r.esError });
     return await cerrar({ accion: "derivado", motivo });
+  };
+
+  /** 12-10: en este turno se creó un pedido → después de la respuesta, el permiso para ofertas (si nunca lo respondió). */
+  let pedidoCreadoEnTurno = false;
+  const pedirPermisoTrasPedido = async () => {
+    if (!deps.herramientas.consentimiento) return;
+    const ya = await deps.herramientas.consentimiento(cli.id).catch(() => "error" as const);
+    if (ya !== null) return;
+    await esperarEscribiendo(pausaBurbujaMs(TEXTO_PERMISO_OFERTAS, cfg.ritmo, azar()));
+    const r = await deps.herramientas.enviarInteractivo(ctx.destino, botonesPermisoOfertas(cli.id), { clienteId: cli.id, conversacionId: conv.id });
+    fila.herramientas.push({ nombre: "permiso_ofertas(sistema)", input: {}, resultado: { ok: r.ok, error: r.error ?? null }, error: !r.ok });
   };
 
   /** Espera con "escribiendo…" visible (WhatsApp lo apaga a los ~25 s: se renueva). */
@@ -352,6 +432,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         return await cerrar({ accion: "error_envio", motivo: envio.error, respuesta: texto }, op);
       }
     }
+    if (pedidoCreadoEnTurno) await pedirPermisoTrasPedido().catch((e) => console.error("vendedor: permiso de ofertas:", e));
     return await cerrar({ accion: accionOk, motivo: motivoOk, respuesta: texto }, op);
   };
 
@@ -359,6 +440,14 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   if (bloque.length === 1 && !esSeguimiento) {
     const pedidoChat = await deps.herramientas.ultimoPedidoChat(conv.id).catch(() => null);
     const nuestros = filasHistorial.filter((f) => f.direccion === "out" && f.estado !== "fallido" && (f.texto ?? "").trim());
+    // 09-10: "ok"/"gracias"/👍 después de que ya cerramos la charla → no se contesta (menos mensajes, menos costo).
+    const acuse = esOkSuelto(entrada.texto) || esGraciasSuelto(entrada.texto) || esStickerOEmoji(entrada.texto);
+    // 10-10: con el pedido ya creado, el acuse tampoco se contesta (antes le respondió 3 veces a "dale gracias", 👍…).
+    // Un "gracias" suelto sí lleva un "de nada" (una vez, lo maneja la respuesta fija).
+    const okOEmoji = (esOkSuelto(entrada.texto) && !esGraciasSuelto(entrada.texto)) || esStickerOEmoji(entrada.texto);
+    if (acuse && pedidoChat?.estado !== "resumen" && ((pedidoChat?.estado === "creado" && okOEmoji) || esCierreNuestro(nuestros.at(-1)?.texto))) {
+      return await cerrar({ accion: "omitido", motivo: "acuse_tras_cierre" }, { contarTurno: false });
+    }
     const tipo = tipoRespuestaFija(entrada.texto, { hayMensajesNuestros: nuestros.length > 0, estadoPedidoChat: pedidoChat?.estado ?? null });
     if (tipo) {
       fila.modelo = "fija";
@@ -400,9 +489,13 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   }, cfg.plantillaPrompt ?? undefined);
   const system: BloqueTexto[] = [
     { type: "text", text: promptBase },
-    { type: "text", text: contextoDinamico(ctx.ahora, cli, perfil0) },
+    { type: "text", text: contextoDinamico(ctx.ahora, cli, perfil.producto && !perfil0.producto ? { ...perfil0, producto: perfil.producto } : perfil0) },
   ];
   const mensajes: Mensaje[] = armarHistorial(filasHistorial, entrada);
+  if (imagenes.length) {
+    const ultimo = mensajes[mensajes.length - 1];
+    mensajes[mensajes.length - 1] = { ...ultimo, content: contenidoConImagenes(ultimo.content, imagenes) };
+  }
 
   const pedido = (msgs: Mensaje[]): PedidoClaude => ({
     modelo: v.modelo,
@@ -485,6 +578,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         resultados.push({ type: "tool_result", tool_use_id: u.id, content: JSON.stringify(res.resultado), ...(res.esError ? { is_error: true } : {}) });
         if (res.terminal) terminal = true;
         if (res.derivado) derivadoPorHerramienta = true;
+        if (res.pedidoCreado) pedidoCreadoEnTurno = true;
       }
       if (terminal) {
         fila.derivado = derivadoPorHerramienta;

@@ -1,6 +1,8 @@
 // _shared/vendedor/io.ts · Dueño: G1 (ola 2)
 // I/O real del vendedor (Supabase, Shopify, WhatsApp, Telegram, Claude). La lógica está en orquestador.ts y
 // herramientas.ts; acá solo se conectan las dependencias.
+import { direccionUtilizable } from "../../pedidos-trabados/logica.ts";
+import { unirReferencia } from "./herramientas.ts";
 import { db } from "../db.ts";
 import { llamarClaude } from "../claude.ts";
 import { gql } from "../shopify.ts";
@@ -13,6 +15,7 @@ import { depsReales as depsShopifyWebhook } from "../../shopify-webhook/io.ts";
 import { armarConfigTurno, CLAVES_CONFIG_VENDEDOR } from "./config.ts";
 import { enviarMedia } from "./enviar_wa.ts";
 import { montosDeResultado } from "./filtro_salida.ts";
+import { MAX_BYTES_IMAGEN } from "./imagenes.ts";
 import type { DepsOrquestador, FilaHistorial } from "./orquestador.ts";
 import type { ConfigTurno, DepsHerramientas, PedidoChat, PedidoCliente, ProductoShopify } from "./tipos.ts";
 import { crearCacheVersion, type FilaVersion } from "./version_activa.ts";
@@ -117,6 +120,72 @@ export const depsHerramientasReales: DepsHerramientas = {
     return (data ?? null) as PedidoChat | null;
   },
 
+  async entradasDesde(conversacionId, desdeISO) {
+    const { data, error } = await db().from("wa_mensajes").select("texto,contenido").eq("conversacion_id", conversacionId)
+      .eq("direccion", "in").gte("creado_en", desdeISO).order("creado_en", { ascending: true }).limit(30);
+    falla("entradas desde el resumen", error);
+    return (data ?? []).map((f) => {
+      const c = (f.contenido ?? {}) as Record<string, unknown>;
+      return String(typeof c.texto_vendedor === "string" ? c.texto_vendedor : f.texto ?? "");
+    }).filter(Boolean);
+  },
+
+  async pedidoTiendaAbierto(clienteId) {
+    const desde = new Date(Date.now() - 72 * 3600_000).toISOString();
+    const { data, error } = await db().from("shopify_pedidos").select("shopify_order_id,creado_en,raw->>cancelled_at,raw->>fulfillment_status")
+      .eq("cliente_id", clienteId).eq("es_borrador", false).gte("creado_en", desde).order("creado_en", { ascending: false }).limit(5);
+    falla("pedido de la tienda abierto", error);
+    const p = ((data ?? []) as Array<Record<string, unknown>>).find((x) => !x.cancelled_at && x.fulfillment_status !== "fulfilled");
+    return p ? { shopify_order_id: Number(p.shopify_order_id), creado_en: String(p.creado_en) } : null;
+  },
+
+  async pedidoParaCourier(orderId) {
+    const { data, error } = await db().from("shopify_pedidos").select("nombre,telefono,raw").eq("shopify_order_id", orderId).maybeSingle();
+    falla("pedido para courier", error);
+    if (!data) return null;
+    const n = String(data.nombre ?? "").replace(/\D/g, "");
+    const v = n ? await db().from("ventas").select("transportadora").eq("n_referencia", `VT-${n}`).is("deleted_at", null).limit(1).maybeSingle() : null;
+    const raw = (data.raw ?? null) as Record<string, unknown> | null;
+    return {
+      nombre: String(data.nombre ?? `#${orderId}`), telefono: (data.telefono as string | null) ?? null, raw,
+      courier: (v?.data?.transportadora as string | undefined) ?? null,
+      despachado: String(raw?.fulfillment_status ?? raw?.displayFulfillmentStatus ?? "").toLowerCase() === "fulfilled",
+    };
+  },
+
+  async actualizarDireccionOrden(orderId, d) {
+    const direccion: Record<string, string> = {};
+    if (d.direccion) direccion.address1 = d.direccion;
+    if (d.referencia) {
+      // 10-10: se suma a la referencia que ya tenía el pedido (no se pisa).
+      const act = await gql<{ order: { shippingAddress: { address2: string | null } | null } | null }>(
+        `query($id: ID!) { order(id: $id) { shippingAddress { address2 } } }`, { id: `gid://shopify/Order/${orderId}` },
+      ).catch(() => null);
+      direccion.address2 = unirReferencia(act?.order?.shippingAddress?.address2, d.referencia);
+    }
+    try {
+      const r = await gql<{ orderUpdate: { userErrors: Array<{ message: string }> } }>(
+        `mutation($input: OrderInput!) { orderUpdate(input: $input) { userErrors { message } } }`,
+        { input: { id: `gid://shopify/Order/${orderId}`, shippingAddress: direccion } },
+      );
+      const errores = r.orderUpdate.userErrors ?? [];
+      if (errores.length) return { ok: false, error: errores.map((e) => e.message).join("; ") };
+      // 12-10: la etiqueta FALTAN_DATOS la saca pedidos-trabados en su próxima corrida (contrato). Acá solo se saca
+      // si la dirección ya quedó utilizable con la MISMA regla (cubre las etiquetas puestas a mano, que pedidos-trabados no toca).
+      const fin = await gql<{ order: { shippingAddress: { address1: string | null; address2: string | null; city: string | null } | null; note: string | null } | null }>(
+        `query($id: ID!) { order(id: $id) { note shippingAddress { address1 address2 city } } }`, { id: `gid://shopify/Order/${orderId}` },
+      ).catch(() => null);
+      const a = fin?.order?.shippingAddress;
+      if (a && direccionUtilizable({ direccion: [a.address1, a.address2].filter(Boolean).join(", "), ciudad: a.city ?? "", notas: fin?.order?.note ?? "" })) {
+        await gql(`mutation($id: ID!) { tagsRemove(id: $id, tags: ["FALTAN_DATOS"]) { userErrors { message } } }`, { id: `gid://shopify/Order/${orderId}` })
+          .catch((e) => console.warn("tagsRemove FALTAN_DATOS:", e instanceof Error ? e.message : e));
+      }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  },
+
   async crearOrdenShopify(input) {
     try {
       const d = await gql<{
@@ -157,6 +226,18 @@ export const depsHerramientasReales: DepsHerramientas = {
   enviarInteractivo: (to, interactive, opts) => enviarInteractivo(to, interactive, opts),
   enviarMedia: (to, tipo, link, caption, opts) => enviarMedia(to, tipo, link, caption, opts),
   normalizarTelefono: normalizarTelefonoPY,
+
+  async consentimiento(clienteId) {
+    const { data, error } = await db().from("wa_consentimientos").select("estado").eq("cliente_id", clienteId)
+      .eq("tipo", "marketing").order("creado_en", { ascending: false }).limit(1).maybeSingle();
+    falla("leer consentimiento", error);
+    if (data?.estado) return data.estado as "si" | "no" | "baja";
+    // 12-10: si ya se le mandaron los botones (aunque no los tocó), no se le vuelve a preguntar.
+    const { count, error: e2 } = await db().from("wa_mensajes").select("id", { count: "exact", head: true })
+      .eq("cliente_id", clienteId).eq("direccion", "out").ilike("texto", "%Voltra te avise%");
+    falla("buscar permiso ya pedido", e2);
+    return (count ?? 0) > 0 ? "preguntado" : null;
+  },
 };
 
 // ---------- dependencias del orquestador ----------
@@ -256,6 +337,14 @@ export const depsOrquestadorReales: DepsOrquestador = {
   async sumarTurno(conversacionId, costoUsd) {
     const { error } = await db().rpc("vendedor_sumar_turno", { p_conversacion: conversacionId, p_costo: costoUsd });
     falla("sumar turno", error);
+  },
+
+  // 08-10: foto del cliente (wa-webhook la copió a wa-media/media/...). Las pesadas no se bajan enteras.
+  async descargarImagen(ruta) {
+    const { data, error } = await db().storage.from("wa-media").download(ruta);
+    if (error || !data) return { ok: false, error: `descarga: ${error?.message ?? "sin datos"}` };
+    if (data.size > MAX_BYTES_IMAGEN) return { ok: false, error: `imagen_muy_pesada:${data.size}` };
+    return { ok: true, bytes: new Uint8Array(await data.arrayBuffer()), mime: data.type || undefined };
   },
 
   marcarLeidoYEscribiendo: (id) => marcarLeidoYEscribiendo(id),
