@@ -13,10 +13,18 @@ const s = (v) => (v == null ? '' : String(v))
 
 // 'Facturar a: 1540443-9 Miguel Soa' etc. viaja en note_attributes → 'Note
 // Attributes' del CSV es un texto "nombre: valor" por línea.
+// 13-10: también customAttributes ({ key, value }) del formato GraphQL: ahí
+// viajan entrega_programada / entrega_franja de las entregas programadas.
 function notaAtributos(raw) {
-  const lista = Array.isArray(raw?.note_attributes) ? raw.note_attributes : []
-  return lista.map(a => `${s(a?.name)}: ${s(a?.value)}`).join('\n')
+  const lista = [
+    ...(Array.isArray(raw?.note_attributes) ? raw.note_attributes : []),
+    ...(Array.isArray(raw?.customAttributes) ? raw.customAttributes : []),
+  ]
+  return lista.map(a => `${s(a?.name ?? a?.key)}: ${s(a?.value)}`).join('\n')
 }
+
+// 13-10: tags como en el CSV ("A, B"): REST los manda en texto y GraphQL en lista.
+const textoTags = (tags) => (Array.isArray(tags) ? tags.map(s).join(', ') : s(tags))
 
 // ¿Un pedido de Shopify se puede pasar a ventas? Borradores (checkout
 // abandonado) y pruebas no. Los cancelados sí pasan: Despacho los marca como
@@ -41,7 +49,10 @@ export function filasCsvDesdePedidoShopify(fila) {
     // pedido es la de los primeros 10 caracteres, sin conversión.
     'Created at': s(raw.created_at).replace('T', ' ').slice(0, 19),
     'Cancelled at': s(raw.cancelled_at),
-    'Tags': s(raw.tags),
+    'Tags': textoTags(raw.tags),
+    // 13-10: la nota del pedido (columna 'Notes' del CSV). Los pedidos
+    // programados del formato viejo dicen ahí "ENTREGAR EL VIERNES 16/10 …".
+    'Notes': s(raw.note),
     // 12-10: con estos dos se decide el pago anticipado igual que con el CSV
     // (antes el botón no los traía y el CSV tomaba 'paid' como prepago).
     'Financial Status': s(raw.financial_status),

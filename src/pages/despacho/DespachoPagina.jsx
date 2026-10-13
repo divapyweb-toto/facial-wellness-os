@@ -12,7 +12,8 @@ import { categorizarPaP as categoriaPaP, importeSano, esImporteCorrupto, cantida
 import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
-import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, transportadoraForzada, ciudadesConocidas, coberturaCiudad, TRANSPORTADORAS } from '../../lib/transportadoras'
+import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, transportadoraForzada, ciudadesConocidas, coberturaCiudad, TRANSPORTADORAS, hoyParaguay } from '../../lib/transportadoras'
+import { leerProgramacion, estadoProgramacion, programacionDesdeShopify } from '../../lib/entregaProgramada'
 import { placeholderEntregaLucero, guiaLucero } from '../../lib/rendicionLucero'
 import { familiaProducto } from '../../lib/recompra'
 import { precioSugerido } from '../../lib/pedidos'
@@ -166,6 +167,11 @@ function mapearGrupoAPedidos(grupoRows) {
   }
   const notas = primero('Note Attributes')
   const estado = clasificarEstado(primero('Tags'), primero('Cancelled at'))
+  // 13-10: entrega programada (tag ENTREGA_PROGRAMADA + atributos, o tag viejo ENTREGAR_…). No frena el
+  // despacho: sale el mismo día y el courier recibe "Entregar el viernes 16/10 antes de las 12".
+  const hoyPy = hoyParaguay()
+  const entregaProgramada = estadoProgramacion(
+    leerProgramacion({ tags: primero('Tags'), notas, nota: primero('Notes'), hoy: hoyPy }), { hoy: hoyPy })
   // 09-10: el motivo a la vista, para no mandar al courier algo que no va (sigue contando como 'pending').
   const tagsTxt = String(primero('Tags') || '').toLowerCase()
   // 09-10: pago anticipado. Pagado en Shopify (botón "Verifiqué el pago" de Telegram o a mano) → sale como YA PAGADO.
@@ -277,6 +283,7 @@ function mapearGrupoAPedidos(grupoRows) {
     referencia_dir: refDir,          // separada: Lucero la pide en su propia columna
     telefono, producto_nombre: it.producto_nombre, cantidad: it.cantidad,
     total: totales[i], fecha, estado_releasit: estado, pagadoShopify, retiroConfirmado, prioridad,
+    entregaProgramada,               // 13-10: null si no es programado (ver lib/entregaProgramada)
     cfg, cobranzaOk, despachar, faltantes,
     transportadora,                  // 'pap' | 'lucero' | 'otra' — editable después en la UI
     motivoTransportadora: sugerencia.motivo,
@@ -531,17 +538,34 @@ function colapsarPorReferencia(pedidos) {
   })
 }
 
+// 13-10: texto de la entrega programada para el courier ("Entregar el viernes 16/10 antes de las 12"), o ''.
+const textoEntrega = (p) => p?.entregaProgramada?.textoCourier || ''
+
+// NOTAS de la planilla de Lucero: aviso de pago, Ref del OS (si el CODIGO va
+// vacío) y, 13-10, el día de la entrega programada.
+function notasLucero(p) {
+  // La referencia va en NOTAS sí o sí: si el CODIGO va vacío, este es el único
+  // rastro que queda para cruzar el envío de Lucero con la venta del OS.
+  const partes = []
+  if (p.prepago) partes.push('YA PAGADO - NO COBRAR')   // primero: es lo urgente
+  // La referencia solo se duplica en NOTAS si el CODIGO va vacío. Con prefijo
+  // (FW-2025) el código ya la lleva y repetirla solo ensucia la guía.
+  if (MODO_CODIGO_LUCERO === 'vacio' && p.n_referencia) partes.push(`Ref ${p.n_referencia}`)
+  if (textoEntrega(p)) partes.push(textoEntrega(p))
+  return partes.length ? partes.join(' · ') : 'N/A'
+}
+
+// DESCRIPCION de la cabecera de Punto a Punto: el producto y, 13-10, el día de
+// la entrega programada (la planilla de PaP no tiene columna de observaciones).
+function descripcionPaP(p) {
+  const desc = p.esMultiProducto ? p.descripcionCombinada : getDesc(p.producto_nombre, p.cantidad)
+  return textoEntrega(p) ? `${desc} · ${textoEntrega(p)}` : desc
+}
+
 function descargarCabeceraLuceroXLSX(pedidos) {
   const aoa = [HEADERS_LUCERO]
   pedidos.forEach(p => {
-    // La referencia va en NOTAS sí o sí: si el CODIGO va vacío, este es el único
-    // rastro que queda para cruzar el envío de Lucero con la venta del OS.
-    const partes = []
-    if (p.prepago) partes.push('YA PAGADO - NO COBRAR')   // primero: es lo urgente
-    // La referencia solo se duplica en NOTAS si el CODIGO va vacío. Con prefijo
-    // (FW-2025) el código ya la lleva y repetirla solo ensucia la guía.
-    if (MODO_CODIGO_LUCERO === 'vacio' && p.n_referencia) partes.push(`Ref ${p.n_referencia}`)
-    const notas = partes.length ? partes.join(' · ') : 'N/A'
+    const notas = notasLucero(p)
     aoa.push([
       codigoLucero(p.n_referencia),                    // CODIGO (vacío: lo genera Lucero)
       EMPRESA_LUCERO,                                  // EMPRESA (siempre fijo)
@@ -556,7 +580,7 @@ function descargarCabeceraLuceroXLSX(pedidos) {
       p.prepago ? 0 : (p.total || 0),                  // IMPORTE a cobrar
       oNA(p.fecha),                                    // FECHA
       'N/A',                                           // UBICACIÓN (no hay link de maps en Shopify)
-      notas,                                           // NOTAS (aviso de pago + Ref del OS)
+      notas,                                           // NOTAS (aviso de pago + Ref del OS + entrega programada)
     ])
   })
   const ws = XLSX.utils.aoa_to_sheet(aoa)
@@ -586,7 +610,7 @@ function descargarCabeceraXLSX(pedidos) {
       p.prepago ? 'ya esta pagado' : 'efectivo a cobrar',    // forma de pago
       p.prepago ? 0 : p.total,                               // importe a cobrar (0 si ya pagó)
       isNaN(refNum) ? p.n_referencia : refNum,
-      p.esMultiProducto ? p.descripcionCombinada : getDesc(p.producto_nombre, p.cantidad),
+      descripcionPaP(p),                                     // 13-10: + "Entregar el viernes 16/10 …"
     ])
   })
   const ws = XLSX.utils.aoa_to_sheet(aoa)
@@ -723,6 +747,8 @@ async function descargarGuiasDOCX(pedidos) {
           ? fila('DETALLE', p.descripcionCombinada)
           : fila('CANTIDAD', `${p.cantidad || 1} unidad${(p.cantidad || 1) === 1 ? '' : 'es'}`),
         fila('REFERENCIA', codigo || p.n_referencia || '—'),
+        // 13-10: entrega programada, bien visible para el repartidor.
+        ...(textoEntrega(p) ? [fila('ENTREGA', textoEntrega(p), { destacado: true })] : []),
       ]),
     )
 
@@ -820,6 +846,8 @@ function ventaAPedido(v) {
     // 12-10: Ventas no guarda tags: lo pagado por adelantado (pago con prioridad) va primero.
     prioridad: !!v.pago_anticipado,
     tienda: v.tienda || undefined,
+    // 13-10: entrega programada leída de Shopify (ver programadasPorRef).
+    entregaProgramada: v.entregaProgramada || null,
   }
 }
 
@@ -1080,6 +1108,29 @@ function refsSalidasShopify(filas) {
     if (r) set.add(r)
   }
   return set
+}
+
+// 13-10: Shopify (Voltra): filas { nombre, raw } → Map ref normalizada →
+// entrega programada (estadoProgramacion). Ventas no guarda tags: "Desde
+// Ventas" la cruza por referencia para mostrar la fecha y pasarla al courier.
+function programadasPorRef(filas, hoy = hoyParaguay()) {
+  const m = new Map()
+  for (const f of filas || []) {
+    const est = estadoProgramacion(programacionDesdeShopify(f?.raw, hoy), { hoy })
+    const r = normalizarRef(refVoltra(f?.raw?.name || f?.nombre))
+    if (est && r) m.set(r, est)
+  }
+  return m
+}
+
+// 13-10: badge de la entrega programada en las listas (no frena el despacho).
+function BadgeEntrega({ e }) {
+  if (!e) return null
+  return (
+    <div style={{ marginTop: 3, fontSize: 10, fontWeight: 700, whiteSpace: 'normal', color: e.aviso ? 'var(--yellow)' : 'var(--accent)' }}>
+      {e.badge}
+    </div>
+  )
 }
 
 export default function DespachoPagina() {
@@ -1675,10 +1726,12 @@ export default function DespachoPagina() {
         .order('fecha', { ascending: false }))
       // 12-10: en paralelo, lo que ya está en manos del courier (entregas) y lo
       // que Shopify da como despachado: no se vuelve a imprimir ni despachar.
-      const [res, resEnt, resShop] = await Promise.all([
+      const [res, resEnt, resShop, resProg] = await Promise.all([
         consulta(`${COLS_VENTAS_PEND_BASE}, ${COLS_VENTAS_PEND_EXTRA}, ${COLS_VENTAS_PEND_RETIRO}`),
         fetchAllSafe(() => supabase.from('entregas').select('n_referencia, estado_pap'), { columnaOrden: 'nro_guia_pap' }),
         fetchAllSafe(() => supabase.from('shopify_pedidos').select('shopify_order_id, nombre, estado_envio').in('estado_envio', ENVIO_YA_SALIO), { columnaOrden: 'shopify_order_id' }),
+        // 13-10: pedidos de Voltra con entrega programada (tag ENTREGA_PROGRAMADA o viejo ENTREGAR_…).
+        fetchAllSafe(() => supabase.from('shopify_pedidos').select('shopify_order_id, nombre, raw').ilike('raw->>tags', '%entrega%'), { columnaOrden: 'shopify_order_id' }),
       ])
       let { data, error } = res
       if (error && esErrorColumnaFaltante(error)) {
@@ -1689,11 +1742,15 @@ export default function DespachoPagina() {
       if (resEnt.error || resShop.error) {
         toast('No se pudo cruzar con Entregas/Shopify: la lista puede incluir pedidos que ya salieron', 'error')
       }
+      if (resProg.error) {
+        toast('No se pudieron leer las entregas programadas de Shopify: revisá las fechas antes de despachar', 'error')
+      }
+      const programadas = programadasPorRef(resProg.data || [])
       setVentasPend(pendientesDesdeVentas(data || [], {
         tienda: getTienda(),
         enCourier: refsEnCourier(resEnt.data || []),
         salidasShopify: refsSalidasShopify(resShop.data || []),
-      }))
+      }).map(v => ({ ...v, entregaProgramada: programadas.get(normalizarRef(v.n_referencia)) || null })))
       setSelVentas(new Set())
       setBusqVentas('')
     } catch (e) {
@@ -2084,7 +2141,10 @@ export default function DespachoPagina() {
                         </td>
                         <td data-label="Ref." className="mono">#{v.n_referencia}</td>
                         <td data-label="Fecha" className="muted" style={{ fontSize: 11 }}>{v.fecha}</td>
-                        <td data-label="Nombre" style={{ fontWeight: 500 }}>{v.cliente_nombre || '—'}</td>
+                        <td data-label="Nombre" style={{ fontWeight: 500 }}>
+                          {v.cliente_nombre || '—'}
+                          <BadgeEntrega e={v.entregaProgramada} />
+                        </td>
                         <td data-label="Ciudad" className="muted">{v.ciudad || '—'}</td>
                         <td data-label="Dirección" className="muted" style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11 }}>
                           {v.cliente_direccion
@@ -2422,6 +2482,7 @@ export default function DespachoPagina() {
                         <span style={{ fontSize: 11, fontWeight: 600, color: p.cfg.color, whiteSpace: 'nowrap' }}>
                           {p.cfg.label}
                         </span>
+                        <BadgeEntrega e={p.entregaProgramada} />
                       </td>
                       <td data-label="Transportadora" onClick={e => e.stopPropagation()}>
                         {(() => {
