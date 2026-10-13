@@ -20,7 +20,7 @@
 //    romper datos es parte del diseño.
 // ═══════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { supabase, formatGs } from '../../lib/supabase'
+import { supabase, supabaseTienda, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { telefonoWhatsApp } from '../../lib/seguimiento'
@@ -328,8 +328,9 @@ export default function ReclamosPage() {
       // entrega fallido no figure "En tránsito". Si esa lectura falla, el
       // buscador sigue funcionando sin ese dato.
       const [vts, ents, sp] = await Promise.all([
-        fetchAll(() => supabase.from('ventas').select(COL_VENTAS).is('deleted_at', null)),
-        fetchAll(() => supabase.from('entregas').select(COL_ENTREGAS), { columnaOrden: 'nro_guia_pap' }),
+        // 12-10: lecturas por tienda (Enrique); shopify_pedidos es solo de Voltra.
+        fetchAll(() => supabaseTienda.from('ventas').select(COL_VENTAS).is('deleted_at', null)),
+        fetchAll(() => supabaseTienda.from('entregas').select(COL_ENTREGAS), { columnaOrden: 'nro_guia_pap' }),
         fetchAll(() => supabase.from('shopify_pedidos').select('shopify_order_id, nombre, estado_envio')
           .not('estado_envio', 'is', null), { columnaOrden: 'shopify_order_id' }).catch(() => []),
       ])

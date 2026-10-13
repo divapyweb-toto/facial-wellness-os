@@ -1,7 +1,7 @@
 // src/pages/rendicion/RendicionPage.jsx
 import { useState, useEffect, useMemo, useRef } from 'react'
 import * as XLSX from 'xlsx'
-import { supabase } from '../../lib/supabase'
+import { supabase, supabaseTienda } from '../../lib/supabase'
 import { sanearEntrega } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
@@ -38,7 +38,7 @@ export default function RendicionPage() {
   const cargarHistorico = async () => {
     try {
       const data = await fetchAll(
-        () => supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
+        () => supabaseTienda.from('entregas').select('*').order('fecha_entrega', { ascending: false }) /* 12-10: por tienda (Enrique) */,
         { columnaOrden: 'nro_guia_pap' })
       setHistorico(data || [])
       setSeleccionados(new Set())
@@ -50,7 +50,7 @@ export default function RendicionPage() {
     ;(async () => {
       try {
         const data = await fetchAll(
-          () => supabase.from('entregas').select('*').order('fecha_entrega', { ascending: false }),
+          () => supabaseTienda.from('entregas').select('*').order('fecha_entrega', { ascending: false }) /* 12-10: por tienda (Enrique) */,
           { columnaOrden: 'nro_guia_pap' })
         if (activo) setHistorico(data || [])
       } catch (e) { /* tabla vacía o sin acceso */ }
