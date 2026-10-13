@@ -205,6 +205,8 @@ export type DepsHerramientas = {
   enviarInteractivo(to: string, interactive: Record<string, unknown>, opts: OpcionesEnvio): Promise<ResultadoEnvio>;
   /** 12-10: último consentimiento de marketing del cliente (null = nunca respondió). Ausente en pruebas viejas. */
   consentimiento?(clienteId: string): Promise<"si" | "no" | "baja" | "preguntado" | null>;
+  /** 12-10: estado de la oferta de pago con prioridad del pedido (envios_programados prio:<id>), null si no hay. */
+  estadoOfertaPrioridad?(shopifyOrderId: number): Promise<string | null>;
   enviarMedia(to: string, tipo: "image" | "video", link: string, caption: string | null, opts: OpcionesEnvio): Promise<ResultadoEnvio>;
   normalizarTelefono(x: string): string | null;
   /** Reloj en ms para la caché del catálogo (tests). */

@@ -261,6 +261,9 @@ export function armarEnvio(
 ): EnvioNuevo | null {
   const plantilla = PLANTILLA_POR_ESTADO[estado]
   if (!plantilla || !pedido.cliente_id) return null
+  // 12-10 (coordinación con Seguimiento): el reintento automático no va a pedidos que retiran en persona ni a
+  // cancelados por cualquier motivo (no solo por el cliente). Entregados ya no llegan acá (estado terminal).
+  if ((estado === 'INTENTO_FALLIDO' || estado === 'NO_ENTREGADO_RESCATABLE') && noEscribirReintento(pedido)) return null
   const nombre = primerNombre(pedido)
   const producto = productoTexto(pedido)
   let variables: string[]
@@ -288,6 +291,14 @@ export function armarEnvio(
     // para que las filas ya programadas sigan bloqueando el duplicado.
     clave_unica: `courier:${pedido.shopify_order_id}:${estado === 'NO_ENTREGADO_RESCATABLE' ? 'INTENTO_FALLIDO' : estado}`,
   }
+}
+
+/** 12-10: retira en persona o cancelado (Shopify o confirmación cancelado_*) → sin mensaje de reintento. */
+export function noEscribirReintento(p: PedidoImport): boolean {
+  const tags = (p.tags ?? []).map((t) => String(t).toUpperCase())
+  const raw = (p.raw ?? null) as { cancelled_at?: string | null } | null
+  return tags.includes('RETIRO_EN_CASA') || tags.some((t) => t.startsWith('CANCELADO')) ||
+    String(p.estado_confirmacion ?? '').startsWith('cancelado') || !!raw?.cancelled_at || p.estado_envio === 'CANCELADO'
 }
 
 const esCanceladoCliente = (p: PedidoImport) =>

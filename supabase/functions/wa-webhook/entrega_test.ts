@@ -136,27 +136,32 @@ Deno.test("Pagar ahora (descuento retirado 12-10): aunque la config vieja esté 
   }
 });
 
-Deno.test("conf_si con el descuento y la oferta vieja prendidos en config: ninguna oferta de pago al confirmar (ni descuento, ni transferencia, ni QR con prioridad prendida)", async () => {
-  const { deps, st } = mock({
-    config: {
-      pago_anticipado_descuento: DESCUENTO_ON,
-      pago_anticipado: BANCO,
-      pago_prioridad: { activo: true, alias: "alias@ejemplo.com", titular: "Voltra E.A.S." },
-      "ola4.qr": { activo: true },
-    },
-    pedidos: [pedido({ estado_confirmacion: "pendiente", tags: [] })],
-  });
-  let qr = 0;
-  deps.ofrecerCobroQR = () => (qr++, Promise.resolve({ ok: true, texto: "QR" }));
-  await procesarMensaje(boton(`conf_si:${ID}`), contacto, deps);
-  assertEquals(st.enviados.length, 1); // solo la respuesta de confirmado
-  assertEquals(qr, 0);
-  assertFalse(st.botones.some((b) => b.botones.some((x) => x.id.startsWith("pago_ant:"))));
-  for (const t of [...st.enviados, ...st.botones.map((b) => b.texto), ...st.avisos]) {
-    assertFalse(/menos|descuento|transfer|alias|0000000000/i.test(t), t);
+Deno.test("conf_si con el descuento y la oferta vieja prendidos en config: ni descuento ni transferencia vieja; con pago_prioridad, solo esa oferta y sin QR", async () => {
+  const base = { pago_anticipado_descuento: DESCUENTO_ON, pago_anticipado: BANCO, "ola4.qr": { activo: true } };
+  for (const conPrioridad of [false, true]) {
+    const { deps, st } = mock({
+      config: conPrioridad ? { ...base, pago_prioridad: { activo: true, alias: "alias@ejemplo.com", titular: "Voltra E.A.S." } } : base,
+      pedidos: [pedido({ estado_confirmacion: "pendiente", tags: [] })],
+    });
+    let qr = 0;
+    deps.ofrecerCobroQR = () => (qr++, Promise.resolve({ ok: true, texto: "QR" }));
+    await procesarMensaje(boton(`conf_si:${ID}`), contacto, deps);
+    assertFalse(st.botones.some((b) => b.botones.some((x) => x.id.startsWith("pago_ant:"))));
+    for (const t of [...st.enviados, ...st.botones.map((b) => b.texto), ...st.avisos]) {
+      assertFalse(/menos|descuento|0000000000|Banco Prueba/i.test(t), t);
+    }
+    assertEquals(st.pedidos.get(ID)!.estado_confirmacion, "confirmado");
+    if (conPrioridad) {
+      assertEquals(st.enviados.length, 2); // respuesta + oferta con prioridad
+      assert(st.enviados[1].startsWith("📦 ¡Tu pedido quedó confirmado!"), st.enviados[1]);
+      assertEquals(qr, 0);
+      assert(st.pedidos.get(ID)!.tags!.includes("OFERTA_PAGO_ANTICIPADO"));
+    } else {
+      assertEquals(st.enviados.length, 2); // respuesta + QR (sin pago_prioridad vuelve el QR de la ola 4)
+      assertEquals(st.enviados[1], "QR");
+      assertFalse(st.pedidos.get(ID)!.tags!.includes("OFERTA_PAGO_ANTICIPADO"));
+    }
   }
-  assertFalse(st.pedidos.get(ID)!.tags!.includes("OFERTA_PAGO_ANTICIPADO"));
-  assertEquals(st.pedidos.get(ID)!.estado_confirmacion, "confirmado");
 });
 
 Deno.test("comprobante de un pedido con el tag viejo PAGO_ANTICIPADO_ELEGIDO: el monto a verificar es el total (sin descuento)", async () => {

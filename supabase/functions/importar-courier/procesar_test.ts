@@ -4,7 +4,7 @@ import type { EstadoEnvio } from '../_shared/tipos.ts'
 import { normalizarTelefonoPY } from '../_shared/telefono.ts'
 import {
   type ConfigImport, type EnvioNuevo, type PedidoImport, type Repo,
-  fechaISO, manianaALas10, montoSano, numeroDesdeReferencia, procesarFilas, sanearFila,
+  armarEnvio, fechaISO, manianaALas10, montoSano, noEscribirReintento, numeroDesdeReferencia, procesarFilas, sanearFila,
 } from './procesar.ts'
 
 const AHORA = new Date('2026-10-06T15:00:00Z') // 12:00 en Asunción
@@ -266,4 +266,17 @@ Deno.test('fallido y después rescatable → un solo "no entregado" por pedido',
   assertEquals(r.avisos_programados, 0)
   assertEquals(log.envios.filter((e) => e.plantilla === 'voltra_reintento_entrega_v2').length, 1)
   assert(log.notificados.includes('9001:NO_ENTREGADO_RESCATABLE'))
+})
+
+Deno.test('12-10: reintento automático (voltra_reintento_entrega_v2) no va a retiro en persona ni a cancelados', () => {
+  const cfg = { ahora: AHORA, plazos: {} } as unknown as ConfigImport
+  const base = pedido()
+  assert(armarEnvio('INTENTO_FALLIDO', base, 'lucero', cfg) !== null)
+  assertEquals(armarEnvio('INTENTO_FALLIDO', base, 'lucero', cfg)!.clave_unica, `courier:${base.shopify_order_id}:INTENTO_FALLIDO`)
+  assertEquals(armarEnvio('NO_ENTREGADO_RESCATABLE', base, 'pap', cfg)!.clave_unica, `courier:${base.shopify_order_id}:INTENTO_FALLIDO`)
+  for (const p of [pedido({ tags: ['RETIRO_EN_CASA'] }), pedido({ estado_confirmacion: 'cancelado_sin_respuesta' }),
+    pedido({ raw: { cancelled_at: '2026-10-06T10:00:00Z' } }), pedido({ tags: ['CANCELADO_CLIENTE'] })]) {
+    assert(noEscribirReintento(p))
+    assertEquals(armarEnvio('INTENTO_FALLIDO', p, 'lucero', cfg), null)
+  }
 })

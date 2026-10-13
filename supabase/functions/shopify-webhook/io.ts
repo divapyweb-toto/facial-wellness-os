@@ -145,7 +145,9 @@ export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
       // Los avisos de envío (courier:…, "ya salió" / "hoy te llega") no son de la confirmación: solo se cancelan
       // si el pedido se canceló.
       let q = sb.from("envios_programados").update({ estado: "cancelado" }).eq("shopify_order_id", id).eq("estado", "pendiente");
-      if (!opts?.incluirAvisos) q = q.not("clave_unica", "like", "courier:%");
+      // 12-10: tampoco la oferta de pago con prioridad del pedido del bot (prio:…), que nace confirmado: si no, el
+      // mismo webhook que la programa la cancelaría al toque.
+      if (!opts?.incluirAvisos) q = q.not("clave_unica", "like", "courier:%").not("clave_unica", "like", "prio:%");
       // 10-10: el "dimos de baja tu pedido" (cmsg:) se programa justo DESPUÉS de cancelar en Shopify; el webhook
       // orders/updated de esa misma cancelación no lo tiene que frenar (procesar-envios lo manda solo si quedó
       // cancelado_sin_respuesta).

@@ -191,6 +191,24 @@ function esParecido(a, b) {
   return d <= 1                           // 5–7 letras: 1 typo
 }
 
+// 12-10: abreviaturas de PALABRA, en general (no ciudad por ciudad):
+// "Cnel. Bogado" → "coronel bogado", "Gral. Díaz" → "general diaz".
+// Se aplican sobre el texto ya normalizado (sin puntos ni tildes).
+const PALABRAS_ABREVIADAS = {
+  'cnel': 'coronel',
+  'gral': 'general',
+  'pte': 'presidente',
+  'pdte': 'presidente',
+  'sta': 'santa',
+  'sto': 'santo',
+  'mcal': 'mariscal',
+  'cap': 'capitan',
+  'cptan': 'capitan',
+}
+export function expandirAbreviaturas(n) {
+  return String(n || '').split(' ').map(w => PALABRAS_ABREVIADAS[w] || w).join(' ')
+}
+
 // Resuelve el nombre real de una ciudad tras normalizar y aplicar abreviaturas.
 function resolverNombre(raw) {
   const n = normalizarCiudadPaP(raw)
@@ -198,30 +216,46 @@ function resolverNombre(raw) {
   return ABREVIATURAS[n] || n
 }
 
+// 12-10: variantes a probar, en orden: primero con las palabras expandidas
+// ("cnel bogado" → "coronel bogado") y después tal cual. La segunda hace falta
+// porque "pte" también es "puente" ("Pte. Kyjha" = Puente Kyjha).
+function variantesNombre(raw) {
+  const n = resolverNombre(raw)
+  if (!n) return []
+  const exp = expandirAbreviaturas(n)
+  const expResuelto = ABREVIATURAS[exp] || exp
+  return expResuelto === n ? [n] : [expResuelto, n]
+}
+
 // Busca, dentro de CUALQUIER lista de ciudades, la que corresponde al texto ingresado.
 // Aplica normalización + abreviaturas + coincidencia parcial + tolerancia a typos.
 // Se exporta para que otras transportadoras (Lucero) reutilicen la misma inteligencia
 // en vez de duplicarla. `lista` = array de nombres ya normalizados.
 export function emparejarCiudad(raw, lista) {
-  const n = resolverNombre(raw)
-  if (!n) return null
+  const variantes = variantesNombre(raw)
+  if (!variantes.length) return null
   // 1) exacto
-  if (lista.includes(n)) return n
+  for (const n of variantes) if (lista.includes(n)) return n
   // 2) el texto contiene el nombre de una ciudad de la lista
   //    (ej. "luque centro" → contiene "luque")
-  for (const c of lista) {
-    if (n === c) return c
-    if (n.startsWith(c + ' ') || n.endsWith(' ' + c) || n.includes(' ' + c + ' ')) return c
-  }
-  // 3) tolerancia a errores de tipeo (Levenshtein)
-  let mejor = null, mejorD = 99
-  for (const c of lista) {
-    if (esParecido(n, c)) {
-      const d = distancia(n, c)
-      if (d < mejorD) { mejorD = d; mejor = c }
+  for (const n of variantes) {
+    for (const c of lista) {
+      if (n === c) return c
+      if (n.startsWith(c + ' ') || n.endsWith(' ' + c) || n.includes(' ' + c + ' ')) return c
     }
   }
-  return mejor
+  // 3) tolerancia a errores de tipeo (Levenshtein)
+  for (const n of variantes) {
+    let mejor = null, mejorD = 99
+    for (const c of lista) {
+      if (esParecido(n, c)) {
+        const d = distancia(n, c)
+        if (d < mejorD) { mejorD = d; mejor = c }
+      }
+    }
+    if (mejor) return mejor
+  }
+  return null
 }
 
 // Busca la ciudad de cobranza que corresponde al texto ingresado.

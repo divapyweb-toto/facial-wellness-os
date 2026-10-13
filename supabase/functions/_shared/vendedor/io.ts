@@ -238,6 +238,12 @@ export const depsHerramientasReales: DepsHerramientas = {
     falla("buscar permiso ya pedido", e2);
     return (count ?? 0) > 0 ? "preguntado" : null;
   },
+
+  async estadoOfertaPrioridad(shopifyOrderId) {
+    const { data, error } = await db().from("envios_programados").select("estado").eq("clave_unica", `prio:${shopifyOrderId}`).maybeSingle();
+    falla("leer oferta de pago con prioridad", error);
+    return (data?.estado as string | undefined) ?? null;
+  },
 };
 
 // ---------- dependencias del orquestador ----------

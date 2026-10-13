@@ -90,12 +90,11 @@ insert into public.config_wa (clave, valor) values
 on conflict (clave) do nothing;
 
 -- ─── 12-10: pago anticipado con prioridad (sin descuento) ───────────────────
--- pago_prioridad: cuando el pedido pasa a "preparado" en Despacho se le ofrece al cliente pagar por transferencia
--- y salir primero (_shared/pago_anticipado.ts). Sale SOLO con activo true y alias cargado. El alias es un dato de
--- la cuenta: va únicamente en la base (nunca en Git); acá queda null. Para prenderla (en la base, no en este archivo):
+-- pago_prioridad: cuando el cliente CONFIRMA el pedido se le ofrece pagar por transferencia y salir primero
+-- (_shared/pago_anticipado.ts), siempre como texto libre (la plantilla voltra_pago_prioridad no se usa). Sale SOLO con
+-- activo true y alias cargado. El alias es un dato de la cuenta: va únicamente en la base (nunca en Git); acá queda
+-- null. Para prenderla (en la base, no en este archivo):
 --   update public.config_wa set valor = valor || '{"activo": true, "alias": "<alias>"}'::jsonb where clave = 'pago_prioridad';
--- Con la ventana de 24 h cerrada usa la plantilla voltra_pago_prioridad, solo después de que Meta la apruebe:
---   update public.config_wa set valor = valor || '{"voltra_pago_prioridad": true}'::jsonb where clave = 'plantillas_activas';
 -- pago_anticipado_descuento ya no se lee (12-10: el descuento quedó retirado).
 insert into public.config_wa (clave, valor) values
   ('pago_prioridad',

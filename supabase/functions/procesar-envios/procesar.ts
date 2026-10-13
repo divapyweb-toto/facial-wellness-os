@@ -17,10 +17,10 @@
 //     marketing (recompra/baja.ts) y no se reintenta; otros → espera creciente; al máximo, 'fallido'.
 //   - voltra_seguimiento_entrega: con config_wa['ola4.factura'].activo, antes se pregunta a factura/io.ts
 //     si hay factura emitida con PDF; si la hay, sale esa plantilla en lugar del seguimiento normal.
-//   - 12-10: voltra_pago_prioridad (prio:<id>, la programa shopify-webhook al pasar a "preparado"): oferta de pagar
-//     antes y salir con prioridad, sin descuento. Solo con config_wa.pago_prioridad activo + alias; ventana abierta →
-//     texto libre; cerrada → la plantilla solo si plantillas_activas.voltra_pago_prioridad; si no, se cancela (no se
-//     repite). Si salió: tag OFERTA_PAGO_ANTICIPADO (marcarOfertaPrioridad) para reconocer el comprobante.
+//   - 12-10: voltra_pago_prioridad (prio:<id>, la programa shopify-webhook cuando llega un pedido del bot de WhatsApp,
+//     que nace confirmado): oferta de pagar antes y salir con prioridad, sin descuento. Solo con config_wa.pago_prioridad
+//     activo + alias y la ventana de 24 h abierta (texto libre; la plantilla ya no se usa). Ya preparado, con el courier
+//     o entregado → se cancela (no se repite). Si salió: tag OFERTA_PAGO_ANTICIPADO (marcarOfertaPrioridad).
 //   - 12-10: pedido ya pagado → los avisos de entrega ("Tené Gs …") salen como texto sin monto dentro de la ventana;
 //     con la ventana cerrada no salen (mejor nada que pedirle plata a quien ya pagó).
 
@@ -100,8 +100,6 @@ export interface Config {
   facturaActiva: boolean;
   /** 12-10: config_wa.pago_prioridad (activo + alias; el alias vive solo en la base). */
   pagoPrioridad: CfgPagoPrioridad;
-  /** 12-10: config_wa.plantillas_activas ya parseada (plantillas aprobadas por Meta). */
-  plantillasActivas: Record<string, boolean>;
 }
 
 export const CONFIG_DEFECTO: Config = {
@@ -116,7 +114,6 @@ export const CONFIG_DEFECTO: Config = {
   reintento131049H: 24,
   facturaActiva: false,
   pagoPrioridad: { activo: false, alias: null, titular: "Voltra E.A.S." },
-  plantillasActivas: {},
 };
 
 export const IDIOMA = "es"; // Meta no tiene es_PY; "es" es el español genérico
@@ -209,7 +206,8 @@ export const PLANTILLAS: Record<string, DefPlantilla> = {
       { prefijo: "seg_problema", titulo: "Tuve un problema" },
     ],
   },
-  // 12-10: oferta de pago con prioridad (sin descuento, sin botones). {{2}} = alias, se lee de config al mandar.
+  // 12-10: oferta de pago con prioridad (sin descuento, sin botones). Sale SOLO como texto libre (la plantilla de Meta
+  // no se manda); la entrada queda para reconocer las filas prio:<id> y para que el catálogo coincida con el JSON.
   [PLANTILLA_PAGO_PRIORIDAD]: { vars: ["pedido", "alias"], botones: [] },
   // Ola 4 (I1). Hoy la manda recuperar-borradores directo; queda acá por si se programa por cola.
   voltra_recuperar_borrador: { vars: ["nombre", "producto"], botones: [] },
@@ -229,7 +227,6 @@ export const AVISOS_ENVIO_CON_HORARIO = new Set([
   "voltra_reintento_entrega_v2",
   "voltra_completar_direccion",
   "voltra_no_entregado",
-  PLANTILLA_PAGO_PRIORIDAD,
 ]);
 
 /** 09-10: avisos previos a la entrega ("ya salió", "hoy te llega", "ya está por llegar"). */
@@ -523,7 +520,7 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
   const nombre = nombrePlantilla(e.plantilla);
   const def = PLANTILLAS[nombre];
   if (!def) return { accion: "fallar", motivo: `plantilla_desconocida:${nombre}` };
-  if (nombre === PLANTILLA_PAGO_PRIORIDAD) return decidirOfertaPrioridad(e, def, ctx, cfg, ahora, horario);
+  if (nombre === PLANTILLA_PAGO_PRIORIDAD) return decidirOfertaPrioridad(ctx, cfg, ahora);
 
   // 10-10: "dimos de baja tu pedido" solo si lo canceló la acción canc (cancelado_sin_respuesta).
   if (nombre === PLANTILLA_CANCELADO_SIN_RESPUESTA && estadoPedido !== "cancelado_sin_respuesta") {
@@ -614,11 +611,12 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
 }
 
 /**
- * 12-10: oferta de pago con prioridad (prio:<id>). Apagada o sin alias, pedido que ya no corresponde (pagado,
- * cancelado, retiro, prueba, mayorista, ya salió) o ventana cerrada sin la plantilla aprobada → se cancela: no se
- * repite nunca. De noche se corre a las 8:00 (como los avisos de envío).
+ * 12-10: oferta de pago con prioridad (prio:<id>, pedido del bot recién confirmado). Apagada o sin alias, pedido que
+ * ya no corresponde (pagado, cancelado, retiro, prueba, mayorista, ya preparado / con el courier / entregado) o
+ * ventana de 24 h cerrada → se cancela: no se repite nunca. Sin horario: va pegada a la confirmación, que el cliente
+ * acaba de hacer chateando. Solo texto libre (la plantilla voltra_pago_prioridad no se usa).
  */
-function decidirOfertaPrioridad(e: Envio, def: DefPlantilla, ctx: Contexto, cfg: Config, ahora: Date, horario: Horario): Decision {
+function decidirOfertaPrioridad(ctx: Contexto, cfg: Config, ahora: Date): Decision {
   const pp = cfg.pagoPrioridad;
   if (!pp.activo) return { accion: "cancelar", motivo: pp.alias ? "pago_prioridad_apagado" : "pago_prioridad_sin_alias_o_apagado" };
   if (!ctx.pedido) return { accion: "cancelar", motivo: "pedido_no_encontrado" };
@@ -626,15 +624,8 @@ function decidirOfertaPrioridad(e: Envio, def: DefPlantilla, ctx: Contexto, cfg:
   if (motivo) return { accion: "cancelar", motivo: `sin_oferta:${motivo}` };
   const to = ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? null;
   if (!to) return { accion: "fallar", motivo: "cliente_sin_telefono" };
-  if (!horario.dentro(ahora, cfg.horarioAvisosEnvio)) {
-    return { accion: "reprogramar", enviar_desde: horario.proxima(ahora, cfg.horarioAvisosEnvio), motivo: "fuera_de_horario_avisos_envio" };
-  }
-  // Ventana de 24 h abierta: texto libre (gratis), con las palabras del dueño.
-  if (ventanaAbierta(ctx.ultimaEntrada, ahora)) return { accion: "texto", to, texto: textoOfertaPrioridad(pp) };
-  if (cfg.plantillasActivas[PLANTILLA_PAGO_PRIORIDAD] !== true) return { accion: "cancelar", motivo: "ventana_cerrada_sin_plantilla_aprobada" };
-  const pedido = str(obj(e.variables).pedido) ?? ctx.pedido.nombre ?? `#${e.shopify_order_id}`;
-  const valores = [limpiarParametro(pedido), limpiarParametro(pp.alias)];
-  return { accion: "plantilla", to, nombre: PLANTILLA_PAGO_PRIORIDAD, idioma: IDIOMA, componentes: construirComponentes(def, valores, null), valores };
+  if (!ventanaAbierta(ctx.ultimaEntrada, ahora)) return { accion: "cancelar", motivo: "ventana_cerrada" };
+  return { accion: "texto", to, texto: textoOfertaPrioridad(pp) };
 }
 
 // ─── Errores y reintentos ───
@@ -972,12 +963,8 @@ export function configDesdeFilas(filas: { clave: string; valor: unknown }[]): Co
   cfg.maxIntentos = num(pe.max_intentos, cfg.maxIntentos);
   cfg.reintento131049H = num(pe.reintento_131049_h, cfg.reintento131049H);
   cfg.facturaActiva = obj(m.get("ola4.factura")).activo === true;
-  // 12-10: pago con prioridad y plantillas aprobadas (objeto de booleanos o lista de nombres, como shopify-webhook).
+  // 12-10: oferta de pago con prioridad (activo + alias).
   cfg.pagoPrioridad = leerConfigPagoPrioridad(m.get(CLAVE_CONFIG_PRIORIDAD));
-  const pa = m.get("plantillas_activas");
-  cfg.plantillasActivas = Array.isArray(pa)
-    ? Object.fromEntries(pa.filter((x): x is string => typeof x === "string").map((x) => [nombrePlantilla(x), true]))
-    : Object.fromEntries(Object.entries(obj(pa)).filter(([, v]) => v === true).map(([k]) => [nombrePlantilla(k), true]));
   if (Array.isArray(pe.esperas_min) && pe.esperas_min.every((x) => typeof x === "number")) {
     cfg.esperasMin = pe.esperas_min as number[];
   }

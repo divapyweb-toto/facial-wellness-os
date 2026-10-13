@@ -8,6 +8,7 @@ import { normalizarTelefonoPY } from "../_shared/telefono.ts";
 import { agregarTags, quitarTags } from "../_shared/shopify.ts";
 import { avisar, avisarConArchivo } from "../_shared/telegram.ts";
 import { enviarInteractivo } from "../_shared/wa_interactivos.ts";
+import { claveOfertaPrioridad, PLANTILLA_PAGO_PRIORIDAD } from "../_shared/pago_anticipado.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { descargarMedia, enviarBotones, enviarTexto, marcarLeidoYEscribiendo, verificarFirmaMeta } from "../_shared/wa.ts";
 import { transcribirAudio } from "../_shared/transcripcion.ts";
@@ -347,6 +348,36 @@ export const depsReales: Deps = {
       .like("contenido->>interactive", `%cons_si:${clienteId}%`);
     falla("permiso de ofertas ya pedido", error);
     return (count ?? 0) > 0;
+  },
+
+  // 12-10: oferta de pago con prioridad al confirmar: la fila prio:<id> se inserta ya 'enviado' (procesar-envios no
+  // la toma) y su clave única impide mandarla dos veces, venga por wa-webhook o por shopify-webhook (pedidos del bot).
+  async reservarOfertaPrioridad(orderId, clienteId) {
+    const { data, error } = await db().from("envios_programados").upsert({
+      cliente_id: clienteId,
+      shopify_order_id: Number(orderId),
+      plantilla: PLANTILLA_PAGO_PRIORIDAD,
+      variables: { origen: "wa-webhook" },
+      categoria: "utilidad",
+      enviar_desde: new Date().toISOString(),
+      estado: "enviado",
+      intentos: 1,
+      clave_unica: claveOfertaPrioridad(orderId),
+    }, { onConflict: "clave_unica", ignoreDuplicates: true }).select("id");
+    falla("reservar oferta de pago con prioridad", error);
+    return (data?.length ?? 0) > 0;
+  },
+
+  async cerrarOfertaPrioridad(orderId, r) {
+    const cambios = r.ok
+      ? { ultimo_error: null, ...(r.wa_message_id ? { wa_message_id: r.wa_message_id } : {}) }
+      : { estado: "fallido", ultimo_error: String(r.error ?? "error").slice(0, 500) };
+    let { error } = await db().from("envios_programados").update(cambios).eq("clave_unica", claveOfertaPrioridad(orderId));
+    // Sin la columna wa_message_id (base vieja), se guarda el resto.
+    if (error && /wa_message_id/.test(error.message)) {
+      ({ error } = await db().from("envios_programados").update({ ultimo_error: null }).eq("clave_unica", claveOfertaPrioridad(orderId)));
+    }
+    falla("cerrar oferta de pago con prioridad", error);
   },
 
   // 12-10: comprobante ya recibido para el pedido (marca que deja aplicarComprobantePago en el mensaje entrante).

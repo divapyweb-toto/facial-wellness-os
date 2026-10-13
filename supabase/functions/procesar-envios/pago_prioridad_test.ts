@@ -1,4 +1,5 @@
-// 12-10: oferta de pago con prioridad (prio:<id>) y avisos de entrega de pedidos ya pagados. Datos inventados.
+// 12-10: oferta de pago con prioridad (prio:<id>, pedidos del bot recién confirmados) y avisos de entrega de pedidos ya
+// pagados. Datos inventados.
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
 import {
   type Config,
@@ -56,31 +57,30 @@ const ctx = (pedido: Partial<NonNullable<Contexto["pedido"]>> = {}, x: Partial<C
 });
 const ABIERTA = new Date("2026-10-12T10:00:00Z");
 
-Deno.test("prio: ventana abierta → texto libre con el alias (palabras del dueño); no hace falta la plantilla", () => {
+Deno.test("prio: ventana abierta → texto libre con el alias (palabras del dueño: 'quedó confirmado')", () => {
   const d = decidir(prio(), ctx({}, { ultimaEntrada: ABIERTA }), cfg(), AHORA, horario);
   assert(d.accion === "texto");
-  assertEquals(d.texto, "📦 ¡Tu pedido ya está listo para salir!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Alias: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍");
-  assertFalse(/descuento|menos|%|QR/.test(d.texto));
+  assertEquals(d.texto, "📦 ¡Tu pedido quedó confirmado!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Alias: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍");
+  assertFalse(/descuento|menos|%|QR|listo para salir/.test(d.texto));
 });
 
-Deno.test("prio: ventana cerrada → plantilla voltra_pago_prioridad (pedido + alias) solo si está aprobada; si no, no sale", () => {
-  const sin = decidir(prio(), ctx(), cfg(), AHORA, horario);
-  assertEquals(sin, { accion: "cancelar", motivo: "ventana_cerrada_sin_plantilla_aprobada" });
-  const con = decidir(prio(), ctx(), cfg({ plantillasActivas: { voltra_pago_prioridad: true } }), AHORA, horario);
-  assert(con.accion === "plantilla");
-  assertEquals(con.nombre, "voltra_pago_prioridad");
-  assertEquals(con.componentes, [{ type: "body", parameters: [{ type: "text", text: "#1001" }, { type: "text", text: "alias@ejemplo.com" }] }]);
+Deno.test("prio: ventana cerrada → no sale nada (la plantilla ya no se usa)", () => {
+  assertEquals(decidir(prio(), ctx(), cfg(), AHORA, horario), { accion: "cancelar", motivo: "ventana_cerrada" });
+  assertEquals(decidir(prio(), ctx({}, { ultimaEntrada: new Date("2026-10-11T14:00:00Z") }), cfg(), AHORA, horario).accion, "cancelar");
 });
 
 Deno.test("prio: apagada o sin alias → no sale nada (se cancela y no se repite)", () => {
   for (const pp of [{ activo: false, alias: "alias@ejemplo.com", titular: "Voltra E.A.S." }, { activo: false, alias: null, titular: "Voltra E.A.S." }]) {
-    const d = decidir(prio(), ctx({}, { ultimaEntrada: ABIERTA }), cfg({ pagoPrioridad: pp, plantillasActivas: { voltra_pago_prioridad: true } }), AHORA, horario);
+    const d = decidir(prio(), ctx({}, { ultimaEntrada: ABIERTA }), cfg({ pagoPrioridad: pp }), AHORA, horario);
     assertEquals(d.accion, "cancelar", JSON.stringify(pp));
   }
 });
 
-Deno.test("prio: pagado, retiro, prueba, mayorista, cancelado, ya despachado u oferta vieja → no sale", () => {
+Deno.test("prio: ya despachado (preparado, con el courier o entregado), pagado, retiro, prueba, mayorista, cancelado u oferta vieja → no sale", () => {
   const casos: Partial<NonNullable<Contexto["pedido"]>>[] = [
+    { raw: { fulfillment_status: "fulfilled" } },
+    { estado_envio: "DESPACHADO" },
+    { estado_envio: "ENTREGADO" },
     { tags: ["CONFIRMADO", "PAGADO"] },
     { tags: ["CONFIRMADO", "PAGO_VERIFICADO"] },
     { tags: ["CONFIRMADO", "PAGADO_QR"] },
@@ -88,9 +88,9 @@ Deno.test("prio: pagado, retiro, prueba, mayorista, cancelado, ya despachado u o
     { tags: ["CONFIRMADO", "RETIRO_EN_CASA"] },
     { tags: ["PRUEBA_E2E"] },
     { tags: ["MAYORISTA"] },
+    { tags: ["SIN_MENSAJES"] },
     { estado_confirmacion: "cancelado_cliente" },
     { raw: { cancelled_at: "2026-10-12T10:00:00-03:00" } },
-    { estado_envio: "DESPACHADO" },
     { tags: ["CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"] },
   ];
   for (const p of casos) {
@@ -101,10 +101,10 @@ Deno.test("prio: pagado, retiro, prueba, mayorista, cancelado, ya despachado u o
   assertEquals(decidir(prio(), ctx({ tags: ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"] }, { ultimaEntrada: ABIERTA }), cfg(), AHORA, horario).accion, "texto");
 });
 
-Deno.test("prio: de noche se corre a las 8:00", () => {
+Deno.test("prio: sin horario (va pegada a la confirmación): de noche con la ventana abierta sale igual", () => {
   const noche = new Date("2026-10-13T01:30:00Z"); // lunes 22:30 en Asunción
-  const d = decidir(prio(), ctx({}, { ultimaEntrada: new Date("2026-10-13T01:00:00Z") }), cfg(), noche, horario);
-  assertEquals(d, { accion: "reprogramar", enviar_desde: new Date("2026-10-13T11:00:00Z"), motivo: "fuera_de_horario_avisos_envio" });
+  const d = decidir(prio(), ctx({}, { ultimaEntrada: new Date("2026-10-13T01:25:00Z") }), cfg(), noche, horario);
+  assertEquals(d.accion, "texto");
 });
 
 Deno.test("prio salió → se marca enviada y después tag OFERTA_PAGO_ANTICIPADO; si el tag falla, Telegram a Enrique", async () => {
@@ -162,15 +162,8 @@ Deno.test("pedido ya pagado: 'ya salió' / 'hoy te llega' / víspera sin 'Tené 
   }
 });
 
-Deno.test("config: pago_prioridad y plantillas_activas desde config_wa (objeto o lista); sin claves, apagado", () => {
-  const c = configDesdeFilas([
-    { clave: "pago_prioridad", valor: { activo: true, alias: "alias@ejemplo.com" } },
-    { clave: "plantillas_activas", valor: { voltra_pago_prioridad: true, voltra_entrega_manana: false } },
-  ]);
-  assertEquals(c.pagoPrioridad, PP_ON);
-  assertEquals(c.plantillasActivas, { voltra_pago_prioridad: true });
-  assertEquals(configDesdeFilas([{ clave: "plantillas_activas", valor: ["pago_prioridad"] }]).plantillasActivas, { voltra_pago_prioridad: true });
-  const vacia = configDesdeFilas([]);
-  assertEquals([vacia.pagoPrioridad.activo, vacia.plantillasActivas], [false, {}]);
+Deno.test("config: pago_prioridad desde config_wa; sin clave o sin alias, apagado", () => {
+  assertEquals(configDesdeFilas([{ clave: "pago_prioridad", valor: { activo: true, alias: "alias@ejemplo.com" } }]).pagoPrioridad, PP_ON);
+  assertEquals(configDesdeFilas([]).pagoPrioridad.activo, false);
   assertEquals(configDesdeFilas([{ clave: "pago_prioridad", valor: { activo: true, alias: null } }]).pagoPrioridad.activo, false);
 });

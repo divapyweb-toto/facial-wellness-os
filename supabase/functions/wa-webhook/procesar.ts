@@ -6,11 +6,14 @@ import { esAceptacion as esAceptacionVendedor } from "../_shared/vendedor/herram
 import { diaEntrega, plazoParaEnDesdeHoy } from "../_shared/plazo_zona.ts";
 import {
   CLAVE_CONFIG_PRIORIDAD,
+  type CfgPagoPrioridad,
   leerConfigPagoPrioridad,
+  motivoSinOfertaPrioridad,
   pedidoPagado,
   TAG_COMPROBANTE_PAGO,
   TAG_OFERTA_PAGO,
   TAG_PRIORIDAD,
+  textoOfertaPrioridad,
 } from "../_shared/pago_anticipado.ts";
 import { deducirProductoAnuncio, marcaAnuncio, type ReferralMeta } from "../_shared/anuncios.ts";
 import { detectarLinkMapas, type LinkMapas, textoLinkMapas } from "../_shared/link_mapas.ts";
@@ -183,6 +186,13 @@ export interface Deps {
   enviarInteractivo?(to: string, interactivo: Interactivo, opts: { clienteId: string; conversacionId: string }): Promise<ResultadoEnvio>;
   /** 12-10: ¿ya se le mandaron alguna vez los botones de permiso para ofertas (cons_si:<cliente_id>)? */
   permisoOfertasPedido?(clienteId: string): Promise<boolean>;
+  /**
+   * 12-10: reserva la oferta de pago con prioridad del pedido (envios_programados `prio:<id>`, ya 'enviado').
+   * false = ya existía (salió por otra vía): no se manda de nuevo.
+   */
+  reservarOfertaPrioridad?(orderId: string, clienteId: string): Promise<boolean>;
+  /** 12-10: resultado del envío de la oferta reservada (guarda el wa_message_id, o 'fallido' con el error). */
+  cerrarOfertaPrioridad?(orderId: string, r: ResultadoEnvio): Promise<void>;
   /** 12-10: ¿ya llegó un comprobante para este pedido? (wa_mensajes.contenido.comprobante_pago_anticipado) */
   comprobanteRecibido?(orderId: string): Promise<boolean>;
   /**
@@ -1129,6 +1139,7 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
   if (accion === "conf_corregir") await deps.actualizarConversacion(ctx.conv.id, { estado: "humano" });
 
   // 4) Respuesta al cliente (ventana de 24 h abierta: el cliente acaba de escribir).
+  const lineasPago: string[] = [];
   const resp = await deps.config("respuestas_confirmacion") as Record<string, string> | null;
   const textoResp = resp?.[CLAVE_RESPUESTA[accion]] ?? resp?.[accion];
   if (!textoResp) avisoDefault("respuestas_confirmacion");
@@ -1151,13 +1162,17 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
   const envio = await deps.enviarTexto(ctx.destino, texto, { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
   if (!envio.ok) fallas.push(`respuesta al cliente: ${envio.error}`);
 
-  // 12-10 (decisión del dueño): al confirmar ya NO se ofrece pagar antes (ni por transferencia ni con descuento).
-  // La oferta de pago con prioridad sale una sola vez, cuando el pedido pasa a "preparado" en Despacho
-  // (shopify-webhook → procesar-envios, _shared/pago_anticipado.ts). Con esa oferta prendida tampoco sale el QR:
-  // al cliente le llega un solo ofrecimiento de pago.
-  const prioridad = accion === "conf_si"
-    ? leerConfigPagoPrioridad(await deps.config(CLAVE_CONFIG_PRIORIDAD).catch(() => null)).activo
-    : false;
+  // 12-10 (decisión del dueño): al confirmar sale la oferta de pagar antes por transferencia y salir con prioridad
+  // (sin descuento, nunca obligatoria), justo después de nuestra respuesta y antes del permiso para ofertas. Una sola
+  // vez por pedido (_shared/pago_anticipado.ts). La oferta vieja (07-10) y la del descuento ya no existen. Con
+  // pago_prioridad prendido tampoco sale el QR: al cliente le llega un solo ofrecimiento de pago.
+  const cfgPrioridad = accion === "conf_si" ? leerConfigPagoPrioridad(await deps.config(CLAVE_CONFIG_PRIORIDAD).catch(() => null)) : null;
+  const prioridad = !!cfgPrioridad?.activo;
+  if (cfgPrioridad?.activo && envio.ok) {
+    const r = await ofrecerPagoPrioridad(ctx, pedido, orderId, objetivo, tags, cfgPrioridad);
+    if (r.falla) fallas.push(r.falla);
+    if (r.enviada) lineasPago.push(`💸 Se le ofreció pagar antes por transferencia, con prioridad${totalGs(pedido) ? ` (Gs ${totalGs(pedido)})` : ""}.`);
+  }
 
   // Ola 4: oferta de pago por QR después de confirmar, solo con config_wa['ola4.qr'].activo.
   if (accion === "conf_si" && !prioridad && deps.ofrecerCobroQR) {
@@ -1194,7 +1209,48 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
     : accion === "conf_cancelar"
     ? [[{ texto: "Cancelar pedido", callback: `cancelar:${orderId}` }]]
     : undefined;
-  await deps.avisar([titulo, ...fallas.map((f) => `Falla: ${f}`)].join("\n"), botones);
+  await deps.avisar([titulo, ...lineasPago, ...fallas.map((f) => `Falla: ${f}`)].join("\n"), botones);
+}
+
+/**
+ * 12-10: oferta de pago con prioridad al confirmar un pedido web. Solo dentro de la ventana de 24 h (el cliente
+ * acaba de escribir; si el mensaje llegó tarde y la ventana se cerró, no sale nada). No sale si el pedido no
+ * corresponde (pagado, retiro, prueba, mayorista, cancelado, ya preparado o con el courier, oferta ya enviada).
+ * Reserva `prio:<id>` antes de mandar (si ya existe, otra vía la mandó: no se repite) y, si salió, deja el tag
+ * OFERTA_PAGO_ANTICIPADO (DB + Shopify) para reconocer el comprobante.
+ */
+async function ofrecerPagoPrioridad(
+  ctx: Ctx,
+  pedido: Pedido,
+  orderId: string,
+  estado: string,
+  tags: string[],
+  cfg: CfgPagoPrioridad,
+): Promise<{ enviada: boolean; falla?: string }> {
+  const { deps } = ctx;
+  if (motivoSinOfertaPrioridad({ tags, raw: pedido.raw, estado_confirmacion: estado, estado_envio: pedido.estado_envio })) return { enviada: false };
+  const ts = Number(ctx.m.timestamp) * 1000;
+  if (Number.isFinite(ts) && ts > 0 && deps.ahora().getTime() - ts >= 24 * 3_600_000) return { enviada: false }; // ventana cerrada
+  if (deps.reservarOfertaPrioridad) {
+    const ok = await deps.reservarOfertaPrioridad(orderId, ctx.clienteId).catch((e) => {
+      console.error("oferta prioridad: no pude reservar prio:", e instanceof Error ? e.message : e);
+      return false; // ante la duda no se manda (nunca dos veces)
+    });
+    if (!ok) return { enviada: false };
+  }
+  const e = await deps.enviarTexto(ctx.destino, textoOfertaPrioridad(cfg), { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
+  await deps.cerrarOfertaPrioridad?.(orderId, e).catch((err) => console.error("oferta prioridad: cerrar prio:", err instanceof Error ? err.message : err));
+  if (!e.ok) return { enviada: false, falla: `oferta de pago con prioridad: ${e.error}` };
+  if (!tags.includes(TAG_OFERTA_PAGO)) {
+    await deps.actualizarPedido(orderId, { estado_confirmacion: estado, tags: [...tags, TAG_OFERTA_PAGO] });
+    try {
+      const r = await deps.agregarTags(`gid://shopify/Order/${orderId}`, [TAG_OFERTA_PAGO]) as { ok?: boolean; error?: string } | undefined;
+      if (r?.ok === false) return { enviada: true, falla: `tag ${TAG_OFERTA_PAGO} en Shopify: ${r.error}` };
+    } catch (err) {
+      return { enviada: true, falla: `tag ${TAG_OFERTA_PAGO} en Shopify: ${err instanceof Error ? err.message : err}` };
+    }
+  }
+  return { enviada: true };
 }
 
 /**
@@ -1225,8 +1281,8 @@ async function pedirPermisoOfertas(ctx: Ctx): Promise<string | null> {
 }
 
 // ---------- pago anticipado con prioridad (decisión del dueño, 07-10; flujo del 12-10) ----------
-// La oferta ya no sale al confirmar: sale una sola vez cuando el pedido pasa a "preparado" (_shared/pago_anticipado.ts).
-// Acá queda el comprobante: imagen o PDF de un cliente con un pedido que recibió la oferta → Telegram a Enrique con
+// La oferta sale al confirmar (ofrecerPagoPrioridad; pedidos del bot: shopify-webhook → procesar-envios).
+// El comprobante: imagen o PDF de un cliente con un pedido que recibió la oferta → Telegram a Enrique con
 // el archivo, el monto a verificar y el botón "Recibido" (pagado:<id>, telegram-webhook). El pedido no cambia hasta
 // que lo toca. Config opcional: config_wa['pago_anticipado'].texto_recibido y dias_comprobante (sin datos de la cuenta:
 // esos van solo en la base, nunca en el código).

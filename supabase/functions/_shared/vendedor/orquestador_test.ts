@@ -757,3 +757,26 @@ Deno.test("12-10: pedido creado en el turno → después de la respuesta, el per
     if (espera) assert(JSON.stringify(permisos[0].interactive).includes("Voltra te avise"));
   }
 });
+
+Deno.test("12-10: el permiso espera a que salga la oferta de pago con prioridad (orden: confirmación → oferta → permiso)", async () => {
+  const e = escenario((_p, n) =>
+    n === 1
+      ? herramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "CDE", direccion: "Calle 1", items: [{ handle: "tiras-prueba", cantidad: 1 }] })
+      : n === 2
+      ? herramienta("crear_pedido_cod", { confirmar: true })
+      : texto("Listo Ana, quedó confirmado tu pedido 🙌")
+  );
+  const estados = ["pendiente", "pendiente", "enviado"];
+  const consultas: number[] = [];
+  e.deps.herramientas = {
+    ...e.deps.herramientas,
+    consentimiento: () => Promise.resolve(null),
+    estadoOfertaPrioridad: (id) => (consultas.push(id), Promise.resolve(estados.shift() ?? "enviado")),
+  };
+  await procesarTurno(ENTRADA, e.deps);
+  const antes = e.esperas.length;
+  await procesarTurno({ ...ENTRADA, texto: "si dale" }, e.deps);
+  assertEquals(consultas.length, 3);
+  assert(e.esperas.slice(antes).filter((ms) => ms === 2000).length >= 2);
+  assertEquals(e.reg.interactivos.filter((i) => JSON.stringify(i.interactive).includes("cons_si:")).length, 1);
+});

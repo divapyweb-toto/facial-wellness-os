@@ -4,7 +4,7 @@
 
 import { alas8HabilDespues, diaEntrega, horaLocal, inicioDespacho, plazoParaEnDesdeHoy, plazoPorCiudad, rangoEntrega, visperaEntrega } from "../_shared/plazo_zona.ts";
 import { verificarHmacShopify } from "../_shared/shopify.ts";
-import { motivoSinOfertaPrioridad, pedidoPagado, PLANTILLA_PAGO_PRIORIDAD, preparadoReciente } from "../_shared/pago_anticipado.ts";
+import { claveOfertaPrioridad, motivoSinOfertaPrioridad, pedidoPagado, PLANTILLA_PAGO_PRIORIDAD } from "../_shared/pago_anticipado.ts";
 import { CONFIG_DEFECTO, envioTerminal, PLANTILLA_ENTREGA_MANANA } from "../procesar-envios/procesar.ts";
 
 export const TAG_BORRADOR_RELEASIT = "abandoned_checkout_releasit_cod_form";
@@ -148,7 +148,10 @@ export interface Deps {
   upsertPedido(p: FilaPedido): Promise<void>;
   /** insert ... on conflict (clave_unica) do nothing. */
   programarEnvios(filas: FilaEnvio[]): Promise<void>;
-  /** pasa a 'cancelado' los envíos 'pendiente' del pedido; los avisos de envío (courier:…) solo con `incluirAvisos`. */
+  /**
+   * pasa a 'cancelado' los envíos 'pendiente' del pedido; los avisos de envío (courier:…) y la oferta de pago con
+   * prioridad (prio:…, 12-10) solo con `incluirAvisos` (pedido cancelado).
+   */
   cancelarEnviosPendientes(id: number, opts?: { incluirAvisos?: boolean }): Promise<void>;
   /** Dispara procesar-envios ya, sin esperar al cron del minuto (opcional; si falla, el cron lo manda igual). */
   dispararEnvios?(): Promise<void>;
@@ -413,13 +416,16 @@ export function armarAvisoPreparado(ped: PedidoNormalizado, clienteId: string, c
   };
 }
 
+/** Minutos desde que Shopify creó el pedido del bot: un orders/updated de un pedido viejo no dispara la oferta. */
+export const OFERTA_WHATSAPP_MAX_MIN = 30;
+
 /**
- * 12-10: pasó a "preparado" → oferta de pagar antes por transferencia y salir con prioridad (sin descuento, nunca
- * obligatoria). Una sola vez por pedido (clave `prio:<id>`); null si no corresponde (pagado, retiro, prueba,
- * mayorista, cancelado, ya salió con el courier, oferta vieja ya enviada) o si el fulfillment no es reciente (un
- * orders/updated de un pedido preparado hace días no la dispara). procesar-envios decide al mandarla: config
- * pago_prioridad (activo + alias), ventana de 24 h (texto) o plantilla aprobada; si no, no sale.
- * Sale 1 s antes que el "ya salió" del mismo lote: primero "listo para salir", después "ya salió".
+ * 12-10 (decisión del dueño): la oferta de pagar antes y salir con prioridad sale al CONFIRMAR. Los pedidos web la
+ * reciben en wa-webhook cuando el cliente toca Confirmo. Los del bot de WhatsApp nacen confirmados (crear_pedido_cod
+ * los crea con ORIGEN_WHATSAPP + CONFIRMADO): acá se programa `prio:<id>` cuando llega el pedido recién creado.
+ * Una sola vez por pedido (misma clave que usa wa-webhook). null si no es del bot, no está confirmado, no es reciente
+ * o no corresponde (pagado, retiro, prueba, mayorista, cancelado, ya preparado). procesar-envios lo manda como texto
+ * libre solo con la ventana de 24 h abierta y pago_prioridad activo con alias.
  */
 export function armarOfertaPrioridad(
   ped: PedidoNormalizado,
@@ -427,7 +433,9 @@ export function armarOfertaPrioridad(
   ahora: Date,
   estadoEnvio?: string | null,
 ): FilaEnvio | null {
-  if (!preparadoReciente(ped.raw, ahora)) return null;
+  const t = ped.tags.map((x) => x.toUpperCase());
+  if (ped.esBorrador || ped.cancelado || !t.includes("ORIGEN_WHATSAPP") || !t.includes("CONFIRMADO")) return null;
+  if (!creadoHaceMenosDe(ped.creadoEn, ahora, OFERTA_WHATSAPP_MAX_MIN)) return null;
   if (motivoSinOfertaPrioridad({ tags: ped.tags, raw: ped.raw, estado_envio: estadoEnvio })) return null;
   return {
     cliente_id: clienteId,
@@ -435,9 +443,8 @@ export function armarOfertaPrioridad(
     plantilla: PLANTILLA_PAGO_PRIORIDAD,
     variables: { pedido: ped.nombre },
     categoria: "utilidad",
-    // Fin de semana sale igual (el "ya salió" espera al lunes): le da tiempo a pagar antes del primer despacho.
-    enviar_desde: new Date(ahora.getTime() - 1000).toISOString(),
-    clave_unica: `prio:${ped.shopifyOrderId}`,
+    enviar_desde: ahora.toISOString(),
+    clave_unica: claveOfertaPrioridad(ped.shopifyOrderId),
   };
 }
 
@@ -585,13 +592,14 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   if (!motivoNoDespachar && !ped.cancelado && !esPruebaE2E && !retira && clienteId && estaPreparado(ped.raw) && !envioTerminal(existente?.estado_envio)) {
     const courier = deps.courierDePedido ? await deps.courierDePedido(ped.nombre).catch(() => null) : null;
     const recordatorio = armarRecordatorioEntrega(ped, clienteId, deps.ahora(), await plantillasActivas(deps), courier);
-    // 12-10: oferta de pago con prioridad (una sola vez por pedido; ver armarOfertaPrioridad).
-    const oferta = armarOfertaPrioridad(ped, clienteId, deps.ahora(), existente?.estado_envio);
-    await deps.programarEnvios([
-      ...(oferta ? [oferta] : []),
-      armarAvisoPreparado(ped, clienteId, courier, deps.ahora()),
-      ...(recordatorio ? [recordatorio] : []),
-    ]);
+    await deps.programarEnvios([armarAvisoPreparado(ped, clienteId, courier, deps.ahora()), ...(recordatorio ? [recordatorio] : [])]);
+    if (deps.dispararEnvios) await deps.dispararEnvios().catch((e) => console.warn("dispararEnvios:", e instanceof Error ? e.message : e));
+  }
+
+  // 12-10: pedido del bot de WhatsApp recién creado (ya confirmado) → oferta de pago con prioridad, una sola vez.
+  const oferta = clienteId ? armarOfertaPrioridad(ped, clienteId, deps.ahora(), existente?.estado_envio) : null;
+  if (oferta) {
+    await deps.programarEnvios([oferta]);
     if (deps.dispararEnvios) await deps.dispararEnvios().catch((e) => console.warn("dispararEnvios:", e instanceof Error ? e.message : e));
   }
 

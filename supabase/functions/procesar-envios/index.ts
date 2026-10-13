@@ -25,9 +25,8 @@ const CLAVES_CONFIG = [
   "textos_libres",
   "procesar_envios",
   "ola4.factura",
-  // 12-10: oferta de pago con prioridad (activo + alias) y plantillas aprobadas por Meta.
+  // 12-10: oferta de pago con prioridad (activo + alias).
   "pago_prioridad",
-  "plantillas_activas",
 ];
 const COLUMNAS =
   "id,cliente_id,shopify_order_id,plantilla,variables,categoria,enviar_desde,estado,clave_unica,intentos,ultimo_error";

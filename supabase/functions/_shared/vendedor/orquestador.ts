@@ -385,10 +385,26 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
 
   /** 12-10: en este turno se creó un pedido → después de la respuesta, el permiso para ofertas (si nunca lo respondió). */
   let pedidoCreadoEnTurno = false;
+  let pedidoCreadoId: number | null = null;
+  /**
+   * 12-10: orden pedido por Enrique: confirmación → oferta de pago con prioridad (la manda shopify-webhook/procesar-envios
+   * segundos después, clave prio:<id>) → permiso. Espera hasta 20 s a que la oferta salga; si en 8 s ni apareció, no hay oferta.
+   */
+  const esperarOfertaPrioridad = async () => {
+    const leer = deps.herramientas.estadoOfertaPrioridad;
+    if (!leer || pedidoCreadoId == null) return;
+    for (let t = 0; t < 20_000; t += 2000) {
+      const e = await leer(pedidoCreadoId).catch(() => "error");
+      if (e === "error" || (e && e !== "pendiente")) return;
+      if (!e && t >= 8000) return;
+      await deps.dormir(2000);
+    }
+  };
   const pedirPermisoTrasPedido = async () => {
     if (!deps.herramientas.consentimiento) return;
     const ya = await deps.herramientas.consentimiento(cli.id).catch(() => "error" as const);
     if (ya !== null) return;
+    await esperarOfertaPrioridad();
     await esperarEscribiendo(pausaBurbujaMs(TEXTO_PERMISO_OFERTAS, cfg.ritmo, azar()));
     const r = await deps.herramientas.enviarInteractivo(ctx.destino, botonesPermisoOfertas(cli.id), { clienteId: cli.id, conversacionId: conv.id });
     fila.herramientas.push({ nombre: "permiso_ofertas(sistema)", input: {}, resultado: { ok: r.ok, error: r.error ?? null }, error: !r.ok });
@@ -578,7 +594,10 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         resultados.push({ type: "tool_result", tool_use_id: u.id, content: JSON.stringify(res.resultado), ...(res.esError ? { is_error: true } : {}) });
         if (res.terminal) terminal = true;
         if (res.derivado) derivadoPorHerramienta = true;
-        if (res.pedidoCreado) pedidoCreadoEnTurno = true;
+        if (res.pedidoCreado) {
+          pedidoCreadoEnTurno = true;
+          pedidoCreadoId = res.pedidoCreado.shopify_order_id;
+        }
       }
       if (terminal) {
         fila.derivado = derivadoPorHerramienta;

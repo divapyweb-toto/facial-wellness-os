@@ -671,18 +671,120 @@ function pedidoConOferta(extra: Partial<Pedido> = {}): Pedido {
 
 const textosCliente = (st: Estado) => [...st.enviados.map((e) => e.texto), ...st.botones.map((b) => b.texto)];
 
-Deno.test("conf_si: ya no se ofrece pagar al confirmar (aunque la oferta vieja y el descuento estén prendidos en config)", async () => {
+const TEXTO_OFERTA = "📦 ¡Tu pedido quedó confirmado!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Alias: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍";
+
+/** Orden real de lo que le llega al cliente (texto y botones) + reservas de prio:<id>. */
+function conOrden(deps: Deps) {
+  const orden: string[] = [];
+  const reservas: string[] = [];
+  const cierres: [string, boolean][] = [];
+  const texto = deps.enviarTexto, botones = deps.enviarBotones;
+  deps.enviarTexto = (to, t, o) => (orden.push(`texto:${t.split("\n")[0]}`), texto(to, t, o));
+  deps.enviarBotones = (to, t, b, o) => (orden.push(`botones:${b.map((x) => x.id.split(":")[0]).join(",")}`), botones(to, t, b, o));
+  deps.reservarOfertaPrioridad = (id) => Promise.resolve(reservas.includes(id) ? false : (reservas.push(id), true));
+  deps.cerrarOfertaPrioridad = (id, r) => (cierres.push([id, r.ok]), Promise.resolve());
+  return { orden, reservas, cierres };
+}
+
+Deno.test("conf_si con pago_prioridad: respuesta → oferta (texto libre) → permiso de ofertas; tag OFERTA en DB y Shopify; una sola vez", async () => {
   const { deps, st } = crearMock();
-  st.config.pago_anticipado = { activo: true, texto: "Pagá Gs {total} a la cuenta 0000000000" };
-  st.config.pago_anticipado_descuento = { activo: true, descuento_pct: 5, metodos: ["alias"] };
+  const o = conOrden(deps);
   st.config.pago_prioridad = PRIORIDAD_ON;
+  st.config.pago_anticipado = { activo: true, texto: "Pagá Gs {total} a la cuenta 0000000000" }; // la oferta vieja ya no existe
+  st.config.pago_anticipado_descuento = { activo: true, descuento_pct: 5, metodos: ["alias"] };
   st.pedidos.set(ORDER, pedidoPendiente({ total: "112000" }));
   await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
-  assertEquals(st.enviados.length, 1); // solo "Listo …, quedó confirmado"
-  for (const t of textosCliente(st)) assertFalse(/0000000000|transfer|alias|menos|Gs 112/i.test(t), t);
+  assertEquals(o.orden.length, 3);
+  assert(o.orden[0].startsWith("texto:Listo Ana, quedó confirmado."), o.orden[0]); // nada antes de la respuesta
+  assertEquals(o.orden.slice(1), ["texto:📦 ¡Tu pedido quedó confirmado!", "botones:cons_si,cons_no"]);
+  assertEquals(st.enviados[1].texto, TEXTO_OFERTA);
+  for (const t of textosCliente(st)) assertFalse(/0000000000|menos|descuento/i.test(t), t);
+  assertEquals(o.reservas, [ORDER]);
+  assertEquals(o.cierres, [[ORDER, true]]);
+  assertEquals(st.pedidos.get(ORDER)!.tags, ["CONFIRMADO", TAG_OFERTA_PAGO]);
+  assertEquals(st.tagsAgregados, [[`gid://shopify/Order/${ORDER}`, ["CONFIRMADO"]], [`gid://shopify/Order/${ORDER}`, [TAG_OFERTA_PAGO]]]);
+  assert(st.avisos[0].texto.includes("💸 Se le ofreció pagar antes por transferencia, con prioridad (Gs 112.000)."), st.avisos[0].texto);
+  // Toque repetido: nada nuevo. Corregir y volver a confirmar: tampoco (ya tiene la oferta / ya reservada).
+  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`, "wamid.IN2")]));
+  await correr(deps, payloadMensajes([botonInteractivo(`conf_corregir:${ORDER}`, "wamid.IN3")]));
+  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`, "wamid.IN4")]));
+  assertEquals(st.enviados.filter((e) => e.texto === TEXTO_OFERTA).length, 1);
+});
+
+Deno.test("conf_si con 'Confirmo' escrito (un pedido pendiente): misma oferta después de la respuesta", async () => {
+  const { deps, st } = crearMock();
+  const o = conOrden(deps);
+  st.config.pago_prioridad = PRIORIDAD_ON;
+  st.pedidos.set(ORDER, pedidoPendiente({ total: 129000 }));
+  await correr(deps, payloadMensajes([{ from: TEL, id: "wamid.SI", timestamp: "1791300100", type: "text", text: { body: "Confirmo" } }]));
+  assertEquals(o.orden.slice(1), ["texto:📦 ¡Tu pedido quedó confirmado!", "botones:cons_si,cons_no"]);
+  assert(o.orden[0].startsWith("texto:Listo Ana, quedó confirmado"));
+});
+
+Deno.test("oferta al confirmar: no sale apagada, sin alias, ya reservada por otra vía, si falla la reserva, con la ventana cerrada o si falló la respuesta", async () => {
+  const casos: Array<[string, (d: Deps, st: Estado) => void]> = [
+    ["apagada", (_d, st) => (st.config.pago_prioridad = { ...PRIORIDAD_ON, activo: false })],
+    ["sin alias", (_d, st) => (st.config.pago_prioridad = { activo: true, alias: null })],
+    ["sin config", (_d, st) => delete st.config.pago_prioridad],
+    ["ya reservada", (d) => (d.reservarOfertaPrioridad = () => Promise.resolve(false))],
+    ["reserva falla", (d) => (d.reservarOfertaPrioridad = () => Promise.reject(new Error("db caída")))],
+    ["ventana cerrada", (d) => (d.ahora = () => new Date("2026-10-08T15:00:00Z"))], // el botón llegó hace 2 días
+    ["respuesta falló", (d) => {
+      const t = d.enviarTexto;
+      d.enviarTexto = (to, x, op) => x.startsWith("Listo") ? Promise.resolve({ ok: false, error: "131047" }) : t(to, x, op);
+    }],
+  ];
+  for (const [nombre, preparar] of casos) {
+    const { deps, st } = crearMock();
+    st.config.pago_prioridad = PRIORIDAD_ON;
+    preparar(deps, st);
+    st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
+    await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
+    assertFalse(st.enviados.some((e) => e.texto === TEXTO_OFERTA), nombre);
+    assertFalse(st.pedidos.get(ORDER)!.tags!.includes(TAG_OFERTA_PAGO), nombre);
+  }
+});
+
+Deno.test("oferta al confirmar: no sale si ya pagó, retiro, prueba, mayorista, sin mensajes, ya preparado o con el courier", async () => {
+  for (const extra of [
+    { tags: ["PAGADO"] },
+    { tags: ["PAGO_VERIFICADO"] },
+    { raw: { customer: { first_name: "Ana" }, financial_status: "paid" } },
+    { tags: ["RETIRO_EN_CASA"] },
+    { tags: ["PRUEBA_E2E"] },
+    { tags: ["MAYORISTA"] },
+    { tags: ["SIN_MENSAJES"] },
+    { raw: { customer: { first_name: "Ana" }, fulfillment_status: "fulfilled" } },
+    { estado_envio: "DESPACHADO" },
+  ] as Partial<Pedido>[]) {
+    const { deps, st } = crearMock();
+    st.config.pago_prioridad = PRIORIDAD_ON;
+    st.pedidos.set(ORDER, pedidoPendiente({ total: 112000, ...extra }));
+    await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
+    assertFalse(st.enviados.some((e) => e.texto === TEXTO_OFERTA), JSON.stringify(extra));
+  }
+  // Corregir y Cancelar no ofrecen.
+  for (const accion of ["conf_corregir", "conf_cancelar"]) {
+    const { deps, st } = crearMock();
+    st.config.pago_prioridad = PRIORIDAD_ON;
+    st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
+    await correr(deps, payloadMensajes([botonInteractivo(`${accion}:${ORDER}`)]));
+    assertFalse(st.enviados.some((e) => e.texto === TEXTO_OFERTA), accion);
+  }
+});
+
+Deno.test("oferta al confirmar: si el envío falla, queda registrada como fallida, sin tag y Enrique se entera; el permiso sale igual", async () => {
+  const { deps, st } = crearMock();
+  const o = conOrden(deps);
+  st.config.pago_prioridad = PRIORIDAD_ON;
+  const t = deps.enviarTexto;
+  deps.enviarTexto = (to, x, op) => x.startsWith("📦") ? (o.orden.push("texto:📦 (falló)"), Promise.resolve({ ok: false, error: "131026: undeliverable" })) : t(to, x, op);
+  st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
+  await correr(deps, payloadMensajes([botonInteractivo(`conf_si:${ORDER}`)]));
+  assertEquals(o.cierres, [[ORDER, false]]);
   assertEquals(st.pedidos.get(ORDER)!.tags, ["CONFIRMADO"]);
-  assertEquals(st.tagsAgregados, [[`gid://shopify/Order/${ORDER}`, ["CONFIRMADO"]]]);
-  assertFalse(st.avisos[0].texto.includes("ofreció"));
+  assert(st.avisos[0].texto.includes("Falla: oferta de pago con prioridad: 131026: undeliverable"), st.avisos[0].texto);
+  assertEquals(st.botones.length, 1);
 });
 
 Deno.test("QR al confirmar: con pago_prioridad prendido no sale (un solo ofrecimiento de pago); apagado o sin alias, vuelve", async () => {
