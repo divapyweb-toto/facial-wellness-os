@@ -239,7 +239,11 @@ function mapearGrupoAPedidos(grupoRows) {
   // peso de cada línea sobre el subtotal — así cada producto se lleva SU
   // parte real del ingreso (importa para ganancia por familia y ROAS). El
   // último ítem absorbe el redondeo para que la suma sea EXACTA al total.
-  const pesoItem = (it) => subtotalOrden > 0 ? (it.precio * it.cantidad) / subtotalOrden : 1 / items.length
+  // 14-10 (Releasit: ×2/×3 con envío 0 y descuento fijo): el peso es sobre el precio de LISTA de todas las líneas, no sobre
+  // el Subtotal (que ya trae el descuento): así los pesos suman 1 y un pedido mixto con descuento no deja al último
+  // producto con un monto chico o negativo. El descuento y el envío quedan repartidos en proporción.
+  const brutoLineas = items.reduce((s, it) => s + it.precio * it.cantidad, 0)
+  const pesoItem = (it) => brutoLineas > 0 ? (it.precio * it.cantidad) / brutoLineas : (subtotalOrden > 0 ? (it.precio * it.cantidad) / subtotalOrden : 1 / items.length)
   let acumulado = 0
   const totales = items.map((it, i) => {
     if (i === items.length - 1) return totalOrden - acumulado
