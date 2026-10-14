@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase, supabaseTienda } from '../../lib/supabase'
+import { diasEntre } from '../../lib/exportLucero'
 import { sanearEntrega } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
@@ -14,7 +15,13 @@ import { hoyLocal } from '../../lib/fechas'
 import { normalizarRef } from '../../lib/referencias'
 
 const formatGs = (n) => Math.round(n || 0).toLocaleString('es-PY') + ' Gs.'
-const fechaCorta = (d) => d ? new Date(d).toLocaleDateString('es-PY', { day: '2-digit', month: 'short' }) : '—'
+// 14-10: "2026-10-12" se leía como medianoche UTC y en Paraguay (UTC−3) mostraba el día anterior: se arma la fecha local.
+const fechaCorta = (d) => {
+  if (!d) return '—'
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d))
+  const f = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(d)
+  return f.toLocaleDateString('es-PY', { day: '2-digit', month: 'short' })
+}
 
 export default function RendicionPage() {
   const { toast } = useToast()
@@ -90,7 +97,8 @@ export default function RendicionPage() {
     const yaRendidoBruto = rendidos.reduce((s, m) => s + (m.importe || 0), 0)
     const porCobrarBruto = sinRendir.reduce((s, m) => s + (m.importe || 0), 0)
 
-    const diasRend = rendidos.map(m => m.dias_rendicion).filter(d => d != null && d >= 0)
+    // 14-10: si la fila no trae dias_rendicion (Lucero), se calcula de la entrega al depósito.
+    const diasRend = rendidos.map(m => m.dias_rendicion ?? diasEntre(m.fecha_entrega, m.fecha_rendido)).filter(d => d != null && d >= 0)
     const diasProm = diasRend.length ? diasRend.reduce((a, b) => a + b, 0) / diasRend.length : null
     const ordenados = [...diasRend].sort((a, b) => a - b)
     const diasMediana = ordenados.length

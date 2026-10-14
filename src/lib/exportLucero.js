@@ -198,6 +198,15 @@ export function parsearExportLucero(filas) {
   return items
 }
 
+// Días entre dos fechas AAAA-MM-DD… (por fecha calendario, sin hora). null si falta alguna o da negativo.
+export function diasEntre(desde, hasta) {
+  const d = (x) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(x ?? '')); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : null }
+  const a = d(desde), b = d(hasta)
+  if (a == null || b == null) return null
+  const n = Math.round((b - a) / 86400000)
+  return n >= 0 ? n : null
+}
+
 // ── A filas de la tabla `entregas` ──
 // Mismo esquema que el importador de PaP, para que todo el resto del sistema
 // (reportes, ganancia, tasa de entrega) lo lea sin cambios.
@@ -232,6 +241,11 @@ export function exportLuceroAEntregas(items) {
     // borraba el registro de que ya te habían pagado. Mismo criterio que
     // costo_envio unas líneas arriba: la clave se omite a propósito.
     ...(it.rendido ? { rendido: true, fecha_rendido: it.fechaRendicion } : {}),
+    // 14-10: Lucero deposita NETO (cobrado − tarifa − multa; en prepagos da negativo). El export trae los dos datos
+    // cuando ya rindió: se guarda lo que cayó al banco y los días de la entrega al depósito.
+    ...(it.rendido && it.tarifa != null ? { neto_depositado: (it.total || 0) - it.tarifa - (it.multa || 0) } : {}),
+    ...(it.rendido && it.categoria === 'entregado' && diasEntre(it.fechaUltimoEstado, it.fechaRendicion) != null
+      ? { dias_rendicion: diasEntre(it.fechaUltimoEstado, it.fechaRendicion) } : {}),
     mensajero: it.transportador || '',
     // Igual que en PaP: lo que dice Lucero, para poder cruzar y auditar.
     telefono_courier: it.telefono || '',

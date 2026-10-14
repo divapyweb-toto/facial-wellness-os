@@ -156,9 +156,12 @@ export function sanearEntrega(e) {
   // legítimo (ver "DOS POLÍTICAS" arriba). importeSano lo llevaba a 0 y
   // "Ya te depositaron" de Lucero FW salía inflado (10.762.100 vs 9.872.100).
   const netoRaw = e?.neto_depositado
+  // 14-10: Lucero sin neto guardado (todavía no rindió, o importado antes de guardarlo) → lo que VA a caer al banco:
+  // bruto − tarifa, si la tarifa se conoce. PaP sigue en bruto.
+  const flete = Number(e?.costo_envio)
   const depositoReal = (netoRaw != null && netoRaw !== '')
     ? (esImporteCorrupto(netoRaw) ? 0 : Number(netoRaw))
-    : importe
+    : (esLucero && Number.isFinite(flete) && flete > 0 && !esImporteCorrupto(flete) ? importe - flete : importe)
   return {
     ...e,
     categoria,
