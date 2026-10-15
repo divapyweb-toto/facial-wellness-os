@@ -374,10 +374,15 @@ Deno.test("conf_corregir: a_corregir, tag, pide el dato, chat a humano y aviso c
   assert(st.avisos[1].texto.includes("Calle Falsa 123"));
 });
 
-Deno.test("conf_cancelar: cancelado_cliente, tag, respuesta, aviso con botón cancelar y quita CONFIRMADO", async () => {
+Deno.test("conf_cancelar (13-10): primero la oferta de rescate; 'Cancelar igual' → cancelado_cliente, tag, respuesta, aviso y quita CONFIRMADO", async () => {
   const { deps, st } = crearMock({ envios: enviosDelPedido() });
   st.pedidos.set(ORDER, pedidoPendiente({ estado_confirmacion: "confirmado", tags: ["CONFIRMADO", "OTRA"] }));
   await correr(deps, payloadMensajes([botonInteractivo(`conf_cancelar:${ORDER}`)]));
+  // 13-10: el primer toque no cancela nada: una sola respuesta, la oferta con los dos botones.
+  assertEquals(st.pedidos.get(ORDER)!.estado_confirmacion, "confirmado");
+  assertEquals([st.enviados.length, st.botones.length], [0, 1]);
+  assertEquals(st.botones[0].botones.map((b) => b.id), [`resc_prog:${ORDER}`, `resc_cancel:${ORDER}`]);
+  await correr(deps, payloadMensajes([botonInteractivo(`resc_cancel:${ORDER}`, "wamid.IN2")]));
   const p = st.pedidos.get(ORDER)!;
   assertEquals(p.estado_confirmacion, "cancelado_cliente");
   assertEquals(p.tags, ["OTRA", "CANCELADO_CLIENTE"]);
@@ -855,7 +860,8 @@ Deno.test("permiso para ofertas: no sale si ya respondió (sí, no o baja), si y
     const { deps, st } = crearMock();
     st.pedidos.set(ORDER, pedidoPendiente({ total: 112000 }));
     await correr(deps, payloadMensajes([botonInteractivo(`${accion}:${ORDER}`)]));
-    assertEquals(st.botones.length, 0, accion);
+    // 13-10: Cancelar manda la oferta de rescate (resc_*), nunca el permiso para ofertas.
+    assertEquals(st.botones.filter((b) => b.botones.some((x) => x.id.startsWith("cons_"))).length, 0, accion);
   }
   // Si la respuesta de la confirmación no salió, tampoco el permiso (nunca como primer mensaje nuestro).
   const { deps, st } = crearMock();

@@ -6,9 +6,19 @@
 //   3. Sin dirección utilizable → etiqueta FALTAN_DATOS. Dirección utilizable = calle (≥ 6 letras) O pin GPS (Enrique
 //      12-10: con pin se entrega igual) + ciudad. Si después se completa, se saca la etiqueta, pero SOLO si la puso el
 //      sistema (una puesta a mano no se toca).
+//      15-10 (Enrique, #1055): "con el pin basta y sobra" → con pin es utilizable aunque falte la ciudad.
+//   4. Pedido del bot que llegó a Shopify SIN dirección (Shopify la descarta entera si el apellido va vacío: nombre de
+//      una sola palabra, #1055) pero con Ciudad/Calle/Mapa en la nota → se completa la dirección desde la nota.
+//   5. Ciudad "Ver mapa" (el bot no pudo leer el mapa, #1056) y hay pin → se busca la ciudad del pin y se carga en
+//      Shopify: sin ciudad real, Despacho no encuentra transportadora y no deja pasar el pedido a Ventas.
+//   6. Confirmado en una ciudad que ni PaP ni Lucero cubren contra entrega (#1056, Enrique 15-10) → se le ofrece al
+//      cliente pagar por adelantado y mandarlo por una transportadora que llegue (una vez, etiqueta SIN_COBERTURA)
+//      y se avisa a Enrique por Telegram.
 // Cada acción se hace una sola vez por pedido (candado en eventos_crudos): si Enrique la deshace a mano, se respeta.
 
-export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos";
+import { transportadorasDisponibles } from "../_shared/transportadoras.js";
+
+export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura";
 
 export interface PedidoAbierto {
   shopifyOrderId: number;
@@ -29,10 +39,53 @@ export function tienePin(p: Pick<PedidoAbierto, "direccion" | "notas">): boolean
 }
 
 export function direccionUtilizable(p: Pick<PedidoAbierto, "direccion" | "notas" | "ciudad">): boolean {
+  if (tienePin(p)) return true; // 15-10: con el pin se entrega igual, aunque falte la ciudad
   if (!p.ciudad.trim() || p.ciudad.trim() === "-") return false;
   const calle = p.direccion.replace(/pin de ubicaci[oó]n:?/gi, "").replace(PIN, "").replace(/https?:\/\/\S+/g, "").replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, "");
-  return calle.length >= 6 || tienePin(p);
+  return calle.length >= 6;
 }
+
+export interface DireccionNota {
+  firstName: string;
+  lastName: string;
+  address1: string;
+  address2: string | null;
+  city: string;
+  phone: string | null;
+}
+
+/**
+ * Dirección armada desde la nota que escribe el vendedor ("Nombre: … / Celular: … / Ciudad: … / Calle: … / Mapa: … /
+ * Referencia: …"). null si no hay ciudad, o si no hay ni calle ni mapa. El apellido nunca va vacío (Shopify descarta la
+ * dirección entera): si el nombre es de una palabra, va "-".
+ */
+export function direccionDesdeNota(notas: string): DireccionNota | null {
+  const campo = (k: string) => (new RegExp(`^${k}:\\s*(.+)$`, "mi").exec(notas)?.[1] ?? "").trim();
+  const ciudad = campo("Ciudad"), calle = campo("Calle"), mapa = campo("Mapa"), ref = campo("Referencia");
+  if (!ciudad || ciudad === "-" || (!calle && !mapa)) return null;
+  const [nombre, ...resto] = (campo("Nombre") || "Cliente WhatsApp").split(/\s+/);
+  return {
+    firstName: nombre,
+    lastName: resto.join(" ") || "-",
+    address1: calle || ref || "Ver mapa",
+    address2: [ref, mapa ? `Mapa: ${mapa}` : null].filter(Boolean).join(" · ") || null,
+    city: ciudad,
+    phone: campo("Celular") || null,
+  };
+}
+
+/** Coordenadas del pin (dirección o notas). */
+export function coordenadasPin(p: Pick<PedidoAbierto, "direccion" | "notas">): { lat: number; lng: number } | null {
+  const m = /(-\d{1,2}\.\d{3,})\s*,\s*(-\d{1,2}\.\d{3,})/.exec(`${p.direccion}\n${p.notas}`);
+  return m ? { lat: Number(m[1]), lng: Number(m[2]) } : null;
+}
+
+/** ¿Ninguna transportadora con cobro contra entrega (PaP o Lucero) llega a esa ciudad? */
+export const sinCobertura = (ciudad: string) => !transportadorasDisponibles(ciudad).some((t: string) => t === "pap" || t === "lucero");
+
+export const ciudadPendiente = (ciudad: string) => !ciudad.trim() || /^ver mapa$/i.test(ciudad.trim());
+
+const sinDireccion = (p: Pick<PedidoAbierto, "direccion" | "ciudad">) => !p.direccion.trim() && !p.ciudad.trim();
 
 const tiene = (p: PedidoAbierto, t: string) => p.tags.some((x) => x.toUpperCase() === t);
 
@@ -47,6 +100,15 @@ export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boo
   }
   if (cancelado) return a;
   if (p.estado === "confirmado" && !tiene(p, "CONFIRMADO")) a.push("agregar_confirmado");
+  // 15-10: sin dirección en Shopify pero con los datos en la nota (pedido del bot) → se completa, no se marca.
+  if (sinDireccion(p) && direccionDesdeNota(p.notas)) {
+    a.push("completar_direccion");
+    if (tiene(p, "FALTAN_DATOS") && puseFaltanDatos) a.push("quitar_faltan_datos");
+    return a;
+  }
+  if (ciudadPendiente(p.ciudad) && p.direccion.trim() && coordenadasPin(p)) a.push("ciudad_desde_pin");
+  if (p.estado === "confirmado" && !ciudadPendiente(p.ciudad) && sinCobertura(p.ciudad) &&
+    !["PAGADO", "RETIRO_EN_CASA", "SIN_COBERTURA"].some((t) => tiene(p, t))) a.push("avisar_sin_cobertura");
   const ok = direccionUtilizable(p);
   if (!ok && !tiene(p, "FALTAN_DATOS") && !tiene(p, "RETIRO_EN_CASA")) a.push("agregar_faltan_datos");
   if (ok && tiene(p, "FALTAN_DATOS") && puseFaltanDatos) a.push("quitar_faltan_datos");

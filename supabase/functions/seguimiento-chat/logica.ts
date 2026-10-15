@@ -4,6 +4,8 @@
 // un turno de seguimiento (orquestador.ts, entrada "[seguimiento N]" con origen "seguimiento").
 // 12-10 (plan de ventas por WhatsApp, fase 2): hasta 3 toques por conversación. El 3 es una plantilla de marketing
 // (toque3.ts) dentro de las 72 h gratis del anuncio; los 1 y 2 siguen acá.
+// 13-10: rescate de datos (rescate_datos.ts): tocó "Quiero …" y no terminó los datos → a los 10-20 min el vendedor le
+// pide solo lo que falta. No cuenta para el tope de recontactos.
 //
 // Cuándo toca (config_wa.vendedor_seguimiento, hora de Asunción):
 //   · Recontacto 1: el bot habló último, hace ≥ horas_1 (1,5 h; 2 h hasta el 12-10) que no responde y su última
@@ -25,6 +27,7 @@ import { type EntradaTurno, type ResultadoTurno, textoSeguimiento } from "../_sh
 import { normalizarPerfil } from "../_shared/vendedor/perfil.ts";
 import { diaLocalMas, instanteLocal } from "../recompra/calendario.ts";
 import { correrToque3, type DepsToque3, type ResumenToque3 } from "./toque3.ts";
+import { correrRescateDatos, type DepsRescateDatos, type ResumenRescateDatos } from "./rescate_datos.ts";
 
 export type CfgSeguimiento = {
   activo: boolean;
@@ -182,6 +185,13 @@ export type Candidato = {
   wa_user_id?: string | null;
   /** Handle del producto del anuncio (config_wa.anuncios_producto), si se sabe. */
   handle_anuncio?: string | null;
+  // ── Para el rescate de datos (13-10, rescate_datos.ts). Opcionales: el resto no los usa. ──
+  /** Último toque de un botón "Quiero …" (vend_p1:q1|q2|pack|pedir) desde `desdeISO`. */
+  ultimo_quiero_en?: string | null;
+  /** creado_en más reciente de wa_pedidos_chat en 'resumen' o 'creado' desde `desdeISO`. */
+  ultimo_resumen_en?: string | null;
+  /** Rescates de datos que le llegaron al cliente en los últimos `dias_reinicio` días (vendedor_turnos). */
+  rescates_datos?: number;
 };
 
 export type Decision =
@@ -268,7 +278,7 @@ export type DepsSeguimiento = {
   ahora(): Date;
   /** Turnos en paralelo (default 4). */
   paralelo?: number;
-} & Partial<DepsToque3>;
+} & Partial<DepsToque3> & Partial<DepsRescateDatos>;
 
 export type ResumenSeguimiento = {
   accion: "inactivo" | "fuera_de_horario" | "tope_gasto" | "corrido";
@@ -285,6 +295,8 @@ export type ResumenSeguimiento = {
   recontactos_cobro?: ResumenRecontactoCobro;
   /** 12-10: toque 3, plantilla de oferta dentro de las 72 h gratis del anuncio (toque3.ts). */
   toque3?: ResumenToque3;
+  /** 13-10: rescate de datos a quien tocó "Quiero …" y no terminó los datos (rescate_datos.ts). */
+  rescate_datos?: ResumenRescateDatos;
 };
 
 /** Resultado del turno que cuenta como falla (se avisa a Enrique, una vez por corrida). */
@@ -292,7 +304,7 @@ export function esFalla(r: ResultadoTurno): boolean {
   return r.accion === "error_envio" || (r.accion === "omitido" && (r.motivo ?? "").startsWith("sin_derivar:"));
 }
 
-async function enLotes<T>(items: T[], n: number, f: (x: T) => Promise<void>): Promise<void> {
+export async function enLotes<T>(items: T[], n: number, f: (x: T) => Promise<void>): Promise<void> {
   const cola = [...items];
   const trabajadores = Array.from({ length: Math.max(1, Math.min(n, cola.length)) }, async () => {
     while (cola.length) await f(cola.shift()!);
@@ -301,8 +313,8 @@ async function enLotes<T>(items: T[], n: number, f: (x: T) => Promise<void>): Pr
 }
 
 /**
- * Recontactos + aviso de intención de compra + recontacto el día que cobra + toque 3. Los últimos corren DESPUÉS
- * (así leen el perfil ya guardado por los turnos) y una falla de uno no frena a los demás.
+ * Recontactos + rescate de datos (13-10) + aviso de intención de compra + recontacto el día que cobra + toque 3. Los
+ * últimos corren DESPUÉS (así leen el perfil ya guardado por los turnos) y una falla de uno no frena a los demás.
  */
 export async function correrSeguimientos(deps: DepsSeguimiento): Promise<ResumenSeguimiento> {
   const crudo = await deps.config();
@@ -317,6 +329,11 @@ export async function correrSeguimientos(deps: DepsSeguimiento): Promise<Resumen
       return error;
     }
   };
+  // 13-10: rescate de datos. Corre a cualquier hora (el cliente tocó "Quiero" hace minutos), aunque los recontactos
+  // estén fuera de horario; si el recontacto de esta misma corrida ya le escribió, lo ve en el perfil y no sale.
+  if (deps.candidatosRescateDatos && deps.marcarRescateDatos) {
+    r.rescate_datos = await aparte<ResumenRescateDatos>("Rescate de datos", () => correrRescateDatos(deps, crudo), { accion: "error" });
+  }
   if (deps.marcarAvisoIntencion) {
     r.avisos_intencion = await aparte<ResumenAvisoIntencion>("Aviso de intención de compra", () => correrAvisosIntencion(deps, crudo), { accion: "error" });
   }

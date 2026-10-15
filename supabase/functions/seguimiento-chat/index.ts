@@ -9,6 +9,8 @@
 // correrRecontactosCobro): escribe el bot si la ventana de 24 h sigue abierta, si no aviso a Enrique por Telegram.
 // Además (12-10): toque 3, plantilla de oferta a quien vino de un anuncio y no compró, entre 48 y 70 h después de la
 // primera respuesta del bot (toque3.ts; arranca apagado: config_wa.vendedor_seguimiento.toque3.activo).
+// Además (13-10): rescate de datos, a quien tocó "Quiero …" y se calló ≥ 10 min sin terminar los datos el vendedor le
+// pide solo lo que falta (rescate_datos.ts; a cualquier hora, dentro de las 24 h; rescate_datos_activo).
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";

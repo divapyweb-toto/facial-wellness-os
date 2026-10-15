@@ -11,6 +11,14 @@
 --   M1 = min(pct_m1 × D, D − margen_dias_m1)        (días desde la entrega, hacia abajo)
 --   M2 = D ÷ factor_uso_real − resta_m2              (solo si no recompró)
 --   factor_uso_real 0,8 es un supuesto: con 30 recompras propias, reemplazar por la mediana real.
+--
+-- 13-10: regla de Enrique para tiras, parches y pack: el aviso de reposición (M1) sale a los
+--   dias_reposicion (25) días de la entrega; cada bolsa extra suma 30 días (2 bolsas → 55, 3 → 85).
+--   Sin dias_reposicion vuelve la fórmula de M1 de arriba. M2 sigue igual y se omite si no cae
+--   después de M1. hora_envio 12: se programa a las 12:00 de Asunción (ventana de marketing 12-21).
+--   "handles": handles exactos de Shopify de Voltra; si la línea del pedido trae handle, gana
+--   sobre los patrones. Esta semilla es on conflict do nothing: en la base ya cargada esto entra
+--   con el UPDATE que se pasa aparte (no se pisa el resto de la config).
 -- ofertas[clave o tipo]["1"|"2"|"3"]: "3" vale para 3 bolsas o más. Cada oferta va a la plantilla
 -- {{3}} = oferta, {{4}} = precio (sin "Gs", se formatea 79.000).
 insert into public.config_wa (clave, valor) values
@@ -22,7 +30,8 @@ insert into public.config_wa (clave, valor) values
      "margen_dias_m1": 7,
      "resta_m2": 3,
      "dia_cruzada": 14,
-     "hora_envio": 9,
+     "hora_envio": 12,
+     "dias_reposicion": 25,
      "dias_gracia": 3,
      "ventana_dias": 200,
      "nombre_si_falta": "de nuevo",
@@ -35,11 +44,14 @@ insert into public.config_wa (clave, valor) values
         "patrones": ["botella", "bottle"], "afin": "tiras"},
        {"clave": "pack", "nombre": "tiras y parches", "tipo": "pack", "unidades_por_bolsa": 30,
         "patrones": ["pack", "tiras y parches", "tira nasal + parche"], "contiene": ["tiras", "parches"],
+        "handles": ["pack-gudair-tiras-nasales-parches-bucales"],
         "afin": "raspador"},
        {"clave": "parches", "nombre": "parches bucales", "tipo": "consumible", "unidades_por_bolsa": 30,
-        "patrones": ["parche", "cinta bucal", "mouth tape"], "afin": "tiras"},
+        "patrones": ["parche", "cinta bucal", "mouth tape"], "afin": "tiras",
+        "handles": ["parches-bucales-gudair-30-unidades"]},
        {"clave": "tiras", "nombre": "tiras nasales", "tipo": "consumible", "unidades_por_bolsa": 30,
-        "patrones": ["tira", "nasal", "nose strip"], "afin": "parches"}
+        "patrones": ["tira", "nasal", "nose strip"], "afin": "parches",
+        "handles": ["tiras-nasales-gudair-30-unidades"]}
      ],
      "ofertas": {
        "consumible": {

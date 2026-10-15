@@ -441,6 +441,11 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     fila.respuesta = texto;
     for (let i = 0; i < burbujas.length; i++) {
       if (i > 0) await esperarEscribiendo(pausaBurbujaMs(burbujas[i], cfg.ritmo, azar()));
+      // 13-10 (#1041): si mientras "escribía" la segunda burbuja llegó otro mensaje, ese turno responde todo junto.
+      if (i > 0 && !esSeguimiento && v.espera_agrupar_s > 0) {
+        const u = await deps.ultimoEntranteId(conv.id).catch(() => null);
+        if (u && u !== entrada.wa_message_id) return await cerrar({ accion: "agrupado", motivo: "llego_otro_mensaje" }, op);
+      }
       const envio = await deps.herramientas.enviarTexto(ctx.destino, burbujas[i], { clienteId: cli.id, conversacionId: conv.id });
       if (!envio.ok) {
         // En un seguimiento avisa seguimiento-chat una sola vez por corrida (no por cada envío).

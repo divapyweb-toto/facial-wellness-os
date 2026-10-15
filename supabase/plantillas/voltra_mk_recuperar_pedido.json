@@ -1,0 +1,45 @@
+{
+  "name": "voltra_mk_recuperar_pedido",
+  "language": "es",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}} 👋 Quedó sin terminar tu pedido de {{2}}.\nSale {{3}}, y pagás recién al recibir.\nSi todavía lo querés, tocá el botón y lo terminamos acá en un minuto.",
+      "example": {
+        "body_text": [
+          [
+            "Ana",
+            "raspador de lengua",
+            "79.000 + envío / 2 por 158.000 con envío gratis"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Quiero terminar mi pedido"
+        }
+      ]
+    }
+  ],
+  "_notas": {
+    "origen": "14-10: recuperar-borradores. UN mensaje por formulario abandonado de Releasit, entre 15 y 60 min después del abandono, tope 30/día, solo con calidad del número GREEN. Reemplaza a voltra_recuperar_borrador (sin precio ni botón).",
+    "variables": [
+      "primer nombre (si no hay: 'qué tal')",
+      "producto sin artículo ('raspador de lengua')",
+      "precio: '79.000 + envío / 2 por 158.000 con envío gratis' (el ×2 solo si sale con envío gratis)"
+    ],
+    "botones_payload": [
+      "vend_p1"
+    ],
+    "aviso": "Sin botón 'No me interesa' (decisión de Enrique, 14-10). El botón le llega al vendedor como [botón] con vend_p1:pedir:<handle>, igual que el toque 3: el vendedor no cambia. Se pide como MARKETING: Meta trata la recuperación de carrito como marketing; un formulario abandonado NO es opt-in.",
+    "boton_solo_plantilla": true,
+    "botones_payload_completo": [
+      "vend_p1:pedir:<handle>"
+    ]
+  }
+}

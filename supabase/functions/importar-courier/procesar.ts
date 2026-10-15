@@ -12,6 +12,8 @@
 //   3. inserta en pedido_estados; el unique (pedido, estado) garantiza que un
 //      mismo cambio de estado se procese UNA sola vez aunque se reimporte.
 //   4. programa el aviso al cliente, carga el evento en Shopify y las tags.
+//      13-10: un intento fallido POSTERIOR del mismo pedido (estado repetido, fecha
+//      más nueva que el último intento avisado) también lleva su aviso (esIntentoNuevo).
 // ═══════════════════════════════════════════════════════════
 import type { EstadoEnvio } from '../_shared/tipos.ts'
 import { type Courier, traducirEstado } from '../_shared/estados_courier.ts'
@@ -66,6 +68,16 @@ export interface Repo {
   enviarARevision(courier: Courier, referencia: string, fila: unknown, motivo: string): Promise<void>
   crearEventoEnvio(orderId: number, estado: EstadoEnvio): Promise<{ ok: boolean; error?: string }>
   agregarTags(orderId: number, tags: string[]): Promise<{ ok: boolean; error?: string }>
+  /** 13-10: avisos de intento fallido ya programados del pedido (envios_programados con clave_unica
+   *  courier:<id>:INTENTO_FALLIDO…, en cualquier estado). Opcional: un Repo sin este método avisa solo el
+   *  primer intento (comportamiento anterior). */
+  intentosAvisados?(orderId: number): Promise<IntentoAvisado[]>
+}
+
+export interface IntentoAvisado {
+  clave_unica: string
+  /** envios_programados.creado_en (cuándo se registró ese intento). */
+  creado_en: string
 }
 
 export interface ConfigImport {
@@ -253,11 +265,57 @@ export function manianaALas10(ahora: Date): string {
   return objetivo.toISOString()
 }
 
+// ─── 13-10: un aviso por intento fallido (no uno por pedido) ─────
+// El primer intento usa courier:<id>:INTENTO_FALLIDO:<fecha del evento> (o la clave vieja, sin fecha, si la fila
+// no trae fecha). Un intento posterior del mismo pedido (el courier volvió a salir y volvió a fallar) llega como
+// estado repetido en pedido_estados (unique pedido+estado): sale su propio aviso solo si la fecha del evento es
+// POSTERIOR a la del último intento ya avisado. Reimportar el mismo evento (misma fecha) da la misma clave y no
+// duplica. Todas las claves empiezan con courier:<id>:INTENTO_FALLIDO (la pantalla Seguimiento filtra por ese prefijo).
+export const ESTADOS_FALLO = new Set<EstadoEnvio>(['INTENTO_FALLIDO', 'NO_ENTREGADO_RESCATABLE'])
+
+export const prefijoIntento = (orderId: number) => `courier:${orderId}:INTENTO_FALLIDO`
+
+/** 'YYYY-MM-DD' de Asunción del instante. */
+function diaAsuncion(iso: string): string | null {
+  const d = new Date(iso)
+  return Number.isFinite(d.getTime()) ? partesAsuncion(d).diaISO : null
+}
+
+function diaMenos(diaISO: string, n: number): string {
+  const [a, m, d] = diaISO.split('-').map(Number)
+  return new Date(Date.UTC(a, m - 1, d - n)).toISOString().slice(0, 10)
+}
+
+/**
+ * Fecha (día) del intento ya avisado. Manda la fecha del evento que va en la clave; pero si esa fecha es más de
+ * un día anterior al registro (o posterior), puede ser una fecha de reserva del archivo (fecha de ingreso o de
+ * creación de la guía, no la del intento): se usa el día en que se registró, que nunca es anterior al evento real.
+ * Así una reimportación del MISMO evento con la fecha buena no se toma como un intento nuevo.
+ */
+export function fechaIntentoAvisado(a: IntentoAvisado): string | null {
+  const reg = diaAsuncion(a.creado_en)
+  const m = a.clave_unica.match(/:INTENTO_FALLIDO:(\d{4}-\d{2}-\d{2})$/)
+  const ev = m ? m[1] : null
+  if (ev && reg && ev <= reg && ev >= diaMenos(reg, 1)) return ev
+  return reg ?? ev
+}
+
+/** true si la fila es un intento fallido NUEVO respecto de los ya avisados del pedido. */
+export function esIntentoNuevo(fecha: string | null | undefined, previos: IntentoAvisado[]): boolean {
+  if (!previos.length) return true
+  if (!fecha) return false // sin fecha no se distingue de una reimportación: no se repite
+  const fechas = previos.map(fechaIntentoAvisado).filter((x): x is string => !!x)
+  if (!fechas.length) return false
+  return fecha > fechas.reduce((a, b) => (b > a ? b : a))
+}
+
 export function armarEnvio(
   estado: EstadoEnvio,
   pedido: PedidoImport,
   courier: Courier,
   cfg: ConfigImport,
+  /** 13-10: fecha del evento ('YYYY-MM-DD') para la clave del aviso de intento fallido; sin fecha, la clave vieja. */
+  fechaIntento?: string | null,
 ): EnvioNuevo | null {
   const plantilla = PLANTILLA_POR_ESTADO[estado]
   if (!plantilla || !pedido.cliente_id) return null
@@ -286,10 +344,12 @@ export function armarEnvio(
     variables,
     categoria: 'utilidad',
     enviar_desde: enviarDesde,
-    // Fallido y rescatable usan la misma plantilla: una sola clave por pedido
-    // para no mandar dos "no entregado". Se reusa la clave de INTENTO_FALLIDO
-    // para que las filas ya programadas sigan bloqueando el duplicado.
-    clave_unica: `courier:${pedido.shopify_order_id}:${estado === 'NO_ENTREGADO_RESCATABLE' ? 'INTENTO_FALLIDO' : estado}`,
+    // Fallido y rescatable usan la misma plantilla y el mismo prefijo de clave (courier:<id>:INTENTO_FALLIDO)
+    // para no mandar dos "no entregado" por el mismo intento. 13-10: con fecha del evento, la clave la lleva al
+    // final (un aviso por intento; ver esIntentoNuevo).
+    clave_unica: ESTADOS_FALLO.has(estado)
+      ? (fechaIntento ? `${prefijoIntento(pedido.shopify_order_id)}:${fechaIntento}` : prefijoIntento(pedido.shopify_order_id))
+      : `courier:${pedido.shopify_order_id}:${estado}`,
   }
 }
 
@@ -384,12 +444,24 @@ export async function procesarFilas(
       for (const est of estados) {
         const nuevo = await repo.insertarEstado(pedido.shopify_order_id, est, fuente)
         const tardio = estadoActual != null && TERMINALES.has(estadoActual) && !TERMINALES.has(est)
+        // 13-10: intentos fallidos ya avisados de este pedido (se leen una vez y solo si hacen falta).
+        const esFallo = ESTADOS_FALLO.has(est)
+        let previos: IntentoAvisado[] | null | undefined
+        const leerPrevios = async () => {
+          if (previos === undefined) previos = repo.intentosAvisados ? await repo.intentosAvisados(pedido.shopify_order_id) : null
+          return previos
+        }
         if (!nuevo) {
           // Si la importación anterior falló después de insertar el estado, el
           // aviso quedó sin salir (notificado=false): se reintenta. La clave_unica
           // de envios_programados impide mandarlo dos veces.
-          const reintentar = !cancelado && !tardio && !!pedido.cliente_id && !!PLANTILLA_POR_ESTADO[est] &&
+          let reintentar = !cancelado && !tardio && !!pedido.cliente_id && !!PLANTILLA_POR_ESTADO[est] &&
             !!repo.avisoPendiente && await repo.avisoPendiente(pedido.shopify_order_id, est)
+          // 13-10: otro intento fallido del mismo pedido (fecha posterior al último avisado) → su propio aviso.
+          if (!reintentar && esFallo && !cancelado && !tardio && !!pedido.cliente_id && !!fila.fecha && !!repo.intentosAvisados) {
+            const prev = await leerPrevios()
+            reintentar = !!prev && prev.length > 0 && esIntentoNuevo(fila.fecha, prev)
+          }
           if (!reintentar) { r.repetidas++; continue }
         }
 
@@ -418,7 +490,24 @@ export async function procesarFilas(
         }
 
         if (PLANTILLA_POR_ESTADO[est]) {
-          const envio = armarEnvio(est, pedido, courier, cfg)
+          let fechaIntento: string | null = null
+          if (esFallo) {
+            // 13-10: retiro en persona o cancelado → sin reintento (antes caía en revisión como 'pedido_sin_cliente').
+            if (noEscribirReintento(pedido)) {
+              await repo.marcarNotificado(pedido.shopify_order_id, est)
+              continue
+            }
+            const prev = await leerPrevios()
+            if (prev) {
+              // Mismo intento ya avisado (p. ej. rescatable después de fallido, o reimportación): no se repite.
+              if (prev.length && !esIntentoNuevo(fila.fecha, prev)) {
+                await repo.marcarNotificado(pedido.shopify_order_id, est)
+                continue
+              }
+              fechaIntento = fila.fecha ?? null
+            }
+          }
+          const envio = armarEnvio(est, pedido, courier, cfg, fechaIntento)
           if (!envio) {
             await repo.enviarARevision(courier, ref, { ...fila, estado: est, shopify_order_id: pedido.shopify_order_id },
               'pedido_sin_cliente')

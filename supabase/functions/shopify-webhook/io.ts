@@ -132,6 +132,19 @@ export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
 
     avisar: (texto) => avisar(texto),
 
+    async reservarAvisoUnaVez(clave) {
+      // 13-10: candado en eventos_crudos (mismo patrón que pedidos-trabados): ya procesado, nadie lo reprocesa.
+      const { error } = await sb.from("eventos_crudos").insert({
+        fuente: "shopify",
+        id_externo: clave,
+        payload: { tipo: "aviso_una_vez", clave },
+        procesado_en: new Date().toISOString(),
+      });
+      if (!error) return true;
+      if (error.code === "23505") return false;
+      throw new Error(`eventos_crudos: ${error.message}`);
+    },
+
     async courierDePedido(nombrePedido) {
       const n = String(nombrePedido ?? "").replace(/\D/g, "");
       if (!n) return null;

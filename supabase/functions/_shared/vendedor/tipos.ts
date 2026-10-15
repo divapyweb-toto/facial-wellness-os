@@ -160,6 +160,10 @@ export type DatosPedidoChat = {
   direccion: string;
   referencia: string | null;
   ubicacion: string | null;
+  /** 13-10: la calle y la ciudad salieron del pin y el cliente las confirmó (para medir). */
+  calleDePin?: boolean;
+  /** 13-10: entrega programada que pidió el cliente ("YYYY-MM-DD", Asunción) y franja opcional ("antes de las 12"). */
+  entregaProgramada?: { fecha: string; franja: string | null };
   telefono: string;
   lineas: LineaPedido[];
   envio: number;
@@ -193,8 +197,10 @@ export type DepsHerramientas = {
   /** Cambia la dirección de envío de un pedido ya creado en Shopify (solo los campos que vienen). 08-10. */
   actualizarDireccionOrden?(orderId: number, d: { direccion?: string; referencia?: string }): Promise<{ ok: boolean; error?: string }>;
   /** Último pedido de la tienda del cliente sin despachar ni cancelar (≤ 72 h), aunque no lo haya creado el bot. 09-10. */
-  pedidoTiendaAbierto?(clienteId: string): Promise<{ shopify_order_id: number; creado_en: string } | null>;
+  pedidoTiendaAbierto?(clienteId: string): Promise<{ shopify_order_id: number; creado_en: string; en_reintento?: boolean } | null>;
   /** Pedido guardado + courier asignado (para el texto que se reenvía al courier). 10-10. */
+  /** 13-10: guarda la entrega programada en Shopify (tag ENTREGA_PROGRAMADA + atributos entrega_programada / entrega_franja). */
+  programarEntregaOrden?(orderId: number, fecha: string, franja: string | null): Promise<{ ok: boolean; error?: string }>;
   pedidoParaCourier?(orderId: number): Promise<{ nombre: string; telefono: string | null; raw: Record<string, unknown> | null; courier: string | null; despachado: boolean } | null>;
   crearOrdenShopify(input: Record<string, unknown>): Promise<ResultadoOrden>;
   /** Mismo camino que un pedido de Releasit: upsert en shopify_pedidos + confirmación programada. */
@@ -207,6 +213,8 @@ export type DepsHerramientas = {
   consentimiento?(clienteId: string): Promise<"si" | "no" | "baja" | "preguntado" | null>;
   /** 12-10: estado de la oferta de pago con prioridad del pedido (envios_programados prio:<id>), null si no hay. */
   estadoOfertaPrioridad?(shopifyOrderId: number): Promise<string | null>;
+  /** 13-10: calle y ciudad del pin (OpenStreetMap, solo lat/lng; con caché). null si no se pudo. */
+  direccionDePin?(lat: number, lng: number): Promise<{ calle: string | null; ciudad: string | null; motivo?: string } | null>;
   enviarMedia(to: string, tipo: "image" | "video", link: string, caption: string | null, opts: OpcionesEnvio): Promise<ResultadoEnvio>;
   normalizarTelefono(x: string): string | null;
   /** Reloj en ms para la caché del catálogo (tests). */

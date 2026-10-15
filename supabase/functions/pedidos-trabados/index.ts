@@ -25,7 +25,7 @@ async function automatico(simular: boolean) {
         continue;
       }
       if (!(await tomarCandado(id, { pedido: p.nombre, accion: a }))) continue;
-      const e = await ejecutar(a, p.shopifyOrderId).catch((x) => String(x));
+      const e = await ejecutar(a, p.shopifyOrderId, p.notas, p.direccion).catch((x) => String(x));
       if (e) await registrarError(id, e);
       hechos.push({ pedido: p.nombre, accion: a, ok: !e, ...(e ? { error: e } : {}) });
     }

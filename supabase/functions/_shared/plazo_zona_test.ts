@@ -277,3 +277,49 @@ Deno.test("alas8HabilDespues con inicioDespacho: el corte de las 15:00 corre el 
   assertEquals(a8("2026-10-16T18:30:00Z", 1), "2026-10-20T11:00:00.000Z"); // viernes 15:30 → despacho lunes → martes 8:00
   assertEquals(a8("2026-10-16T18:30:00Z", 2), "2026-10-21T11:00:00.000Z");
 });
+
+// ---------- 13-10: entrega programada ----------
+
+Deno.test("13-10 fechaMinimaEntrega: primer día del rango, con el corte de las 15:00 y sin sábado ni domingo", async () => {
+  const { fechaMinimaEntrega } = await import("./plazo_zona.ts");
+  const lunes10 = new Date("2026-10-12T13:00:00Z"); // lunes 10:00 en Asunción
+  const lunes16 = new Date("2026-10-12T19:00:00Z"); // lunes 16:00: pasó el corte
+  const viernes16 = new Date("2026-10-16T19:00:00Z"); // viernes 16:00: sale el lunes
+  assertEquals([fechaMinimaEntrega("Ciudad del Este", lunes10), fechaMinimaEntrega("Ciudad del Este", lunes16)], ["2026-10-12", "2026-10-13"]);
+  assertEquals([fechaMinimaEntrega("Asunción", lunes10, "pap"), fechaMinimaEntrega("Asunción", lunes16, "lucero")], ["2026-10-13", "2026-10-14"]);
+  assertEquals(fechaMinimaEntrega("Encarnación", lunes10), "2026-10-14");
+  assertEquals([fechaMinimaEntrega("Ciudad del Este", viernes16), fechaMinimaEntrega("Asunción", viernes16)], ["2026-10-19", "2026-10-20"]);
+  // El caso real: CDE confirmado el lunes, pide el viernes 16/10 → válido (≥ mínima).
+  assert("2026-10-16" >= fechaMinimaEntrega("Ciudad del Este", lunes10));
+});
+
+Deno.test("13-10 diaDespachoParaEntrega: fecha menos el tránsito MÁXIMO del courier (CDE el mismo día), nunca antes de hoy", async () => {
+  const { diaDespachoParaEntrega } = await import("./plazo_zona.ts");
+  const lunes = new Date("2026-10-12T13:00:00Z");
+  assertEquals(diaDespachoParaEntrega("2026-10-16", "Ciudad del Este", null, lunes), "2026-10-16");
+  assertEquals(diaDespachoParaEntrega("2026-10-16", "Asunción", "pap", lunes), "2026-10-14"); // [1, 2] → 2 hábiles antes
+  assertEquals(diaDespachoParaEntrega("2026-10-19", "Asunción", "lucero", lunes), "2026-10-15"); // lunes → jueves (sin finde)
+  assertEquals(diaDespachoParaEntrega("2026-10-16", "Encarnación", null, lunes), "2026-10-12"); // [2, 5] → antes de hoy → hoy
+});
+
+Deno.test("13-10 textoFecha, textoEntregaProgramada y habilAnterior", async () => {
+  const { habilAnterior, textoEntregaProgramada, textoFecha, alas8DeFecha } = await import("./plazo_zona.ts");
+  assertEquals(textoFecha("2026-10-16"), "viernes 16/10");
+  assertEquals(textoEntregaProgramada({ fecha: "2026-10-16", franja: "antes de las 12" }), "el viernes 16/10, antes de las 12");
+  assertEquals(textoEntregaProgramada({ fecha: "2026-10-19", franja: null }), "el lunes 19/10");
+  assertEquals([habilAnterior("2026-10-16"), habilAnterior("2026-10-19")], ["2026-10-15", "2026-10-16"]);
+  assertEquals(alas8DeFecha("2026-10-16").toISOString(), "2026-10-16T11:00:00.000Z");
+});
+
+Deno.test("13-10 leerEntregaProgramada: REST (note_attributes) y GraphQL (customAttributes); fecha inválida o sin atributo → null", async () => {
+  const { leerEntregaProgramada } = await import("./plazo_zona.ts");
+  assertEquals(
+    leerEntregaProgramada({ tags: "CONFIRMADO, ENTREGA_PROGRAMADA", note_attributes: [{ name: "entrega_programada", value: "2026-10-16" }, { name: "entrega_franja", value: "  antes de   las 12 " }] }),
+    { fecha: "2026-10-16", franja: "antes de las 12" },
+  );
+  assertEquals(leerEntregaProgramada({ customAttributes: [{ key: "entrega_programada", value: "2026-10-19" }] }), { fecha: "2026-10-19", franja: null });
+  assertEquals(leerEntregaProgramada({ tags: "ENTREGA_PROGRAMADA", note_attributes: [] }), null); // tag sin fecha
+  assertEquals(leerEntregaProgramada({ note_attributes: [{ name: "entrega_programada", value: "2026-02-30" }] }), null);
+  assertEquals(leerEntregaProgramada({ note_attributes: [{ name: "entrega_programada", value: "viernes" }] }), null);
+  assertEquals([leerEntregaProgramada(null), leerEntregaProgramada({})], [null, null]);
+});

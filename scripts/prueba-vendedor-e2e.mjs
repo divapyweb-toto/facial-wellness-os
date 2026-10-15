@@ -134,6 +134,11 @@ function legible(o) {
 
 const resultado = [];
 let ultimoInteractivo = null;
+// 13-10: si el paso es un botón y no hay interactivo en memoria (pasos en corridas separadas), se busca en la base.
+if (pasos[0]?.startsWith('boton:') && cliente) {
+  const ult = await rest(`wa_mensajes?select=contenido&cliente_id=eq.${cliente.id}&direccion=eq.out&tipo=eq.interactive&order=creado_en.desc&limit=1`);
+  ultimoInteractivo = ult[0]?.contenido?.interactive ?? null;
+}
 for (let k = 0; k < pasos.length; k++) {
   const desde = new Date().toISOString();
   await enviar(mensaje(pasos[k], k === 0, ultimoInteractivo));

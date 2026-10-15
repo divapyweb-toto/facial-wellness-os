@@ -63,6 +63,9 @@ const MUTACION_ORDER_CREATE = `mutation($order: OrderCreateOrderInput!, $options
 
 // ---------- dependencias de las herramientas ----------
 
+/** 13-10: última consulta a Nominatim de esta instancia (máximo 1 por segundo). */
+let ultimaGeocodificacion = 0;
+
 export const depsHerramientasReales: DepsHerramientas = {
   async catalogoShopify(estado) {
     const d = await gql<{ products: { nodes: NodoProducto[] } }>(QUERY_CATALOGO, { q: `status:${estado.toLowerCase()}` });
@@ -131,11 +134,16 @@ export const depsHerramientasReales: DepsHerramientas = {
   },
 
   async pedidoTiendaAbierto(clienteId) {
-    const desde = new Date(Date.now() - 72 * 3600_000).toISOString();
-    const { data, error } = await db().from("shopify_pedidos").select("shopify_order_id,creado_en,raw->>cancelled_at,raw->>fulfillment_status")
-      .eq("cliente_id", clienteId).eq("es_borrador", false).gte("creado_en", desde).order("creado_en", { ascending: false }).limit(5);
+    // 13-10: también el pedido con intento de entrega fallido (despachado, hasta 30 días): el cliente coordina día y horario.
+    const desde = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    const { data, error } = await db().from("shopify_pedidos").select("shopify_order_id,creado_en,estado_envio,raw->>cancelled_at,raw->>fulfillment_status")
+      .eq("cliente_id", clienteId).eq("es_borrador", false).gte("creado_en", desde).order("creado_en", { ascending: false }).limit(10);
     falla("pedido de la tienda abierto", error);
-    const p = ((data ?? []) as Array<Record<string, unknown>>).find((x) => !x.cancelled_at && x.fulfillment_status !== "fulfilled");
+    const filas = (data ?? []) as Array<Record<string, unknown>>;
+    const re = filas.find((x) => !x.cancelled_at && ["INTENTO_FALLIDO", "NO_ENTREGADO_RESCATABLE"].includes(String(x.estado_envio ?? "")));
+    if (re) return { shopify_order_id: Number(re.shopify_order_id), creado_en: String(re.creado_en), en_reintento: true };
+    const limite = Date.now() - 72 * 3600_000;
+    const p = filas.find((x) => !x.cancelled_at && x.fulfillment_status !== "fulfilled" && Date.parse(String(x.creado_en)) >= limite);
     return p ? { shopify_order_id: Number(p.shopify_order_id), creado_en: String(p.creado_en) } : null;
   },
 
@@ -237,6 +245,76 @@ export const depsHerramientasReales: DepsHerramientas = {
       .eq("cliente_id", clienteId).eq("direccion", "out").ilike("texto", "%Voltra te avise%");
     falla("buscar permiso ya pedido", e2);
     return (count ?? 0) > 0 ? "preguntado" : null;
+  },
+
+  async direccionDePin(lat, lng) {
+    // 13-10: OpenStreetMap Nominatim (política: ≤ 1 consulta/s, User-Agent con sistema y email, caché). Solo coordenadas.
+    const clave = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+    const { data: cache, error: eCache } = await db().from("geocodificacion_cache").select("calle,ciudad").eq("clave", clave).maybeSingle();
+    if (eCache) console.error("geocodificación: caché", eCache.message);
+    if (cache) return { calle: cache.calle ?? null, ciudad: cache.ciudad ?? null };
+    const { data: cfg } = await db().from("config_wa").select("valor").eq("clave", "geocodificacion").maybeSingle();
+    const email = typeof cfg?.valor?.email === "string" ? cfg.valor.email : "";
+    const espera = ultimaGeocodificacion + 1100 - Date.now();
+    if (espera > 0) await new Promise((r) => setTimeout(r, espera));
+    ultimaGeocodificacion = Date.now();
+    const ua = { "User-Agent": `VoltraOS/1.0 (vendedor WhatsApp${email ? `; ${email}` : ""})` };
+    const guardar = async (calle: string | null, ciudad: string | null, crudo: unknown) => {
+      const { error: eUp } = await db().from("geocodificacion_cache").upsert({ clave, calle, ciudad, crudo });
+      if (eUp) console.error("geocodificación: guardar caché", eUp.message);
+    };
+    let motivo = "";
+    // 1) Nominatim (pedido de Enrique). 13-10: desde Supabase responde 403 (bloquea IPs de servidores en la nube).
+    try {
+      const u = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=es&lat=${lat}&lon=${lng}`;
+      const r = await fetch(u, { headers: ua, signal: AbortSignal.timeout(6000) });
+      if (r.ok) {
+        const a = ((await r.json()) as { address?: Record<string, string> }).address ?? {};
+        if (a.country_code && a.country_code !== "py") return { calle: null, ciudad: null, motivo: "fuera_de_paraguay" };
+        const calle = a.road ? [a.road, a.house_number].filter(Boolean).join(" ") : (a.pedestrian ?? a.residential ?? null);
+        const ciudad = a.city ?? a.town ?? a.village ?? a.municipality ?? a.county ?? null;
+        if (calle && ciudad) {
+          await guardar(calle, ciudad, { fuente: "nominatim", ...a });
+          return { calle, ciudad };
+        }
+        motivo = "nominatim_sin_calle";
+      } else motivo = `nominatim_http_${r.status}`;
+    } catch (e) {
+      motivo = `nominatim_falla: ${e instanceof Error ? e.message : String(e)}`.slice(0, 80);
+    }
+    // 2) Respaldo: Photon (komoot), mismos datos de OpenStreetMap, sin clave.
+    try {
+      const r = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&lang=default`, { headers: { "User-Agent": "VoltraOS/1.0" }, signal: AbortSignal.timeout(6000) });
+      if (!r.ok) return { calle: null, ciudad: null, motivo: `${motivo}; photon_http_${r.status}` };
+      const f = ((await r.json()) as { features?: Array<{ properties?: Record<string, string> }> }).features?.[0]?.properties ?? {};
+      if (f.countrycode && f.countrycode !== "PY") return { calle: null, ciudad: null, motivo: "fuera_de_paraguay" };
+      const calle = f.street ? [f.street, f.housenumber].filter(Boolean).join(" ") : null;
+      const ciudad = f.city ?? f.locality ?? f.county ?? null;
+      await guardar(calle, ciudad, { fuente: "photon", ...f });
+      return calle && ciudad ? { calle, ciudad } : { calle, ciudad, motivo: `${motivo}; photon_sin_calle` };
+    } catch (e) {
+      return { calle: null, ciudad: null, motivo: `${motivo}; photon_falla: ${e instanceof Error ? e.message : String(e)}`.slice(0, 160) };
+    }
+  },
+
+  async programarEntregaOrden(orderId, fecha, franja) {
+    // 13-10: atributos del pedido (se mezclan con los que ya tiene: orderUpdate reemplaza la lista) + tag.
+    try {
+      const gid = `gid://shopify/Order/${orderId}`;
+      const r = await gql<{ order: { customAttributes: { key: string; value: string | null }[] } | null }>(
+        `query($id: ID!) { order(id: $id) { customAttributes { key value } } }`, { id: gid });
+      const previos = (r.order?.customAttributes ?? []).filter((a) => a.key !== "entrega_programada" && a.key !== "entrega_franja");
+      const attrs = [...previos, { key: "entrega_programada", value: fecha }, ...(franja ? [{ key: "entrega_franja", value: franja }] : [])];
+      const u = await gql<{ orderUpdate: { userErrors: { message: string }[] } }>(
+        `mutation($i: OrderInput!) { orderUpdate(input: $i) { userErrors { message } } }`, { i: { id: gid, customAttributes: attrs } });
+      if (u.orderUpdate.userErrors.length) return { ok: false, error: u.orderUpdate.userErrors.map((e) => e.message).join("; ") };
+      const t = await gql<{ tagsAdd: { userErrors: { message: string }[] } }>(
+        `mutation($id: ID!, $t: [String!]!) { tagsAdd(id: $id, tags: $t) { userErrors { message } } }`, { id: gid, t: ["ENTREGA_PROGRAMADA"] });
+      if (t.tagsAdd.userErrors.length) return { ok: false, error: t.tagsAdd.userErrors.map((e) => e.message).join("; ") };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
   },
 
   async estadoOfertaPrioridad(shopifyOrderId) {

@@ -1,6 +1,9 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
 import {
+  botonesPrimerTurno,
+  cuerpoPrimerTurno,
   inputOrderCreate,
+  nombreDePerfil,
   _limpiarCacheCatalogo,
   derivarAEnrique,
   ejecutarHerramienta,
@@ -20,8 +23,8 @@ import { configPrueba, ctxPrueba, depsPrueba } from "./prueba_utiles.ts";
 
 Deno.test("definiciones: las 9 herramientas del contrato + registrar_perfil, con JSON Schema", () => {
   assertEquals(HERRAMIENTAS.map((h) => h.name).sort(), [
-    "actualizar_direccion", "cierre_botones", "consultar_catalogo", "crear_pedido_cod", "datos_transferencia", "derivar_a_enrique", "enviar_formulario", "enviar_media",
-    "enviar_opciones", "estado_pedido", "pedir_telefono", "pedir_ubicacion", "permiso_ofertas", "primer_turno", "registrar_perfil",
+    "actualizar_direccion", "avisar_enrique", "cierre_botones", "confirmar_ubicacion", "consultar_catalogo", "crear_pedido_cod", "datos_transferencia", "derivar_a_enrique", "enviar_formulario", "enviar_media",
+    "enviar_opciones", "estado_pedido", "pedir_telefono", "pedir_ubicacion", "permiso_ofertas", "primer_turno", "programar_entrega", "registrar_perfil",
   ]);
   for (const h of HERRAMIENTAS) assertEquals(h.input_schema.type, "object");
 });
@@ -261,7 +264,7 @@ Deno.test("interactivos: el texto del modelo pasa por el filtro; lista vertical 
   assertEquals(lista.header.type, "image");
   assertEquals(lista.action.buttons.map((b) => b.reply.title), ["1 unidad", "2 unidades", "3 unidades"]);
   // 12-10: el total con envío y lo que gana contra comprar de a 1.
-  assert(lista.body.text.includes("*1 unidad* · 79.000 + 33.000 de envío = 112.000"), lista.body.text);
+  assert(lista.body.text.includes("*1 unidad* · 79.000 + 33.000 de envío (112.000 en total)"), lista.body.text);
   assert(lista.body.text.includes("*2 unidades* · 158.000 en total: es como pagar 2 × 79.000, el envío te sale gratis"), lista.body.text);
   assert(lista.body.text.includes("*3 unidades* · 188.000 en total: envío gratis + 49.000 menos"), lista.body.text);
   const sinOfertas = await ejecutarHerramienta("enviar_opciones", { handle: "raspador-prueba", texto: "Elegí" }, ctxPrueba(), deps);
@@ -339,16 +342,28 @@ Deno.test("derivar_a_enrique por motivo del sistema: el cliente nunca ve el text
   assert(reg.avisos[0].texto.includes("20 turnos"));
 });
 
-Deno.test("esSoloPin + crear_pedido_cod: con solo el pin y sin referencia pide algo escrito; con referencia sigue (08-10)", async () => {
+Deno.test("14-10 el nombre nunca traba y alcanza con ciudad + referencia o pin + referencia; con solo el pin falta una referencia", async () => {
   for (const t of ["Pin de ubicación", "Ubicación por pin", "ubicacion", "pin"]) assert(esSoloPin(t), t);
   for (const t of ["Número 115", "Club 29 de Setiembre", "Ruta 1 km 20"]) assertFalse(esSoloPin(t), t);
   _limpiarCacheCatalogo();
-  const { deps } = depsPrueba();
-  const sinRef = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, direccion: "Pin de ubicación", referencia: "" }, ctxPrueba(), deps);
-  assert(sinRef.esError);
-  assert(String(sinRef.resultado.error).includes("referencia"), String(sinRef.resultado.error));
-  const conRef = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, direccion: "Pin de ubicación", referencia: "reja negra" }, ctxPrueba(), deps);
-  assertFalse(conRef.esError);
+  const { deps, reg } = depsPrueba();
+  const soloPin = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, direccion: "Pin de ubicación", referencia: "" }, ctxPrueba(), deps);
+  assert(soloPin.esError);
+  assert(JSON.stringify(soloPin.resultado).includes("calle o una referencia"), JSON.stringify(soloPin.resultado));
+  const pinRef = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, direccion: "Pin de ubicación", referencia: "reja negra" }, ctxPrueba(), deps);
+  assertFalse(pinRef.esError, JSON.stringify(pinRef.resultado));
+  const ciudadRef = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, direccion: "", referencia: "frente a la escuela" }, ctxPrueba(), deps);
+  assertFalse(ciudadRef.esError, JSON.stringify(ciudadRef.resultado));
+  // Sin nombre: el de su perfil de WhatsApp (ctxPrueba trae "Ana Prueba").
+  const sinNombre = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, nombre: "" }, ctxPrueba(), deps);
+  assertFalse(sinNombre.esError, JSON.stringify(sinNombre.resultado));
+  assertEquals(reg.pedidosChat.at(-1)!.datos.nombre, "Ana Prueba");
+});
+
+Deno.test("14-10 nombreDePerfil: limpia emojis y números; si no sirve, null", () => {
+  assertEquals(nombreDePerfil("Ángel Andino💚"), "Ángel Andino");
+  assertEquals(nombreDePerfil("fulll6666666⁶666666⁶66666"), null);
+  assertEquals(nombreDePerfil(""), null);
 });
 
 Deno.test("actualizar_direccion: suma la referencia al pedido creado y avisa; sin pedido creado, error", async () => {
@@ -490,10 +505,13 @@ Deno.test("primer_turno: gancho en texto + total con 3 botones; marca la variant
   assertEquals(reg.textos.map((t) => t.texto), ["Te pegás la tira y la nariz se abre al toque"]);
   const i = reg.interactivos[0].interactive as { type: string; body: { text: string }; action: { buttons: Array<{ reply: { id: string; title: string } }> } };
   assertEquals(i.type, "button");
-  assertEquals(i.body.text, "79.000 + 33.000 de envío = 112.000, pagás al recibir.");
-  assertEquals(i.action.buttons.map((b) => b.reply.title), ["Quiero pedirlo", "Tengo una duda", "Precios por cantidad"]);
-  assertEquals(i.action.buttons.map((b) => b.reply.id), ["vend_p1:pedir:tiras-prueba", "vend_p1:duda:tiras-prueba", "vend_p1:cant:tiras-prueba"]);
-  assertEquals(r.resultado.variante, "botones_v1");
+  // 13-10: todos los totales con envío y la cantidad ya elegida en el botón.
+  assertEquals(i.body.text, "Sale 79.000 + 33.000 de envío (112.000 en total), pagás al recibir. Llevando 2 el envío te sale gratis: 158.000 por los 2.");
+  assertEquals(i.action.buttons.map((b) => b.reply.title), ["2 con envío gratis", "Quiero 1", "Tengo una duda"]);
+  assertEquals(i.action.buttons.map((b) => b.reply.id), ["vend_p1:q2:tiras-prueba", "vend_p1:q1:tiras-prueba", "vend_p1:duda:tiras-prueba"]);
+  assertEquals(r.resultado.variante, "botones_v2");
+  assertEquals(r.resultado.pasar_a_2, "Ojo: llevando 2 el envío te sale GRATIS (158.000 los 2)");
+  assertEquals(r.resultado.subir_a_3, "Y por 30.000 más te llevás 3: envío gratis + 49.000 menos (188.000 en total)");
   assert(JSON.stringify(r.resultado.ofertas).includes("158.000") && JSON.stringify(r.resultado.ofertas).includes("188.000"));
 });
 
@@ -519,7 +537,7 @@ Deno.test("cierre_botones: texto revisado + los 3 botones del primer turno; prod
   assert(r.terminal);
   const i = reg.interactivos[0].interactive as { body: { text: string }; action: { buttons: Array<{ reply: { id: string; title: string } }> } };
   assertEquals(i.body.text, "Te lo armo y pagás recién cuando lo tenés en la mano");
-  assertEquals(i.action.buttons.map((b) => b.reply.id), ["vend_p1:pedir:tiras-prueba", "vend_p1:duda:tiras-prueba", "vend_p1:cant:tiras-prueba"]);
+  assertEquals(i.action.buttons.map((b) => b.reply.id), ["vend_p1:q2:tiras-prueba", "vend_p1:q1:tiras-prueba", "vend_p1:duda:tiras-prueba"]);
   assert((await ejecutarHerramienta("cierre_botones", { handle: "no-existe", texto: "Dale" }, ctxPrueba(), deps)).esError);
   assert((await ejecutarHerramienta("cierre_botones", { handle: "tiras-prueba", texto: "Tiene garantía" }, ctxPrueba(), deps)).esError);
   assertEquals(reg.interactivos.length, 1);
@@ -550,4 +568,117 @@ Deno.test("permiso_ofertas: sin respuesta previa → tu texto + el pedido de per
   assertFalse(ya.terminal);
   assertEquals(ya.resultado.ya_respondio, true);
   assertEquals(reg.interactivos.length, 1);
+});
+
+Deno.test("13-10 primer turno: pack → un precio y Quiero el pack; sin oferta ×2 → solo Quiero 1", () => {
+  const base = { titulo: "x", variante_id: "v", precio: 120000, precio_texto: "120.000", disponible: true, total: 153000, total_texto: "153.000", imagen: null, frase_precio: "" };
+  const pack = { ...base, handle: "pack-gudair-tiras-nasales-parches-bucales", ofertas: [] };
+  assertEquals(cuerpoPrimerTurno(pack as never), "Sale 120.000 + 33.000 de envío (153.000 en total), pagás al recibir.");
+  assertEquals(botonesPrimerTurno(pack as never).map((b) => b.titulo), ["Quiero el pack", "Tengo una duda"]);
+  const solo = { ...base, handle: "otro-prueba", precio: 79000, total: 112000, ofertas: [] };
+  assertEquals(cuerpoPrimerTurno(solo as never), "Sale 79.000 + 33.000 de envío (112.000 en total), pagás al recibir.");
+  assertEquals(botonesPrimerTurno(solo as never).map((b) => b.titulo), ["Quiero 1", "Tengo una duda"]);
+  for (const b of [...botonesPrimerTurno(pack as never), ...botonesPrimerTurno(solo as never)]) assert(b.titulo.length <= 20);
+});
+
+Deno.test("13-10 confirmar_ubicacion: pin → \"¿Es en <calle>, <ciudad>?\" con Sí, es ahí / Corregir; sin calle → pedir escrita", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const conCalle = { ...deps, direccionDePin: () => Promise.resolve({ calle: "Avenida Prueba 123", ciudad: "Ciudad del Este" }) };
+  const r = await ejecutarHerramienta("confirmar_ubicacion", { ubicacion: "-25.5097,-54.6111" }, ctxPrueba(), conCalle);
+  assert(r.terminal);
+  const i = reg.interactivos[0].interactive as { body: { text: string }; action: { buttons: Array<{ reply: { id: string; title: string } }> } };
+  assertEquals(i.body.text, "¿Es en Avenida Prueba 123, Ciudad del Este?");
+  assertEquals(i.action.buttons.map((b) => b.reply.title), ["Sí, es ahí", "Corregir"]);
+  const sin = await ejecutarHerramienta("confirmar_ubicacion", { ubicacion: "-25.5097,-54.6111" }, ctxPrueba(), { ...deps, direccionDePin: () => Promise.resolve({ calle: null, ciudad: "Ciudad del Este" }) });
+  assertFalse(sin.terminal);
+  assertEquals(sin.resultado.sin_calle, true);
+  assert((await ejecutarHerramienta("confirmar_ubicacion", { ubicacion: "x" }, ctxPrueba(), conCalle)).esError);
+  assertEquals(reg.interactivos.length, 1);
+});
+
+Deno.test("13-10 Shopify: la nota lleva nombre, celular, ciudad, calle, mapa y referencia; address2 = referencia + mapa", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, direccion: "Avenida Prueba 123", ubicacion: "-25.5097,-54.6111", referencia: "reja negra", calle_de_pin: true }, ctxPrueba(), deps);
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si dale" }), deps);
+  const o = (reg.ordenes[0] as { order: { note: string; shippingAddress: { address1: string; address2: string } } }).order;
+  for (const x of ["Nombre: ", "Celular: ", "Ciudad: ", "Calle: Avenida Prueba 123", "Mapa: https://maps.google.com/?q=-25.5097,-54.6111", "Referencia: reja negra"]) assert(o.note.includes(x), x);
+  assertEquals(o.shippingAddress.address2, "reja negra · Mapa: https://maps.google.com/?q=-25.5097,-54.6111");
+  assertEquals((reg.pedidosChat[0].datos as { calleDePin?: boolean }).calleDePin, true);
+});
+
+Deno.test("13-10 avisar_enrique: cliente que cancela por demora → Telegram con botón para escribirle; el chat sigue con el bot", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const r = await ejecutarHerramienta("avisar_enrique", { motivo: "demora_cancela", resumen: "#1004: si hoy no llega, cancela" }, ctxPrueba(), deps);
+  assertFalse(r.terminal);
+  assertFalse(r.esError);
+  assert(reg.avisos[0].texto.includes("Cliente por cancelar por demora"));
+  assert(reg.avisos[0].texto.includes("#1004: si hoy no llega, cancela"));
+  assert((await ejecutarHerramienta("avisar_enrique", { motivo: "otro", resumen: "x" }, ctxPrueba(), deps)).esError);
+  assertEquals(reg.humano.length, 0);
+});
+
+Deno.test("13-10 entrega programada: en el resumen y en Shopify; antes del plazo, no", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const antes = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, fecha_entrega: "2026-10-05" }, ctxPrueba(), deps);
+  assert(antes.esError);
+  assert(JSON.stringify(antes.resultado).includes("fecha_antes_de_lo_posible"));
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, fecha_entrega: "2026-10-09", franja_entrega: "antes de las 12" }, ctxPrueba(), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  assert(JSON.stringify(reg.interactivos.at(-1)!.interactive).includes("📦 Te llega: el viernes 09/10 (antes de las 12)"));
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si dale" }), deps);
+  const o = (reg.ordenes[0] as { order: { tags: string[]; note: string; customAttributes: { key: string; value: string }[] } }).order;
+  assert(o.tags.includes("ENTREGA_PROGRAMADA"));
+  assert(o.customAttributes.some((a) => a.key === "entrega_programada" && a.value === "2026-10-09"));
+  assert(o.customAttributes.some((a) => a.key === "entrega_franja" && a.value === "antes de las 12"));
+  assert(o.note.includes("ENTREGA PROGRAMADA: viernes 09/10 (antes de las 12). Despachar en el día y pedirle a la transportadora que entregue ese día."));
+});
+
+Deno.test("13-10 programar_entrega: pedido creado → guarda fecha y franja; antes del plazo → fecha_minima, sin guardar", async () => {
+  _limpiarCacheCatalogo();
+  const guardados: unknown[] = [];
+  const { deps } = depsPrueba();
+  const d = { ...deps, programarEntregaOrden: (id: number, f: string, fr: string | null) => (guardados.push([id, f, fr]), Promise.resolve({ ok: true })) };
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS }, ctxPrueba(), d);
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si dale" }), d);
+  const no = await ejecutarHerramienta("programar_entrega", { fecha: "2026-10-05" }, ctxPrueba(), d);
+  assertEquals(no.resultado.antes_de_lo_posible, true);
+  assertEquals(guardados.length, 0);
+  const ok = await ejecutarHerramienta("programar_entrega", { fecha: "2026-10-09", franja: "antes de las 12" }, ctxPrueba(), d);
+  assertEquals(ok.resultado.texto_fecha, "viernes 09/10");
+  assertEquals(guardados, [[5550001, "2026-10-09", "antes de las 12"]]);
+  assert((await ejecutarHerramienta("programar_entrega", { fecha: "2026-12-31" }, ctxPrueba(), d)).esError);
+});
+
+Deno.test("14-10 pedido nuevo: el Telegram queda registrado (aviso_telegram) y si falla se reintenta una vez", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  let intentos = 0;
+  const d = { ...deps, avisar: (t: string, b?: unknown) => (intentos++, intentos === 1 ? Promise.resolve({ ok: false, error: "caído" }) : deps.avisar(t, b as never)) };
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS }, ctxPrueba(), d);
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: true }, ctxPrueba({ textoEntrada: "si dale" }), d);
+  assertEquals(r.resultado.aviso_telegram, true);
+  assertEquals(intentos, 2);
+  assert(reg.avisos.some((a) => a.texto.includes("Pedido nuevo")));
+});
+
+Deno.test("15-10 (#1055): con nombre, celular y pin alcanza; la ciudad queda 'Ver mapa' si el mapa no la da", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const r = await ejecutarHerramienta("crear_pedido_cod", {
+    confirmar: false, nombre: "ana", ubicacion: "-25.3000000,-57.2000000", items: [{ handle: "tiras-prueba", cantidad: 1 }],
+  }, ctxPrueba(), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  const d = reg.pedidosChat.at(-1)!.datos;
+  assertEquals([d.ciudad, d.direccion, d.ubicacion], ["Ver mapa", "Pin de ubicación", "-25.3000000,-57.2000000"]);
+});
+
+Deno.test("15-10 (#1055): nombre de una palabra → apellido '-' (con apellido vacío Shopify descarta la dirección)", () => {
+  const base = { nombre: "anita", telefono: "+595981000000", direccion: "Calle 1", referencia: null, ciudad: "Caacupé", ubicacion: null,
+    lineas: [], envio: 33000, total: 33000, factura: null };
+  const o = inputOrderCreate(base as never, ctxPrueba()) as { order: { shippingAddress: { firstName: string; lastName: string } } };
+  assertEquals([o.order.shippingAddress.firstName, o.order.shippingAddress.lastName], ["anita", "-"]);
 });

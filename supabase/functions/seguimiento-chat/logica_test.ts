@@ -25,6 +25,7 @@ import {
   seguimientosVigentes,
 } from "./logica.ts";
 import { CFG_TOQUE3_DEFAULT, leerCfgToque3 } from "./toque3.ts";
+import { CFG_RESCATE_DATOS_DEFAULT, leerCfgRescateDatos } from "./rescate_datos.ts";
 import { instanteLocal } from "../recompra/calendario.ts";
 
 const H = 3_600_000;
@@ -68,9 +69,11 @@ Deno.test("semilla seed_seguimiento.sql = defaults del código (con toque3), arr
   const m = /\('vendedor_seguimiento',\s*'([\s\S]*?)'::jsonb\)/.exec(sql);
   assert(m);
   const semilla = JSON.parse(m[1]);
-  assertEquals(semilla, { ...CFG, toque3: CFG_TOQUE3_DEFAULT });
+  // 13-10: con las claves del rescate de datos.
+  assertEquals(semilla, { ...CFG, ...CFG_RESCATE_DATOS_DEFAULT, toque3: CFG_TOQUE3_DEFAULT });
   assertEquals(leerCfgSeguimiento(semilla), CFG);
   assertEquals(leerCfgToque3(semilla), CFG_TOQUE3_DEFAULT);
+  assertEquals(leerCfgRescateDatos(semilla), CFG_RESCATE_DATOS_DEFAULT);
   // El update (bases donde la clave ya existía) suma exactamente lo mismo.
   const u = /set valor = '([\s\S]*?)'::jsonb \|\| valor/.exec(sql);
   assert(u);

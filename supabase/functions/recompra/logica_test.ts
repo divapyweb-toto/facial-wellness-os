@@ -1,9 +1,11 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { cfgDeSemilla } from "./semilla_prueba.ts";
-import type { ItemPlan, MensajeMk } from "./calendario.ts";
+import type { ItemPlan, MensajeMk, RecompraCfg } from "./calendario.ts";
 import { type Consentimiento, type Deps, ejecutarRecompra, type PedidoFila, type PlanFila } from "./logica.ts";
 
 const cfg = cfgDeSemilla();
+// 13-10: los tests de antes usan la fórmula previa (sin dias_reposicion) y el envío a las 9:00.
+const cfgVieja: RecompraCfg = { ...cfg, dias_reposicion: null, hora_envio: 9 };
 const ENTREGA = new Date("2026-10-01T15:00:00Z"); // 12:00 Asunción
 const enDia = (n: number) => new Date(ENTREGA.getTime() + n * 86_400_000); // mismo horario, n días después
 
@@ -18,7 +20,9 @@ interface Envio {
 }
 
 /** Base en memoria con la misma semántica que index.ts (claves únicas, cancelación solo de pendientes). */
-function base(op: { consent?: Consentimiento; pedidos?: PedidoFila[]; mensajes?: MensajeMk[] } = {}) {
+function base(
+  op: { consent?: Consentimiento; pedidos?: PedidoFila[]; mensajes?: MensajeMk[]; cfg?: RecompraCfg } = {},
+) {
   const s = {
     ahora: enDia(0),
     consent: new Map<string, Consentimiento>([["c1", op.consent === undefined ? "si" : op.consent]]),
@@ -31,7 +35,7 @@ function base(op: { consent?: Consentimiento; pedidos?: PedidoFila[]; mensajes?:
   let n = 0;
   const deps: Deps = {
     ahora: () => s.ahora,
-    cfg,
+    cfg: op.cfg ?? cfgVieja,
     pedidos: () => Promise.resolve(s.pedidos),
     consentimientos: (ids) => Promise.resolve(new Map(ids.map((i) => [i, s.consent.get(i) ?? null]))),
     insertarPlanes: (items: ItemPlan[]) => {
@@ -103,7 +107,7 @@ function base(op: { consent?: Consentimiento; pedidos?: PedidoFila[]; mensajes?:
   return { s, deps, mandarPendientes };
 }
 
-function pedido(id: number, lineas: [string, number][], o: Partial<PedidoFila> = {}): PedidoFila {
+function pedido(id: number, lineas: [string, number, string?][], o: Partial<PedidoFila> = {}): PedidoFila {
   return {
     shopify_order_id: id,
     cliente_id: "c1",
@@ -111,7 +115,7 @@ function pedido(id: number, lineas: [string, number][], o: Partial<PedidoFila> =
     creado_en: new Date("2026-09-28T12:00:00Z"),
     entregado_en: ENTREGA,
     cancelado: false,
-    lineas: lineas.map(([titulo, cantidad]) => ({ titulo, cantidad })),
+    lineas: lineas.map(([titulo, cantidad, handle]) => (handle ? { titulo, cantidad, handle } : { titulo, cantidad })),
     ...o,
   };
 }
@@ -241,4 +245,82 @@ Deno.test("arranque con entregas viejas: no crea avisos cuyo día ya pasó hace 
   s.ahora = enDia(40); // M1 (23) y M2 (34) ya pasaron
   const r = await ejecutarRecompra(deps);
   assertEquals([r.planes_nuevos, s.envios.length], [0, 0]);
+});
+
+// ─── 13-10: regla de 25 días con la config de la semilla (dias_reposicion 25, hora_envio 12) ───
+
+Deno.test("13-10: tiras ×1 → M1 el día 25 a las 12:00 de Asunción; M2 el 34", async () => {
+  const { s, deps } = base({ cfg });
+  await ejecutarRecompra(deps);
+  assertEquals(s.planes.map((p) => [p.tipo, p.dia_objetivo]), [["M1", "2026-10-26"], ["M2", "2026-11-04"]]);
+  s.ahora = enDia(24);
+  assertEquals((await ejecutarRecompra(deps)).programados, 0);
+  s.ahora = new Date("2026-10-26T11:00:00Z"); // 8:00 Asunción del día 25
+  assertEquals((await ejecutarRecompra(deps)).programados, 1);
+  assertEquals(s.envios.map((e) => [e.clave_unica, e.plantilla, e.enviar_desde, e.variables.join("|")]), [
+    ["rc:1001:M1", "voltra_mk_reposicion", "2026-10-26T15:00:00.000Z", "Ana|tiras nasales|otra bolsa|79000"],
+  ]);
+});
+
+Deno.test("13-10: sin consentimiento 'si' no planifica ni programa (regla de 25 días)", async () => {
+  for (const c of [null, "no", "baja"] as const) {
+    const { s, deps } = base({ cfg, consent: c });
+    s.ahora = enDia(25);
+    const r = await ejecutarRecompra(deps);
+    assertEquals([r.planes_nuevos, r.programados, s.planes.length, s.envios.length], [0, 0, 0, 0]);
+  }
+});
+
+Deno.test("13-10: pidió de nuevo mientras el primero viajaba → el M1 del primero no sale", async () => {
+  const { s, deps } = base({
+    cfg,
+    pedidos: [
+      pedido(1001, [["Tiras nasales", 1, "tiras-nasales-gudair-30-unidades"]]),
+      // creado el 30-09 (después del 28-09 de 1001 y antes de su entrega del 01-10), todavía sin entregar
+      pedido(1002, [["Tiras nasales", 1]], { creado_en: new Date("2026-09-30T12:00:00Z"), entregado_en: null }),
+    ],
+  });
+  s.ahora = enDia(25);
+  const r = await ejecutarRecompra(deps);
+  assertEquals([r.programados, s.envios.length], [0, 0]);
+  assert(s.planes.length > 0 && s.planes.every((p) => p.estado === "cancelado" && p.motivo === "recompro"));
+});
+
+Deno.test("13-10: plan de pack se cancela si después pidió solo tiras", async () => {
+  const { s, deps } = base({
+    cfg,
+    pedidos: [
+      pedido(1001, [["Gudair noches", 1, "pack-gudair-tiras-nasales-parches-bucales"]]),
+      pedido(1002, [["Tiras nasales", 1]], { creado_en: enDia(10), entregado_en: null }),
+    ],
+  });
+  s.ahora = enDia(25);
+  const r = await ejecutarRecompra(deps);
+  assertEquals(r.programados, 0);
+  assertEquals(s.planes.map((p) => [p.tipo, p.producto_clave, p.estado, p.motivo]), [
+    ["M1", "pack", "cancelado", "recompro"],
+    ["M2", "pack", "cancelado", "recompro"],
+  ]);
+});
+
+Deno.test("13-10: plan de tiras se cancela si después pidió el pack; un pedido cancelado no cuenta", async () => {
+  const conPack = base({
+    cfg,
+    pedidos: [
+      pedido(1001, [["Tiras nasales", 1]]),
+      pedido(1002, [["Pack Gudair Tiras + Parches", 1]], { creado_en: enDia(5), entregado_en: null }),
+    ],
+  });
+  conPack.s.ahora = enDia(25);
+  assertEquals((await ejecutarRecompra(conPack.deps)).programados, 0);
+
+  const cancelado = base({
+    cfg,
+    pedidos: [
+      pedido(1001, [["Tiras nasales", 1]]),
+      pedido(1002, [["Tiras nasales", 1]], { creado_en: enDia(5), entregado_en: null, cancelado: true }),
+    ],
+  });
+  cancelado.s.ahora = enDia(25);
+  assertEquals((await ejecutarRecompra(cancelado.deps)).programados, 1);
 });

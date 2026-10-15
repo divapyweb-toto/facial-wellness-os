@@ -99,6 +99,7 @@ const deps: DepsAuditoria = {
         .from("shopify_pedidos")
         .select("cliente_id, total, creado_en")
         .in("cliente_id", t)
+        .eq("es_borrador", false) // 14-10: un formulario abandonado de Releasit no es un pedido
         .gte("creado_en", desde)
         .lt("creado_en", hasta);
       if (error) throw new Error(`shopify_pedidos: ${error.message}`);

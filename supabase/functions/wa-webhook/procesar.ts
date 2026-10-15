@@ -3,7 +3,7 @@
 
 import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
 import { esAceptacion as esAceptacionVendedor } from "../_shared/vendedor/herramientas.ts";
-import { diaEntrega, plazoParaEnDesdeHoy } from "../_shared/plazo_zona.ts";
+import { diaEntrega, leerEntregaProgramada, plazoParaEnDesdeHoy, textoEntregaProgramada } from "../_shared/plazo_zona.ts";
 import {
   CLAVE_CONFIG_PRIORIDAD,
   type CfgPagoPrioridad,
@@ -177,7 +177,7 @@ export interface Deps {
    * repetir la marca del anuncio cuando ya se sabe el producto. Si falla (o no está), la marca va solo en el mensaje
    * que trae el referral del anuncio.
    */
-  perfilConversacion?(conversacionId: string): Promise<{ producto?: unknown; pidio_testimonio_en?: unknown } | null>;
+  perfilConversacion?(conversacionId: string): Promise<{ producto?: unknown; pidio_testimonio_en?: unknown; testimonio_pedido?: unknown } | null>;
   /** Texto del último mensaje que mandamos en la conversación (para saber si el "no" responde a una confirmación). 10-10. */
   ultimoTextoNuestro?(conversacionId: string): Promise<string | null>;
   /** Escribe (o borra con null) una clave del perfil de la conversación sin tocar el resto. 09-10. */
@@ -204,7 +204,33 @@ export interface Deps {
     botones: BotonAviso[][],
     archivo: { mediaId: string; ruta: string | null; mime: string; nombre: string },
   ): Promise<{ ok: boolean; error?: string }>;
+  // ---- 13-10: testimonios (tabla testimonios, migración 20261013000010). Opcionales: sin ellas, como el 09-10. ----
+  /** Guarda el testimonio. null = ya estaba (mismo wa_message_id). */
+  guardarTestimonio?(t: TestimonioNuevo): Promise<{ id: string } | null>;
+  /** Respuesta al permiso: solo si es del cliente y todavía no respondió (autorizado null). true si cambió. */
+  responderPermisoTestimonio?(id: string, clienteId: string, autorizado: boolean): Promise<boolean>;
+  /** Cuántos testimonios autorizados hay (para los hitos de 5 en 5). */
+  contarTestimoniosAutorizados?(): Promise<number>;
+  /** Registra el hito (5, 10, 15…) UNA vez. true si es nuevo: recién ahí se avisa a Enrique. */
+  registrarHitoTestimonios?(hito: number): Promise<boolean>;
+  /**
+   * 13-10: ¿le mandamos (no fallido: después pasa a entregado o leído) la oferta de rescate antes de cancelar este pedido en esta conversación
+   * desde `desdeISO`? (wa_mensajes saliente con el botón resc_prog:<id>). Sin esto, solo "Cancelar igual" cancela.
+   */
+  ofertaRescateDesde?(conversacionId: string, orderId: string, desdeISO: string): Promise<boolean>;
 }
+
+/** 13-10: fila nueva de `testimonios`. Nunca se publica nada solo: Enrique elige qué usar. */
+export type TestimonioNuevo = {
+  cliente_id: string;
+  shopify_order_id: number | null;
+  tipo: "foto" | "video" | "texto";
+  /** Copia en Storage wa-media (la que ya hace copiarMediaChat para la Bandeja); null en los de texto o si falló. */
+  ruta_storage: string | null;
+  texto: string | null;
+  producto: string | null;
+  wa_message_id: string;
+};
 
 /** Conversación activa. `origen_anuncio_id`: anuncio por el que entró (se guarda al crearla). */
 export type Conversacion = { id: string; estado: string; origen_anuncio_id?: string | null };
@@ -281,8 +307,15 @@ export const TEXTOS_BOTONES_DEFAULT: Record<string, string> = {
   ne_cancelar: "Entendido {nombre}, le pasamos tu pedido {pedido} al equipo para cancelarlo. Si cambiás de idea, escribinos por acá.",
   seg_problema: "Entiendo {nombre}. Contame qué pasó con el producto y lo vemos ahora. Si me mandás una foto, lo resolvemos más rápido.",
   seg_bien_ya: "Gracias {nombre}, qué bueno que llegó todo bien.",
-  pedir_testimonio: "Una cosita más 🙏 ¿Nos mandás una foto o un video cortito usándolo? Nos ayuda muchísimo a que otros se animen a probar. Si lo mandás, lo podemos mostrar sin tu nombre completo ni tu número.",
+  // 13-10: también un comentario corto; el permiso para mostrarlo se pide aparte (botones tst_si / tst_no).
+  pedir_testimonio: "Una cosita más 🙏 ¿Nos mandás una foto o un video cortito usándolo, o nos contás en una frase qué te pareció? Nos ayuda muchísimo a que otros se animen a probar.",
   gracias_testimonio: "¡Gracias {nombre}! Nos ayuda un montón 🙌",
+  permiso_testimonio: "¡Gracias {nombre}! Nos ayuda un montón 🙌\n¿Podemos mostrar {que} en nuestras redes? Va sin tu nombre ni tu número.",
+  // Etiquetas de botón: máximo 20 caracteres.
+  permiso_testimonio_si: "Sí, podés usarla",
+  permiso_testimonio_no: "No, prefiero que no",
+  tst_si: "¡Genial, gracias {nombre}! Va sin tu nombre ni tu número.",
+  tst_no: "Perfecto {nombre}, queda solo para nosotros. ¡Gracias igual!",
   consentimiento: "¡Qué bueno {nombre}! ¿Te puedo avisar por acá cuando se te estén por acabar y cuando haya novedades de Voltra?",
   consentimiento_si: "Sí, avisame",
   consentimiento_no: "No, gracias",
@@ -294,6 +327,13 @@ export const TEXTOS_BOTONES_DEFAULT: Record<string, string> = {
   corregir_sin_vendedor: "Dale {nombre}, escribime acá el dato correcto (dirección, ciudad o referencia) y lo cambiamos.",
   pago_al_recibir: "Por ahora el pago es al recibir: pagás en efectivo cuando te llega tu pedido {pedido} 🙌",
   pago_ya_hecho: "Tu pedido {pedido} ya figura pagado ✅ No pagás nada al recibir.",
+  // 13-10: rescate antes de cancelar (botones resc_prog / resc_cancel:<id>). Títulos ≤ 20 caracteres.
+  rescate_cancelar: "Antes de cancelar: ¿te sirve que te lo llevemos otro día, en otro horario o que lo reciba otra persona? Decime y lo programamos 🙌",
+  rescate_boton_programar: "Programar otro día",
+  rescate_boton_cancelar: "Cancelar igual",
+  programar_sin_vendedor: "Dale {nombre}, ¿qué día y en qué horario te queda bien recibir tu pedido {pedido}? Lo programamos.",
+  ya_cancelado: "Tu pedido {pedido} ya está cancelado. Si lo querés de nuevo, escribime por acá y lo armamos 🙌",
+  ya_entregado: "Tu pedido {pedido} ya figura entregado, así que no se puede cancelar. Si tuviste algún problema con el producto, contame y lo vemos 🙏",
 };
 
 // config_wa.textos_marketing (supabase/seed_integracion.sql).
@@ -391,6 +431,13 @@ export type AccionEntrega = "ent_ok" | "reprogramar" | "corregir" | "pago_ant";
 export function leerBotonEntrega(m: MensajeMeta): { accion: AccionEntrega; id: string } | null {
   const r = /^(ent_ok|reprogramar|corregir|pago_ant):(\d+)$/.exec(idDeBoton(m));
   return r ? { accion: r[1] as AccionEntrega, id: r[2] } : null;
+}
+
+/** 13-10: botones de la oferta de rescate antes de cancelar: resc_prog / resc_cancel:<shopify_order_id>. */
+export type AccionRescate = "resc_prog" | "resc_cancel";
+export function leerBotonRescate(m: MensajeMeta): { accion: AccionRescate; orderId: string } | null {
+  const r = /^(resc_prog|resc_cancel):(\d+)$/.exec(idDeBoton(m));
+  return r ? { accion: r[1] as AccionRescate, orderId: r[2] } : null;
 }
 
 /**
@@ -732,22 +779,34 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
 
   const ctx: Ctx = { deps, m, clienteId: cliente.id, conv, telefono, destino: telefono ?? userId!, nombreWa: contacto?.profile?.name ?? cliente.nombre ?? null };
 
-  // 09-10: foto o video después de pedirle testimonio (7 días) → gracias + aviso a Enrique; no va al vendedor.
+  // 09-10: foto o video después de pedirle testimonio (7 días) → gracias; no va al vendedor.
+  // 13-10: se guarda en `testimonios` (con la copia de Storage de arriba) y se pide permiso para mostrarlo.
   if ((m.type === "image" || m.type === "video") && deps.perfilConversacion && deps.marcarPerfil) {
-    const p = await deps.perfilConversacion(conv.id).catch(() => null);
-    const en = typeof p?.pidio_testimonio_en === "string" ? Date.parse(p.pidio_testimonio_en) : NaN;
-    if (Number.isFinite(en) && deps.ahora().getTime() - en < 7 * 86_400_000) {
-      await deps.marcarPerfil(conv.id, "pidio_testimonio_en", null).catch(() => {});
-      const nombre = primerNombre(null, ctx.nombreWa);
-      await deps.enviarTexto(ctx.destino, renderizar(await textoBoton(deps, "gracias_testimonio"), { nombre, pedido: "" }), { clienteId: cliente.id, conversacionId: conv.id });
-      await deps.avisar(`📸 <b>${escaparHtml(ctx.nombreWa ?? "Un cliente")}</b> mandó ${m.type === "video" ? "un video" : "una foto"} usando el producto (testimonio). Miralo en la Bandeja de Voltra OS.`);
+    const pt = await pedidoDeTestimonio(ctx);
+    if (pt) {
+      const caption = (m.type === "image" ? m.image?.caption : m.video?.caption)?.trim() || null;
+      await aplicarTestimonio(ctx, pt, m.type === "video" ? "video" : "foto", copiaChat?.ok ? copiaChat.ruta ?? null : null, caption);
       return;
     }
   }
 
+  // 13-10: botones del permiso para mostrar el testimonio (tst_si / tst_no:<id del testimonio>).
+  const permiso = leerBotonTestimonio(m);
+  if (permiso) {
+    await aplicarPermisoTestimonio(ctx, permiso.autorizado, permiso.id);
+    return;
+  }
+
   const boton = leerBotonConfirmacion(m);
   if (boton) {
-    await aplicarRespuestaConfirmacion(ctx, boton.accion, boton.orderId);
+    // 13-10: "Cancelar pedido" ya no cancela al toque: primero la oferta de rescate (pedirCancelacion).
+    if (boton.accion === "conf_cancelar") await pedirCancelacion(ctx, boton.orderId);
+    else await aplicarRespuestaConfirmacion(ctx, boton.accion, boton.orderId);
+    return;
+  }
+  const rescate = leerBotonRescate(m);
+  if (rescate) {
+    await aplicarBotonRescate(ctx, rescate.accion, rescate.orderId);
     return;
   }
   // 10-10: "Lo quiero igual" en el aviso de pedido dado de baja → el vendedor arma el resumen con los mismos datos.
@@ -783,7 +842,11 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
   if (m.type === "text" && m.text?.body) {
     const lista = await deps.config("aceptaciones");
     const aceptaciones = Array.isArray(lista) ? lista as string[] : (avisoDefault("aceptaciones"), ACEPTACIONES_DEFAULT);
+    // 13-10: pedido de cancelar por texto. Con la oferta de rescate vigente (24 h), un segundo "cancelá" / "no"
+    // cancela; si no, va la oferta de rescate (nunca se cancela al primer pedido).
+    if (await cancelacionPorTexto(ctx, m.text.body)) return;
     // 10-10: "no", "ya no", "cancelá" justo después de un mensaje de confirmación → igual que el botón Cancelar.
+    // 13-10: igual que el botón: oferta de rescate primero.
     if (esNoAConfirmacion(m.text.body) && deps.ultimoTextoNuestro) {
       const ultimo = await deps.ultimoTextoNuestro(conv.id).catch(() => null);
       if (ultimo && /^\[plantilla voltra_(confirmacion_pedido|recordatorio_confirmacion|ultimo_aviso_confirmacion)/.test(ultimo)) {
@@ -791,7 +854,7 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
         const desde = new Date(deps.ahora().getTime() - (conf?.cancelar_h ?? 72) * 3600_000).toISOString();
         const pendientes = await deps.pedidosPorEstado(cliente.id, telefono, "pendiente", desde);
         if (pendientes.length === 1) {
-          await aplicarRespuestaConfirmacion(ctx, "conf_cancelar", String(pendientes[0].shopify_order_id), pendientes[0]);
+          await pedirCancelacion(ctx, String(pendientes[0].shopify_order_id), pendientes[0]);
           return;
         }
       }
@@ -821,6 +884,16 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
       await deps.avisar(`Corrección para ${p.nombre ?? p.shopify_order_id}: "${m.text.body}"`, [
         [{ texto: "Le escribo yo", callback: `escribo:${p.shopify_order_id}` }],
       ]);
+      return;
+    }
+  }
+
+  // 13-10: comentario corto después de pedirle testimonio (7 días) → testimonio de texto; no va al vendedor.
+  if (m.type === "text" && m.text?.body && esComentarioTestimonio(m.text.body) && deps.perfilConversacion && deps.marcarPerfil &&
+    deps.guardarTestimonio) {
+    const pt = await pedidoDeTestimonio(ctx);
+    if (pt) {
+      await aplicarTestimonio(ctx, pt, "texto", null, m.text.body.trim().slice(0, 1000));
       return;
     }
   }
@@ -934,18 +1007,25 @@ export async function reactivarPedido(ctx: Ctx, orderId: string): Promise<void> 
  */
 export async function conPedidoAbierto(deps: Deps, clienteId: string, telefono: string | null, texto: string): Promise<string> {
   try {
-    const desde = new Date(deps.ahora().getTime() - 10 * 86_400_000).toISOString();
+    const ahoraMs = deps.ahora().getTime();
+    const desde = new Date(ahoraMs - 10 * 86_400_000).toISOString();
+    // 13-10: un pedido con intento de entrega fallido puede tener más de 10 días (interior, reintentos): se mira 30.
+    const desdeFallo = new Date(ahoraMs - DIAS_PEDIDO_EN_REINTENTO * 86_400_000).toISOString();
     const [pend, conf] = await Promise.all([
       deps.pedidosPorEstado(clienteId, telefono, "pendiente", desde),
-      deps.pedidosPorEstado(clienteId, telefono, "confirmado", desde),
+      deps.pedidosPorEstado(clienteId, telefono, "confirmado", desdeFallo),
     ]);
     // 10-10: también los ya despachados (en camino): sin esto el bot le dijo a un cliente con el pedido en viaje que
     // "no quedó registrado" y le volvió a pedir todos los datos.
-    const abierto = [...pend, ...conf].filter((p) => {
+    const abiertos = [...pend, ...conf].filter((p) => {
       const r = p.raw ?? {};
-      return !r.cancelled_at && !["ENTREGADO", "NO_ENTREGADO", "RENDIDO", "CANCELADO"].includes(String(p.estado_envio ?? "").toUpperCase());
-    }).sort((a, b) => String(b.creado_en ?? "").localeCompare(String(a.creado_en ?? "")))[0];
+      if (r.cancelled_at || ["ENTREGADO", "NO_ENTREGADO", "RENDIDO", "CANCELADO"].includes(String(p.estado_envio ?? "").toUpperCase())) return false;
+      return enReintento(p) || String(p.creado_en ?? "") >= desde || !p.creado_en;
+    }).sort((a, b) => String(b.creado_en ?? "").localeCompare(String(a.creado_en ?? "")));
+    // 13-10: si hay uno con intento fallido, ese manda (es el que el cliente viene a coordinar).
+    const abierto = abiertos.find(enReintento) ?? abiertos[0];
     if (!abierto) return texto;
+    if (enReintento(abierto)) return `${textoPedidoEnReintento(abierto)}\n${texto}`;
     const despachado = (abierto.raw ?? {}).fulfillment_status === "fulfilled";
     const r = abierto.raw ?? {};
     const a = (r.shipping_address ?? {}) as Record<string, unknown>;
@@ -954,12 +1034,39 @@ export async function conPedidoAbierto(deps: Deps, clienteId: string, telefono: 
     const dir = [a.address1, a.address2].filter((x) => typeof x === "string" && x.trim()).join(", ");
     const estado = despachado ? "YA DESPACHADO, en camino con el courier (los datos están bien cargados: no se los vuelvas a pedir)"
       : abierto.estado_confirmacion === "pendiente" ? "PENDIENTE DE CONFIRMAR" : "confirmado, sin despachar";
-    return `[pedido ${abierto.nombre ?? ""} de la tienda, ${estado}: ${prods || "productos sin detalle"}, total Gs ${r.total_price ?? "?"}, ` +
+    // 13-10: entrega programada → el vendedor sabe el día pedido y no promete otro.
+    const prog = leerEntregaProgramada(r);
+    const programada = prog ? `, ENTREGA PROGRAMADA ${textoEntregaProgramada(prog)} (no prometas otro día; si pide cambiarla, programar_entrega)` : "";
+    return `[pedido ${abierto.nombre ?? ""} de la tienda, ${estado}${programada}: ${prods || "productos sin detalle"}, total Gs ${r.total_price ?? "?"}, ` +
       `dirección "${dir || "sin dirección"}", ciudad ${a.city ?? "?"}. Si el cliente corrige o agrega un dato de la dirección, ` +
       `llamá actualizar_direccion; si está pendiente y pregunta algo (precio, día de entrega, dirección), respondé y volvé a pedir que confirme respondiendo "sí" en 1 línea. No le preguntes qué producto quiere.]\n${texto}`;
   } catch {
     return texto;
   }
+}
+
+/** 13-10: días hacia atrás en que se busca un pedido con intento de entrega fallido para darle contexto al vendedor. */
+export const DIAS_PEDIDO_EN_REINTENTO = 30;
+
+/** 13-10: el courier fue y no pudo entregar (se reintenta siempre). */
+export const enReintento = (p: Pedido) => ["INTENTO_FALLIDO", "NO_ENTREGADO_RESCATABLE"].includes(String(p.estado_envio ?? "").toUpperCase());
+
+/**
+ * 13-10: contexto para el vendedor cuando el cliente responde al aviso de reintento (voltra_reintento_entrega_v2) con
+ * un día, un horario o una dirección: que coordine (regla COORDINAR UNA ENTREGA), lo anote con actualizar_direccion
+ * (día, horario y dónde recibe van en la referencia) y no ofrezca cancelar ni prometa una hora.
+ */
+export function textoPedidoEnReintento(p: Pedido): string {
+  const r = p.raw ?? {};
+  const a = (r.shipping_address ?? {}) as Record<string, unknown>;
+  const items = (Array.isArray(r.line_items) ? r.line_items : []) as Array<Record<string, unknown>>;
+  const prods = items.map((i) => `${i.quantity ?? 1} ${i.title ?? i.name ?? ""}`.trim()).join(", ");
+  const dir = [a.address1, a.address2].filter((x) => typeof x === "string" && x.trim()).join(", ");
+  return `[pedido ${p.nombre ?? ""} de la tienda, INTENTO DE ENTREGA FALLIDO: el repartidor fue y no pudo entregar; se vuelve a intentar. ` +
+    `${prods || "productos sin detalle"}, total Gs ${r.total_price ?? "?"}, dirección "${dir || "sin dirección"}", ciudad ${a.city ?? "?"}. ` +
+    "Coordiná como dice COORDINAR UNA ENTREGA: preguntale qué día le queda bien y que confirme la dirección y una referencia. " +
+    "Cuando te diga día, horario, dirección o referencia, llamá actualizar_direccion (día, horario y dónde recibe van en referencia) " +
+    "y confirmale corto que se lo pasamos al repartidor, que lo contacta antes de salir. No prometas una hora ni ofrezcas cancelar.]";
 }
 
 export async function conMarcaDeAnuncio(
@@ -1203,7 +1310,9 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
     ? `✅ ${etiqueta} confirmado por el cliente`
     : accion === "conf_corregir"
     ? `✏️ ${etiqueta}: el cliente quiere corregir datos. El chat pasó a humano.`
-    : `❌ ${etiqueta}: el cliente canceló. Cancelalo en Shopify si corresponde.`;
+    : `❌ ${etiqueta}: el cliente canceló. Cancelalo en Shopify si corresponde.${
+      despachado(pedido) ? " Ya estaba despachado: avisale al courier que no lo entregue." : ""
+    }`;
   const botones = accion === "conf_corregir"
     ? [[{ texto: "Le escribo yo", callback: `escribo:${orderId}` }]]
     : accion === "conf_cancelar"
@@ -1278,6 +1387,196 @@ async function pedirPermisoOfertas(ctx: Ctx): Promise<string | null> {
       { id: `cons_no:${ctx.clienteId}`, titulo: "No, gracias" },
     ], opts);
   return r.ok ? null : `permiso para ofertas: ${r.error}`;
+}
+
+// ---------- 13-10: rescate antes de cancelar ----------
+// Caso real (13-10): un cliente de CDE pidió "viernes 16/10 antes de las 12", el pedido salió el martes, le llegó "ya
+// salió" y tocó el "Cancelar pedido" viejo de la confirmación, que cancelaba al toque. Ahora ningún "Cancelar" cancela
+// al primer toque: sale UNA respuesta con la oferta de programar otro día, otro horario u otra persona y dos botones:
+// "Programar otro día" (resc_prog:<id> → el chat sigue con el vendedor, que tiene programar_entrega) y "Cancelar
+// igual" (resc_cancel:<id> → la cancelación de siempre, aplicarRespuestaConfirmacion). Un segundo pedido explícito de
+// cancelar (botón o texto) dentro de las 24 h de la oferta también cancela. Pedido ya cancelado → se le dice una vez;
+// pedido entregado → nunca se cancela. El chat queda en 'ia'.
+
+/** Horas en que vale la oferta de rescate: un segundo "cancelá" en ese lapso cancela. */
+export const RESCATE_H = 24;
+
+/** Estados de envío en que el pedido ya fue entregado (nunca se cancela). */
+const ENVIO_ENTREGADO = ["ENTREGADO", "RENDIDO"];
+/** Estados de envío en que el pedido ya no está abierto (no se busca para cancelar por texto). */
+const ENVIO_CERRADO = ["ENTREGADO", "RENDIDO", "NO_ENTREGADO", "CANCELADO"];
+
+const despachado = (p: Pedido) => String((p.raw ?? {}).fulfillment_status ?? "").toLowerCase() === "fulfilled";
+const pedidoCancelado = (p: Pedido) => p.estado_confirmacion.startsWith("cancelado") || !!(p.raw ?? {}).cancelled_at;
+const pedidoEntregado = (p: Pedido) => ENVIO_ENTREGADO.includes(String(p.estado_envio ?? "").toUpperCase());
+
+/**
+ * 13-10: el mensaje entero es un pedido de cancelar el pedido ("cancelar pedido", "quiero cancelar", "cancelámelo",
+ * "anulá mi pedido", "ya no lo quiero", "cancelar igual"). Negaciones ("no lo cancelen") y mensajes largos no cuentan:
+ * esos los atiende el vendedor.
+ */
+export function esPedidoCancelar(texto: string): boolean {
+  const n = normalizarTexto(texto);
+  if (!n || n.length > 60) return false;
+  if (/\bno (lo |la |me )?(cancel|anul)/.test(n)) return false;
+  const cortesia = "(?:(?:hola|buenas|buen dia|buenas tardes|buenas noches|por favor|porfa|disculpa|perdon)\\s+)*";
+  const fin = "(?:\\s+(?:por favor|porfa|gracias|nomas|igual|ya))*";
+  const verbo = "(?:quiero |quisiera |necesito |deseo |me gustaria |podes |podrias |pueden |puede |vamos a )?" +
+    "(?:cancelar|cancela|cancelen|cancelalo|cancelala|cancelame|cancelamelo|anular|anula|anulen|anulalo|cancelarlo|anularlo)";
+  const objeto = "(?:\\s+(?:el|mi|mis|ese|este|los|la|nomas))?(?:\\s+(?:pedido|pedidos|compra|orden|envio))?";
+  const re = [
+    new RegExp(`^${cortesia}${verbo}${objeto}${fin}$`),
+    new RegExp(`^${cortesia}(?:ya )?no (?:lo |la )?quiero(?: mas)?(?: (?:el|mi) (?:pedido|producto))?${fin}$`),
+  ];
+  return re.some((r) => r.test(n));
+}
+
+/** 13-10: ¿la oferta de rescate de este pedido salió en esta conversación en las últimas RESCATE_H horas? */
+async function rescateVigente(ctx: Ctx, orderId: string): Promise<boolean> {
+  if (!ctx.deps.ofertaRescateDesde) return false;
+  const desde = new Date(ctx.deps.ahora().getTime() - RESCATE_H * 3_600_000).toISOString();
+  return await ctx.deps.ofertaRescateDesde(ctx.conv.id, orderId, desde).catch((e) => {
+    console.error("rescate: no pude ver si ya se ofreció:", e instanceof Error ? e.message : e);
+    return false; // ante la duda, otra oferta (nunca cancelar sin estar seguros)
+  });
+}
+
+const esDueño = (p: Pedido, ctx: Ctx) =>
+  (p.cliente_id && p.cliente_id === ctx.clienteId) || (p.telefono && ctx.telefono && p.telefono === ctx.telefono) ||
+  (!p.cliente_id && !p.telefono);
+
+/**
+ * 13-10: respuesta única para un pedido que no se puede cancelar ni programar (ya cancelado o entregado). Un pedido
+ * ya cancelado se dice una sola vez: si nuestro último mensaje ya era ese, no se repite. true si respondió (o calló a
+ * propósito); false si el pedido sigue abierto.
+ */
+async function responderSiCerrado(ctx: Ctx, pedido: Pedido, etiqueta: string): Promise<boolean> {
+  const clave = pedidoEntregado(pedido) ? "ya_entregado" : pedidoCancelado(pedido) ? "ya_cancelado" : null;
+  if (!clave) return false;
+  const { deps } = ctx;
+  const texto = renderizar(await textoBoton(deps, clave), { nombre: primerNombre(nombreDePedido(pedido), ctx.nombreWa), pedido: etiqueta });
+  const ultimo = deps.ultimoTextoNuestro ? await deps.ultimoTextoNuestro(ctx.conv.id).catch(() => null) : null;
+  if (ultimo?.trim() === texto.trim()) return true;
+  await deps.marcarLeidoYEscribiendo(ctx.m.id).catch(() => {});
+  const r = await deps.enviarTexto(ctx.destino, texto, { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
+  if (!r.ok) console.error(`respuesta ${clave} (${ctx.clienteId}): ${r.error}`);
+  return true;
+}
+
+/**
+ * 13-10: el cliente pidió cancelar (botón conf_cancelar, "no" a la confirmación o texto "cancelar pedido"). Con la
+ * oferta de rescate vigente para ese pedido (segundo pedido explícito) → cancela; si no → oferta de rescate. Exactamente
+ * una respuesta al cliente. El vendedor no recibe este mensaje.
+ */
+export async function pedirCancelacion(ctx: Ctx, orderId: string, pedidoYa?: Pedido): Promise<void> {
+  const { deps } = ctx;
+  const pedido = pedidoYa ?? await deps.buscarPedido(orderId);
+  if (!pedido) {
+    await deps.avisar(`Botón conf_cancelar de un pedido que no está en la base (${orderId}). Revisalo.`);
+    return;
+  }
+  const etiqueta = pedido.nombre ?? `#${orderId}`;
+  if (!esDueño(pedido, ctx)) {
+    await deps.avisar(`Botón conf_cancelar en ${etiqueta} tocado por otro cliente (${ctx.telefono ?? ctx.destino}). No hice nada.`);
+    return;
+  }
+  if (await responderSiCerrado(ctx, pedido, etiqueta)) return;
+  if (await rescateVigente(ctx, orderId)) return cancelarPedidoCliente(ctx, orderId, pedido);
+  await ofrecerRescate(ctx, orderId, pedido, etiqueta);
+}
+
+async function ofrecerRescate(ctx: Ctx, orderId: string, pedido: Pedido, etiqueta: string): Promise<void> {
+  const { deps } = ctx;
+  if (ctx.conv.estado !== "ia") await deps.actualizarConversacion(ctx.conv.id, { estado: "ia" });
+  await deps.marcarLeidoYEscribiendo(ctx.m.id).catch(() => {});
+  const vars = { nombre: primerNombre(nombreDePedido(pedido), ctx.nombreWa), pedido: etiqueta };
+  const r = await deps.enviarBotones(ctx.destino, renderizar(await textoBoton(deps, "rescate_cancelar"), vars), [
+    { id: `resc_prog:${orderId}`, titulo: (await textoBoton(deps, "rescate_boton_programar")).slice(0, 20) },
+    { id: `resc_cancel:${orderId}`, titulo: (await textoBoton(deps, "rescate_boton_cancelar")).slice(0, 20) },
+  ], { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
+  if (!r.ok) {
+    // Sin la oferta no se cancela nada: Enrique decide.
+    await deps.avisar(`⚠️ ${etiqueta}: el cliente quiere cancelar y no le pude mandar la oferta de programar otro día (${r.error}). No cancelé nada.`, [
+      [{ texto: "Le escribo yo", callback: `escribo:${orderId}` }, { texto: "Cancelar pedido", callback: `cancelar:${orderId}` }],
+    ]);
+    return;
+  }
+  // Ya despachado: el courier puede llegar mientras tanto; Enrique se entera sin tener que hacer nada todavía.
+  if (despachado(pedido)) {
+    await deps.avisar(`⚠️ ${etiqueta} (ya despachado): el cliente quiere cancelar. Le ofrecí programar otro día; si cancela igual te aviso.`);
+  }
+}
+
+/** 13-10: cancelación pedida por el cliente (la de siempre: estado cancelado_cliente, tag, envíos, respuesta y Telegram). */
+async function cancelarPedidoCliente(ctx: Ctx, orderId: string, pedido: Pedido): Promise<void> {
+  await aplicarRespuestaConfirmacion(ctx, "conf_cancelar", orderId, pedido);
+}
+
+/**
+ * 13-10: "Programar otro día" → el chat sigue con el vendedor con la marca "[programar entrega pedido #X]" (programa con
+ * programar_entrega). "Cancelar igual" → cancela. Pedido ya cancelado o entregado → se le dice (una vez).
+ */
+export async function aplicarBotonRescate(ctx: Ctx, accion: AccionRescate, orderId: string): Promise<void> {
+  const { deps } = ctx;
+  const pedido = await deps.buscarPedido(orderId).catch(() => null);
+  if (!pedido) {
+    await deps.avisar(`Botón ${accion} de un pedido que no está en la base (${orderId}). Revisalo.`);
+    return;
+  }
+  const etiqueta = pedido.nombre ?? `#${orderId}`;
+  if (!esDueño(pedido, ctx)) {
+    await deps.avisar(`Botón ${accion} en ${etiqueta} tocado por otro cliente (${ctx.telefono ?? ctx.destino}). No hice nada.`);
+    return;
+  }
+  if (await responderSiCerrado(ctx, pedido, etiqueta)) return;
+  if (accion === "resc_cancel") return cancelarPedidoCliente(ctx, orderId, pedido);
+
+  await deps.marcarLeidoYEscribiendo(ctx.m.id).catch(() => {});
+  if (ctx.conv.estado !== "ia") await deps.actualizarConversacion(ctx.conv.id, { estado: "ia" });
+  const contexto = `[programar entrega pedido ${etiqueta}] El cliente quiere otro día/horario. ` +
+    "Preguntale en 1 línea qué día y en qué horario le queda bien (o quién lo recibe) y programalo con programar_entrega " +
+    "(nunca antes de la fecha mínima); si cambia quién recibe o el lugar, actualizar_direccion.";
+  const texto = await conPedidoAbierto(deps, ctx.clienteId, ctx.telefono, contexto);
+  await deps.completarContenidoMensaje(ctx.m.id, { texto_vendedor: texto }).catch(() => {});
+  if (!deps.pasarAlVendedor) {
+    const r = await deps.enviarTexto(ctx.destino, renderizar(await textoBoton(deps, "programar_sin_vendedor"), {
+      nombre: primerNombre(nombreDePedido(pedido), ctx.nombreWa),
+      pedido: etiqueta,
+    }), { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
+    if (!r.ok) console.error(`respuesta a resc_prog (${ctx.clienteId}): ${r.error}`);
+    return;
+  }
+  await deps.pasarAlVendedor({ conversacion_id: ctx.conv.id, cliente_id: ctx.clienteId, wa_message_id: ctx.m.id, texto });
+}
+
+/**
+ * 13-10: texto que pide cancelar. (1) Oferta de rescate vigente (24 h) y el texto es un pedido de cancelar o un "no"
+ * → cancela ese pedido. (2) Chat con el vendedor ('ia') y el texto es un pedido de cancelar con UN solo pedido
+ * abierto (pendiente o confirmado, sin cancelar ni entregar) → oferta de rescate. Si no, false (sigue el camino de
+ * siempre: el vendedor).
+ */
+async function cancelacionPorTexto(ctx: Ctx, texto: string): Promise<boolean> {
+  const { deps } = ctx;
+  const cancelar = esPedidoCancelar(texto);
+  if (!cancelar && !esNoAConfirmacion(texto)) return false;
+  const ahora = deps.ahora().getTime();
+  const [pend, conf] = await Promise.all([
+    deps.pedidosPorEstado(ctx.clienteId, ctx.telefono, "pendiente", new Date(ahora - 10 * 86_400_000).toISOString()),
+    deps.pedidosPorEstado(ctx.clienteId, ctx.telefono, "confirmado", new Date(ahora - DIAS_PEDIDO_EN_REINTENTO * 86_400_000).toISOString()),
+  ]).catch((e) => {
+    console.error("cancelar por texto: no pude leer los pedidos:", e instanceof Error ? e.message : e);
+    return [[], []] as Pedido[][];
+  });
+  const abiertos = [...pend, ...conf].filter((p) => !pedidoCancelado(p) && !ENVIO_CERRADO.includes(String(p.estado_envio ?? "").toUpperCase()));
+  for (const p of abiertos) {
+    if (await rescateVigente(ctx, String(p.shopify_order_id))) {
+      await cancelarPedidoCliente(ctx, String(p.shopify_order_id), p);
+      return true;
+    }
+  }
+  if (!cancelar || ctx.conv.estado !== "ia" || abiertos.length !== 1) return false;
+  await pedirCancelacion(ctx, String(abiertos[0].shopify_order_id), abiertos[0]);
+  return true;
 }
 
 // ---------- pago anticipado con prioridad (decisión del dueño, 07-10; flujo del 12-10) ----------
@@ -1503,7 +1802,11 @@ export async function aplicarBotonPostventa(ctx: Ctx, accion: AccionBoton, id: s
     // 09-10: cliente contento → pedido de foto/video (prueba social real). Gratis: ventana abierta por el botón.
     if (r.ok && deps.marcarPerfil) {
       const t = await deps.enviarTexto(ctx.destino, renderizar(await textoBoton(deps, "pedir_testimonio"), vars), opts);
-      if (t.ok) await deps.marcarPerfil(ctx.conv.id, "pidio_testimonio_en", deps.ahora().toISOString()).catch(() => {});
+      if (t.ok) {
+        await deps.marcarPerfil(ctx.conv.id, "pidio_testimonio_en", deps.ahora().toISOString()).catch(() => {});
+        // 13-10: de qué pedido es (el testimonio se guarda con el pedido y el producto).
+        await deps.marcarPerfil(ctx.conv.id, "testimonio_pedido", id).catch(() => {});
+      }
     }
     return;
   }
@@ -1539,6 +1842,137 @@ export async function aplicarBotonPostventa(ctx: Ctx, accion: AccionBoton, id: s
   if (accion === "ne_reintentar" && pedido) {
     const d = datosCourierDesdeRaw(etiqueta, pedido.raw ?? null, pedido.telefono ?? ctx.telefono);
     await deps.avisar(avisoParaCourier(d, "Volver a intentar la entrega (el cliente lo pidió). Coordinar día, hora y lugar con el cliente.", pedido.courier)).catch(() => {});
+  }
+}
+
+// ---------- 13-10: testimonios después de la entrega ----------
+// "Todo bien" → se pide foto, video o un comentario corto (7 días). Lo que llega se guarda en `testimonios` y se
+// pide permiso para mostrarlo sin nombre ni número (tst_si / tst_no). Nunca se publica nada solo. A Enrique le
+// llega UN aviso cuando hay 5 autorizados, y otro cada 5 más (hitos guardados en testimonios_hitos).
+
+/** Días que espera el pedido de testimonio. */
+export const DIAS_TESTIMONIO = 7;
+/** Cada cuántos testimonios autorizados se avisa a Enrique. */
+export const PASO_HITO_TESTIMONIOS = 5;
+
+/**
+ * Comentario corto que sirve de testimonio: una opinión (3+ palabras, sin preguntas, links ni números largos).
+ * Un "no", "después", un reclamo o una pregunta siguen al vendedor como siempre.
+ */
+export function esComentarioTestimonio(texto: string): boolean {
+  const t = String(texto ?? "").trim();
+  if (t.length < 12 || t.length > 600) return false;
+  if (/[?¿]/.test(t) || /https?:\/\/|www\.|\d{6,}/i.test(t)) return false;
+  const n = normalizarTexto(t);
+  if (n.split(" ").length < 3) return false;
+  if (/^(no|nop|ahora no|despues|luego|mas tarde|otro dia|todavia)\b/.test(n)) return false;
+  if (/\b(cancel\w*|devol\w*|reclam\w*|roto|rota|falta\w*|no (me )?(llego|funciona|sirve|sirvio|anda|gusto)|quiero (otro|otra|mas|comprar|pedir)|precio|cuanto)\b/.test(n)) {
+    return false;
+  }
+  return true;
+}
+
+/** Pedido de testimonio vigente en la conversación (≤ 7 días), o null. */
+async function pedidoDeTestimonio(ctx: Ctx): Promise<{ orderId: string | null } | null> {
+  const p = await ctx.deps.perfilConversacion!(ctx.conv.id).catch(() => null);
+  const en = typeof p?.pidio_testimonio_en === "string" ? Date.parse(p.pidio_testimonio_en) : NaN;
+  if (!Number.isFinite(en) || ctx.deps.ahora().getTime() - en >= DIAS_TESTIMONIO * 86_400_000) return null;
+  const id = p?.testimonio_pedido;
+  return { orderId: typeof id === "string" && /^\d+$/.test(id) ? id : typeof id === "number" ? String(id) : null };
+}
+
+/** Productos del pedido para la columna `producto` ("1 Tiras nasales Gudair"). */
+export function productoDePedido(p: Pedido | null): string | null {
+  const items = (Array.isArray(p?.raw?.line_items) ? p!.raw!.line_items : []) as Array<Record<string, unknown>>;
+  const t = items.map((i) => `${i.quantity ?? 1} ${i.title ?? i.name ?? ""}`.trim()).filter((x) => /\D/.test(x)).join(", ");
+  return t || null;
+}
+
+const QUE_TESTIMONIO: Record<TestimonioNuevo["tipo"], string> = { foto: "tu foto", video: "tu video", texto: "tu comentario" };
+
+async function aplicarTestimonio(
+  ctx: Ctx,
+  pt: { orderId: string | null },
+  tipo: TestimonioNuevo["tipo"],
+  ruta: string | null,
+  texto: string | null,
+): Promise<void> {
+  const { deps } = ctx;
+  const opts = { clienteId: ctx.clienteId, conversacionId: ctx.conv.id };
+  await deps.marcarPerfil!(ctx.conv.id, "pidio_testimonio_en", null).catch(() => {});
+  await deps.marcarPerfil!(ctx.conv.id, "testimonio_pedido", null).catch(() => {});
+  const pedido = pt.orderId ? await deps.buscarPedido(pt.orderId).catch(() => null) : null;
+  const nombre = primerNombre(pedido ? nombreDePedido(pedido) : null, ctx.nombreWa);
+
+  // Sin la tabla (deps sin guardarTestimonio): como el 09-10, gracias + aviso a Enrique para que no se pierda.
+  if (!deps.guardarTestimonio) {
+    await deps.enviarTexto(ctx.destino, renderizar(await textoBoton(deps, "gracias_testimonio"), { nombre, pedido: "" }), opts);
+    await deps.avisar(`📸 <b>${escaparHtml(ctx.nombreWa ?? "Un cliente")}</b> mandó ${tipo === "video" ? "un video" : tipo === "foto" ? "una foto" : "un comentario"} usando el producto (testimonio). Miralo en la Bandeja de Voltra OS.`);
+    return;
+  }
+  let guardado: { id: string } | null;
+  try {
+    guardado = await deps.guardarTestimonio({
+      cliente_id: ctx.clienteId,
+      shopify_order_id: pedido ? Number(pedido.shopify_order_id) : pt.orderId ? Number(pt.orderId) : null,
+      tipo,
+      ruta_storage: ruta,
+      texto,
+      producto: productoDePedido(pedido),
+      wa_message_id: ctx.m.id,
+    });
+  } catch (e) {
+    // No se pudo guardar: el cliente igual recibe el gracias; no se le pide un permiso que no quedaría registrado.
+    console.error("guardar testimonio:", e instanceof Error ? e.message : e);
+    await deps.enviarTexto(ctx.destino, renderizar(await textoBoton(deps, "gracias_testimonio"), { nombre, pedido: "" }), opts);
+    return;
+  }
+  if (!guardado) return; // ya estaba (mismo mensaje)
+  const r = await deps.enviarBotones(
+    ctx.destino,
+    renderizar(await textoBoton(deps, "permiso_testimonio"), { nombre, pedido: "", que: QUE_TESTIMONIO[tipo] }),
+    [
+      { id: `tst_si:${guardado.id}`, titulo: await textoBoton(deps, "permiso_testimonio_si") },
+      { id: `tst_no:${guardado.id}`, titulo: await textoBoton(deps, "permiso_testimonio_no") },
+    ],
+    opts,
+  );
+  if (!r.ok) console.error(`permiso de testimonio a ${ctx.clienteId}: ${r.error}`);
+}
+
+/** Botón del permiso: tst_si:<uuid> / tst_no:<uuid>. */
+export function leerBotonTestimonio(m: MensajeMeta): { autorizado: boolean; id: string } | null {
+  const r = /^tst_(si|no):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(idDeBoton(m));
+  return r ? { autorizado: r[1].toLowerCase() === "si", id: r[2].toLowerCase() } : null;
+}
+
+/** Hito alcanzado con `n` autorizados (5, 10, 15…), o null si todavía no llega a 5. */
+export function hitoTestimonios(n: number, paso = PASO_HITO_TESTIMONIOS): number | null {
+  const h = Math.floor(n / paso) * paso;
+  return h >= paso ? h : null;
+}
+
+export async function aplicarPermisoTestimonio(ctx: Ctx, autorizado: boolean, id: string): Promise<void> {
+  const { deps } = ctx;
+  await deps.marcarLeidoYEscribiendo(ctx.m.id).catch(() => {});
+  // Solo cambia si el testimonio es de este cliente y todavía no respondió (un segundo toque no lo da vuelta).
+  const cambio = deps.responderPermisoTestimonio
+    ? await deps.responderPermisoTestimonio(id, ctx.clienteId, autorizado)
+    : false;
+  const nombre = primerNombre(null, ctx.nombreWa);
+  const r = await deps.enviarTexto(ctx.destino, renderizar(await textoBoton(deps, autorizado ? "tst_si" : "tst_no"), { nombre, pedido: "" }), {
+    clienteId: ctx.clienteId,
+    conversacionId: ctx.conv.id,
+  });
+  if (!r.ok) console.error(`respuesta al permiso de testimonio (${ctx.clienteId}): ${r.error}`);
+  if (!autorizado || !cambio || !deps.contarTestimoniosAutorizados || !deps.registrarHitoTestimonios) return;
+  const n = await deps.contarTestimoniosAutorizados();
+  const hito = hitoTestimonios(n);
+  if (hito && await deps.registrarHitoTestimonios(hito)) {
+    await deps.avisar(
+      `⭐ Ya tenés <b>${hito} testimonios</b> de clientes con permiso para mostrarlos (sin nombre ni número). ` +
+        "Están en la tabla testimonios (fotos y videos en Storage wa-media). No se publica nada solo: elegí vos cuáles usar.",
+    );
   }
 }
 

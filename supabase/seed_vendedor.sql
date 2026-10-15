@@ -170,7 +170,7 @@ insert into public.config_wa (clave, valor) values
            "objecion": "¿Hay talles?",
            "respuesta": "Es talla única"
          }
-       ],
+       , {"objecion": "¿Cuánto dura una bolsa?", "respuesta": "Trae 30 tiras: usando una por noche te dura alrededor de un mes"}, {"objecion": "¿Dónde se pega?", "respuesta": "Arriba de las aletas de la nariz, con la nariz limpia y seca"}],
        "consejo_uso": "Piel limpia y seca, sin crema ni aceite; presioná unos segundos para que pegue bien",
        "precios_referencia": {
          "x1": 79000,
@@ -204,7 +204,7 @@ insert into public.config_wa (clave, valor) values
            "objecion": "¿Se despega de noche?",
            "respuesta": "Con los labios limpios y secos, sin bálsamo, queda firme"
          }
-       ],
+       , {"objecion": "¿Me tapa? ¿Puedo respirar?", "respuesta": "No te deja sin aire: respirás por la nariz y se despega fácil cuando querés"}, {"objecion": "¿Cuántos trae?", "respuesta": "30 parches, uno por noche"}, {"objecion": "¿Tiene látex?", "respuesta": "No, es sin látex"}],
        "consejo_uso": "Labios limpios y secos, sin bálsamo ni crema; con barba larga sobre el labio pega menos",
        "precios_referencia": {
          "x1": 79000,
@@ -234,7 +234,7 @@ insert into public.config_wa (clave, valor) values
            "objecion": "¿Funciona de verdad?",
            "respuesta": "Te mando el video real y pagás recién cuando te llega"
          }
-       ],
+       , {"objecion": "¿Qué trae?", "respuesta": "30 tiras nasales y 30 parches bucales"}],
        "consejo_uso": "Piel y labios limpios y secos, sin crema ni bálsamo",
        "precios_referencia": {
          "pack": 120000
@@ -262,7 +262,7 @@ insert into public.config_wa (clave, valor) values
            "objecion": "Está caro",
            "respuesta": "Lo comprás una vez: es de acero y dura años"
          }
-       ],
+       , {"objecion": "¿Se lava?", "respuesta": "Sí: después de usarlo lo enjuagás con agua y listo"}, {"objecion": "¿Cada cuánto se usa?", "respuesta": "Todas las mañanas, 30 segundos"}],
        "consejo_uso": "Pasalo suave, de atrás hacia adelante, sin apretar; enjuagalo después de cada pasada",
        "precios_referencia": {
          "x1": 79000,
@@ -292,7 +292,7 @@ insert into public.config_wa (clave, valor) values
            "objecion": "¿Es de plástico común?",
            "respuesta": "Es libre de BPA y PVC"
          }
-       ],
+       , {"objecion": "¿Se puede enrollar?", "respuesta": "Sí: cuando está vacía la enrollás y entra en cualquier bolsillo"}],
        "consejo_uso": "Lavala con agua y jabón y dejala secar abierta antes de enrollarla",
        "precios_referencia": {
          "x1": 79000,
@@ -322,7 +322,7 @@ insert into public.config_wa (clave, valor) values
            "objecion": "Me duele la mandíbula",
            "respuesta": "Eso te conviene consultarlo con tu médico antes de usarlo"
          }
-       ],
+       , {"objecion": "¿Cuántos niveles tiene?", "respuesta": "3 niveles de resistencia: empezás suave y subís a tu ritmo"}, {"objecion": "¿Cuánto tiempo por día?", "respuesta": "15 minutos al día, mientras trabajás, manejás o mirás una serie"}],
        "consejo_uso": "Empezá con el nivel suave y pocos minutos; lavalo con agua y jabón",
        "precios_referencia": {
          "x1": 79000,

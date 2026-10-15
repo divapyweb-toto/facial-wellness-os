@@ -2,7 +2,26 @@
 // Todo el I/O (base de datos, reloj, normalizador de teléfono) entra por `Deps`,
 // así los tests no tocan Supabase ni Shopify.
 
-import { alas8HabilDespues, diaEntrega, horaLocal, inicioDespacho, plazoParaEnDesdeHoy, plazoPorCiudad, rangoEntrega, visperaEntrega } from "../_shared/plazo_zona.ts";
+import {
+  alas8DeFecha,
+  alas8HabilDespues,
+  diaEntrega,
+  type EntregaProgramada,
+  etiquetaDia,
+  fechaLocal,
+  habilAnterior,
+  horaLocal,
+  inicioDespacho,
+  leerEntregaProgramada,
+  plazoParaEnDesdeHoy,
+  plazoPorCiudad,
+  rangoEntrega,
+  textoEntregaProgramada,
+  textoFecha,
+  visperaEntrega,
+} from "../_shared/plazo_zona.ts";
+import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
+import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { verificarHmacShopify } from "../_shared/shopify.ts";
 import { claveOfertaPrioridad, motivoSinOfertaPrioridad, pedidoPagado, PLANTILLA_PAGO_PRIORIDAD } from "../_shared/pago_anticipado.ts";
 import { CONFIG_DEFECTO, envioTerminal, PLANTILLA_ENTREGA_MANANA } from "../procesar-envios/procesar.ts";
@@ -169,6 +188,12 @@ export interface Deps {
   courierDePedido?(nombrePedido: string | null): Promise<string | null>;
   /** 12-10: config_wa.plantillas_activas ya parseada. Opcional: sin esto (o si falla) van las plantillas de siempre. */
   leerPlantillasActivas?(): Promise<PlantillasActivas>;
+  /**
+   * 13-10: candado de un aviso que sale UNA vez (eventos_crudos, fuente 'shopify', id `clave`). true = es la primera
+   * vez (mandalo); false = ya salió. Opcional: sin esto, el aviso de entrega programada a Enrique no sale (cada
+   * orders/updated de un pedido preparado lo repetiría).
+   */
+  reservarAvisoUnaVez?(clave: string): Promise<boolean>;
 }
 
 export type ResultadoProceso = {
@@ -393,10 +418,24 @@ export function estaPreparado(raw: unknown): boolean {
 
 const NOMBRE_COURIER: Record<string, string> = { lucero: "Lucero del Este", pap: "Punto a Punto" };
 
+/**
+ * 13-10: entrega programada vigente del pedido (atributo entrega_programada de Shopify) con fecha igual o posterior
+ * al día de despacho; una fecha ya pasada (atributo viejo) no cuenta. null si no hay.
+ */
+export function programadaVigente(ped: PedidoNormalizado, ahora: Date): EntregaProgramada | null {
+  const p = leerEntregaProgramada(ped.raw);
+  return p && p.fecha >= fechaLocal(inicioDespacho(ahora)) ? p : null;
+}
+
+/** 13-10: {plazo} del "ya salió" de un pedido programado: "Te llega en la fecha que pediste: el viernes 16/10, antes de las 12." */
+export const plazoProgramado = (p: EntregaProgramada) => `la fecha que pediste: ${textoEntregaProgramada(p)}`;
+
 export function armarAvisoPreparado(ped: PedidoNormalizado, clienteId: string, courier: string | null, ahora: Date): FilaEnvio {
   const c = courier?.toLowerCase() ?? "";
+  const prog = programadaVigente(ped, ahora);
   // 10-10: días reales desde el despacho (sin sábados ni domingos), igual que lo que dice el vendedor.
-  const plazo = plazoParaEnDesdeHoy(ped.ciudad, inicioDespacho(ahora), courier);
+  // 13-10: pedido con entrega programada → el día que pidió el cliente (nunca el plazo genérico "el día o al siguiente").
+  const plazo = prog ? plazoProgramado(prog) : plazoParaEnDesdeHoy(ped.ciudad, inicioDespacho(ahora), courier);
   return {
     cliente_id: clienteId,
     shopify_order_id: ped.shopifyOrderId,
@@ -476,6 +515,11 @@ export function armarRecordatorioEntrega(
   // "mañana / hoy te llega").
   const metro = (plazo === "24 a 48 h" || plazo === "24 a 72 h") && rangoEntrega(ped.ciudad, courier).rango[0] === 1;
   const nombre = conMayuscula(ped.nombreCliente?.trim().split(/\s+/)[0] ?? null);
+  // 13-10: entrega programada para un día posterior al despacho → los avisos van contra ESE día.
+  const prog = programadaVigente(ped, ahoraReal);
+  if (prog && prog.fecha > fechaLocal(ahora)) {
+    return armarRecordatorioProgramado(ped, clienteId, ahoraReal, prog, { metro: plazo === "24 a 48 h" || plazo === "24 a 72 h", cde, nombre }, activas);
+  }
   if (metro && plantillaActiva(activas, PLANTILLA_ENTREGA_MANANA) && !estaPagado(ped)) {
     const v = visperaEntrega(ahoraReal);
     if (horaLocal(v.enviar) < CONFIG_DEFECTO.horarioAvisosEnvio.hasta) {
@@ -501,6 +545,56 @@ export function armarRecordatorioEntrega(
     enviar_desde: enviar.toISOString(),
     clave_unica: `courier:${ped.shopifyOrderId}:ENTREGA_HOY`,
   };
+}
+
+/**
+ * 13-10: recordatorio de un pedido con entrega programada (fecha posterior al día de despacho). Nunca dice "hoy" ni
+ * "mañana" un día que no corresponde:
+ * - Asunción y Central con voltra_entrega_manana activa y sin pagar: víspera a las 18:00 del día hábil anterior a la
+ *   fecha ("mañana viernes 16/10"; si la fecha es lunes, el viernes "el lunes 19/10"), con fecha_entrega para que
+ *   procesar-envios no lo mande tarde. Si esa hora ya pasó, sigue el de la mañana.
+ * - Si no: 8:00 de Asunción del día programado. CDE y alrededores, Asunción y Central → "hoy te llega"
+ *   (voltra_entrega_hoy); interior → "ya está por llegar" (voltra_entrega_proxima: el día exacto depende del viaje).
+ * Misma clave que el recordatorio de siempre (courier:<id>:ENTREGA_HOY). Si el cliente cambia la fecha después,
+ * procesar-envios lo corre o lo cancela al mandarlo (guardiaEntregaProgramada).
+ */
+export function armarRecordatorioProgramado(
+  ped: PedidoNormalizado,
+  clienteId: string,
+  ahoraReal: Date,
+  prog: EntregaProgramada,
+  z: { metro: boolean; cde: boolean; nombre: string | null },
+  activas?: PlantillasActivas,
+): FilaEnvio {
+  const base = { cliente_id: clienteId, shopify_order_id: ped.shopifyOrderId, categoria: "utilidad" as const, clave_unica: `courier:${ped.shopifyOrderId}:ENTREGA_HOY` };
+  if (z.metro && plantillaActiva(activas, PLANTILLA_ENTREGA_MANANA) && !estaPagado(ped)) {
+    const vispera = habilAnterior(prog.fecha);
+    const enviar = new Date(`${vispera}T21:00:00Z`); // 18:00 de Asunción
+    if (enviar.getTime() > ahoraReal.getTime() && vispera >= fechaLocal(inicioDespacho(ahoraReal))) {
+      return {
+        ...base,
+        plantilla: PLANTILLA_ENTREGA_MANANA,
+        variables: { nombre: z.nombre, dia_entrega: etiquetaDia(prog.fecha, vispera), total: formatoGs(ped.total), fecha_entrega: prog.fecha },
+        enviar_desde: enviar.toISOString(),
+      };
+    }
+  }
+  return {
+    ...base,
+    plantilla: z.metro || z.cde ? "voltra_entrega_hoy" : "voltra_entrega_proxima",
+    // fecha_entrega: procesar-envios no lo manda otro día que no sea ese ("hoy te llega" sería falso).
+    variables: { nombre: z.nombre, total: formatoGs(ped.total), fecha_entrega: prog.fecha },
+    enviar_desde: alas8DeFecha(prog.fecha).toISOString(),
+  };
+}
+
+/** 13-10: aviso a Enrique con el texto para el courier de un pedido programado (sale una vez por pedido y fecha). */
+export function textoAvisoProgramado(ped: PedidoNormalizado, prog: EntregaProgramada, courier: string | null, telefono: string | null): string {
+  const etiqueta = ped.nombre ?? `#${ped.shopifyOrderId}`;
+  const nota = `Entregar el ${textoFecha(prog.fecha)}${prog.franja ? ` (${prog.franja})` : ""}. No entregar antes.`;
+  const d = datosCourierDesdeRaw(etiqueta, ped.raw as Record<string, unknown> | null, telefono);
+  return `📅 <b>${escaparHtml(etiqueta)}</b>: entrega programada para el ${escaparHtml(textoFecha(prog.fecha))}` +
+    `${prog.franja ? ` (${escaparHtml(prog.franja)})` : ""}. Sale hoy como siempre; pasale esto al courier:\n` + avisoParaCourier(d, nota, courier);
 }
 
 /**
@@ -594,6 +688,19 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
     const recordatorio = armarRecordatorioEntrega(ped, clienteId, deps.ahora(), await plantillasActivas(deps), courier);
     await deps.programarEnvios([armarAvisoPreparado(ped, clienteId, courier, deps.ahora()), ...(recordatorio ? [recordatorio] : [])]);
     if (deps.dispararEnvios) await deps.dispararEnvios().catch((e) => console.warn("dispararEnvios:", e instanceof Error ? e.message : e));
+    // 13-10: entrega programada → sale igual hoy (decisión del dueño), y a Enrique le llega UNA vez el texto para el
+    // courier con "Entregar el viernes 16/10 (antes de las 12). No entregar antes." Si cambia la fecha, otro aviso.
+    const prog = programadaVigente(ped, deps.ahora());
+    if (prog && deps.avisar) {
+      if (!deps.reservarAvisoUnaVez) console.warn(`entrega programada ${ped.nombre}: sin candado, no aviso a Enrique`);
+      else {
+        const nuevo = await deps.reservarAvisoUnaVez(`entrega_programada:${ped.shopifyOrderId}:${prog.fecha}`).catch((e) => {
+          console.warn("candado entrega programada:", e instanceof Error ? e.message : e);
+          return false;
+        });
+        if (nuevo) await deps.avisar(textoAvisoProgramado(ped, prog, courier, telefono))?.catch?.((e: unknown) => console.warn("aviso entrega programada:", e));
+      }
+    }
   }
 
   // 12-10: pedido del bot de WhatsApp recién creado (ya confirmado) → oferta de pago con prioridad, una sola vez.

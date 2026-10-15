@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { accionesPara, direccionUtilizable, type PedidoAbierto } from "./logica.ts";
+import { accionesPara, ciudadPendiente, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, type PedidoAbierto } from "./logica.ts";
 
 const AHORA = new Date("2026-10-12T18:00:00Z");
 const base = (o: Partial<PedidoAbierto> = {}): PedidoAbierto => ({
@@ -13,6 +13,33 @@ Deno.test("dirección: calle o pin GPS + ciudad (casos reales del 12-10, datos i
   assertEquals(direccionUtilizable(base({ direccion: "Mariscal López, zona norte" })), true);
   assertEquals(direccionUtilizable(base({ direccion: "Pin de ubicación" })), false);
   assertEquals(direccionUtilizable(base({ ciudad: "-" })), false);
+});
+
+// Nota tipo #1055 (datos inventados): el vendedor dejó todo en la nota y Shopify descartó la dirección.
+const NOTA_BOT = "Pedido creado por el vendedor con IA (WhatsApp).\nNombre: ana\nCelular: +595981000000\nCiudad: Caacupé\n" +
+  "Calle: Calle Falsa\nMapa: https://maps.google.com/?q=-25.3000000,-57.2000000\nReferencia: Frente a la plaza";
+
+Deno.test("15-10: con pin basta, aunque falte la ciudad", () => {
+  assertEquals(direccionUtilizable(base({ direccion: "", ciudad: "", notas: "Mapa: https://maps.google.com/?q=-25.3000000,-57.2000000" })), true);
+  assertEquals(direccionUtilizable(base({ direccion: "Seivo", ciudad: "" })), false);
+});
+
+Deno.test("15-10: dirección desde la nota del vendedor; apellido nunca vacío", () => {
+  assertEquals(direccionDesdeNota(NOTA_BOT), {
+    firstName: "ana", lastName: "-", address1: "Calle Falsa",
+    address2: "Frente a la plaza · Mapa: https://maps.google.com/?q=-25.3000000,-57.2000000", city: "Caacupé", phone: "+595981000000",
+  });
+  assertEquals(direccionDesdeNota("Nombre: Ana Pérez Gómez\nCiudad: Luque\nMapa: https://maps.google.com/?q=-25.1,-57.4")?.lastName, "Pérez Gómez");
+  assertEquals(direccionDesdeNota("Nombre: Ana\nCiudad: Luque\nMapa: x")?.address1, "Ver mapa");
+  assertEquals(direccionDesdeNota("Nombre: Ana\nCalle: Mcal López"), null); // sin ciudad
+  assertEquals(direccionDesdeNota("Nombre: Ana\nCiudad: Luque"), null); // sin calle ni mapa
+});
+
+Deno.test("15-10: pedido sin dirección en Shopify y con nota → completar (y sacar FALTAN_DATOS si lo puso el sistema)", () => {
+  const p = base({ direccion: "", ciudad: "", notas: NOTA_BOT });
+  assertEquals(accionesPara(p, AHORA, false), ["completar_direccion"]);
+  assertEquals(accionesPara({ ...p, tags: ["CONFIRMADO", "FALTAN_DATOS"] }, AHORA, true), ["completar_direccion", "quitar_faltan_datos"]);
+  assertEquals(accionesPara(base({ direccion: "", ciudad: "", notas: "" }), AHORA, false), ["agregar_faltan_datos"]);
 });
 
 Deno.test("confirmado sin etiqueta → agregar CONFIRMADO; con etiqueta → nada", () => {
@@ -37,4 +64,21 @@ Deno.test("faltan datos: se pone si no hay calle ni pin; se saca solo si la puso
   assertEquals(accionesPara(base({ tags: ["CONFIRMADO", "FALTAN_DATOS"] }), AHORA, true), ["quitar_faltan_datos"]);
   assertEquals(accionesPara(base({ tags: ["CONFIRMADO", "FALTAN_DATOS"] }), AHORA, false), []); // puesta a mano: no se toca
   assertEquals(accionesPara(base({ direccion: "Retira", tags: ["CONFIRMADO", "RETIRO_EN_CASA"] }), AHORA, false), []);
+});
+
+Deno.test("15-10 (#1056): ciudad 'Ver mapa' con pin → buscar la ciudad del pin; con ciudad real, nada", () => {
+  const p = base({ direccion: "Pin de ubicación, Mapa: https://maps.google.com/?q=-24.1000000,-56.5000000", ciudad: "Ver mapa" });
+  assertEquals(accionesPara(p, AHORA, false), ["ciudad_desde_pin"]);
+  assertEquals(coordenadasPin(p), { lat: -24.1, lng: -56.5 });
+  assertEquals(accionesPara({ ...p, ciudad: "Luque" }, AHORA, false), []);
+  assertEquals([ciudadPendiente("ver mapa"), ciudadPendiente(""), ciudadPendiente("Luque")], [true, true, false]);
+});
+
+Deno.test("15-10 (#1056): ciudad sin cobertura contra entrega → avisar una vez; con cobertura, pagado o ya avisado, nada", () => {
+  assertEquals([sinCobertura("General Isidoro Resquín"), sinCobertura("Luque"), sinCobertura("Choré")], [true, false, false]);
+  const p = base({ direccion: "Pin de ubicación, Mapa: https://maps.google.com/?q=-24.1000000,-56.5000000", ciudad: "General Isidoro Resquín" });
+  assertEquals(accionesPara(p, AHORA, false), ["avisar_sin_cobertura"]);
+  for (const t of ["PAGADO", "SIN_COBERTURA", "RETIRO_EN_CASA"]) assertEquals(accionesPara({ ...p, tags: ["CONFIRMADO", t] }, AHORA, false), [], t);
+  assertEquals(accionesPara({ ...p, estado: "pendiente", tags: [] }, AHORA, false), []);
+  assertEquals(accionesPara(base(), AHORA, false), []); // Asunción: cubierta
 });

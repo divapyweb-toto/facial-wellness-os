@@ -163,6 +163,9 @@ export const HERRAMIENTAS: Herramienta[] = [
         direccion: { type: "string", description: "Calle, número o barrio" },
         referencia: { type: "string", description: "Referencia para el courier (opcional)" },
         ubicacion: { type: "string", description: "Pin de ubicación si lo mandó, lat,long (opcional)" },
+        fecha_entrega: { type: "string", description: "Solo si el cliente pidió un día futuro: \"YYYY-MM-DD\". No puede ser antes del plazo (el sistema lo valida)." },
+        franja_entrega: { type: "string", description: "Franja horaria que pidió, corta (\"antes de las 12\", \"de tarde\"). Opcional." },
+        calle_de_pin: { type: "boolean", description: "true si la calle y la ciudad salieron del pin y el cliente tocó \"Sí, es ahí\"" },
         items: {
           type: "array",
           items: {
@@ -232,6 +235,38 @@ export const HERRAMIENTAS: Herramienta[] = [
     description:
       "Cuando el cliente posterga (\"no por ahora\", \"después\", \"cuando cobre\"): tu respuesta corta va arriba y abajo el sistema le pregunta si quiere que Voltra le avise de ofertas (botones Sí / No). Una sola vez por cliente; nunca en el primer turno ni ante un no rotundo. Después no escribas nada más.",
     input_schema: { type: "object", properties: { texto: { type: "string", description: "Tu respuesta corta a la postergación (ej. \"Dale, tranqui. El lunes te escribo\")." } }, required: ["texto"] },
+  },
+  {
+    name: "confirmar_ubicacion",
+    description:
+      "Cuando el cliente manda el pin ([ubicación] lat,lng): el sistema busca la calle y la ciudad en el mapa y le pregunta \"¿Es en <calle>, <ciudad>?\" con Sí, es ahí / Corregir. Si devuelve sin_calle, pedile la ciudad y la calle escritas. Después no escribas nada más.",
+    input_schema: { type: "object", properties: { ubicacion: { type: "string", description: "\"lat,lng\" del pin" } }, required: ["ubicacion"] },
+  },
+  {
+    name: "avisar_enrique",
+    description:
+      "Aviso urgente a Enrique por Telegram SIN pasarle el chat (vos seguís atendiendo). Solo cuando el cliente se queja de la demora y amenaza con cancelar si no le llega (motivo demora_cancela). Escribí igual tu respuesta al cliente.",
+    input_schema: {
+      type: "object",
+      properties: {
+        motivo: { type: "string", enum: ["demora_cancela"] },
+        resumen: { type: "string", description: "1 oración: pedido, qué pide el cliente y para cuándo (\"#1004: si hoy no llega, cancela\")." },
+      },
+      required: ["motivo", "resumen"],
+    },
+  },
+  {
+    name: "programar_entrega",
+    description:
+      "El cliente pide que su pedido (ya creado) llegue un día futuro y/o en una franja (\"el viernes antes de las 12\"). Guarda la fecha en el pedido: sale en el día, a la transportadora se le pide esa fecha y los avisos la usan. Si la fecha es antes de lo posible, devuelve fecha_minima: ofrecé esa. Nunca anotes el día solo como referencia.",
+    input_schema: {
+      type: "object",
+      properties: {
+        fecha: { type: "string", description: "\"YYYY-MM-DD\" (usá la fecha de AHORA para calcularla)" },
+        franja: { type: "string", description: "Opcional: \"antes de las 12\", \"de tarde\"" },
+      },
+      required: ["fecha"],
+    },
   },
   {
     name: "enviar_media",
@@ -376,7 +411,7 @@ export type ItemCatalogo = {
 };
 
 /** 08-10: el anuncio dice "Gs 79.000"; decir "112.000 con envío" parecía otro precio. Siempre precio + envío = total. */
-export const frasePrecio = (precio: number, envio: number) => `${gs(precio)} + ${gs(envio)} de envío = ${gs(precio + envio)}`;
+export const frasePrecio = (precio: number, envio: number) => `${gs(precio)} + ${gs(envio)} de envío (${gs(precio + envio)} en total)`;
 /**
  * 12-10 (Enrique): siempre el total con envío y lo que gana contra comprar de a 1 (unidad + envío).
  * ×2 → "158.000 en total: es como pagar 2 × 79.000, el envío te sale gratis"; ×3 → "188.000 en total: envío gratis
@@ -525,6 +560,14 @@ export function esSoloPin(direccion: string): boolean {
   return /^(?:el )?(?:pin|ubicacion)(?: (?:de|por|del|enviada|en|el|mapa|maps|google|ubicacion|pin|link|whatsapp))*$/.test(n);
 }
 
+/** 14-10: nombre usable del perfil de WhatsApp (sin emojis ni números; al menos 2 letras). null si no sirve. */
+export function nombreDePerfil(n: string | null | undefined): string | null {
+  const limpio = String(n ?? "").normalize("NFC").replace(/[^\p{L}\s'.-]/gu, " ").replace(/\s+/g, " ").trim();
+  const letras = (limpio.match(/\p{L}/gu) ?? []).length;
+  if (letras < 2 || letras < String(n ?? "").replace(/\s/g, "").length * 0.5) return null;
+  return limpio.split(" ").slice(0, 3).join(" ");
+}
+
 /** Valida los datos y arma las líneas con los precios del catálogo. Puro (salvo el catálogo ya leído). */
 export function armarPedido(
   input: Record<string, unknown>,
@@ -533,15 +576,15 @@ export function armarPedido(
 ): { ok: true; datos: DatosPedidoChat } | { ok: false; faltan: string[]; error?: string } {
   const s = (k: string) => (typeof input[k] === "string" ? (input[k] as string).trim() : "");
   const faltan: string[] = [];
-  if (!s("nombre")) faltan.push("nombre");
+  // 14-10 (Enrique): el nombre nunca traba el pedido: si no lo dio, el de su perfil de WhatsApp.
+  const nombre = s("nombre") || nombreDePerfil(ctx.nombreCliente) || "Cliente WhatsApp";
   const retiro = input.retiro_oficina === true;
-  if (!retiro && !s("ciudad")) faltan.push("ciudad");
-  if (retiro) { /* retira en la oficina de CDE: no hace falta dirección */ }
-  else if (!s("direccion")) faltan.push("direccion");
-  // 08-10: con solo el pin ("Pin de ubicación") el pedido no se despacha: hace falta algo escrito para el courier.
-  else if (esSoloPin(s("direccion")) && !s("referencia")) {
-    faltan.push("referencia escrita además del pin (calle o barrio, número de casa, color del portón o algo cerca)");
-  }
+  // 15-10 (Enrique, #1055): "si tenemos nombre, celular y pin de ubicación, ya estamos": con pin no se pide nada más.
+  const conPin = /-?\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+/.test(s("ubicacion"));
+  if (!retiro && !s("ciudad") && !conPin) faltan.push("ciudad");
+  if (retiro || conPin) { /* retiro en la oficina de CDE, o pin: no hace falta escribir la dirección */ }
+  // 14-10 (Enrique): alcanza con ciudad + calle o referencia.
+  else if ((!s("direccion") || esSoloPin(s("direccion"))) && !s("referencia")) faltan.push("calle o una referencia");
   if (!ctx.telefono) faltan.push("telefono (usá pedir_telefono)");
   const pedidos = Array.isArray(input.items) ? input.items as Array<Record<string, unknown>> : [];
   if (!pedidos.length) faltan.push("items");
@@ -585,11 +628,13 @@ export function armarPedido(
   return {
     ok: true,
     datos: {
-      nombre: s("nombre"),
-      ciudad: retiro ? "Ciudad del Este" : s("ciudad"),
-      direccion: retiro ? "Retira en la oficina (CDE)" : s("direccion"),
+      nombre,
+      ciudad: retiro ? "Ciudad del Este" : s("ciudad") || "Ver mapa",
+      direccion: retiro ? "Retira en la oficina (CDE)" : (s("direccion") && !esSoloPin(s("direccion")) ? s("direccion") : s("ubicacion") ? "Pin de ubicación" : s("referencia")),
       referencia: s("referencia") || null,
       ubicacion: s("ubicacion") || null,
+      ...(input.calle_de_pin === true && s("ubicacion") ? { calleDePin: true } : {}),
+      ...(/^\d{4}-\d{2}-\d{2}$/.test(s("fecha_entrega")) && !retiro ? { entregaProgramada: { fecha: s("fecha_entrega"), franja: s("franja_entrega") || null } } : {}),
       telefono: ctx.telefono!,
       lineas,
       envio,
@@ -621,11 +666,24 @@ export function lineasShopify(lineas: LineaPedido[]): Array<Record<string, unkno
   return out;
 }
 
+/** "lat,lng" → link de Google Maps (null si no hay pin válido). */
+export function linkMapa(ubicacion: string | null | undefined): string | null {
+  const m = /(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/.exec(String(ubicacion ?? ""));
+  return m ? `https://maps.google.com/?q=${m[1]},${m[2]}` : null;
+}
+
 /** Input de orderCreate (Admin GraphQL 2026-10): pago pendiente como un pedido contra entrega de Releasit. */
 export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<string, unknown> {
   const [nombre, ...resto] = d.nombre.split(/\s+/);
   const notas = [`Pedido creado por el vendedor con IA (WhatsApp).`];
-  if (d.ubicacion) notas.push(`Ubicación: ${d.ubicacion}`);
+  // 13-10: datos para el courier en la nota (nombre, celular, ciudad, calle, mapa, referencia).
+  const mapa = linkMapa(d.ubicacion);
+  if (d.entregaProgramada) notas.push(`ENTREGA PROGRAMADA: ${textoFechaCorta(d.entregaProgramada.fecha)}${d.entregaProgramada.franja ? ` (${d.entregaProgramada.franja})` : ""}. Despachar en el día y pedirle a la transportadora que entregue ese día.`);
+  if (!d.retiro) {
+    notas.push(`Nombre: ${d.nombre}`, `Celular: ${d.telefono}`, `Ciudad: ${d.ciudad}`, `Calle: ${d.direccion}`);
+    if (mapa) notas.push(`Mapa: ${mapa}`);
+    if (d.referencia) notas.push(`Referencia: ${d.referencia}`);
+  } else if (d.ubicacion) notas.push(`Ubicación: ${d.ubicacion}`);
   if (d.retiro) notas.push("Retira en la oficina de CDE, sin envío. Coordinar día y hora por WhatsApp.");
   if (d.factura) notas.push(`Factura: ${d.factura}`);
   return {
@@ -641,9 +699,11 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
       shippingLines: d.retiro ? [] : [{ title: "Envío", priceSet: { shopMoney: { amount: String(d.envio), currencyCode: "PYG" } } }],
       shippingAddress: {
         firstName: nombre,
-        lastName: resto.join(" ") || null,
+        // 15-10 (#1055): con el apellido vacío Shopify descarta la dirección ENTERA sin avisar.
+        lastName: resto.join(" ") || "-",
         address1: d.direccion,
-        address2: d.referencia,
+        // 13-10: Despacho arma la guía, la cabecera y el CSV con address1 + address2: ahí van la referencia y el mapa.
+        address2: [d.referencia, mapa ? `Mapa: ${mapa}` : null].filter(Boolean).join(" · ") || null,
         city: d.ciudad,
         countryCode: "PY",
         phone: d.telefono,
@@ -651,7 +711,8 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
       // RETIRO_EN_CASA: no va al courier (Despacho lo excluye) ni recibe avisos de envío.
       // 10-10: el cliente ya confirmó en el resumen del chat → entra CONFIRMADO y no se le manda la plantilla de
       // confirmación (antes tenía que confirmar dos veces). OFERTA_PAGO_ANTICIPADO: si manda comprobante, se detecta igual.
-      tags: d.retiro ? ["ORIGEN_WHATSAPP", "CONFIRMADO", "RETIRO_EN_CASA"] : ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"],
+      tags: d.retiro ? ["ORIGEN_WHATSAPP", "CONFIRMADO", "RETIRO_EN_CASA"]
+        : ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO", ...(d.entregaProgramada ? ["ENTREGA_PROGRAMADA"] : [])],
       note: notas.join("\n"),
       customAttributes: [
         { key: "origen", value: "whatsapp" },
@@ -660,6 +721,8 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
         ...(d.factura ? [{ key: "factura", value: d.factura }] : []),
         // 10-10: mismos nombres que Releasit; la facturación los lee antes que "factura". Solo con RUC válido.
         ...(d.facturaRuc ? [{ key: "Ruc", value: d.facturaRuc }, { key: "Razon social", value: d.facturaRazon ?? "" }] : []),
+        // 13-10: entrega programada: sale en el día como todos y a la transportadora se le pide esa fecha (Telegram al despachar).
+        ...(d.entregaProgramada ? [{ key: "entrega_programada", value: d.entregaProgramada.fecha }, ...(d.entregaProgramada.franja ? [{ key: "entrega_franja", value: d.entregaProgramada.franja }] : [])] : []),
       ],
     },
     options: { inventoryBehaviour: "DECREMENT_OBEYING_POLICY", sendReceipt: false, sendFulfillmentReceipt: false },
@@ -675,7 +738,9 @@ export function textoResumen(d: DatosPedidoChat, ctx: CtxTurno): string {
   const clave = d.retiro ? "resumen_retiro" : gratis ? "resumen_envio_gratis" : "resumen";
   const lineaFactura = d.facturaRuc ? `\n🧾 Factura a nombre de: ${d.facturaRazon} · RUC ${d.facturaRuc}` : "";
   // 12-10 (fase 3): el día de entrega según la ciudad, en el mismo resumen que se confirma.
-  const lineaEntrega = d.retiro || !d.ciudad ? "" : `\n📦 Te llega: ${diaEntrega(d.ciudad, ctx.ahora).texto}`;
+  const lineaEntrega = d.retiro || !d.ciudad ? "" : d.entregaProgramada
+    ? `\n📦 Te llega: el ${textoFechaCorta(d.entregaProgramada.fecha)}${d.entregaProgramada.franja ? ` (${d.entregaProgramada.franja})` : ""}`
+    : `\n📦 Te llega: ${diaEntrega(d.ciudad, ctx.ahora).texto}`;
   return texto(ctx.cfg.textos, clave, TEXTOS_DEFAULT[clave], {
     lineas,
     envio: gs(d.envio),
@@ -697,8 +762,23 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
     } catch (e) {
       return error(`catalogo_no_disponible: ${e instanceof Error ? e.message : e}. Derivá a Enrique.`);
     }
+    // 14-10: con el pin, la ciudad y la calle salen del mapa (sin preguntar "¿Es en…?"; el resumen ya se confirma).
+    const pin = /(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/.exec(String(input.ubicacion ?? ""));
+    const dirIn = String(input.direccion ?? "").trim();
+    if (pin && input.retiro_oficina !== true && deps.direccionDePin && (!String(input.ciudad ?? "").trim() || !dirIn || esSoloPin(dirIn))) {
+      const m = await deps.direccionDePin(Number(pin[1]), Number(pin[2])).catch(() => null);
+      if (m?.ciudad && !String(input.ciudad ?? "").trim()) input = { ...input, ciudad: m.ciudad };
+      if (m?.calle && (!dirIn || esSoloPin(dirIn))) input = { ...input, direccion: m.calle, calle_de_pin: true };
+    }
     const a = armarPedido(input, itemsCatalogo(productos, ctx), ctx);
     if (!a.ok) return error(a.error ?? `faltan_datos: ${a.faltan.join(", ")}. Pedí solo el que falta.`, { faltan: a.faltan });
+    // 13-10: una entrega programada nunca puede ser antes del plazo mínimo de esa ciudad.
+    if (a.datos.entregaProgramada) {
+      const minima = fechaMinimaPedido(a.datos.ciudad, ctx.ahora);
+      if (a.datos.entregaProgramada.fecha < minima) {
+        return error(`fecha_antes_de_lo_posible: lo antes posible es el ${textoFechaCorta(minima)} (${minima}). Ofrecé esa fecha.`, { fecha_minima: minima });
+      }
+    }
     const fila = await deps.guardarPedidoChat({
       conversacion_id: ctx.conversacionId,
       cliente_id: ctx.clienteId,
@@ -789,7 +869,11 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
     origen: "whatsapp (vendedor IA)",
     cliente: { nombre: d.nombre, telefono: d.telefono, wa_user_id: ctx.waUserId },
   });
-  await deps.avisar([aviso.texto, ...avisos.map((a) => `• ${escapar(a)}`)].join("\n"), aviso.botones);
+  // 14-10 (Enrique: "siempre avisame por Telegram"): el resultado queda en vendedor_turnos y, si falla, un reintento.
+  const textoAviso = [aviso.texto, ...avisos.map((a) => `• ${escapar(a)}`)].join("\n");
+  let rTg = await deps.avisar(textoAviso, aviso.botones).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+  if (!rTg.ok) rTg = await deps.avisar(textoAviso, aviso.botones).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+  if (!rTg.ok) console.error(`vendedor: no salió el Telegram de pedido nuevo ${r.nombre}: ${rTg.error ?? "sin detalle"}`);
   const primer = d.nombre.split(/\s+/)[0] ?? "";
   return {
     resultado: {
@@ -797,6 +881,8 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
       shopify_order_id: r.shopify_order_id,
       pedido: r.nombre,
       total: d.total,
+      aviso_telegram: rTg.ok,
+      ...(rTg.ok ? {} : { aviso_telegram_error: String(rTg.error ?? "").slice(0, 160) }),
       texto_respuesta: texto(ctx.cfg.textos, "pedido_creado", TEXTOS_DEFAULT.pedido_creado, { nombre: primer, pedido: r.nombre ?? "" }),
     },
     pedidoCreado: { shopify_order_id: r.shopify_order_id, nombre: r.nombre ?? String(r.shopify_order_id) },
@@ -963,22 +1049,25 @@ async function actualizarDireccion(input: Record<string, unknown>, ctx: CtxTurno
   if (!direccion && !referencia) return error("sin_datos: mandá la dirección, la referencia o el pin nuevo.");
   const chat = await deps.ultimoPedidoChat(ctx.conversacionId);
   // Pedido del bot ya creado o, si no, el pedido de la tienda abierto (Releasit) del cliente.
-  const previo = chat?.estado === "creado" && chat.shopify_order_id
-    ? { shopify_order_id: chat.shopify_order_id, creado_en: chat.creado_en }
-    : deps.pedidoTiendaAbierto ? await deps.pedidoTiendaAbierto(ctx.clienteId).catch(() => null) : null;
+  // 13-10: un pedido en reintento de entrega manda (el cliente coordina día y horario), aunque tenga más de 72 h.
+  const tienda = deps.pedidoTiendaAbierto ? await deps.pedidoTiendaAbierto(ctx.clienteId).catch(() => null) : null;
+  const previo: { shopify_order_id: number; creado_en: string; en_reintento?: boolean } | null = tienda?.en_reintento ? tienda
+    : chat?.estado === "creado" && chat.shopify_order_id ? { shopify_order_id: chat.shopify_order_id, creado_en: chat.creado_en } : tienda;
   if (!previo) {
     return error("no_hay_pedido_creado: si todavía no confirmó, armá el resumen con crear_pedido_cod con estos datos.");
   }
-  if (ctx.ahora.getTime() - new Date(previo.creado_en).getTime() > 72 * 3600_000) return error("pedido_viejo: derivá a Enrique.");
+  if (!previo.en_reintento && ctx.ahora.getTime() - new Date(previo.creado_en).getTime() > 72 * 3600_000) return error("pedido_viejo: derivá a Enrique.");
   if (!deps.actualizarDireccionOrden) return error("no_disponible: derivá a Enrique con motivo direccion_dudosa.");
   const d = { ...(direccion ? { direccion } : {}), ...(referencia ? { referencia } : {}) };
   const r = await deps.actualizarDireccionOrden(previo.shopify_order_id, d);
   if (!r.ok) return error(`no_se_pudo_actualizar: ${r.error}. Derivá a Enrique con motivo direccion_dudosa.`);
   const quien = escaparHtml(ctx.nombreCliente ?? ctx.telefono ?? "Cliente");
-  await deps.avisar(`📍 <b>${quien}</b> completó la dirección del pedido (Shopify ${previo.shopify_order_id}): ${escaparHtml([direccion, referencia].filter(Boolean).join(" · "))}`)
-    .catch(() => {});
-  // 10-10: si el pedido ya salió, va el texto listo para reenviar al courier con el cambio.
+  // 10-10: si el pedido ya salió, va el texto listo para reenviar al courier con el cambio (13-10: un solo Telegram).
   const pc = deps.pedidoParaCourier ? await deps.pedidoParaCourier(previo.shopify_order_id).catch(() => null) : null;
+  if (!pc?.despachado) {
+    await deps.avisar(`📍 <b>${quien}</b> completó la dirección del pedido (Shopify ${previo.shopify_order_id}): ${escaparHtml([direccion, referencia].filter(Boolean).join(" · "))}`)
+      .catch(() => {});
+  }
   if (pc?.despachado) {
     const base = datosCourierDesdeRaw(pc.nombre, pc.raw, pc.telefono ?? ctx.telefono);
     const datos = { ...base, ...(direccion ? { direccion } : {}), ...(referencia ? { referencia: unirReferencia(base.referencia, referencia) } : {}) };
@@ -1028,13 +1117,49 @@ async function enviarOpciones(input: Record<string, unknown>, ctx: CtxTurno, dep
     listaVertical(`${t}\n\n${lineas.join("\n")}\nPagás al recibir.`, prod.imagen!, botones));
 }
 
-/** 12-10: botones del primer turno. El id lleva el producto: `vend_p1:<pedir|duda|cant>:<handle>`. */
-export const BOTONES_PRIMER_TURNO = [
-  { clave: "pedir", titulo: "Quiero pedirlo" },
-  { clave: "duda", titulo: "Tengo una duda" },
-  { clave: "cant", titulo: "Precios por cantidad" },
-] as const;
-export const VARIANTE_PRIMER_TURNO = "botones_v1";
+/**
+ * 13-10 (segunda tanda): botones del primer turno con la cantidad ya elegida. El id lleva el producto:
+ * `vend_p1:<q1|q2|pack|duda>:<handle>`. "Precios por cantidad" se sacó (se leía como mayorista). Los ids viejos
+ * (pedir / cant) siguen llegando de chats anteriores: el prompt los sigue entendiendo.
+ */
+export const VARIANTE_PRIMER_TURNO = "botones_v2";
+export const esPack = (handle: string) => /(^|-)pack(-|$)/.test(handle);
+
+/** Botones según el producto: pack → Quiero el pack / Tengo una duda; con oferta ×2 → Quiero 1 / Quiero 2 · sin envío / Tengo una duda. */
+export function botonesPrimerTurno(prod: ItemCatalogo): { id: string; titulo: string }[] {
+  const b = (clave: string, titulo: string) => ({ id: `vend_p1:${clave}:${prod.handle}`, titulo });
+  if (esPack(prod.handle)) return [b("pack", "Quiero el pack"), b("duda", "Tengo una duda")];
+  const x2 = prod.ofertas.find((o) => o.cantidad === 2);
+  // 13-10 (Enrique): "envío gratis" vende más que "sin envío", y la mejor opción va primero.
+  return x2 && x2.total <= 2 * prod.precio ? [b("q2", "2 con envío gratis"), b("q1", "Quiero 1"), b("duda", "Tengo una duda")] : [b("q1", "Quiero 1"), b("duda", "Tengo una duda")];
+}
+
+/** Segunda burbuja: todos los totales con envío incluido (13-10, Enrique). Los montos salen del catálogo, nunca del modelo. */
+export function cuerpoPrimerTurno(prod: ItemCatalogo): string {
+  // 14-10 (Enrique): el precio igual al anuncio. 4 de 5 clientes del 13-10 preguntaron "¿no es 79 mil?" y se fueron.
+  // Nunca "1 por 112.000" ni "todo con envío incluido"; el 3 solo si pregunta por más cantidad.
+  const base = `Sale ${frasePrecio(prod.precio, ctxEnvio(prod))}, pagás al recibir.`;
+  if (esPack(prod.handle)) return base;
+  const x2 = prod.ofertas.find((o) => o.cantidad === 2);
+  if (!x2 || x2.total > 2 * prod.precio) return base;
+  return `${base} Llevando 2 el envío te sale gratis: ${gs(x2.total)} por los 2.`;
+}
+
+/** Envío del ítem (total − precio): el catálogo ya lo trae calculado con la config. */
+const ctxEnvio = (prod: ItemCatalogo) => prod.total - prod.precio;
+
+/** Frases que el vendedor usa después del toque (montos permitidos por el filtro porque quedan en el resultado). */
+export function frasesCantidad(prod: ItemCatalogo): Record<string, string> {
+  const x2 = prod.ofertas.find((o) => o.cantidad === 2);
+  const x3 = prod.ofertas.find((o) => o.cantidad === 3);
+  const f: Record<string, string> = {};
+  if (x2 && x2.total <= 2 * prod.precio) f.pasar_a_2 = `Ojo: llevando 2 el envío te sale GRATIS (${gs(x2.total)} los 2)`;
+  const menos3 = x3 ? 3 * prod.precio - x3.total : 0;
+  if (x2 && x3 && x3.total > x2.total) {
+    f.subir_a_3 = `Y por ${gs(x3.total - x2.total)} más te llevás 3: envío gratis${menos3 > 0 ? ` + ${gs(menos3)} menos` : ""} (${gs(x3.total)} en total)`;
+  }
+  return f;
+}
 
 /**
  * 12-10 (plan de conversión, fase 1): gancho en texto + total cerrado con 3 botones. El precio lo arma el sistema
@@ -1051,10 +1176,10 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
   if (!prod) return error(`producto_desconocido:${input.handle}. Usá consultar_catalogo y el handle exacto.`);
   const g = textoRevisado({ texto: input.gancho }, ctx);
   if (!g.ok) return g.r;
-  const cuerpo = `${prod.frase_precio}, pagás al recibir.`;
+  const cuerpo = cuerpoPrimerTurno(prod);
   let interactivo: Record<string, unknown>;
   try {
-    interactivo = botonesRespuesta(cuerpo, BOTONES_PRIMER_TURNO.map((b) => ({ id: `vend_p1:${b.clave}:${prod.handle}`, titulo: b.titulo })));
+    interactivo = botonesRespuesta(cuerpo, botonesPrimerTurno(prod));
   } catch (e) {
     return error(`interactivo_invalido: ${e instanceof Error ? e.message : e}. Respondé con frase_precio en texto.`);
   }
@@ -1074,7 +1199,8 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
       // Quedan en vendedor_turnos: el filtro de los turnos siguientes permite estos montos (×2 / ×3 al pedir los datos).
       frase_precio: prod.frase_precio,
       ofertas: prod.ofertas.map((o) => o.frase_precio),
-      nota: "Ya se le mandaron el gancho y el precio con botones. No escribas nada más.",
+      ...frasesCantidad(prod),
+      nota: "Ya se le mandaron el gancho y los precios con botones. No escribas nada más.",
     },
     terminal: true,
   };
@@ -1091,8 +1217,8 @@ async function cierreBotones(input: Record<string, unknown>, ctx: CtxTurno, deps
   const prod = items.find((x) => x.handle === input.handle);
   if (!prod) return error(`producto_desconocido:${input.handle}. Usá consultar_catalogo y el handle exacto.`);
   return await enviarInteractivoRevisado(input, ctx, deps, (t) =>
-    botonesRespuesta(t, BOTONES_PRIMER_TURNO.map((b) => ({ id: `vend_p1:${b.clave}:${prod.handle}`, titulo: b.titulo }))),
-    { ofertas: prod.ofertas.map((o) => o.frase_precio) });
+    botonesRespuesta(t, botonesPrimerTurno(prod)),
+    { ofertas: prod.ofertas.map((o) => o.frase_precio), ...frasesCantidad(prod) });
 }
 
 /** 12-10: permiso para ofertas (opt-in de Meta) al final, cuando el cliente posterga. Una vez por cliente. */
@@ -1100,6 +1226,67 @@ async function permisoOfertas(input: Record<string, unknown>, ctx: CtxTurno, dep
   const ya = deps.consentimiento ? await deps.consentimiento(ctx.clienteId).catch(() => "error" as const) : null;
   if (ya !== null) return { resultado: { ok: true, ya_respondio: true, nota: "Ya respondió el permiso de ofertas (o no se pudo leer): respondé normal, sin preguntarlo." } };
   return await enviarInteractivoRevisado(input, ctx, deps, (t) => botonesPermisoOfertas(ctx.clienteId, `${t}\n\n${TEXTO_PERMISO_OFERTAS}`));
+}
+
+/** 13-10: pin → calle y ciudad (OpenStreetMap) y confirmación en una línea con "Sí, es ahí" / "Corregir". */
+async function confirmarUbicacion(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  const m = /(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/.exec(String(input.ubicacion ?? ""));
+  if (!m) return error("ubicacion_invalida: pasá \"lat,lng\" del mensaje [ubicación].");
+  const dir = deps.direccionDePin ? await deps.direccionDePin(Number(m[1]), Number(m[2])).catch(() => null) : null;
+  if (!dir?.calle || !dir.ciudad) {
+    return { resultado: { ok: true, sin_calle: true, ciudad: dir?.ciudad ?? null, motivo: dir?.motivo ?? (dir ? "sin_calle_en_el_mapa" : "sin_respuesta"), nota: "No salió la calle del mapa, pero con el pin alcanza: no pidas ciudad ni calle; armá el resumen con crear_pedido_cod pasando la ubicacion." } };
+  }
+  const texto = `¿Es en ${dir.calle}, ${dir.ciudad}?`;
+  const r = await deps.enviarInteractivo(ctx.destino, botonesSiNo(texto, "vend_ubi:si", "vend_ubi:no", { si: "Sí, es ahí", no: "Corregir" }), opts(ctx));
+  if (!r.ok) return error(`envio_fallido: ${r.error}. Preguntale en texto si es en ${dir.calle}, ${dir.ciudad}.`);
+  return { resultado: { ok: true, enviado: true, calle: dir.calle, ciudad: dir.ciudad, ubicacion: `${m[1]},${m[2]}`, nota: "Ya se le preguntó. No escribas nada más." }, terminal: true };
+}
+
+/** 13-10 (#1004): cliente que cancela si no le llega → Enrique se entera al instante; el chat sigue con el bot. */
+async function avisarEnrique(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  const resumen = String(input.resumen ?? "").trim().slice(0, 300);
+  if (input.motivo !== "demora_cancela" || resumen.length < 10) return error("aviso_invalido: motivo demora_cancela y un resumen de 1 oración.");
+  const link = enlaceWaMe(ctx.telefono, null);
+  const texto = `⚠️ <b>Cliente por cancelar por demora</b>\n${escaparHtml(ctx.nombreCliente ?? "Cliente")}: ${escaparHtml(resumen)}\nDestrabalo con el courier; el bot sigue en el chat.`;
+  const r = await deps.avisar(texto, link ? [[{ texto: "Escribirle", url: link }]] : undefined);
+  return { resultado: { ok: r.ok, nota: "Enrique ya está avisado. Respondele al cliente sin prometer otro día ni ofrecer cancelar." } };
+}
+
+/** "2026-10-16" → "viernes 16/10". */
+export function textoFechaCorta(fecha: string): string {
+  const [y, m, d] = fecha.split("-").map(Number);
+  const dia = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"][new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${dia} ${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}`;
+}
+
+/** Primer día posible de entrega ("YYYY-MM-DD") para la ciudad (plazo por courier + corte 15:00 + días hábiles). */
+export function fechaMinimaPedido(ciudad: string, ahora: Date, courier?: string | null): string {
+  return diaEntrega(ciudad, ahora, courier).desde;
+}
+
+/** 13-10 (#1041): el cliente pide un día futuro → se programa en el pedido; antes del plazo, no. */
+async function programarEntrega(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  const fecha = String(input.fecha ?? "").trim();
+  const franja = typeof input.franja === "string" && input.franja.trim() ? input.franja.trim().slice(0, 40) : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !Number.isFinite(Date.parse(fecha))) return error("fecha_invalida: \"YYYY-MM-DD\".");
+  const chat = await deps.ultimoPedidoChat(ctx.conversacionId);
+  const tienda = deps.pedidoTiendaAbierto ? await deps.pedidoTiendaAbierto(ctx.clienteId).catch(() => null) : null;
+  const orderId = chat?.estado === "creado" && chat.shopify_order_id ? chat.shopify_order_id : tienda?.shopify_order_id ?? null;
+  if (!orderId) return error("no_hay_pedido_creado: si todavía no confirmó, pasá fecha_entrega en crear_pedido_cod.");
+  const pc = deps.pedidoParaCourier ? await deps.pedidoParaCourier(orderId).catch(() => null) : null;
+  const dir = (pc?.raw?.shipping_address ?? {}) as Record<string, unknown>;
+  const ciudad = String(dir.city ?? chat?.datos?.ciudad ?? "");
+  const minima = fechaMinimaPedido(ciudad, ctx.ahora, pc?.courier ?? null);
+  if (fecha < minima) {
+    return { resultado: { ok: false, antes_de_lo_posible: true, fecha_minima: minima, texto_minima: textoFechaCorta(minima), nota: "Esa fecha es antes de lo posible: ofrecele la fecha mínima, sin prometer antes." } };
+  }
+  const limite = new Date(ctx.ahora.getTime() + 30 * 86_400_000).toISOString().slice(0, 10);
+  if (fecha > limite) return error("fecha_muy_lejana: más de 30 días; pedile una fecha más cercana.");
+  if (!deps.programarEntregaOrden) return error("no_disponible: anotalo en la referencia y avisá a Enrique con avisar_enrique.");
+  const r = await deps.programarEntregaOrden(orderId, fecha, franja);
+  if (!r.ok) return error(`no_se_pudo_programar: ${r.error}`);
+  // Si ya salió, shopify-webhook (orders/updated) le manda a Enrique UNA vez el texto para el courier con la fecha.
+  return { resultado: { ok: true, programado: true, fecha, texto_fecha: textoFechaCorta(fecha), franja, nota: "Listo: confirmale corto el día (y la franja) y que pagás al recibir." } };
 }
 
 /** Datos del turno que no vienen en el input de la herramienta (los pone el orquestador). */
@@ -1142,6 +1329,9 @@ export const EJECUTORES: Record<string, Ejecutor> = {
   primer_turno: primerTurno,
   cierre_botones: cierreBotones,
   permiso_ofertas: permisoOfertas,
+  confirmar_ubicacion: confirmarUbicacion,
+  avisar_enrique: avisarEnrique,
+  programar_entrega: programarEntrega,
   datos_transferencia: datosTransferencia,
   actualizar_direccion: actualizarDireccion,
   pedir_telefono: (i, c, d) => {

@@ -60,7 +60,7 @@ async function contexto(e: Envio): Promise<Contexto> {
       ? sb.from("wa_clientes").select("telefono,wa_user_id,nombre").eq("id", e.cliente_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     e.shopify_order_id != null
-      ? sb.from("shopify_pedidos").select("shopify_order_id,nombre,estado_confirmacion,tags,total,raw,estado_envio,creado_en")
+      ? sb.from("shopify_pedidos").select("shopify_order_id,nombre,estado_confirmacion,tags,total,raw,estado_envio,creado_en,courier")
         .eq("shopify_order_id", e.shopify_order_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     e.cliente_id

@@ -1,28 +1,21 @@
 // supabase/functions/lucero-seguimiento/io.ts · Dueño: W (09-10-2026)
 // I/O real de la función: Supabase (entregas, pipeline de courier), la página pública de Lucero y Telegram.
 //
-// El Repo del pipeline común es una COPIA de repoSupabase() de importar-courier/index.ts: ese archivo no lo
-// exporta y al importarlo arrancaría su propio Deno.serve. Si se cambia uno, cambiar el otro (o mover ambos a
-// importar-courier/repo.ts, que es lo correcto cuando se pueda tocar ese archivo).
+// 13-10: el Repo del pipeline común ya no es una copia: viene de importar-courier/repo.ts (el mismo que usan la
+// pantalla Entregas y pap-sync), así un intento fallido visto en la web de Lucero sigue exactamente el mismo
+// camino (pedido_estados → aviso de reintento al cliente → texto para el courier a Enrique).
 import { db, guardarEventoCrudo } from '../_shared/db.ts'
 import { normalizarTelefonoPY } from '../_shared/telefono.ts'
-import { agregarTags, crearEventoEnvio, orderGid } from '../_shared/shopify.ts'
 import { avisar } from '../_shared/telegram.ts'
-import { type ConfigImport, type FilaCourier, type PedidoImport, procesarFilas, type Repo } from '../importar-courier/procesar.ts'
+import { type ConfigImport, type FilaCourier, procesarFilas } from '../importar-courier/procesar.ts'
+import { configCourierDesde, repoCourier } from '../importar-courier/repo.ts'
 import { CATEGORIAS_TERMINALES, type ConfigSeguimiento, type Deps, type GuiaAbierta } from './procesar.ts'
+
+export { repoCourier }
 
 export const URL_ENVIO = 'https://www.luceroexpress.com.py/envio.php?id='
 export const USER_AGENT = 'VoltraOS/1.0 (seguimiento de envios propios; contacto voltraparaguay@gmail.com)'
 const TIMEOUT_MS = 15_000
-
-const COLS_PEDIDO =
-  'shopify_order_id, nombre, cliente_id, telefono, total, estado_confirmacion, estado_envio, tags, es_borrador, raw, creado_en, wa_clientes(nombre)'
-
-// deno-lint-ignore no-explicit-any
-function aPedido(row: any): PedidoImport {
-  const { wa_clientes, ...resto } = row ?? {}
-  return { ...resto, cliente_nombre: wa_clientes?.nombre ?? null }
-}
 
 async function sha256(t: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t))
@@ -40,75 +33,10 @@ export async function leerConfig(): Promise<{
   if (error) throw new Error(`config_wa: ${error.message}`)
   const m = Object.fromEntries((data ?? []).map((r) => [r.clave, r.valor]))
   const ls = m.lucero_seguimiento ?? {}
-  const pre = m.prefijos_courier ?? {}
-  const arr = (x: unknown) => Array.isArray(x) ? x.map(String) : typeof x === 'string' ? [x] : []
   return {
     activo: ls.activo !== false, // sin la clave: activo con valores por defecto
     seguimiento: { tope: ls.tope, pausa_ms: ls.pausa_ms },
-    importar: {
-      prefijos: { lucero: 'lucero' in pre ? arr(pre.lucero) : ['FW-'], pap: 'pap' in pre ? arr(pre.pap) : [] },
-      plazos: { lucero: m.plazos_courier?.lucero ?? '', pap: m.plazos_courier?.pap ?? '' },
-    },
-  }
-}
-
-export function repoCourier(): Repo {
-  const s = db()
-  return {
-    async buscarPedidoPorNumero(numero) {
-      const { data, error } = await s.from('shopify_pedidos').select(COLS_PEDIDO)
-        .in('nombre', [`#${numero}`, numero]).eq('es_borrador', false).limit(2)
-      if (error) throw new Error(`buscar pedido: ${error.message}`)
-      return data && data.length === 1 ? aPedido(data[0]) : null
-    },
-    async buscarPedidosPorTelefono(tel) {
-      const { data, error } = await s.from('shopify_pedidos').select(COLS_PEDIDO)
-        .eq('telefono', tel).order('creado_en', { ascending: false }).limit(10)
-      if (error) throw new Error(`buscar por teléfono: ${error.message}`)
-      return (data ?? []).map(aPedido)
-    },
-    async avisoPendiente(orderId, estado) {
-      // Estado guardado pero cuyo aviso no salió (falla anterior): se reintenta en vez de contarlo como repetido.
-      const { data, error } = await s.from('pedido_estados').select('notificado')
-        .eq('shopify_order_id', orderId).eq('estado', estado).maybeSingle()
-      if (error) throw new Error(`pedido_estados: ${error.message}`)
-      return data?.notificado === false
-    },
-    async insertarEstado(orderId, estado, fuente) {
-      const { data, error } = await s.from('pedido_estados')
-        .upsert({ shopify_order_id: orderId, estado, fuente }, { onConflict: 'shopify_order_id,estado', ignoreDuplicates: true })
-        .select('id')
-      if (error) throw new Error(`pedido_estados: ${error.message}`)
-      return Array.isArray(data) && data.length > 0
-    },
-    async marcarNotificado(orderId, estado) {
-      const { error } = await s.from('pedido_estados').update({ notificado: true })
-        .eq('shopify_order_id', orderId).eq('estado', estado)
-      if (error) throw new Error(`marcar notificado: ${error.message}`)
-    },
-    async actualizarEstadoEnvio(orderId, estado, courier) {
-      const { error } = await s.from('shopify_pedidos').update({ estado_envio: estado, courier })
-        .eq('shopify_order_id', orderId)
-      if (error) throw new Error(`estado_envio: ${error.message}`)
-    },
-    async programarEnvio(envio) {
-      const { data, error } = await s.from('envios_programados')
-        .upsert(envio, { onConflict: 'clave_unica', ignoreDuplicates: true }).select('id')
-      if (error) throw new Error(`envios_programados: ${error.message}`)
-      return Array.isArray(data) && data.length > 0
-    },
-    async enviarARevision(courier, referencia, fila, motivo) {
-      const { error } = await s.from('courier_revision').insert({ courier, referencia, fila, motivo })
-      if (error) throw new Error(`courier_revision: ${error.message}`)
-    },
-    async crearEventoEnvio(orderId, estado) {
-      const r = await crearEventoEnvio(orderGid(orderId), estado)
-      return { ok: r.ok, error: r.error }
-    },
-    async agregarTags(orderId, tags) {
-      const r = await agregarTags(orderGid(orderId), tags)
-      return { ok: r.ok, error: r.error }
-    },
+    importar: configCourierDesde(m.prefijos_courier, m.plazos_courier),
   }
 }
 

@@ -599,3 +599,34 @@ Deno.test("09-10: WhatsApp OK y el update falla → reintenta, guarda wa_message
     assertMatch(log.avisos[0], /no se pudo marcar/);
   }
 });
+
+Deno.test("13-10: reintento de entrega no sale si el pedido ya se entregó, devolvió, canceló o es de retiro", () => {
+  const e = envio({ plantilla: "voltra_reintento_entrega_v2", clave_unica: "courier:1001:INTENTO_FALLIDO:2026-10-06", variables: ["Ana", "1 Tiras nasales"] });
+  const conEnvio = (estado_envio: string | null, tags: string[] = []) => {
+    const c = ctx({}, "confirmado");
+    c.pedido = { ...c.pedido!, estado_envio, tags };
+    return c;
+  };
+  for (const ee of ["ENTREGADO", "RENDIDO", "NO_ENTREGADO", "CANCELADO"]) {
+    const d = decidir(e, conEnvio(ee), cfg(), AHORA, horario);
+    assertEquals(d, { accion: "cancelar", motivo: `envio_${ee}` });
+  }
+  assertEquals(decidir(e, conEnvio("INTENTO_FALLIDO", ["RETIRO_EN_CASA"]), cfg(), AHORA, horario), { accion: "cancelar", motivo: "retiro_en_casa" });
+  // Sigue en reintento (o el courier ya volvió a salir): sale la plantilla.
+  for (const ee of ["INTENTO_FALLIDO", "NO_ENTREGADO_RESCATABLE", "DESPACHADO"]) {
+    assertEquals(decidir(e, conEnvio(ee), cfg(), AHORA, horario).accion, "plantilla");
+  }
+});
+
+Deno.test("13-10: después del reintento, a Enrique le llega el texto para reenviar con el nombre del courier", async () => {
+  const e = envio({ id: "r1", plantilla: "voltra_reintento_entrega_v2", clave_unica: "courier:1001:INTENTO_FALLIDO:2026-10-06", variables: ["Ana", "1 Tiras nasales"] });
+  const c = ctx({}, "confirmado");
+  c.pedido = { ...c.pedido!, estado_envio: "INTENTO_FALLIDO", courier: "lucero" };
+  const { d, log } = fakes([e], { r1: c }, () => ({ ok: true }));
+  const r = await procesarLote(d);
+  assertEquals(r.enviados, 1);
+  assertEquals(log.enviados, ["voltra_reintento_entrega_v2"]);
+  assertEquals(log.avisos.length, 1);
+  assertMatch(log.avisos[0], /Para reenviar a Lucero/);
+  assertMatch(log.avisos[0], /volver a intentar/);
+});

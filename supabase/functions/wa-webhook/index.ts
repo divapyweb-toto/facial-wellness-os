@@ -316,7 +316,16 @@ export const depsReales: Deps = {
     const { data, error } = await db().from("wa_conversaciones").select("perfil_vendedor").eq("id", conversacionId).maybeSingle();
     falla("perfil de la conversación", error);
     const p = data?.perfil_vendedor;
-    return p && typeof p === "object" && !Array.isArray(p) ? p as { producto?: unknown } : null;
+    return p && typeof p === "object" && !Array.isArray(p) ? p as { producto?: unknown; pidio_testimonio_en?: unknown; testimonio_pedido?: unknown } : null;
+  },
+
+  async ofertaRescateDesde(conversacionId, orderId, desdeISO) {
+    // 13-10: la oferta de rescate es un mensaje interactivo con el botón resc_prog:<id> (el primero).
+    const { data, error } = await db().from("wa_mensajes").select("id").eq("conversacion_id", conversacionId)
+      .eq("direccion", "out").neq("estado", "fallido").gte("creado_en", desdeISO)
+      .filter("contenido->interactive->action->buttons->0->reply->>id", "eq", `resc_prog:${orderId}`).limit(1);
+    falla("oferta de rescate", error);
+    return (data?.length ?? 0) > 0;
   },
 
   async ultimoTextoNuestro(conversacionId) {
@@ -407,6 +416,35 @@ export const depsReales: Deps = {
     }
     const r = await avisarConArchivo(escaparHtml(texto), { bytes, mime, nombre: a.nombre }, botones);
     return r.ok ? { ok: true } : { ok: false, error: r.error };
+  },
+
+  // 13-10: testimonios (migración 20261013000010_testimonios.sql). Solo service role.
+  async guardarTestimonio(t) {
+    const { data, error } = await db().from("testimonios")
+      .upsert(t, { onConflict: "wa_message_id", ignoreDuplicates: true }).select("id");
+    falla("guardar testimonio", error);
+    return data && data.length ? { id: String((data[0] as { id: string }).id) } : null;
+  },
+
+  async responderPermisoTestimonio(id, clienteId, autorizado) {
+    const { data, error } = await db().from("testimonios")
+      .update({ autorizado, autorizado_en: new Date().toISOString() })
+      .eq("id", id).eq("cliente_id", clienteId).is("autorizado", null).select("id");
+    falla("permiso del testimonio", error);
+    return (data?.length ?? 0) > 0;
+  },
+
+  async contarTestimoniosAutorizados() {
+    const { count, error } = await db().from("testimonios").select("id", { count: "exact", head: true }).eq("autorizado", true);
+    falla("contar testimonios", error);
+    return count ?? 0;
+  },
+
+  async registrarHitoTestimonios(hito) {
+    const { data, error } = await db().from("testimonios_hitos")
+      .upsert({ hito }, { onConflict: "hito", ignoreDuplicates: true }).select("hito");
+    falla("hito de testimonios", error);
+    return (data?.length ?? 0) > 0;
   },
 
   async clienteDeMensaje(waMessageId) {

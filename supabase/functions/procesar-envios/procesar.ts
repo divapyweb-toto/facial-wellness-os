@@ -25,7 +25,7 @@
 //     con la ventana cerrada no salen (mejor nada que pedirle plata a quien ya pagó).
 
 import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
-import { fechaLocal } from "../_shared/plazo_zona.ts";
+import { alas8DeFecha, fechaLocal, leerEntregaProgramada, textoEntregaProgramada, textoFecha } from "../_shared/plazo_zona.ts";
 import {
   CLAVE_CONFIG_PRIORIDAD,
   type CfgPagoPrioridad,
@@ -69,6 +69,8 @@ export interface Pedido {
   raw: unknown;
   /** shopify_pedidos.estado_envio (lo escribe importar-courier). */
   estado_envio?: string | null;
+  /** 13-10: shopify_pedidos.courier ('lucero' | 'pap'; lo escribe importar-courier). Nombra al courier en el texto para reenviar. */
+  courier?: string | null;
   /** shopify_pedidos.creado_en (10-10: la cancelación nunca antes de 24 h). Manda raw.created_at si está. */
   creado_en?: string | null;
 }
@@ -248,6 +250,11 @@ export const TEXTOS_AVISO_PAGADO: Record<string, string> = {
   voltra_entrega_proxima: "Hola {nombre}, tu pedido de Voltra ya está por llegar.\nYa está pagado ✅ no pagás nada al recibir. Tené el teléfono a mano para cuando te llame el repartidor.",
 };
 
+/** 13-10: aviso de "no se pudo entregar" con reintento automático (la v1 voltra_no_entregado ya no se programa). */
+export const AVISOS_REINTENTO = new Set(["voltra_reintento_entrega_v2"]);
+/** 13-10: con el envío en uno de estos estados ya no hay entrega que reintentar. */
+export const ESTADOS_SIN_REINTENTO = new Set(["ENTREGADO", "RENDIDO", "NO_ENTREGADO", "CANCELADO"]);
+
 /** 12-10: "mañana te llega": dice un día concreto (variables.fecha_entrega); el día de la entrega o después ya no sale. */
 export const PLANTILLA_ENTREGA_MANANA = "voltra_entrega_manana";
 
@@ -256,6 +263,50 @@ export function visperaVencida(e: Pick<Envio, "plantilla" | "variables">, moment
   if (nombrePlantilla(e.plantilla) !== PLANTILLA_ENTREGA_MANANA) return false;
   const f = str(obj(e.variables).fecha_entrega);
   return !!f && fechaLocal(momento) >= f;
+}
+
+/**
+ * 13-10: guardia de los avisos previos a la entrega de un pedido con entrega programada (atributo entrega_programada
+ * en el raw de Shopify, que se refresca con cada orders/updated). Se mira la fecha AL MANDAR, así un cambio de fecha
+ * posterior también se respeta:
+ * - Fecha ya pasada → "hoy te llega" / "mañana te llega" / "ya está por llegar" se cancelan.
+ * - "hoy te llega" o "ya está por llegar" antes del día → se corren a las 8:00 del día programado.
+ * - "mañana te llega" de otra fecha (programado antes del cambio) → se corre a las 8:00 del día programado y ese día
+ *   sale como "hoy te llega" (el "mañana" diría un día equivocado). Con la misma fecha, sigue la regla de la víspera.
+ * - "ya salió" → {plazo} dice el día programado si todavía decía el plazo genérico.
+ * null = no es programado o no cambia nada.
+ */
+export function guardiaEntregaProgramada(
+  nombre: string,
+  variables: unknown,
+  pedido: Pick<Pedido, "raw"> | null,
+  ahora: Date,
+): { decision: Decision } | { plantilla?: string; variables?: unknown } | null {
+  if (!AVISOS_PREVIOS_ENTREGA.has(nombre) || !pedido) return null;
+  const prog = leerEntregaProgramada(pedido.raw);
+  if (!prog) return null;
+  const hoy = fechaLocal(ahora);
+  const v = obj(variables);
+  if (nombre === "voltra_pedido_despachado") {
+    const plazo = `la fecha que pediste: ${textoEntregaProgramada(prog)}`;
+    // importar-courier lo programa con variables posicionales ([nombre, productos, courier, plazo, total]).
+    if (Array.isArray(variables)) {
+      const i = PLANTILLAS.voltra_pedido_despachado.vars.indexOf("plazo");
+      if (hoy > prog.fecha || String(variables[i] ?? "").includes(textoFecha(prog.fecha))) return null;
+      return { variables: variables.map((x, k) => (k === i ? plazo : x)) };
+    }
+    if (hoy > prog.fecha || String(v.plazo ?? "").includes(textoFecha(prog.fecha))) return null;
+    return { variables: { ...v, plazo } };
+  }
+  if (hoy > prog.fecha) return { decision: { accion: "cancelar", motivo: "entrega_programada_pasada" } };
+  const correr: { decision: Decision } = {
+    decision: { accion: "reprogramar", enviar_desde: alas8DeFecha(prog.fecha), motivo: `entrega_programada:${prog.fecha}` },
+  };
+  if (nombre === PLANTILLA_ENTREGA_MANANA) {
+    if (str(v.fecha_entrega) === prog.fecha) return null;
+    return hoy < prog.fecha ? correr : { plantilla: "voltra_entrega_hoy" };
+  }
+  return hoy < prog.fecha ? correr : null;
 }
 
 /** 09-10: estados de _shared/tipos.ts EstadoEnvio en los que el paquete ya no está en camino al cliente. */
@@ -517,8 +568,8 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
       : { accion: "cancelar", motivo: `pedido_${estadoPedido}` };
   }
 
-  const nombre = nombrePlantilla(e.plantilla);
-  const def = PLANTILLAS[nombre];
+  let nombre = nombrePlantilla(e.plantilla);
+  let def = PLANTILLAS[nombre];
   if (!def) return { accion: "fallar", motivo: `plantilla_desconocida:${nombre}` };
   if (nombre === PLANTILLA_PAGO_PRIORIDAD) return decidirOfertaPrioridad(ctx, cfg, ahora);
 
@@ -537,8 +588,27 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
   if (AVISOS_PREVIOS_ENTREGA.has(nombre) && envioTerminal(ctx.pedido?.estado_envio)) {
     return { accion: "cancelar", motivo: `envio_${ctx.pedido?.estado_envio}` };
   }
-  // 12-10: un "mañana te llega" que no salió a tiempo (error, reintento) ya no se manda: sería falso.
-  if (visperaVencida(e, ahora)) return { accion: "cancelar", motivo: "vispera_vencida" };
+  // 13-10: entrega programada → ningún "hoy / mañana te llega" en un día que no es el programado.
+  let variables = e.variables;
+  const guardia = guardiaEntregaProgramada(nombre, e.variables, ctx.pedido, ahora);
+  if (guardia && "decision" in guardia) return guardia.decision;
+  if (guardia?.plantilla) {
+    nombre = guardia.plantilla;
+    def = PLANTILLAS[nombre];
+  }
+  if (guardia?.variables) variables = guardia.variables;
+  // 12-10: un "mañana te llega" que no salió a tiempo (error, reintento) ya no se manda: sería falso. 13-10: salvo el
+  // "mañana" de otra fecha que la guardia corrió al día programado: ese sale como "hoy te llega".
+  if (!guardia?.plantilla && visperaVencida(e, ahora)) return { accion: "cancelar", motivo: "vispera_vencida" };
+  // 13-10: el aviso de reintento quedó en cola (de noche se corre a las 8:00) y mientras tanto el pedido se entregó,
+  // se devolvió o se canceló, o es de retiro en persona → ya no corresponde.
+  if (AVISOS_REINTENTO.has(nombre) && ctx.pedido) {
+    const ee = ctx.pedido.estado_envio ?? "";
+    if (ESTADOS_SIN_REINTENTO.has(ee)) return { accion: "cancelar", motivo: `envio_${ee}` };
+    if ((ctx.pedido.tags ?? []).some((t) => String(t).toUpperCase() === "RETIRO_EN_CASA")) {
+      return { accion: "cancelar", motivo: "retiro_en_casa" };
+    }
+  }
 
   const to = ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? null;
   if (!to) return { accion: "fallar", motivo: "cliente_sin_telefono" };
@@ -564,7 +634,7 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
     };
   }
 
-  const p = armarParametros(def, e.variables, ctx.pedido, ctx.cliente);
+  const p = armarParametros(def, variables, ctx.pedido, ctx.cliente);
   if (!p.ok) return { accion: "fallar", motivo: `falta_variable:${p.falta}` };
 
   // 12-10: pedido ya pagado (pago con prioridad, QR o transferencia): el aviso no le pide plata.
@@ -879,7 +949,7 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
       // 10-10: reintento de entrega → a Enrique le llega el texto listo para reenviar al courier.
       if (nombrePlantilla(e.plantilla) === "voltra_reintento_entrega_v2" && ctx.pedido) {
         const dc = datosCourierDesdeRaw(ctx.pedido.nombre ?? pedidoTxt, (ctx.pedido.raw ?? null) as Record<string, unknown> | null, ctx.cliente?.telefono ?? null);
-        await d.avisar(avisoParaCourier(dc, "No se pudo entregar: volver a intentar el próximo día hábil. Coordinar día, hora y lugar con el cliente.", null))
+        await d.avisar(avisoParaCourier(dc, "No se pudo entregar: volver a intentar el próximo día hábil. Coordinar día, hora y lugar con el cliente.", ctx.pedido.courier ?? null))
           .catch(() => {});
       }
       return marcarEnviado(e, res.wa_message_id, d, pedidoTxt);

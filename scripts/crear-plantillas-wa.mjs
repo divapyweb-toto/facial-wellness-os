@@ -120,7 +120,8 @@ export function validarPlantilla(p, palabras, archivo = '') {
     const t = b.text ?? '';
     if (!t.trim()) e.push('botón sin texto');
     if (t.length > LIMITES.etiquetaMeta) e.push(`botón "${t}" de más de ${LIMITES.etiquetaMeta} caracteres (límite de Meta)`);
-    else if (t.length > LIMITES.etiquetaProyecto) e.push(`botón "${t}" de más de ${LIMITES.etiquetaProyecto} caracteres`);
+    // 14-10: `_notas.boton_solo_plantilla` = la etiqueta no se reusa en botones interactivos → vale el límite de Meta.
+    else if (t.length > LIMITES.etiquetaProyecto && !p._notas?.boton_solo_plantilla) e.push(`botón "${t}" de más de ${LIMITES.etiquetaProyecto} caracteres`);
     // Meta (07-10, error 2388060): los botones no aceptan emojis, saltos de línea, variables ni formato.
     if (/\p{Extended_Pictographic}|\n|\{\{|[*_~]/u.test(t)) e.push(`botón "${t}": Meta no acepta emojis, saltos de línea, variables ni formato`);
     if (etiquetas.has(t)) e.push(`botón repetido "${t}"`);

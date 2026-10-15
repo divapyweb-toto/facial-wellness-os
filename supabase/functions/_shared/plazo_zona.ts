@@ -328,3 +328,95 @@ export function visperaEntrega(ahoraReal: Date, hora = 18): { enviar: Date; entr
 
 /** Hora de Asunción (0-23) de un instante. */
 export const horaLocal = (d: Date) => diaLocal(d).getUTCHours();
+
+// ---------- 13-10: entrega programada (el cliente pide un día concreto) ----------
+// Regla del dueño (13-10): se puede programar cualquier fecha FUTURA igual o posterior a la fecha mínima de entrega
+// (el primer día del rango de diaEntrega para esa ciudad y courier, con el corte de las 15:00 y sin sábado ni
+// domingo); nunca antes. El pedido sale el mismo día como cualquier otro: al courier se le pasa "Entregar el viernes
+// 16/10 (antes de las 12). No entregar antes." En Shopify queda el tag ENTREGA_PROGRAMADA y los atributos
+// entrega_programada = "YYYY-MM-DD" (fecha de Asunción) y entrega_franja = texto corto opcional ("antes de las 12").
+
+export const TAG_ENTREGA_PROGRAMADA = "ENTREGA_PROGRAMADA";
+export const ATRIBUTO_FECHA_PROGRAMADA = "entrega_programada";
+export const ATRIBUTO_FRANJA_PROGRAMADA = "entrega_franja";
+
+export type EntregaProgramada = { fecha: string; franja: string | null };
+
+/** 13-10: primer día posible de entrega ("2026-10-14") para la ciudad y el courier, desde `ahora`. */
+export function fechaMinimaEntrega(ciudad: unknown, ahora: Date, courier?: string | null): string {
+  return diaEntrega(ciudad, ahora, courier).desde;
+}
+
+/**
+ * 13-10: día hábil en que hay que darle el pedido al courier para que llegue el `fechaEntrega`: la fecha menos los días
+ * hábiles MÁXIMOS de tránsito del courier en esa zona (rangoEntrega(...).rango[1]); CDE y alrededores: el mismo día
+ * (el courier sale de CDE y entrega en el día). Se usa el máximo y no el mínimo para que llegue ese día y no después; si llega antes, el courier lo guarda
+ * con la nota "No entregar antes". Nunca antes de hoy (con el corte de las 15:00: diaDespacho(ahora)).
+ * Desde el 13-10 los pedidos programados salen el mismo día como cualquier otro: queda como dato para Despacho.
+ */
+export function diaDespachoParaEntrega(fechaEntrega: string, ciudad: unknown, courier?: string | null, ahora: Date = new Date()): string {
+  const r = rangoEntrega(ciudad, courier);
+  const max = r.zona === "cde" ? 0 : r.rango[1]; // CDE: el courier la lleva en el día; se le da ese mismo día
+  const d = deFecha(fechaEntrega);
+  while (finde(d)) d.setUTCDate(d.getUTCDate() - 1); // entrega sábado o domingo: se cuenta desde el viernes
+  let k = max;
+  while (k > 0) {
+    d.setUTCDate(d.getUTCDate() - 1);
+    if (!finde(d)) k--;
+  }
+  const hoy = aFecha(diaDespacho(ahora));
+  return aFecha(d) < hoy ? hoy : aFecha(d);
+}
+
+/** 13-10: "2026-10-16" → "viernes 16/10". */
+export const textoFecha = (fecha: string): string => nombreDia(fecha);
+
+/** 13-10: "el viernes 16/10, antes de las 12" (franja opcional). */
+export const textoEntregaProgramada = (p: EntregaProgramada): string => `el ${textoFecha(p.fecha)}${p.franja ? `, ${p.franja}` : ""}`;
+
+const FECHA_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+/** "2026-10-16" válida (no "2026-02-30"). */
+export function esFechaValida(f: unknown): f is string {
+  if (typeof f !== "string") return false;
+  const m = FECHA_RE.exec(f.trim());
+  if (!m) return false;
+  return aFecha(deFecha(f.trim())) === f.trim();
+}
+
+/**
+ * 13-10: entrega programada desde el pedido de Shopify guardado (shopify_pedidos.raw): REST (note_attributes
+ * [{name, value}]) o GraphQL (customAttributes [{key, value}]). Manda el atributo entrega_programada con una fecha
+ * válida; el tag ENTREGA_PROGRAMADA solo no alcanza (sin fecha no hay nada que respetar) y el atributo sin el tag
+ * vale igual (Shopify puede mandar el orders/updated del atributo antes que el del tag). null si no hay.
+ */
+export function leerEntregaProgramada(raw: unknown): EntregaProgramada | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const pares: Array<[string, unknown]> = [];
+  for (const lista of [r.note_attributes, r.customAttributes]) {
+    if (!Array.isArray(lista)) continue;
+    for (const a of lista) {
+      if (!a || typeof a !== "object") continue;
+      const o = a as Record<string, unknown>;
+      pares.push([String(o.name ?? o.key ?? "").trim().toLowerCase(), o.value]);
+    }
+  }
+  const valor = (k: string) => {
+    const p = pares.find(([n]) => n === k);
+    return typeof p?.[1] === "string" && p[1].trim() ? p[1].trim() : null;
+  };
+  const fecha = valor(ATRIBUTO_FECHA_PROGRAMADA);
+  if (!esFechaValida(fecha)) return null;
+  const franja = valor(ATRIBUTO_FRANJA_PROGRAMADA);
+  return { fecha, franja: franja ? franja.replace(/\s+/g, " ").slice(0, 60) : null };
+}
+
+/** 13-10: 8:00 de Asunción (11:00 UTC) de una fecha "YYYY-MM-DD". */
+export const alas8DeFecha = (fecha: string): Date => new Date(`${fecha}T11:00:00Z`);
+
+/** 13-10: día hábil anterior a `fecha` ("2026-10-19" lunes → "2026-10-16" viernes). */
+export function habilAnterior(fecha: string): string {
+  const d = deFecha(fecha);
+  do d.setUTCDate(d.getUTCDate() - 1); while (finde(d));
+  return aFecha(d);
+}

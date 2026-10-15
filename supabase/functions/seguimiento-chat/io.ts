@@ -1,4 +1,5 @@
-// seguimiento-chat · I/O real (Supabase, vendedor, Telegram, WhatsApp). La lógica está en logica.ts y toque3.ts.
+// seguimiento-chat · I/O real (Supabase, vendedor, Telegram, WhatsApp). La lógica está en logica.ts, toque3.ts y
+// rescate_datos.ts (13-10).
 import { deducirProductoAnuncio } from "../_shared/anuncios.ts";
 import { db } from "../_shared/db.ts";
 import { avisar } from "../_shared/telegram.ts";
@@ -8,6 +9,7 @@ import { depsHerramientasReales, depsOrquestadorReales } from "../_shared/vended
 import { registrarBaja } from "../recompra/baja.ts";
 import type { Candidato, CfgSeguimiento, DepsSeguimiento } from "./logica.ts";
 import type { HistorialMk, PreciosToque3 } from "./toque3.ts";
+import { esBotonQuiero, PREFIJO_RESCATE, rescateSalio } from "./rescate_datos.ts";
 
 function falla(contexto: string, error: { message: string } | null): void {
   if (error) throw new Error(`${contexto}: ${error.message}`);
@@ -68,6 +70,58 @@ async function candidatosToque3(creadasDesdeISO: string, entradaHastaISO: string
   return cands.map((c) => ({
     ...c,
     handle_anuncio: deducirProductoAnuncio({ adId: c.origen_anuncio_id ?? null, mapeo: mapeo.data?.valor })?.handle ?? null,
+  }));
+}
+
+/**
+ * 13-10 · rescate de datos: conversaciones en 'ia' con un toque "Quiero …" (vend_p1:q1|q2|pack|pedir) desde
+ * toqueDesdeISO y que no escriben desde entradaHastaISO. El toque es un entrante: interactive
+ * (contenido.interactive.button_reply.id) o botón de plantilla (contenido.button.payload, el "Quiero pedirlo" del
+ * toque 3). Suma el último toque, el último wa_pedidos_chat en 'resumen'/'creado' y los rescates que salieron en los
+ * últimos dias_reinicio días.
+ */
+async function candidatosRescateDatos(toqueDesdeISO: string, entradaHastaISO: string, cfg: CfgSeguimiento): Promise<Candidato[]> {
+  const sb = db();
+  const toques = await sb.from("wa_mensajes")
+    .select("conversacion_id,creado_en,boton:contenido->interactive->button_reply->>id,payload:contenido->button->>payload")
+    .eq("direccion", "in").in("tipo", ["interactive", "button"]).gte("creado_en", toqueDesdeISO)
+    .order("creado_en", { ascending: false }).limit(2000);
+  falla("toques de botones", toques.error);
+  const ultimoQuiero = new Map<string, string>(); // vienen del más nuevo al más viejo: queda el último toque
+  for (const m of toques.data ?? []) {
+    if (!m.conversacion_id || ultimoQuiero.has(m.conversacion_id)) continue;
+    if (esBotonQuiero(m.boton as string | null) || esBotonQuiero(m.payload as string | null)) ultimoQuiero.set(m.conversacion_id, m.creado_en);
+  }
+  // 150 como mucho (los .in() viajan en la URL): las de toque más reciente primero (las que se pueden rescatar ya).
+  const ids = [...ultimoQuiero.keys()].slice(0, 150);
+  if (!ids.length) return [];
+  const { data, error } = await sb.from("wa_conversaciones").select(COLUMNAS_CONV).in("id", ids)
+    .eq("estado", "ia").lte("ultima_entrada_en", entradaHastaISO);
+  falla("conversaciones para el rescate de datos", error);
+  const convs = (data ?? []) as FilaConv[];
+  if (!convs.length) return [];
+  const idsConv = convs.map((c) => c.id);
+  const desdeRescates = new Date(Date.now() - cfg.dias_reinicio * DIA).toISOString();
+  const [cands, resumenes, rescates] = await Promise.all([
+    enriquecer(convs, toqueDesdeISO, cfg),
+    sb.from("wa_pedidos_chat").select("conversacion_id,creado_en").in("conversacion_id", idsConv)
+      .in("estado", ["resumen", "creado"]).gte("creado_en", toqueDesdeISO).order("creado_en", { ascending: false }),
+    sb.from("vendedor_turnos").select("conversacion_id,accion").in("conversacion_id", idsConv)
+      .like("mensaje_entrada_id", `${PREFIJO_RESCATE}%`).gte("creado_en", desdeRescates).limit(1000),
+  ]);
+  falla("resúmenes del chat", resumenes.error);
+  falla("rescates de datos anteriores", rescates.error);
+  const ultimoResumen = new Map<string, string>();
+  for (const p of resumenes.data ?? []) if (!ultimoResumen.has(p.conversacion_id)) ultimoResumen.set(p.conversacion_id, p.creado_en);
+  const cuantos = new Map<string, number>();
+  for (const t of rescates.data ?? []) {
+    if (rescateSalio(t.accion as string | null)) cuantos.set(t.conversacion_id, (cuantos.get(t.conversacion_id) ?? 0) + 1);
+  }
+  return cands.map((c) => ({
+    ...c,
+    ultimo_quiero_en: ultimoQuiero.get(c.conversacion_id) ?? null,
+    ultimo_resumen_en: ultimoResumen.get(c.conversacion_id) ?? null,
+    rescates_datos: cuantos.get(c.conversacion_id) ?? 0,
   }));
 }
 
@@ -334,4 +388,13 @@ export const depsReales: DepsSeguimiento = {
   },
 
   registrarBaja: (clienteId) => registrarBaja(clienteId, "meta_131050"),
+
+  // ---- 13-10: rescate de datos (rescate_datos.ts) ----
+  candidatosRescateDatos,
+
+  marcarRescateDatos(conversacionId, enISO) {
+    // Mismo enfoque que marcarToque3 (sin RPC propia). Se marca antes del turno y, si no salió nada, se devuelve la
+    // marca anterior después (nunca a la par del guardado de perfil del orquestador). normalizarPerfil("base") la conserva.
+    return marcarClavesPerfil(conversacionId, { rescate_datos_en: enISO }, "rescate de datos");
+  },
 };

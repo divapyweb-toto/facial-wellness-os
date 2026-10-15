@@ -258,3 +258,23 @@ Deno.test('correrSeguimiento: guarda de a tandas; si se corta, lo ya consultado 
   assertEquals(b.estados.length, 5)
   assertEquals(b.log.marcadas.map((m) => m.guia), gs.slice(0, 5).map((g) => g.nro_guia_pap))
 })
+
+Deno.test('13-10: fallido en la web de Lucero → mismo pipeline que el Excel: INTENTO_FALLIDO y aviso de reintento', async () => {
+  const FALLIDO = paginaInventada({
+    id: '90003', ref: 'VT-9003', estado: 'fallido',
+    fechas: { Creado: '2026-10-01 00:00', Aceptado: '2026-10-02 09:10', 'En camino': '2026-10-08 08:00', Fallido: '2026-10-08 16:40' },
+  })
+  const pedidos = [pedido({ shopify_order_id: 5003, nombre: '#9003' })]
+  const { deps, log, estados } = depsPrueba(
+    [guia({ nro_guia_pap: 'L-VT-9003', n_referencia: 'VT-9003', envio_id: '90003', estado_pap: 'En camino', categoria: 'en_proceso' })],
+    { '90003': FALLIDO },
+    pedidos,
+  )
+  const r = await correrSeguimiento(deps, { tope: 40, pausa_ms: 3000 })
+  assertEquals(estados, ['5003:INTENTO_FALLIDO'])
+  assertEquals(pedidos[0].estado_envio, 'INTENTO_FALLIDO')
+  assertEquals(r.pipeline?.avisos_programados, 1)
+  assertEquals(log.lotes[0][0].fecha, '2026-10-08 16:40')
+  // fallido no es terminal: la guía se sigue consultando (categoría en_proceso).
+  assertEquals((log.actualizadas[0].cambios as { categoria: string }).categoria, 'en_proceso')
+})

@@ -22,6 +22,6 @@
       "producto"
     ],
     "botones_payload": [],
-    "aviso": "Solo se manda si el borrador trae evidencia de consentimiento (ver ola4.recuperacion). Un único mensaje por borrador. Utilidad porque nombra un pedido concreto que el cliente empezó; sin ofertas ni descuentos. Riesgo: Meta puede recategorizarla a marketing (USD 0,074 en vez de 0,0113); si pasa, revisar el costo antes de activar."
+    "aviso": "Solo se manda si el borrador trae evidencia de consentimiento (ver ola4.recuperacion). Un único mensaje por borrador. Se pidió como utilidad (nombra un pedido concreto, sin ofertas), pero al 13-10 Meta la tiene APROBADA como MARKETING: se cobra tarifa de marketing y solo vale consentimiento de marketing (config categoria=MARKETING en ola4.recuperacion). No reenviarla como utilidad: Meta trata los recordatorios de carrito abandonado como marketing."
   }
 }

@@ -22,6 +22,11 @@
 --       update public.config_wa set valor = jsonb_set(valor, '{toque3,activo}', 'true') where clave = 'vendedor_seguimiento';
 --     requiere_consentimiento: true = solo a clientes con consentimiento de marketing 'si'. reintento_h: horas sin
 --     reintentar tras una falla. nombre_si_falta: {{1}} sin nombre usable ("Hola de nuevo, …").
+--   rescate_datos_activo / rescate_datos_min / rescate_datos_max (13-10, seguimiento-chat/rescate_datos.ts): quien tocó
+--     "Quiero …" (vend_p1:q1|q2|pack|pedir) y se calla ≥ rescate_datos_min (10) min sin resumen ni pedido recibe UN
+--     mensaje del vendedor pidiendo solo lo que falta (uno por toque, máx. rescate_datos_max (2) por conversación cada
+--     dias_reinicio días). A cualquier hora, dentro de las 24 h de WhatsApp. Para apagarlo:
+--       update public.config_wa set valor = valor || '{"rescate_datos_activo": false}'::jsonb where clave = 'vendedor_seguimiento';
 -- Si la clave ya existe no se pisa (on conflict do nothing); las claves nuevas que falten se agregan sin tocar
 -- las que ya están (lo existente gana). Por eso los cambios de valor del 12-10 (horas_1 2 → 1,5 y horario_desde
 -- 8 → 12) NO llegan solos a una base que ya tenía la clave: van con este update, una sola vez:
@@ -43,6 +48,9 @@ insert into public.config_wa (clave, valor) values
      "dias_pedido": 7,
      "horas_2_min": 8,
      "margen_2_h": 0.5,
+     "rescate_datos_activo": true,
+     "rescate_datos_min": 10,
+     "rescate_datos_max": 2,
      "toque3": {"activo": false,
                 "requiere_consentimiento": true,
                 "plantilla": "voltra_mk_seguimiento_oferta",
@@ -71,6 +79,9 @@ update public.config_wa
                  "dias_pedido": 7,
                  "horas_2_min": 8,
                  "margen_2_h": 0.5,
+                 "rescate_datos_activo": true,
+                 "rescate_datos_min": 10,
+                 "rescate_datos_max": 2,
                  "toque3": {"activo": false,
                             "requiere_consentimiento": true,
                             "plantilla": "voltra_mk_seguimiento_oferta",

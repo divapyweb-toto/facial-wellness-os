@@ -611,3 +611,112 @@ Deno.test("víspera activa: pedido ya pagado o despacho marcado de noche → el 
   const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
   assertEquals([r.plantilla, r.enviar_desde, r.variables.dia_entrega], ["voltra_entrega_manana", "2026-10-07T21:00:00.000Z", "mañana jueves 08/10"]);
 });
+
+// ---------- 13-10: entrega programada (sale el mismo día; avisos contra la fecha pedida) ----------
+
+const MARTES = new Date("2026-10-13T15:00:00.000Z"); // martes 12:00 en Asunción
+const programado = (ciudad: string, fecha = "2026-10-16", franja: string | null = "antes de las 12", extra: Record<string, unknown> = {}) =>
+  despachado(ciudad, {
+    tags: "CONFIRMADO, ENTREGA_PROGRAMADA",
+    note_attributes: [{ name: "entrega_programada", value: fecha }, ...(franja ? [{ name: "entrega_franja", value: franja }] : [])],
+    ...extra,
+  });
+
+function conCandado(f: ReturnType<typeof dbFalsa>) {
+  const candados = new Set<string>();
+  const avisos: string[] = [];
+  let revertidos = 0;
+  f.deps.ahora = () => MARTES;
+  f.deps.courierDePedido = () => Promise.resolve("lucero");
+  f.deps.reservarAvisoUnaVez = (c) => Promise.resolve(!candados.has(c) && !!candados.add(c));
+  f.deps.avisar = (t) => (avisos.push(t), Promise.resolve({ ok: true }));
+  f.deps.revertirPreparado = () => (revertidos++, Promise.resolve({ ok: true }));
+  return { avisos, candados, revertidos: () => revertidos };
+}
+
+Deno.test("13-10 programado (caso real CDE, viernes 16/10 antes de las 12): no se revierte; 'ya salió' con la fecha; 'hoy te llega' el viernes 8:00; UN aviso a Enrique con el texto para el courier", async () => {
+  const f = dbFalsa();
+  const c = conCandado(f);
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", programado("Ciudad del Este")), f.deps);
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", { ...programado("Ciudad del Este"), tags: "CONFIRMADO, ENTREGA_PROGRAMADA, VIP" }), f.deps);
+  assertEquals(c.revertidos(), 0);
+  const ya = f.envios.get("courier:5550001:DESPACHADO")!;
+  assertEquals(ya.variables.plazo, "la fecha que pediste: el viernes 16/10, antes de las 12");
+  assertEquals(ya.enviar_desde, MARTES.toISOString());
+  const rec = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+  assertEquals([rec.plantilla, rec.enviar_desde], ["voltra_entrega_hoy", "2026-10-16T11:00:00.000Z"]);
+  assertEquals(rec.variables, { nombre: "Ana", total: "129.000", fecha_entrega: "2026-10-16" });
+  assertEquals(c.avisos.length, 1);
+  assert(c.avisos[0].includes("Entregar el viernes 16/10 (antes de las 12). No entregar antes."));
+  assert(c.avisos[0].includes("Para reenviar a Lucero</b>"));
+  assert(c.avisos[0].includes("#1001"));
+  // Si el cliente cambia la fecha (el pedido sigue preparado), sale otro aviso con la fecha nueva.
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", programado("Ciudad del Este", "2026-10-19", null)), f.deps);
+  assertEquals(c.avisos.length, 2);
+  assert(c.avisos[1].includes("Entregar el lunes 19/10. No entregar antes."));
+});
+
+Deno.test("13-10 programado: Asunción con la víspera activa → 18:00 del día hábil anterior; lunes → el viernes 'el lunes 19/10'", async () => {
+  for (const [fecha, cuando, dia] of [
+    ["2026-10-16", "2026-10-15T21:00:00.000Z", "mañana viernes 16/10"],
+    ["2026-10-19", "2026-10-16T21:00:00.000Z", "el lunes 19/10"],
+  ] as const) {
+    const f = dbFalsa();
+    conCandado(f);
+    f.deps.leerPlantillasActivas = () => Promise.resolve({ voltra_entrega_manana: true });
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", programado("Asunción", fecha)), f.deps);
+    const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+    assertEquals([r.plantilla, r.enviar_desde, r.variables.dia_entrega, r.variables.fecha_entrega], ["voltra_entrega_manana", cuando, dia, fecha]);
+  }
+});
+
+Deno.test("13-10 programado: sin la víspera, pagado o interior → la mañana del día programado; nunca el día siguiente al despacho", async () => {
+  const casos = [
+    [programado("Asunción"), {}, "voltra_entrega_hoy"],
+    [programado("Luque", "2026-10-16", null, { tags: "CONFIRMADO, ENTREGA_PROGRAMADA, PAGO_VERIFICADO" }), { voltra_entrega_manana: true }, "voltra_entrega_hoy"],
+    [programado("Encarnación", "2026-10-20"), {}, "voltra_entrega_proxima"],
+  ] as const;
+  for (const [p, activas, plantilla] of casos) {
+    const f = dbFalsa();
+    conCandado(f);
+    f.deps.leerPlantillasActivas = () => Promise.resolve(activas);
+    await procesarPedido(normalizarDesdeWebhook("orders/updated", p), f.deps);
+    const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+    const fecha = (p.note_attributes as Array<{ value: string }>)[0].value;
+    assertEquals([r.plantilla, r.enviar_desde], [plantilla, `${fecha}T11:00:00.000Z`], JSON.stringify(p.shipping_address.city));
+  }
+  // Marcado el jueves 14:00 (víspera) para el viernes → la víspera sale ese mismo jueves a las 18:00.
+  const f = dbFalsa();
+  conCandado(f);
+  f.deps.ahora = () => new Date("2026-10-15T17:00:00.000Z");
+  f.deps.leerPlantillasActivas = () => Promise.resolve({ voltra_entrega_manana: true });
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", programado("Asunción")), f.deps);
+  const r = f.envios.get("courier:5550001:ENTREGA_HOY")!;
+  assertEquals([r.plantilla, r.enviar_desde, r.variables.dia_entrega], ["voltra_entrega_manana", "2026-10-15T21:00:00.000Z", "mañana viernes 16/10"]);
+});
+
+Deno.test("13-10 programado: fecha ya pasada (atributo viejo) → avisos de siempre; sin candado → no avisa a Enrique (no se repetiría)", async () => {
+  const f = dbFalsa();
+  const c = conCandado(f);
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", programado("Ciudad del Este", "2026-10-09")), f.deps);
+  assertEquals(f.envios.get("courier:5550001:DESPACHADO")!.variables.plazo, "el día o al siguiente");
+  assertEquals(f.envios.get("courier:5550001:ENTREGA_HOY")!.plantilla, "voltra_entrega_proxima");
+  assertEquals(c.avisos.length, 0);
+
+  const g = dbFalsa();
+  const d = conCandado(g);
+  delete g.deps.reservarAvisoUnaVez;
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", programado("Ciudad del Este")), g.deps);
+  assertEquals(d.avisos.length, 0);
+  assertEquals(g.envios.get("courier:5550001:DESPACHADO")!.variables.plazo, "la fecha que pediste: el viernes 16/10, antes de las 12");
+});
+
+Deno.test("13-10 programado sin confirmar: se revierte como cualquier otro (la regla de siempre), sin aviso del courier", async () => {
+  const f = dbFalsa();
+  const c = conCandado(f);
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", programado("Ciudad del Este", "2026-10-16", null, { tags: "ENTREGA_PROGRAMADA" })), f.deps);
+  assertEquals(c.revertidos(), 1);
+  assertEquals(c.avisos.length, 1);
+  assert(c.avisos[0].includes("todavía no confirmó"));
+  assertEquals([...f.envios.keys()].filter((k) => k.startsWith("courier:")).length, 0);
+});

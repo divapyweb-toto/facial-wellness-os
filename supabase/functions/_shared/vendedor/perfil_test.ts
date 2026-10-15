@@ -100,9 +100,23 @@ Deno.test("toque3_en (12-10): la base la conserva, el modelo no la puede tocar y
 });
 
 Deno.test("variante_p1: la marca primer_turno, sobrevive al guardar y la primera no se pisa", () => {
-  assertEquals(marcasDeRespuesta("", ["primer_turno"]).variante_p1, "botones_v1");
+  // 13-10: primer turno con todos los precios y Quiero 1 / Quiero 2 · sin envío = botones_v2.
+  assertEquals(marcasDeRespuesta("", ["primer_turno"]).variante_p1, "botones_v2");
+  // Los chats que ya tenían v1 siguen en v1 (la primera queda).
+  assertEquals(fusionarPerfil({ variante_p1: "botones_v1" }, marcasDeRespuesta("", ["primer_turno"])).variante_p1, "botones_v1");
   assertEquals(marcasDeRespuesta("", ["consultar_catalogo"]).variante_p1, undefined);
   assertEquals(normalizarPerfil({ variante_p1: "botones_v1" }).variante_p1, "botones_v1");
   assertEquals(normalizarPerfil({ variante_p1: "botones_v1" }, "modelo").variante_p1, undefined);
   assertEquals(fusionarPerfil({ variante_p1: "a" }, { variante_p1: "b" }).variante_p1, "a");
+});
+
+Deno.test("rescate_datos_en (13-10): la base la conserva, el modelo no la puede tocar, fusionar no la pierde y cuenta en mismoPerfil", () => {
+  const iso = "2026-10-13T15:00:00.000Z";
+  assertEquals(normalizarPerfil({ rescate_datos_en: iso }).rescate_datos_en, iso);
+  assertEquals(normalizarPerfil({ rescate_datos_en: "ayer" }).rescate_datos_en, undefined);
+  assertEquals(normalizarPerfil({ rescate_datos_en: iso }, "modelo").rescate_datos_en, undefined);
+  assertEquals(fusionarPerfil({ rescate_datos_en: iso }, normalizarPerfil({ perfil: "precio", rescate_datos_en: "2026-10-14T15:00:00.000Z" }, "modelo")).rescate_datos_en, iso);
+  assertEquals(fusionarPerfil({}, { rescate_datos_en: iso }).rescate_datos_en, iso);
+  assertEquals(mismoPerfil({ rescate_datos_en: iso }, { rescate_datos_en: iso }), true);
+  assertEquals(mismoPerfil({}, { rescate_datos_en: iso }), false);
 });

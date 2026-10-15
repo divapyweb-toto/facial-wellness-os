@@ -6,6 +6,11 @@
 //   M2 = D ÷ factor_uso_real − 3                solo si no recompró   (redondeo hacia abajo)
 //   Compra única (raspador, botella, ejercitador): venta cruzada el día 14 con el producto afín.
 //
+// 13-10: regla de Enrique para tiras, parches y pack: si config_wa.recompra.dias_reposicion está
+//   cargado (hoy 25), M1 = dias_reposicion + (bolsas − 1) × unidades_por_bolsa ÷ unidades_por_noche
+//   (1 bolsa → 25, 2 → 55, 3 → 85). M2 igual que antes, pero si no cae después de M1 no se manda.
+//   Sin esa clave queda la fórmula de arriba (compatible con lo que ya estaba).
+//
 // Productos, tipo (consumible / pack / única), unidades por bolsa, afinidades, ofertas y precios
 // salen de config_wa.recompra (supabase/seed_recompra.sql), nunca de este archivo.
 
@@ -20,6 +25,8 @@ export interface ProductoCfg {
   nombre: string;
   /** Subcadenas (sin tildes, minúsculas) que identifican la línea del pedido. */
   patrones: string[];
+  /** 13-10: handles exactos de Shopify; si la línea trae handle, gana sobre los patrones. */
+  handles?: string[];
   tipo: TipoProducto;
   unidades_por_bolsa?: number;
   /** Clave del producto que se ofrece en venta cruzada / lanzamientos. */
@@ -50,6 +57,8 @@ export interface RecompraCfg {
   resta_m2: number;
   dia_cruzada: number;
   hora_envio: number;
+  /** 13-10: días desde la entrega para M1 de consumibles y pack (1 bolsa). null = fórmula vieja. */
+  dias_reposicion: number | null;
   /** No se crean avisos cuyo día ya pasó hace más de esto (arranque con entregas viejas). */
   dias_gracia: number;
   /** Solo se miran entregas de los últimos N días. */
@@ -74,6 +83,7 @@ export const CFG_DEFECTO: RecompraCfg = {
   resta_m2: 3,
   dia_cruzada: 14,
   hora_envio: 9,
+  dias_reposicion: null,
   dias_gracia: 3,
   ventana_dias: 200,
   nombre_si_falta: "de nuevo",
@@ -109,6 +119,11 @@ export function configDesdeValor(valor: unknown): RecompraCfg {
   ) {
     c[k] = num(v[k], CFG_DEFECTO[k]);
   }
+  // 13-10: ausente, null o ≤ 0 → fórmula vieja (pct_m1 / margen_dias_m1).
+  c.dias_reposicion = typeof v.dias_reposicion === "number" && Number.isFinite(v.dias_reposicion) &&
+      v.dias_reposicion > 0
+    ? v.dias_reposicion
+    : null;
   if (typeof v.nombre_si_falta === "string") c.nombre_si_falta = v.nombre_si_falta;
   if (Array.isArray(v.productos)) c.productos = v.productos as ProductoCfg[];
   if (v.ofertas && typeof v.ofertas === "object") c.ofertas = v.ofertas as RecompraCfg["ofertas"];
@@ -154,8 +169,16 @@ export function diasEntre(desdeISO: string, hastaISO: string): number {
 
 export const normalizar = (s: string) => (s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
-/** Producto de una línea del pedido por sus patrones (gana el primero de la lista de config). */
-export function clasificar(titulo: string, productos: ProductoCfg[]): ProductoCfg | null {
+/**
+ * Producto de una línea del pedido. 13-10: primero el handle exacto de Shopify (si la línea lo trae
+ * y algún producto lo tiene en `handles`); si no, por sus patrones (gana el primero de la lista de config).
+ */
+export function clasificar(titulo: string, productos: ProductoCfg[], handle?: string | null): ProductoCfg | null {
+  const h = (handle ?? "").trim().toLowerCase();
+  if (h) {
+    const porHandle = productos.find((p) => (p.handles ?? []).some((x) => x.trim().toLowerCase() === h));
+    if (porHandle) return porHandle;
+  }
   const t = normalizar(titulo);
   if (!t) return null;
   return productos.find((p) => p.patrones.some((x) => t.includes(normalizar(x)))) ?? null;
@@ -164,6 +187,16 @@ export function clasificar(titulo: string, productos: ProductoCfg[]): ProductoCf
 export interface LineaPedido {
   titulo: string;
   cantidad: number;
+  /** 13-10: handle del producto en Shopify, si el raw lo trae. */
+  handle?: string;
+}
+
+/** 13-10: handle de la línea (REST product_handle / handle / product.handle; GraphQL variant.product.handle). */
+function handleDeLinea(it: Obj): string {
+  for (const x of [it.product_handle, it.handle, obj(it.product).handle, obj(obj(it.variant).product).handle]) {
+    if (typeof x === "string" && x.trim()) return x.trim();
+  }
+  return "";
 }
 
 /** Líneas desde shopify_pedidos.raw (REST line_items o GraphQL lineItems.nodes / edges). */
@@ -179,15 +212,21 @@ export function lineasDesdeRaw(raw: unknown): LineaPedido[] {
     : [];
   return items.map((i) => {
     const it = obj(i);
-    return { titulo: String(it.title ?? it.name ?? ""), cantidad: Math.max(1, Number(it.quantity ?? 1) || 1) };
-  }).filter((l) => l.titulo);
+    const l: LineaPedido = {
+      titulo: String(it.title ?? it.name ?? ""),
+      cantidad: Math.max(1, Number(it.quantity ?? 1) || 1),
+    };
+    const h = handleDeLinea(it);
+    if (h) l.handle = h;
+    return l;
+  }).filter((l) => l.titulo || l.handle);
 }
 
 /** Bolsas por producto clasificado en un pedido. */
 export function bolsasPorProducto(lineas: LineaPedido[], productos: ProductoCfg[]): Map<string, number> {
   const m = new Map<string, number>();
   for (const l of lineas) {
-    const p = clasificar(l.titulo, productos);
+    const p = clasificar(l.titulo, productos, l.handle);
     if (p) m.set(p.clave, (m.get(p.clave) ?? 0) + l.cantidad);
   }
   return m;
@@ -210,6 +249,11 @@ export function duracionDias(bolsas: number, p: ProductoCfg, cfg: RecompraCfg): 
 }
 export function diaM1(D: number, cfg: RecompraCfg): number {
   return Math.floor(Math.min(cfg.pct_m1 * D, D - cfg.margen_dias_m1));
+}
+/** 13-10: M1 con dias_reposicion (consumible y pack): la 1ª bolsa a los N días, cada bolsa extra suma su duración. */
+export function diaM1Reposicion(bolsas: number, p: ProductoCfg, cfg: RecompraCfg): number | null {
+  if (cfg.dias_reposicion === null || (p.tipo !== "consumible" && p.tipo !== "pack")) return null;
+  return Math.floor(cfg.dias_reposicion + duracionDias(Math.max(0, bolsas - 1), p, cfg));
 }
 export function diaM2(D: number, cfg: RecompraCfg): number {
   return Math.floor(D / cfg.factor_uso_real - cfg.resta_m2);
@@ -271,10 +315,13 @@ export function calcularPlan(p: PedidoEntregado, cfg: RecompraCfg): ItemPlan[] {
   }
   if (principal) {
     const { prod, b, D } = principal;
+    const m1 = diaM1Reposicion(b, prod, cfg) ?? diaM1(D, cfg);
     for (const tipo of ["M1", "M2"] as const) {
       const of = ofertaPara(prod, b, tipo, cfg);
       if (!of) continue;
-      const dia = tipo === "M1" ? diaM1(D, cfg) : diaM2(D, cfg);
+      const dia = tipo === "M1" ? m1 : diaM2(D, cfg);
+      // 13-10: M2 que no cae después de M1 no tiene sentido (con dias_reposicion grande puede pasar).
+      if (tipo === "M2" && dia <= m1) continue;
       out.push({
         ...base,
         tipo,
@@ -336,15 +383,24 @@ export function planLanzamiento(
     }));
 }
 
-/** ¿Hizo otro pedido (no cancelado) del mismo producto después de la entrega de origen? */
+/**
+ * ¿Hizo otro pedido (no cancelado) del mismo producto después del pedido de origen?
+ * 13-10: se cuenta desde la CREACIÓN del pedido de origen (creado_en; si no viene, desde la entrega):
+ *   un segundo pedido hecho mientras el primero estaba en camino también corta la recompra del primero.
+ *   Con `productos`, si `producto` es un pack, un pedido con cualquiera de sus contenidos también cuenta
+ *   (al revés ya andaba: un pedido con el pack "tiene" tiras y parches por clavesQueTiene).
+ */
 export function recompro(
-  origen: { shopify_order_id: number; entregado_en: Date },
+  origen: { shopify_order_id: number; entregado_en: Date; creado_en?: Date | null },
   producto: string,
   pedidosCliente: { shopify_order_id: number; creado_en: Date; cancelado: boolean; tiene: Set<string> }[],
+  productos?: ProductoCfg[],
 ): boolean {
+  const desde = (origen.creado_en ?? origen.entregado_en).getTime();
+  const claves = [producto, ...(productos?.find((p) => p.clave === producto)?.contiene ?? [])];
   return pedidosCliente.some((x) =>
     x.shopify_order_id !== origen.shopify_order_id && !x.cancelado &&
-    x.creado_en.getTime() > origen.entregado_en.getTime() && x.tiene.has(producto)
+    x.creado_en.getTime() > desde && claves.some((k) => x.tiene.has(k))
   );
 }
 

@@ -18,6 +18,7 @@ import {
   type ItemPlan,
   type LineaPedido,
   type MensajeMk,
+  type ProductoCfg,
   type RecompraCfg,
   recompro,
 } from "./calendario.ts";
@@ -124,7 +125,13 @@ export async function ejecutarRecompra(d: Deps): Promise<Resumen> {
   const abiertos = await d.planesAbiertos();
   const vivos: PlanFila[] = [];
   for (const pl of abiertos) {
-    const motivo = motivoCancelacion(pl, cons.get(pl.cliente_id) ?? null, porCliente.get(pl.cliente_id) ?? [], tieneDe);
+    const motivo = motivoCancelacion(
+      pl,
+      cons.get(pl.cliente_id) ?? null,
+      porCliente.get(pl.cliente_id) ?? [],
+      tieneDe,
+      cfg.productos,
+    );
     if (motivo) {
       await cancelarPlan(d, pl, motivo);
       r.cancelados++;
@@ -204,6 +211,7 @@ export function motivoCancelacion(
   consentimiento: Consentimiento,
   pedidosCliente: PedidoFila[],
   tieneDe: (p: PedidoFila) => Set<string>,
+  productos?: ProductoCfg[],
 ): string | null {
   if (consentimiento !== "si") return `sin_consentimiento:${consentimiento ?? "ninguno"}`;
   if (pl.tipo === "LANZAMIENTO") return null;
@@ -215,8 +223,14 @@ export function motivoCancelacion(
     cancelado: p.cancelado,
     tiene: tieneDe(p),
   }));
-  const o = { shopify_order_id: origen.shopify_order_id, entregado_en: origen.entregado_en };
-  if ((pl.tipo === "M1" || pl.tipo === "M2") && recompro(o, pl.producto_clave, otros)) return "recompro";
+  // 13-10: desde la creación del pedido de origen (un pedido nuevo mientras viaja también corta) y,
+  // para M1/M2 de un pack, un pedido con tiras o parches también cuenta como recompra.
+  const o = {
+    shopify_order_id: origen.shopify_order_id,
+    entregado_en: origen.entregado_en,
+    creado_en: origen.creado_en,
+  };
+  if ((pl.tipo === "M1" || pl.tipo === "M2") && recompro(o, pl.producto_clave, otros, productos)) return "recompro";
   if (pl.tipo === "CRUZADA" && recompro(o, pl.producto_clave, otros)) return "ya_compro_afin";
   return null;
 }

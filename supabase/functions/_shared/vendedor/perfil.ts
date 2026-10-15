@@ -43,10 +43,19 @@ export type PerfilCliente = {
   recontacto_cobro_en?: string;
   /** Cuándo se le pidió foto/video de testimonio tras "Todo bien" (ISO). Marca del sistema (09-10). */
   pidio_testimonio_en?: string;
-  /** Variante del primer turno que recibió (12-10: "botones_v1" = primer_turno). Marca del sistema, para medir. */
+  /**
+   * Variante del primer turno que recibió, para medir. Marca del sistema. 12-10: "botones_v1" = primer_turno (Quiero
+   * pedirlo / Tengo una duda). 13-10: "botones_v2" = primer_turno con todos los precios y Quiero 1 / Quiero 2 · sin envío.
+   * La primera queda (fusionarPerfil): los chats viejos siguen en v1.
+   */
   variante_p1?: string;
   /** Cuándo salió el toque 3 (plantilla de oferta de seguimiento-chat, ISO). Marca del sistema (12-10): una sola vez. */
   toque3_en?: string;
+  /**
+   * 13-10: cuándo salió el rescate de datos (seguimiento-chat/rescate_datos.ts: tocó "Quiero …" y no terminó los datos;
+   * ISO). Marca del sistema: uno por toque (si vuelve a tocar "Quiero" después de esta marca, puede salir otro).
+   */
+  rescate_datos_en?: string;
 };
 
 const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/;
@@ -93,6 +102,8 @@ export function normalizarPerfil(v: unknown, origen: "base" | "modelo" = "base")
       p.pidio_testimonio_en = v.pidio_testimonio_en;
     }
     if (typeof v.toque3_en === "string" && Number.isFinite(Date.parse(v.toque3_en))) p.toque3_en = v.toque3_en;
+    // 13-10: rescate de datos (seguimiento-chat).
+    if (typeof v.rescate_datos_en === "string" && Number.isFinite(Date.parse(v.rescate_datos_en))) p.rescate_datos_en = v.rescate_datos_en;
     if (typeof v.variante_p1 === "string" && /^[a-z0-9_]{1,30}$/.test(v.variante_p1)) p.variante_p1 = v.variante_p1;
   }
   return p;
@@ -119,6 +130,7 @@ export function fusionarPerfil(previo: PerfilCliente, nuevo: PerfilCliente): Per
   if (nuevo.recontacto_cobro_en !== undefined) r.recontacto_cobro_en = nuevo.recontacto_cobro_en;
   if (nuevo.pidio_testimonio_en !== undefined) r.pidio_testimonio_en = nuevo.pidio_testimonio_en;
   if (nuevo.toque3_en !== undefined) r.toque3_en = nuevo.toque3_en;
+  if (nuevo.rescate_datos_en !== undefined) r.rescate_datos_en = nuevo.rescate_datos_en;
   if (nuevo.variante_p1 && !previo.variante_p1) r.variante_p1 = nuevo.variante_p1; // la primera queda
   return r;
 }
@@ -128,7 +140,7 @@ export function mismoPerfil(a: PerfilCliente, b: PerfilCliente): boolean {
     JSON.stringify([
       p.necesidad ?? null, p.perfil ?? null, p.nota ?? null, p.producto ?? null, p.cantidad ?? null, !!p.ofrecido_x2, !!p.pregunto_freno,
       !!p.rechazo, p.seguimientos ?? 0, p.ultimo_seguimiento_en ?? null, p.recontactar_el ?? null, p.recontacto_cobro_en ?? null,
-      p.variante_p1 ?? null,
+      p.variante_p1 ?? null, p.rescate_datos_en ?? null, // 13-10: rescate de datos
     ]);
   return k(a) === k(b);
 }
@@ -142,7 +154,8 @@ export function marcasDeRespuesta(texto: string, herramientasUsadas: string[] = 
   const m: PerfilCliente = {};
   if (RE_X2.test(t) || herramientasUsadas.includes("enviar_opciones")) m.ofrecido_x2 = true;
   if (RE_FRENO.test(t)) m.pregunto_freno = true;
-  if (herramientasUsadas.includes("primer_turno")) m.variante_p1 = "botones_v1";
+  // 13-10: v2 = primer turno con todos los precios y Quiero 1 / Quiero 2 · sin envío (v1 = 12-10, Quiero pedirlo).
+  if (herramientasUsadas.includes("primer_turno")) m.variante_p1 = "botones_v2";
   return m;
 }
 
