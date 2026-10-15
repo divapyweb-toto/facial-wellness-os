@@ -205,7 +205,12 @@ function mapearGrupoAPedidos(grupoRows) {
   const nombre = (extraerNota(notas, 'Nombre y apellido') || primero('Billing Name') || primero('Shipping Name') || '').replace(/\s*-\s*$/, '').trim()
   const ciudad = extraerNota(notas, 'ciudad') || primero('Shipping City') || ''
   const departamento = extraerNota(notas, 'departamento') || ''
-  const dir = extraerNota(notas, 'Dirección principal') || primero('Shipping Address1') || ''
+  // 15-10 (VT-1047): el CSV de Shopify trae la referencia y el link del mapa en
+  // 'Shipping Address2'; antes se leía solo Address1 y al courier le llegaba
+  // "Pin de ubicación" pelado. Se unen las dos (el botón ya las trae juntas).
+  const a1 = String(primero('Shipping Address1') || '').trim()
+  const a2 = String(primero('Shipping Address2') || '').trim()
+  const dir = extraerNota(notas, 'Dirección principal') || (a2 && !a1.includes(a2) ? [a1, a2].filter(Boolean).join(', ') : a1)
   const refDir = extraerNota(notas, 'Referencia') || ''
   const direccion = dir ? (refDir ? `${dir} (${refDir})` : dir) : refDir
   // El primer candidato que dé un número real (los pedidos del vendedor IA lo traen en Phone / Shipping Phone).
