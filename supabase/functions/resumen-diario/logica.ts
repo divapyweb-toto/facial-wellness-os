@@ -3,6 +3,8 @@
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 
 export const EQUILIBRIO_CPA = 41_000;
+// 16-10: meta de Enrique (línea 🎯 arriba de todo).
+export const META_PEDIDOS = 15, META_ENTREGA = 0.85, META_CPA = 35_000;
 export const META_BOT_V33 = 100;
 export const DESDE_BOT_V33 = "2026-10-13T20:40:00Z";
 export const CONJUNTO_PRUEBA = "120251142117330429";
@@ -66,6 +68,8 @@ export interface Entrada {
   chatsBotV33: number;
   botV33YaAvisado: string | null; // día en que se mostró "100/100 listo", o null
   stock: Array<{ nombre: string; stock: number }>;
+  /** Pedidos resueltos en los últimos 7 días (null = no se pudo leer). */
+  entrega7d: { entregados: number; rechazados: number } | null;
   prueba?: boolean;
 }
 
@@ -91,6 +95,15 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
   const l: string[] = [];
   if (e.prueba) l.push("🧪 <b>PRUEBA</b> (no es el envío real de las 21:30)");
   l.push(`📊 <b>Voltra · resumen del ${DIAS[fecha.getUTCDay()]} ${e.hoy.slice(8, 10)}-${e.hoy.slice(5, 7)}</b>`, "");
+  // Línea de meta: siempre arriba. Sin rechazos registrados no se inventa un 100%.
+  const en = e.entrega7d;
+  const txtEntrega = !en ? "entrega: sin dato" : en.rechazados === 0
+    ? "entrega: sin datos de rechazos"
+    : `entrega 7 días: ${Math.round((en.entregados / (en.entregados + en.rechazados)) * 100)}%${en.entregados / (en.entregados + en.rechazados) >= META_ENTREGA ? " ✅" : ""}`;
+  const gastoHoy = e.meta ? e.meta.hoy.reduce((s, c) => s + c.gasto, 0) : null;
+  const cpaHoy = gastoHoy != null && hoy.length ? gastoHoy / hoy.length : null;
+  const txtCpa = cpaHoy == null ? "CPA —" : `CPA ${Math.round(cpaHoy).toLocaleString("es-PY")}${cpaHoy <= META_CPA ? " ✅" : ""}`;
+  l.push(`🎯 Meta: ${META_PEDIDOS} pedidos/día · ${Math.round(META_ENTREGA * 100)}% entrega · CPA ≤ ${META_CPA.toLocaleString("es-PY")} → hoy: <b>${hoy.length}</b> · ${txtEntrega} · ${txtCpa}`);
   l.push(`Pedidos válidos hoy: <b>${hoy.length}</b> (web ${web} · WhatsApp ${wa}) · piso 5-6/día ${termo}`);
   const extras = Object.keys(porProd).filter((k) => !(PRODUCTOS as readonly string[]).includes(k));
   l.push(`Por producto: ${[...PRODUCTOS, ...extras].map((k) => `${k} ${porProd[k] ?? 0}`).join(" · ")}`);

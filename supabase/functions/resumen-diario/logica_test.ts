@@ -9,6 +9,7 @@ const p = (o: Partial<Pedido>): Pedido => ({
 const base = {
   hoy: "2026-10-16", ahora: AHORA, chatsAnuncioHoy: [{ clienteId: "c1" }, { clienteId: "c2" }], chatsBotV33: 98, botV33YaAvisado: null,
   stock: [{ nombre: "Raspador de Lengua", stock: 18 }, { nombre: "Botella Flexible", stock: 47 }],
+  entrega7d: { entregados: 17, rechazados: 3 } as { entregados: number; rechazados: number } | null,
 };
 const pedidos = [
   p({ nombre: "#1" }), p({ nombre: "#2", tags: ["ORIGEN_WHATSAPP"], clienteId: "c1", lineas: [{ titulo: "Pack GUDAIR", cantidad: 1 }] }),
@@ -60,4 +61,12 @@ Deno.test("bot v33: 100/100 se muestra un día y después desaparece", () => {
   assert(a.botV33Listo); assertStringIncludes(a.texto, "100/100 ✅ listo para mejoras");
   const b = armarResumen({ ...base, pedidos, meta, chatsBotV33: 104, botV33YaAvisado: "2026-10-15" });
   assert(!b.texto.includes("Bot v33"));
+});
+
+Deno.test("línea de meta: arriba de todo, con el valor real; sin rechazos no inventa 100%", () => {
+  const a = armarResumen({ ...base, pedidos, meta });
+  const lineas = a.texto.split("\n");
+  assertStringIncludes(lineas[2], "🎯 Meta: 15 pedidos/día · 85% entrega · CPA ≤ 35.000 → hoy: <b>3</b> · entrega 7 días: 85% ✅ · CPA 33.333 ✅");
+  const b = armarResumen({ ...base, pedidos, meta: null, entrega7d: { entregados: 9, rechazados: 0 } });
+  assertStringIncludes(b.texto, "entrega: sin datos de rechazos · CPA —");
 });

@@ -47,6 +47,25 @@ export async function stock(): Promise<Array<{ nombre: string; stock: number }>>
   return (data ?? []).filter((p: Obj) => !p.es_combo).map((p: Obj) => ({ nombre: String(p.nombre), stock: n(p.stock_actual) }));
 }
 
+/** Resueltos de los últimos 7 días: ENTREGADO vs rechazados (CANCELADO / NO_ENTREGADO / DEVUELTO en pedido_estados,
+ *  más las devoluciones de Lucero en entregas de pedidos de las últimas 2 semanas). Un pedido entregado no cuenta como rechazo. */
+export async function entrega7d(desde7Iso: string, desde14Iso: string): Promise<{ entregados: number; rechazados: number }> {
+  const s = db();
+  const { data: est, error } = await s.from("pedido_estados").select("shopify_order_id,estado")
+    .in("estado", ["ENTREGADO", "CANCELADO", "NO_ENTREGADO", "DEVUELTO"]).gte("creado_en", desde7Iso);
+  if (error) throw new Error(`pedido_estados: ${error.message}`);
+  const ent = new Set<string>(), rech = new Set<string>();
+  for (const x of (est ?? []) as Obj[]) (x.estado === "ENTREGADO" ? ent : rech).add(String(x.shopify_order_id));
+  const { data: dev } = await s.from("entregas").select("n_referencia").eq("tienda", "voltra").eq("categoria", "devuelto");
+  const nums = ((dev ?? []) as Obj[]).map((d) => /^VT-(\d+)$/.exec(String(d.n_referencia))?.[1]).filter(Boolean).map((x) => `#${x}`);
+  if (nums.length) {
+    const { data: ped } = await s.from("shopify_pedidos").select("shopify_order_id").in("nombre", nums).gte("creado_en", desde14Iso);
+    for (const p of (ped ?? []) as Obj[]) rech.add(String(p.shopify_order_id));
+  }
+  for (const id of ent) rech.delete(id);
+  return { entregados: ent.size, rechazados: rech.size };
+}
+
 // ── Estado: candados en eventos_crudos (fuente 'telegram') ──
 export async function leerCandado(id: string): Promise<{ payload: Obj; error: string | null } | null> {
   const { data } = await db().from("eventos_crudos").select("payload,error").eq("fuente", "telegram").eq("id_externo", id).maybeSingle();
