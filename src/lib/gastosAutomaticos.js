@@ -69,13 +69,17 @@ function costoProveedor(estimadas, reales, tasas, respaldo) {
 // Gastos fijos escritos en Config, una línea por gasto:
 //   Shopify: 180000          (guaraníes por mes)
 //   Supabase: 25 usd         (dólares por mes)
+//   Releasit: 10 usd desde 2026-10   (16-10: opcional, mes desde el que se paga; antes no se descuenta)
 export function parsearGastosFijos(texto) {
-  return String(texto ?? '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+  return String(texto ?? '').split('\n').map(l => l.trim()).filter(Boolean).map(linea => {
+    const d = linea.match(/\s+desde\s+(\d{4})-(\d{2})\s*$/i)
+    const desde = d ? `${d[1]}-${d[2]}` : null
+    const l = d ? linea.slice(0, d.index).trim() : linea
     const m = l.match(/^(.+?)\s*:\s*([\d.,]+)\s*(usd|us\$|\$|gs|₲)?\s*$/i)
     if (!m) return null
     const monto = parseFloat(m[2].replace(/\./g, '').replace(',', '.')) || (parseFloat(m[2]) || 0)
     const usd = /usd|us\$|\$/i.test(m[3] || '')
-    return monto > 0 ? { concepto: m[1].trim(), monto, usd } : null
+    return monto > 0 ? { concepto: m[1].trim(), monto, usd, desde } : null
   }).filter(Boolean)
 }
 
@@ -147,7 +151,9 @@ export function armarGastosAutomaticos({
 
   // Fijos en dólares: el cambio de la fecha de referencia (fin del período, o hoy).
   const tFijos = tasaDelDia(tasas, fechaTasaFijos, usdPyg)
-  const fijos = aplicaVoltra ? parsearGastosFijos(gastosFijosTexto).map(f => {
+  // 16-10: un fijo con "desde AAAA-MM" no se descuenta en períodos que terminan antes de ese mes.
+  const mesPeriodo = String(fechaTasaFijos || new Date().toISOString()).slice(0, 7)
+  const fijos = aplicaVoltra ? parsearGastosFijos(gastosFijosTexto).filter(f => !f.desde || mesPeriodo >= f.desde).map(f => {
     const faltaTC = f.usd && !(tFijos > 0)
     const gs = faltaTC ? 0 : Math.round((f.usd ? f.monto * tFijos : f.monto) * fraccionMes)
     return { concepto: f.concepto, gs, faltaTC }
