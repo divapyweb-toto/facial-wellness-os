@@ -64,15 +64,17 @@ const errs = (u: unknown) => ((u ?? []) as Array<{ message: string }>).map((e) =
 
 /** Pone la cantidad disponible exacta (corrección). Compara contra la actual para no pisar una venta que entró recién. */
 export async function fijarCantidad(inventoryItemId: string, locationId: string, cantidad: number, actual: number): Promise<string | null> {
-  const m = `mutation($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { field message } } }`;
+  // API 2026-10: la mutación exige @idempotent (un reintento con la misma clave no aplica el cambio dos veces).
+  const m = `mutation($input: InventorySetQuantitiesInput!, $clave: String!) { inventorySetQuantities(input: $input) @idempotent(key: $clave) { userErrors { field message } } }`;
+  const clave = crypto.randomUUID();
   const base = { name: "available", reason: "correction", referenceDocumentUri: "logistics://voltra-os/stock-real" };
   try {
-    const r = await gql<Obj>(m, { input: { ...base, quantities: [{ inventoryItemId, locationId, quantity: cantidad, changeFromQuantity: actual }] } });
+    const r = await gql<Obj>(m, { clave, input: { ...base, quantities: [{ inventoryItemId, locationId, quantity: cantidad, changeFromQuantity: actual }] } });
     return errs((r.inventorySetQuantities as Obj)?.userErrors);
   } catch (e) {
     // Versiones de la API sin changeFromQuantity: se usa la forma vieja.
     if (!/changeFromQuantity/i.test(String(e))) return e instanceof Error ? e.message : String(e);
-    const r = await gql<Obj>(m, { input: { ...base, ignoreCompareQuantity: true, quantities: [{ inventoryItemId, locationId, quantity: cantidad }] } });
+    const r = await gql<Obj>(m, { clave, input: { ...base, ignoreCompareQuantity: true, quantities: [{ inventoryItemId, locationId, quantity: cantidad }] } });
     return errs((r.inventorySetQuantities as Obj)?.userErrors);
   }
 }
