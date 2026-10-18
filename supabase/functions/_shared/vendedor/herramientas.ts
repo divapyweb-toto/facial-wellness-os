@@ -597,7 +597,7 @@ export function armarPedido(
     const prod = items.find((x) => x.handle === handle) ??
       items.find((x) => normalizar(x.titulo).includes(normalizar(handle)) && normalizar(handle).length > 3);
     if (!prod) return { ok: false, faltan: [], error: `producto_desconocido:${handle}. Usá un handle de consultar_catalogo.` };
-    if (!prod.disponible) return { ok: false, faltan: [], error: `sin_stock:${prod.handle}` };
+    if (!prod.disponible) return { ok: false, faltan: [], error: mensajeSinStock(prod, items) };
     if (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > ctx.cfg.vendedor.cantidad_max) {
       return { ok: false, faltan: [], error: `cantidad_invalida:${cantidad} (1 a ${ctx.cfg.vendedor.cantidad_max}; más es mayorista: derivá)` };
     }
@@ -1358,3 +1358,21 @@ export async function ejecutarHerramienta(
 }
 
 export type { PedidoChat };
+
+// 18-10 (Enrique: stock real): si un producto está agotado, no se ofrece ni se confirma; se ofrece otro DISPONIBLE de la
+// misma línea (sueño/respiración, cuidado diario, entrenamiento) y, si no hay, cualquiera disponible.
+export function lineaProducto(titulo: string): string {
+  const t = titulo.toLowerCase();
+  if (/tira|nasal|parche|bucal|pack|gudair/.test(t)) return "sueño";
+  if (/raspador|lengua|botella/.test(t)) return "cuidado";
+  if (/jaw|mand[ií]bula|ejercitador/.test(t)) return "entrenamiento";
+  return "otros";
+}
+export function mensajeSinStock(prod: { handle: string; titulo: string }, items: Array<{ handle: string; titulo: string; disponible: boolean }>): string {
+  const disp = items.filter((x) => x.disponible && x.handle !== prod.handle);
+  const misma = disp.filter((x) => lineaProducto(x.titulo) === lineaProducto(prod.titulo));
+  const alts = (misma.length ? misma : disp).slice(0, 3);
+  return `sin_stock:${prod.handle}. Está agotado: no lo ofrezcas ni lo confirmes. ` + (alts.length
+    ? `Ofrecé en su lugar: ${alts.map((a) => `${a.titulo} (${a.handle})`).join(", ")}.`
+    : "No hay otro disponible: decí que se repone pronto, sin inventar fecha, y avisá a Enrique.");
+}

@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
+import { mensajeSinStock } from "./herramientas.ts";
 import {
   botonesPrimerTurno,
   cuerpoPrimerTurno,
@@ -681,4 +682,18 @@ Deno.test("15-10 (#1055): nombre de una palabra → apellido '-' (con apellido v
     lineas: [], envio: 33000, total: 33000, factura: null };
   const o = inputOrderCreate(base as never, ctxPrueba()) as { order: { shippingAddress: { firstName: string; lastName: string } } };
   assertEquals([o.order.shippingAddress.firstName, o.order.shippingAddress.lastName], ["anita", "-"]);
+});
+
+Deno.test("sin stock: no lo ofrece y propone otro disponible de la misma línea (18-10)", () => {
+  const items = [
+    { handle: "tiras", titulo: "Tiras Nasales", disponible: false },
+    { handle: "parches", titulo: "Parches Bucales", disponible: true },
+    { handle: "raspador", titulo: "Raspador de Lengua", disponible: true },
+  ];
+  const m = mensajeSinStock(items[0], items);
+  assertEquals(m.startsWith("sin_stock:tiras"), true);
+  assertEquals(m.includes("Parches Bucales (parches)") && !m.includes("Raspador"), true);
+  const solo = mensajeSinStock(items[0], [items[0], { handle: "raspador", titulo: "Raspador de Lengua", disponible: true }]);
+  assertEquals(solo.includes("Raspador de Lengua (raspador)"), true);
+  assertEquals(mensajeSinStock(items[0], [items[0]]).includes("se repone pronto"), true);
 });
