@@ -72,6 +72,9 @@ export interface Entrada {
   entrega7d: { entregados: number; rechazados: number } | null;
   /** 19-10: anuncios en estado 'cansado' del libro de creativos (solo aviso: no se pausa nada). */
   cansados?: Array<{ anuncio: string; canal: string; caidaPct: number | null }>;
+  /** 19-10: Lucero en gestión +3 días (reprogramar) y PaP en custodia. Solo referencias, sin datos de clientes. */
+  luceroGestion?: Array<{ ref: string; estado: string; dias: number }>;
+  papCustodia?: Array<{ ref: string; desde: string }>;
   prueba?: boolean;
 }
 
@@ -101,7 +104,7 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
   const en = e.entrega7d;
   const txtEntrega = !en ? "entrega: sin dato" : en.rechazados === 0
     ? "entrega: sin datos de rechazos"
-    : `entrega 7 días: ${Math.round((en.entregados / (en.entregados + en.rechazados)) * 100)}%${en.entregados / (en.entregados + en.rechazados) >= META_ENTREGA ? " ✅" : ""}`;
+    : `entrega 14 días: ${Math.round((en.entregados / (en.entregados + en.rechazados)) * 100)}%${en.entregados / (en.entregados + en.rechazados) >= META_ENTREGA ? " ✅" : ""}`;
   const gastoHoy = e.meta ? e.meta.hoy.reduce((s, c) => s + c.gasto, 0) : null;
   const cpaHoy = gastoHoy != null && hoy.length ? gastoHoy / hoy.length : null;
   const txtCpa = cpaHoy == null ? "CPA —" : `CPA ${Math.round(cpaHoy).toLocaleString("es-PY")}${cpaHoy <= META_CPA ? " ✅" : ""}`;
@@ -172,6 +175,14 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
     if (s.stock < tope) alertas.push(`${f === "Otros" ? escaparHtml(s.nombre) : f}: ${s.stock} unidades`);
   }
   if (alertas.length) l.push("", `⚠️ Alertas: ${alertas.join(" · ")}`);
+  const lg = e.luceroGestion ?? [];
+  if (lg.length) {
+    l.push(`📦 Lucero en gestión +3 días (reprogramar): ${lg.slice(0, 8).map((x) => `${x.ref} ${escaparHtml(x.estado)} ${x.dias}d`).join(" · ")}${lg.length > 8 ? ` · y ${lg.length - 8} más` : ""}`);
+  }
+  const cu = e.papCustodia ?? [];
+  if (cu.length) {
+    l.push(`🟠 PaP en custodia: ${cu.slice(0, 8).map((x) => `${x.ref}${x.desde ? ` desde ${x.desde.slice(8, 10)}-${x.desde.slice(5, 7)}` : ""}`).join(" · ")}`);
+  }
   for (const c of e.cansados ?? []) {
     const medida = c.canal === "whatsapp" ? "pedidos/chat" : "formularios/clic";
     l.push(`⚠️ Se está cansando: ${escaparHtml(c.anuncio)} (${medida} ${c.caidaPct ?? "−50"}% contra sus primeros días)`);

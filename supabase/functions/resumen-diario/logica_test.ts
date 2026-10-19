@@ -66,7 +66,7 @@ Deno.test("bot v33: 100/100 se muestra un día y después desaparece", () => {
 Deno.test("línea de meta: arriba de todo, con el valor real; sin rechazos no inventa 100%", () => {
   const a = armarResumen({ ...base, pedidos, meta });
   const lineas = a.texto.split("\n");
-  assertStringIncludes(lineas[2], "🎯 Meta: 15 pedidos/día · 85% entrega · CPA ≤ 35.000 → hoy: <b>3</b> · entrega 7 días: 85% ✅ · CPA 33.333 ✅");
+  assertStringIncludes(lineas[2], "🎯 Meta: 15 pedidos/día · 85% entrega · CPA ≤ 35.000 → hoy: <b>3</b> · entrega 14 días: 85% ✅ · CPA 33.333 ✅");
   const b = armarResumen({ ...base, pedidos, meta: null, entrega7d: { entregados: 9, rechazados: 0 } });
   assertStringIncludes(b.texto, "entrega: sin datos de rechazos · CPA —");
 });
@@ -74,4 +74,10 @@ Deno.test("línea de meta: arriba de todo, con el valor real; sin rechazos no in
 Deno.test("libro de creativos: línea de cansancio (solo aviso)", () => {
   const { texto } = armarResumen({ ...base, pedidos, meta, cansados: [{ anuncio: "VID JAWFLEX V4", canal: "web", caidaPct: -88 }] });
   assertStringIncludes(texto, "⚠️ Se está cansando: VID JAWFLEX V4 (formularios/clic -88% contra sus primeros días)");
+});
+
+Deno.test("Lucero en gestión +3 días y PaP en custodia (solo referencias)", () => {
+  const { texto } = armarResumen({ ...base, pedidos, meta, luceroGestion: [{ ref: "VT-9001", estado: "Fallido", dias: 4 }], papCustodia: [{ ref: "VT-9002", desde: "2026-10-17T10:00:00Z" }] });
+  assertStringIncludes(texto, "📦 Lucero en gestión +3 días (reprogramar): VT-9001 Fallido 4d");
+  assertStringIncludes(texto, "🟠 PaP en custodia: VT-9002 desde 17-10");
 });

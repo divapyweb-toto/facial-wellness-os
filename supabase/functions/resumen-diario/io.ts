@@ -47,6 +47,31 @@ export async function stock(): Promise<Array<{ nombre: string; stock: number }>>
   return (data ?? []).filter((p: Obj) => !p.es_combo).map((p: Obj) => ({ nombre: String(p.nombre), stock: n(p.stock_actual) }));
 }
 
+/** 19-10: regla de 3 grupos (vista pedidos_entrega). Tasa = ENTREGADO ÷ (ENTREGADO + PERDIDO) de los pedidos de los
+ *  últimos 14 días (un COD tarda 2-4 días en resolverse). */
+export async function entregaGrupos(desde14Iso: string): Promise<{ entregados: number; rechazados: number }> {
+  const { data, error } = await db().from("pedidos_entrega").select("grupo").gte("fecha", desde14Iso.slice(0, 10)).in("grupo", ["ENTREGADO", "PERDIDO"]);
+  if (error) throw new Error(`pedidos_entrega: ${error.message}`);
+  const ent = (data ?? []).filter((x: Obj) => x.grupo === "ENTREGADO").length;
+  return { entregados: ent, rechazados: (data ?? []).length - ent };
+}
+
+/** Pedidos de Lucero EN GESTIÓN con más de 3 días (incluye "Fallido"): todavía se pueden salvar reprogramando. */
+export async function luceroEnGestion(): Promise<Array<{ ref: string; estado: string; dias: number }>> {
+  const { data, error } = await db().from("pedidos_entrega").select("referencia,estado_courier,gestion_desde")
+    .eq("transportadora", "lucero").eq("grupo", "EN_GESTION").lt("gestion_desde", new Date(Date.now() - 3 * 86_400_000).toISOString());
+  if (error) throw new Error(`pedidos_entrega: ${error.message}`);
+  return (data ?? []).map((x: Obj) => ({ ref: String(x.referencia), estado: String(x.estado_courier || "sin estado"),
+    dias: Math.floor((Date.now() - Date.parse(String(x.gestion_desde))) / 86_400_000) })).sort((a, b) => b.dias - a.dias);
+}
+
+/** Pedidos de PaP en custodia, con la fecha de entrada (fin de custodia = causa n.º 1 de pérdida en PaP). */
+export async function papCustodia(): Promise<Array<{ ref: string; desde: string }>> {
+  const { data, error } = await db().from("pedidos_entrega").select("referencia,custodia_desde").eq("en_custodia", true);
+  if (error) throw new Error(`pedidos_entrega: ${error.message}`);
+  return (data ?? []).map((x: Obj) => ({ ref: String(x.referencia), desde: String(x.custodia_desde ?? "") }));
+}
+
 /** Resueltos de los últimos 7 días: ENTREGADO vs rechazados (CANCELADO / NO_ENTREGADO / DEVUELTO en pedido_estados,
  *  más las devoluciones de Lucero en entregas de pedidos de las últimas 2 semanas). Un pedido entregado no cuenta como rechazo. */
 export async function entrega7d(desde7Iso: string, desde14Iso: string): Promise<{ entregados: number; rechazados: number }> {
