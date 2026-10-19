@@ -3,7 +3,8 @@
 // solo PaP y confirmados. Plantilla aprobada voltra_entrega_proxima ("ya está por llegar. Tené listo Gs X…").
 // Si el "ya está por llegar" fijo del 2.º día (courier:<id>:ENTREGA_HOY) sigue pendiente, se cancela: lo reemplaza este,
 // que llega cuando el paquete realmente sale a reparto. Si ese salió hace < 24 h, no se repite el mismo texto.
-// Interruptor: config 'aviso_ruta_pap' {"activo": true|false}.
+// Interruptor: config 'aviso_ruta_pap' {"activo", "desde", "base_hecha"}. La 1.ª corrida (base_hecha=false) solo REGISTRA
+// los que ya estaban en ruta al activar (PaP no guarda desde cuándo, y avisar a pedidos de hace una semana confunde).
 import { db } from "../_shared/db.ts";
 
 export const PLANTILLA_RUTA = "voltra_entrega_proxima";
@@ -43,13 +44,17 @@ const primerNombre = (s: unknown) => {
 export async function avisoRutaPap(ahora = new Date(), simular = false) {
   const s = db();
   const { data: cfg } = await s.from("config").select("valor").eq("clave", "aviso_ruta_pap").maybeSingle();
-  let activo = false;
-  try { activo = JSON.parse(String(cfg?.valor ?? "{}")).activo === true; } catch { /* config inválida = apagado */ }
+  let conf: Obj = {};
+  try { conf = JSON.parse(String(cfg?.valor ?? "{}")); } catch { /* config inválida = apagado */ }
+  const activo = conf.activo === true, base = conf.base_hecha === true;
   if (!activo) return { activo: false, hechos: [] };
   const { data: ent, error } = await s.from("entregas").select("n_referencia").eq("transportadora", "pap").eq("tienda", "voltra").ilike("estado_pap", "%asignado a ruta%");
   if (error) throw new Error(`entregas: ${error.message}`);
   const nombres = (ent ?? []).map((e: Obj) => `#${String(e.n_referencia).replace(/^VT-/, "")}`);
-  if (!nombres.length) return { activo: true, hechos: [] };
+  const marcarBase = async () => {
+    if (!base && !simular) await s.from("config").update({ valor: JSON.stringify({ ...conf, base_hecha: true }) }).eq("clave", "aviso_ruta_pap");
+  };
+  if (!nombres.length) { await marcarBase(); return { activo: true, base_previa: !base, hechos: [] }; }
   const { data: peds, error: e2 } = await s.from("shopify_pedidos")
     .select("shopify_order_id,nombre,cliente_id,total,estado_confirmacion,estado_envio,tags,raw->>cancelled_at,raw->shipping_address->>name").in("nombre", nombres);
   if (e2) throw new Error(`shopify_pedidos: ${e2.message}`);
@@ -65,7 +70,8 @@ export async function avisoRutaPap(ahora = new Date(), simular = false) {
       envios: ((envs ?? []) as Obj[]).filter((e) => Number(e.shopify_order_id) === id)
         .map((e) => ({ clave: String(e.clave_unica), plantilla: String(e.plantilla), estado: String(e.estado), creadoEn: String(e.creado_en) })),
     };
-    const d = decidirRuta(c, ahora);
+    let d = decidirRuta(c, ahora);
+    if (!base && d.accion === "enviar") d = { accion: "registrar_sin_enviar", motivo: "ya_estaba_en_ruta_al_activar" };
     if (d.accion === "omitir") continue;
     hechos.push({ pedido: String(p.nombre), resultado: d.accion === "enviar" ? (d.cancelarProxima ? "enviar (reemplaza el del 2.º día)" : "enviar") : d.motivo });
     if (simular) continue;
@@ -83,5 +89,6 @@ export async function avisoRutaPap(ahora = new Date(), simular = false) {
         .eq("clave_unica", `courier:${id}:ENTREGA_HOY`).eq("estado", "pendiente");
     }
   }
-  return { activo: true, hechos };
+  await marcarBase();
+  return { activo: true, base_previa: !base, hechos };
 }
