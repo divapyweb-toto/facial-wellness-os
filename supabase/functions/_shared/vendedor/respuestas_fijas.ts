@@ -25,6 +25,17 @@ export const RESPUESTAS_FIJAS_DEFAULT: CfgRespuestasFijas = {
   ],
 };
 
+/**
+ * 19-10 (paquete 1, punto 7): texto arriba de los botones que se reenvían cuando el cliente responde "ok" / 👌 /
+ * "genial" al precio ANTES de tener pedido (no es un cierre: se le vuelve a dar el toque para elegir). Se puede
+ * cambiar con config_wa.vendedor_respuestas_fijas.acuse_precio; va aparte de RESPUESTAS_FIJAS_DEFAULT porque ese
+ * tiene que ser igual a la semilla (prompt_test).
+ */
+export const ACUSE_PRECIO_DEFAULT = [
+  "Buenísimo. ¿Cuál te preparo?",
+  "Dale. ¿Con cuál avanzamos?",
+];
+
 function normalizar(s: string): string {
   return String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();
 }

@@ -17,6 +17,9 @@ import {
   leerCfgAvisoIntencion,
   tieneSenalCompra,
   correrSeguimientos,
+  bloqueEsAcuse,
+  esAcuseSuelto,
+  leerRecontactoAvisoDesde,
   decidirSeguimiento,
   type DepsSeguimiento,
   franjasHorario,
@@ -31,7 +34,7 @@ import { instanteLocal } from "../recompra/calendario.ts";
 const H = 3_600_000;
 // 15:00 UTC = 12:00 de Asunción (UTC−3).
 const AHORA = new Date("2026-10-07T15:00:00Z");
-const hace = (h: number) => new Date(AHORA.getTime() - h * H).toISOString();
+const hace = (h: number, base = AHORA) => new Date(base.getTime() - h * H).toISOString();
 const CFG = CFG_SEGUIMIENTO_DEFAULT;
 
 function cand(over: Partial<Candidato> = {}): Candidato {
@@ -703,7 +706,7 @@ Deno.test("corrida cobro: fuera de la ventana → Telegram con el texto pedido y
   assertEquals(x.entradas, []);
   assertEquals(x.avisos.length, 1);
   assert(x.avisos[0].texto.startsWith(
-    "💰 <b>Ana Prueba</b> dijo que hoy cobraba (tiras nasales x2). Ya pasaron más de 24 h desde su último mensaje: escribile vos.",
+    "📅 <b>Ana Prueba</b>: hoy quedamos en escribirle (tiras nasales x2). Ya pasaron más de 24 h desde su último mensaje: escribile vos.",
   ));
   assert(x.avisos[0].texto.includes("https://wa.me/595981000000"));
   assertEquals(x.avisos[0].botones, [[{ texto: "Escribirle a Ana Prueba", url: "https://wa.me/595981000000" }]]);
@@ -716,7 +719,7 @@ Deno.test("corrida cobro: tope de gasto → ningún turno, se avisa a Enrique (c
   assertEquals([r.enviados, r.avisados], [0, 2]);
   assertEquals(x.entradas, []);
   assertEquals(x.avisos.length, 1, "los dos en un solo mensaje");
-  assert(x.avisos[0].texto.includes("Beto</b> dijo que hoy cobraba"));
+  assert(x.avisos[0].texto.includes("Beto</b>: hoy quedamos en escribirle"));
   assert(x.avisos[0].texto.includes("gasto de IA del mes llegó al tope"));
   assertEquals((x.avisos[0].botones as unknown[]).length, 2);
 });
@@ -790,4 +793,72 @@ Deno.test("señal de compra: el texto automático del anuncio y las postergacion
   for (const x of ["Quiero 2", "3 unidades", "lo quiero", "quiero el raspador", "Dale", "si dale", "mandame uno", "te paso mis datos"]) {
     assertEquals(tieneSenalCompra(x), true, x);
   }
+});
+
+// ---------- 19-10 (v35, ítem 7): "Ok" / 👌 al precio no frena los recontactos ----------
+
+Deno.test("acuse suelto: ok, 👌, genial, dale, sticker y reacción sí; preguntas, 'no gracias' y botones no", () => {
+  for (const t of ["Ok", "ok!", "👌", "Genial", "dale", "buenísimo", "👍🏻", "ok gracias"]) assert(esAcuseSuelto({ texto: t, tipo: "text" }), t);
+  assert(esAcuseSuelto({ texto: null, tipo: "sticker" }));
+  assert(esAcuseSuelto({ texto: null, tipo: "reaction" }));
+  for (const t of ["cuánto sale el envío?", "no gracias", "después te aviso", "quiero 2", ""]) assertFalse(esAcuseSuelto({ texto: t, tipo: "text" }), t);
+  assertFalse(esAcuseSuelto({ texto: "Quiero pedirlo", tipo: "interactive" }));
+  assertFalse(esAcuseSuelto({ texto: null, tipo: "image" }));
+  assertFalse(bloqueEsAcuse([]));
+  assertFalse(bloqueEsAcuse(undefined));
+  assertFalse(bloqueEsAcuse([{ texto: "ok", tipo: "text" }, { texto: "y el envío?", tipo: "text" }]));
+  assert(bloqueEsAcuse([{ texto: "ok", tipo: "text" }, { texto: "👌", tipo: "text" }]));
+});
+
+Deno.test("recontacto tras un 'Ok' al precio: sale a las 1,5 h del acuse; sin pedido, sin rechazo, sin derivación", () => {
+  const ok = (h: number, over: Partial<Candidato> = {}) =>
+    cand({ ultima_entrada_en: hace(h), ultimo_mensaje: { direccion: "in", creado_en: hace(h) }, bloque_cliente: [{ texto: "Ok", tipo: "text" }], ...over });
+  assertEquals(motivo(ok(2)), "seguimiento 1");
+  assertEquals(motivo(ok(1)), "esperando");
+  assertEquals(motivo(ok(2, { bloque_cliente: [{ texto: "👌", tipo: "text" }] })), "seguimiento 1");
+  assertEquals(motivo(ok(2, { pedido_reciente: true })), "pedido_reciente");
+  assertEquals(motivo(ok(2, { perfil: { rechazo: true } })), "rechazo");
+  assertEquals(motivo(ok(2, { ultima_respuesta_derivada: true })), "derivado");
+  // Una pregunta sin responder, o sin un mensaje nuestro antes (bloque ausente): sigue frenando.
+  assertEquals(motivo(ok(2, { bloque_cliente: [{ texto: "y el envío cuánto es?", tipo: "text" }] })), "cliente_hablo_ultimo");
+  assertEquals(motivo(ok(2, { bloque_cliente: undefined })), "cliente_hablo_ultimo");
+  // El 2 sigue la regla de siempre (20 h desde su última entrada, que es el acuse).
+  assertEquals(motivo(ok(20, { perfil: { seguimientos: 1, ultimo_seguimiento_en: hace(18) } })), "seguimiento 2");
+});
+
+// ---------- 19-10 (v35, ítem 6): fecha prometida fuera de la ventana → aviso a Enrique desde las 8 ----------
+
+Deno.test("cobro/promesa: fuera de la ventana avisa desde las 8 (antes 12); el turno del bot sigue esperando a las 12", async () => {
+  const ocho = new Date("2026-10-07T11:30:00Z"); // 8:30 Asunción
+  assertEquals(decidirRecontactoCobro(cobra({ ultima_entrada_en: hace(30) }), CFG, ocho, 8).tipo, "avisar");
+  const d = decidirRecontactoCobro(cobra({ ultima_entrada_en: new Date(ocho.getTime() - 5 * H).toISOString() }), CFG, ocho, 8);
+  assertEquals(d, { tipo: "nada", motivo: "fuera_de_horario" });
+  assertEquals(leerRecontactoAvisoDesde(null), 8);
+  assertEquals(leerRecontactoAvisoDesde({ recontacto_aviso_desde: 12 }), 12);
+  assertEquals(leerRecontactoAvisoDesde({ recontacto_aviso_desde: 30 }), 8);
+  // Corrida a las 8:30: el de fuera de la ventana sale con contexto; el de dentro espera (sin turno).
+  const x = corridaCobro([
+    cobra({ ultima_entrada_en: hace(50, ocho), consentimiento_marketing: "si", perfil: { producto: "tiras", recontactar_el: "2026-10-07", nota: "cobra el 7" },
+      entradas_recientes: [{ texto: "el martes te confirmo", creado_en: hace(50, ocho) }] }),
+    cobra({ conversacion_id: "conv-dentro", ultima_entrada_en: new Date(ocho.getTime() - 3 * H).toISOString() }),
+  ], { ahora: ocho });
+  const r = await correrRecontactosCobro(x.deps, null);
+  assertEquals([r.avisados, r.enviados], [1, 0]);
+  assertEquals(r.motivos, { fuera_de_horario: 1 });
+  const t = x.avisos[0].texto;
+  assert(t.includes("Lo último que dijo (hace 2 días): «el martes te confirmo»"), t);
+  assert(t.includes("Nota: cobra el 7"));
+  assert(t.includes("Tiene permiso de ofertas"));
+  // A las 7:30 todavía nada.
+  const temprano = corridaCobro([cobra({ ultima_entrada_en: hace(30) })], { ahora: new Date("2026-10-07T10:30:00Z") });
+  assertEquals((await correrRecontactosCobro(temprano.deps, null)).accion, "fuera_de_horario");
+});
+
+// ---------- 19-10 (v35, ítem 4): un seguimiento que deriva se avisa ----------
+
+Deno.test("corrida: si un seguimiento deriva (no debería), sale en el aviso de problemas", async () => {
+  const x = corrida([cand()], { turno: () => ({ accion: "derivado", motivo: "herramienta", costo_usd: 0.001 }) });
+  const r = await correrSeguimientos(x.deps);
+  assertEquals(r.fallas, 1);
+  assert(x.avisos[0].includes("derivó a Enrique (no debería)"));
 });

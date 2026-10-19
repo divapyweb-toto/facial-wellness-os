@@ -3,6 +3,7 @@
 // herramientas.ts; acá solo se conectan las dependencias.
 import { direccionUtilizable } from "../../pedidos-trabados/logica.ts";
 import { unirReferencia } from "./herramientas.ts";
+import { depsPedidosWebReales } from "./pedidos_web_io.ts";
 import { db } from "../db.ts";
 import { llamarClaude } from "../claude.ts";
 import { gql } from "../shopify.ts";
@@ -67,6 +68,7 @@ const MUTACION_ORDER_CREATE = `mutation($order: OrderCreateOrderInput!, $options
 let ultimaGeocodificacion = 0;
 
 export const depsHerramientasReales: DepsHerramientas = {
+  pedidosWeb: depsPedidosWebReales,
   async catalogoShopify(estado) {
     const d = await gql<{ products: { nodes: NodoProducto[] } }>(QUERY_CATALOGO, { q: `status:${estado.toLowerCase()}` });
     return d.products.nodes.map((n): ProductoShopify => ({
@@ -389,9 +391,20 @@ export const depsOrquestadorReales: DepsOrquestador = {
   },
 
   async ultimoEntranteId(conversacionId) {
+    // 19-10 (paquete 1, informe 02 §3d): solo cuentan los mensajes que se le pasan al vendedor. Una reacción o un
+    // mensaje que resolvió el webhook (marca no_vendedor) ya no cortan la respuesta en curso.
     const { data } = await db().from("wa_mensajes").select("wa_message_id").eq("conversacion_id", conversacionId)
-      .eq("direccion", "in").order("creado_en", { ascending: false }).limit(1).maybeSingle();
+      .eq("direccion", "in").neq("tipo", "reaction")
+      .or("contenido->>no_vendedor.is.null,contenido->>no_vendedor.neq.true")
+      .order("creado_en", { ascending: false }).limit(1).maybeSingle();
     return data?.wa_message_id ?? null;
+  },
+
+  // 19-10 (paquete 1): alertas del tope de IA al 70/90/100% y tope duro, una vez por mes (función atómica en la base).
+  async marcarAlertaTope(mes, clave) {
+    const { data, error } = await db().rpc("vendedor_marcar_alerta_tope", { p_mes: mes, p_clave: clave });
+    if (error) throw new Error(`alerta tope: ${error.message}`);
+    return data === true;
   },
 
   async gastoMesUsd(desdeISO) {

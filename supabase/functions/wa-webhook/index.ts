@@ -335,6 +335,15 @@ export const depsReales: Deps = {
     return (data?.texto as string | null) ?? null;
   },
 
+  // 19-10 (#1072): por cliente y no por conversación: la plantilla de confirmación de un cliente nuevo (o con el chat
+  // cerrado) queda sin conversación o en otra. Los fallidos no cuentan: el cliente nunca los vio.
+  async ultimoSalienteCliente(clienteId) {
+    const { data, error } = await db().from("wa_mensajes").select("tipo,texto,contenido").eq("cliente_id", clienteId)
+      .eq("direccion", "out").or("estado.is.null,estado.neq.fallido").order("creado_en", { ascending: false }).limit(1).maybeSingle();
+    falla("último mensaje al cliente", error);
+    return data ?? null;
+  },
+
   async marcarPerfil(conversacionId, clave, valor) {
     const sb = db();
     const { data, error } = await sb.from("wa_conversaciones").select("perfil_vendedor").eq("id", conversacionId).maybeSingle();

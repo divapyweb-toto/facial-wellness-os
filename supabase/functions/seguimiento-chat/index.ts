@@ -11,6 +11,9 @@
 // primera respuesta del bot (toque3.ts; arranca apagado: config_wa.vendedor_seguimiento.toque3.activo).
 // Además (13-10): rescate de datos, a quien tocó "Quiero …" y se calló ≥ 10 min sin terminar los datos el vendedor le
 // pide solo lo que falta (rescate_datos.ts; a cualquier hora, dentro de las 24 h; rescate_datos_activo).
+// Además (19-10, v35): derivaciones con plazo (derivaciones_plazo.ts): recordatorio a Enrique a las 2 y 8 h, a las 4 h
+// hábiles el bot retoma (venta) o mensaje fijo (salud/reclamo), y nunca 24 h sin un mensaje al cliente. Un "Ok"/👌
+// suelto al precio ya no frena los recontactos, y el aviso por una fecha prometida fuera de la ventana sale desde las 8.
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";

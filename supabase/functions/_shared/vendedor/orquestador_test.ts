@@ -157,8 +157,8 @@ Deno.test("turno: tope de turnos → deriva sin llamar al modelo", async () => {
   assert(e.reg.avisos[0].texto.includes("límite de turnos"));
 });
 
-Deno.test("turno: tope mensual de gasto → deriva sin llamar al modelo", async () => {
-  const e = escenario(() => texto("no debería"), { gasto: 45.01 });
+Deno.test("turno: tope DURO de gasto (19-10: tope × 1,3) → deriva sin llamar al modelo", async () => {
+  const e = escenario(() => texto("no debería"), { gasto: 58.5 }); // tope 45 × 1,3
   const r = await procesarTurno(ENTRADA, e.deps);
   assertEquals(r.motivo, "tope_gasto");
   assertEquals(e.pedidos.length, 0);
@@ -779,4 +779,178 @@ Deno.test("12-10: el permiso espera a que salga la oferta de pago con prioridad 
   assertEquals(consultas.length, 3);
   assert(e.esperas.slice(antes).filter((ms) => ms === 2000).length >= 2);
   assertEquals(e.reg.interactivos.filter((i) => JSON.stringify(i.interactive).includes("cons_si:")).length, 1);
+});
+
+// ---------- 19-10 (paquete 1, W1) ----------
+
+const filaBotones = (id: string, cuerpoTxt: string, botones: Array<[string, string]>): FilaHistorial => ({
+  direccion: "out",
+  texto: `[button] ${cuerpoTxt} | ${botones.map((b) => b[1]).join(" | ")}`,
+  tipo: "interactive",
+  contenido: {
+    messaging_product: "whatsapp",
+    type: "interactive",
+    interactive: { type: "button", body: { text: cuerpoTxt }, action: { buttons: botones.map(([bid, title]) => ({ type: "reply", reply: { id: bid, title } })) } },
+  },
+  estado: "entregado",
+  wa_message_id: id,
+});
+const BOTONES_P1: Array<[string, string]> = [["vend_p1:q2:tiras-prueba", "2 con envío gratis"], ["vend_p1:q1:tiras-prueba", "Quiero 1"], ["vend_p1:duda:tiras-prueba", "Tengo una duda"]];
+
+Deno.test("19-10 tope: pasado el tope usa el modelo barato (no deriva); el seguimiento no sale", async () => {
+  const cfg = configPrueba({ vendedor: { modelo: "claude-sonnet-5-5", espera_agrupar_s: 0, whatsapp_enrique: "595990000000" } });
+  const e = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { cfg, gasto: 50 });
+  const r = await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(e.pedidos[0].modelo, "claude-haiku-4-5-20251001");
+  assertEquals(e.reg.humano, []);
+  const s = escenario(() => texto("x"), { cfg, gasto: 50 });
+  const rs = await procesarTurno({ conversacion_id: CONV, wa_message_id: "seguimiento:1:x", texto: "[seguimiento 1]", origen: "seguimiento" }, s.deps);
+  assertEquals(rs, { accion: "omitido", motivo: "tope_gasto", costo_usd: 0 });
+  // Debajo del tope, el modelo normal.
+  const n = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { cfg, gasto: 10 });
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, n.deps);
+  assertEquals(n.pedidos[0].modelo, "claude-sonnet-5-5");
+});
+
+Deno.test("19-10 tope: modelo_tope y tope_duro_usd configurables", async () => {
+  const cfg = configPrueba({ vendedor: { espera_agrupar_s: 0, tope_mensual_usd: 90, tope_duro_usd: 100, modelo_tope: "modelo-barato-x" } });
+  const a = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { cfg, gasto: 95 });
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, a.deps);
+  assertEquals(a.pedidos[0].modelo, "modelo-barato-x");
+  const b = escenario(() => texto("x"), { cfg, gasto: 100 });
+  assertEquals((await procesarTurno(ENTRADA, b.deps)).motivo, "tope_gasto");
+});
+
+Deno.test("19-10 tope: alerta por Telegram al 70% y 90%, una sola vez por mes cada una", async () => {
+  const marcadas = new Set<string>();
+  const marcar = (mes: string, clave: string) => {
+    const k = `${mes}:${clave}`;
+    const nueva = !marcadas.has(k);
+    marcadas.add(k);
+    return Promise.resolve(nueva);
+  };
+  const a = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { gasto: 33 }); // 73% de 45
+  a.deps.marcarAlertaTope = marcar;
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, a.deps);
+  assertEquals(a.reg.avisos.length, 1);
+  assert(a.reg.avisos[0].texto.includes("70% del tope"));
+  const b = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { gasto: 41 }); // 91%
+  b.deps.marcarAlertaTope = marcar;
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, b.deps);
+  assertEquals(b.reg.avisos.map((x) => x.texto.includes("90% del tope")), [true]);
+  assertEquals([...marcadas].sort(), ["2026-10:70", "2026-10:90"]);
+  // Sin la persistencia (io.ts viejo) no se manda nada (para no avisar en cada mensaje).
+  const c = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { gasto: 41 });
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, c.deps);
+  assertEquals(c.reg.avisos, []);
+});
+
+Deno.test("19-10 filtro: confirmar un cambio sin herramienta → regenera con la instrucción exacta", async () => {
+  const e = escenario((_p, n) =>
+    n === 1 ? texto("Listo, ya lo cambié a 2 unidades.") : texto("Eso no lo puedo cambiar desde acá. Te paso con Enrique para hacerlo. ¿Te parece?")
+  );
+  const r = await procesarTurno({ ...ENTRADA, texto: "cambiámelo a 2" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assert(e.turnos[0].regenerado);
+  const control = e.pedidos[1].mensajes.at(-1)!.content as string;
+  assert(control.includes("accion_inventada:cambio:"), control);
+  assert(control.includes("No confirmes cambios que no hiciste con una herramienta: decí en la primera línea que eso no lo podés hacer desde acá y ofrecé la alternativa real."));
+});
+
+Deno.test("19-10 acuse antes del pedido: 'ok' al precio con botones → se reenvían los 3 botones sin modelo", async () => {
+  for (const t of ["Ok", "👌", "Genial", "dale", "listo"]) {
+    const hist = [fila("out", "Las tiras te ayudan a respirar mejor de noche.", "o1"), filaBotones("o2", "Sale 79.000 + envío, pagás al recibir.", BOTONES_P1), fila("in", t, "wamid.IN1")];
+    const e = escenario(() => texto("no debería"), { historial: hist, azar: 0 });
+    const r = await procesarTurno({ ...ENTRADA, texto: t }, e.deps);
+    assertEquals(r.accion, "respondido", t);
+    assertEquals(e.pedidos.length, 0, t);
+    assertEquals(e.reg.interactivos.length, 1, t);
+    const i = e.reg.interactivos[0].interactive as { body: { text: string }; action: { buttons: Array<{ reply: { id: string } }> } };
+    assertEquals(i.body.text, "Buenísimo. ¿Cuál te preparo?");
+    assert(i.action.buttons.every((b) => b.reply.id.endsWith(":tiras-prueba")));
+    assertEquals(e.turnos[0].accion, "respondido:fija:acuse_precio");
+    assertEquals(e.sumas, []);
+  }
+});
+
+Deno.test("19-10 acuse antes del pedido: un segundo 'ok' después de los botones reenviados no se contesta", async () => {
+  const hist = [filaBotones("o2", "Buenísimo. ¿Cuál te preparo?", BOTONES_P1), fila("in", "ok", "wamid.IN1")];
+  const e = escenario(() => texto("no debería"), { historial: hist });
+  const r = await procesarTurno({ ...ENTRADA, texto: "ok" }, e.deps);
+  assertEquals(r.accion, "omitido");
+  assertEquals(r.motivo, "acuse_tras_botones_repetido");
+  assertEquals(e.reg.interactivos.length + e.reg.textos.length + e.pedidos.length, 0);
+});
+
+Deno.test("19-10 acuse antes del pedido: precio en texto (sin botones) → lo ve el modelo con la nota de que no es un cierre", async () => {
+  const hist = [fila("out", "Salen Gs 79.000 y pagás al recibir.", "o1"), fila("in", "ok", "wamid.IN1")];
+  const e = escenario(() => texto("Buenísimo. ¿Te preparo 1 o 2?"), { historial: hist });
+  const r = await procesarTurno({ ...ENTRADA, texto: "ok" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(e.pedidos.length, 1);
+  assert((e.pedidos[0].mensajes.at(-1)!.content as string).includes("no es un cierre"));
+});
+
+Deno.test("19-10 acuse después del pedido junto con el botón del permiso de ofertas (#1049) → no se contesta", async () => {
+  const botonPermiso: FilaHistorial = {
+    direccion: "in", texto: "Sí, avisame", tipo: "interactive",
+    contenido: { type: "interactive", interactive: { type: "button_reply", button_reply: { id: `cons_si:${CLIENTE}`, title: "Sí, avisame" } } },
+    estado: "recibido", wa_message_id: "wamid.P1",
+  };
+  const hist = [fila("out", "Listo Ana, ya cargamos tu pedido #1050. Te llega el jueves.", "o1"), botonPermiso, fila("in", "ok", "wamid.IN1")];
+  const e = escenario(() => texto("no debería"), { historial: hist });
+  e.reg.pedidosChat.push(pedidoChat("creado"));
+  const r = await procesarTurno({ ...ENTRADA, texto: "ok" }, e.deps);
+  assertEquals(r.accion, "omitido");
+  assertEquals(e.reg.textos.length + e.pedidos.length, 0);
+});
+
+Deno.test("19-10 seguimiento: derivar_a_enrique se ignora (no pasa a humano ni manda el botón); sale el recontacto", async () => {
+  const e = escenario((_p, n) =>
+    n === 1 ? herramienta("derivar_a_enrique", { motivo: "otro", resumen: "no contesta" }) : texto("¿Pudiste ver lo de las tiras? Te las preparo hoy si querés.")
+  );
+  const r = await procesarTurno({ conversacion_id: CONV, wa_message_id: "seguimiento:2:x", texto: "[seguimiento 2]", origen: "seguimiento" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(e.reg.humano, []);
+  assertEquals(e.reg.interactivos, []);
+  assertEquals(e.reg.avisos, []);
+  assertEquals(e.reg.textos.length, 1);
+  const tr = (e.pedidos[1].mensajes.at(-1)!.content as Bloque[])[0] as { content: string; is_error?: boolean };
+  assert(tr.content.includes("no_disponible_en_seguimiento") && tr.is_error);
+  assertFalse(e.turnos[0].derivado);
+});
+
+Deno.test("19-10 un solo resumen vigente: Confirmo de un resumen viejo con otro total no crea el pedido", async () => {
+  const hist = [
+    filaBotones("o1", "Tiras x1 (Gs 79.000) + envío Gs 33.000 = Gs 112.000", [["vend_conf:pc-1", "Confirmo"], ["vend_corr:pc-1", "Corregir"]]),
+    filaBotones("o2", "Tiras x2 · envío gratis · total Gs 125.000", [["vend_conf:pc-2", "Confirmo"], ["vend_corr:pc-2", "Corregir"]]),
+    fila("in", "Confirmo (vend_conf:pc-1)", "wamid.IN1"),
+  ];
+  const e = escenario((_p, n) => n === 1 ? herramienta("crear_pedido_cod", { confirmar: true }) : texto("Te muestro el resumen de nuevo. ¿Confirmás ese?"), { historial: hist });
+  e.reg.pedidosChat.push({ ...pedidoChat("resumen"), id: "pc-2", total: 125000 });
+  await procesarTurno({ ...ENTRADA, texto: "Confirmo (vend_conf:pc-1)" }, e.deps);
+  assertEquals(e.reg.ordenes, []);
+  const tr = (e.pedidos[1].mensajes.at(-1)!.content as Bloque[])[0] as { content: string };
+  assert(tr.content.includes("boton_de_resumen_viejo"), tr.content);
+});
+
+Deno.test("19-10 espera variable: mandando la dirección en partes espera 18 s en total; una reacción no deja el turno sin respuesta", async () => {
+  const cfg = configPrueba({ vendedor: { espera_agrupar_s: 8, whatsapp_enrique: null } });
+  const hist = [fila("out", "Pasame tu dirección y la ciudad.", "o1"), fila("in", "Calle Palma 123 casi", "wamid.IN1")];
+  const e = escenario(() => texto("¿Casi qué calle?"), { cfg, historial: hist });
+  await procesarTurno({ ...ENTRADA, texto: "Calle Palma 123 casi" }, e.deps);
+  assertEquals(e.esperas.slice(0, 2), [8000, 10000]);
+  // Charla normal: solo los 8 s.
+  const n = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), { cfg });
+  await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, n.deps);
+  assertFalse(n.esperas.includes(10000));
+  // Una reacción del cliente mientras "escribe" no cuenta como mensaje nuevo para el vendedor.
+  const reaccion: FilaHistorial = { direccion: "in", texto: null, tipo: "reaction", contenido: { type: "reaction" }, estado: "recibido", wa_message_id: "wamid.R1" };
+  const r = escenario(() => texto("Te llega en 2 a 5 días hábiles. ¿Es para vos?"), {
+    cfg, historial: [fila("in", "cuánto tarda?", "wamid.IN1"), reaccion], ultimos: ["wamid.IN1", "wamid.R1", "wamid.R1"],
+  });
+  const rr = await procesarTurno({ ...ENTRADA, texto: "cuánto tarda?" }, r.deps);
+  assertEquals(rr.accion, "respondido");
+  assertEquals(r.reg.textos.length, 1);
 });

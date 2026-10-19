@@ -41,6 +41,9 @@ function normalizar(s: string): string {
 export function productoPorPalabras(texto: string): string | null {
   const t = normalizar(texto);
   if (!t.trim()) return null;
+  // 19-10 (informe 02 §2b): "inhalador nasal" caía en tiras por la palabra "nasal". El inhalador todavía no se vende
+  // por el bot (falta DINAVISA y precio): no se asigna a ningún producto.
+  if (/inhalador/.test(t)) return null;
   const tiras = /\btiras?\b|nasal/.test(t);
   const parches = /parche|bucal/.test(t);
   if (/\bpack\b/.test(t) || (tiras && parches)) return "pack-gudair-tiras-nasales-parches-bucales";

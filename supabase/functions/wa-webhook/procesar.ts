@@ -180,6 +180,12 @@ export interface Deps {
   perfilConversacion?(conversacionId: string): Promise<{ producto?: unknown; pidio_testimonio_en?: unknown; testimonio_pedido?: unknown } | null>;
   /** Texto del último mensaje que mandamos en la conversación (para saber si el "no" responde a una confirmación). 10-10. */
   ultimoTextoNuestro?(conversacionId: string): Promise<string | null>;
+  /**
+   * 19-10 (#1072): último mensaje que le mandamos a este cliente, en cualquier conversación y sin los fallidos (la
+   * plantilla de confirmación de un cliente nuevo queda sin conversación). Para saber si un "sí" escrito responde a la
+   * confirmación del pedido o a otra pregunta. Sin esto (o si falla), el "sí" se toma como antes.
+   */
+  ultimoSalienteCliente?(clienteId: string): Promise<Saliente | null>;
   /** Escribe (o borra con null) una clave del perfil de la conversación sin tocar el resto. 09-10. */
   marcarPerfil?(conversacionId: string, clave: string, valor: string | null): Promise<void>;
   /** 12-10: manda un `interactive` armado con _shared/wa_interactivos.ts (permiso para ofertas). Sin esto, enviarBotones. */
@@ -750,7 +756,13 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
         t = await deps.transcribirAudio(r.ruta ?? ruta, r.mime ?? m.audio.mime_type ?? null)
           .catch((e) => ({ ok: false, texto: "", error: e instanceof Error ? e.message : String(e) }));
       }
-      const texto = await conContextoRecompraFw(deps, telefono, await conMarcaDeAnuncio({ deps, m, conv, clienteId: cliente.id }, textoDeAudio(t)));
+      // 19-10: también el pedido abierto (sin esto, al que mandaba audios le volvía a pedir todos los datos).
+      const texto = await conPedidoAbierto(
+        deps,
+        cliente.id,
+        telefono,
+        await conContextoRecompraFw(deps, telefono, await conMarcaDeAnuncio({ deps, m, conv, clienteId: cliente.id }, textoDeAudio(t))),
+      );
       await deps.completarContenidoMensaje(m.id, {
         transcripcion: t.texto || null,
         confianza: t.confianza ?? null,
@@ -847,23 +859,45 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
     if (await cancelacionPorTexto(ctx, m.text.body)) return;
     // 10-10: "no", "ya no", "cancelá" justo después de un mensaje de confirmación → igual que el botón Cancelar.
     // 13-10: igual que el botón: oferta de rescate primero.
-    if (esNoAConfirmacion(m.text.body) && deps.ultimoTextoNuestro) {
-      const ultimo = await deps.ultimoTextoNuestro(conv.id).catch(() => null);
-      if (ultimo && /^\[plantilla voltra_(confirmacion_pedido|recordatorio_confirmacion|ultimo_aviso_confirmacion)/.test(ultimo)) {
-        const conf = (await deps.config("confirmacion")) as { cancelar_h?: number } | null;
-        const desde = new Date(deps.ahora().getTime() - (conf?.cancelar_h ?? 72) * 3600_000).toISOString();
-        const pendientes = await deps.pedidosPorEstado(cliente.id, telefono, "pendiente", desde);
-        if (pendientes.length === 1) {
-          await pedirCancelacion(ctx, String(pendientes[0].shopify_order_id), pendientes[0]);
-          return;
-        }
+    // 19-10: el último mensaje al cliente se lee una sola vez (lo usan el "no" y el "sí").
+    let saliente: Saliente | null | undefined;
+    let salienteLeido = false;
+    const ultimoSaliente = async () => {
+      if (!salienteLeido) [saliente, salienteLeido] = [await leerUltimoSaliente(deps, cliente.id), true];
+      return saliente;
+    };
+    const pideNo = esNoAConfirmacion(m.text.body);
+    let ultimoEsConfirmacion = false;
+    if (pideNo) {
+      const u = await ultimoSaliente();
+      if (u !== undefined) ultimoEsConfirmacion = !!u && esConfirmacionNuestra(u);
+      else if (deps.ultimoTextoNuestro) {
+        const t = await deps.ultimoTextoNuestro(conv.id).catch(() => null);
+        ultimoEsConfirmacion = !!t && RE_PLANTILLA_CONF.test(t);
       }
     }
-    if (esAceptacion(m.text.body, aceptaciones)) {
+    if (ultimoEsConfirmacion) {
+      const conf = (await deps.config("confirmacion")) as { cancelar_h?: number } | null;
+      const desde = new Date(deps.ahora().getTime() - (conf?.cancelar_h ?? 72) * 3600_000).toISOString();
+      const pendientes = await deps.pedidosPorEstado(cliente.id, telefono, "pendiente", desde);
+      if (pendientes.length === 1) {
+        await pedirCancelacion(ctx, String(pendientes[0].shopify_order_id), pendientes[0]);
+        return;
+      }
+    }
+    // 19-10 (#1072): el "sí" escrito confirma el pedido pendiente solo si responde a la confirmación (plantilla o
+    // botones conf_si) o a un mensaje que pide confirmar el pedido tal cual. Si responde a otra pregunta ("¿te lo
+    // cambio a 2?"), pasa al vendedor. Sin el dato (dependencia ausente o falla) o sin ningún mensaje nuestro, como antes.
+    const acepta = esAceptacion(m.text.body, aceptaciones);
+    const s = acepta ? await ultimoSaliente() : undefined;
+    if (acepta && (s == null || siConfirmaPedido(s))) {
       const conf = (await deps.config("confirmacion")) as { cancelar_h?: number } | null;
       const horas = conf?.cancelar_h ?? 72;
       const desde = new Date(deps.ahora().getTime() - horas * 3600_000).toISOString();
-      const pendientes = await deps.pedidosPorEstado(cliente.id, telefono, "pendiente", desde);
+      let pendientes = await deps.pedidosPorEstado(cliente.id, telefono, "pendiente", desde);
+      // Si la confirmación era de otro pedido (el de los botones), no se confirma este: lo ve el vendedor.
+      const idConf = s ? pedidoDeConfirmacion(s) : null;
+      if (idConf) pendientes = pendientes.filter((p) => String(p.shopify_order_id) === idConf);
       if (pendientes.length === 1) {
         await aplicarRespuestaConfirmacion(ctx, "conf_si", String(pendientes[0].shopify_order_id), pendientes[0]);
         return;
@@ -972,6 +1006,78 @@ export async function conContextoRecompraFw(deps: Deps, telefono: string | null,
   }
 }
 
+/** 19-10: un mensaje que le mandamos al cliente (wa_mensajes, direccion 'out'). */
+export type Saliente = { tipo?: string | null; texto?: string | null; contenido?: unknown };
+
+/** Plantillas de la secuencia de confirmación (texto guardado por _shared/wa.ts: "[plantilla <nombre>] …"). */
+export const RE_PLANTILLA_CONF = /^\[plantilla voltra_(confirmacion_pedido|recordatorio_confirmacion|ultimo_aviso_confirmacion)/;
+
+/** Último mensaje al cliente. undefined = no se pudo saber (sin dependencia o falló); null = nunca le escribimos. */
+export async function leerUltimoSaliente(deps: Deps, clienteId: string): Promise<Saliente | null | undefined> {
+  if (!deps.ultimoSalienteCliente) return undefined;
+  try {
+    return await deps.ultimoSalienteCliente(clienteId);
+  } catch (e) {
+    console.error("último mensaje al cliente:", e instanceof Error ? e.message : e);
+    return undefined;
+  }
+}
+
+/** ids de los botones de un mensaje nuestro: interactivo (reply.id) o plantilla (payload de cada botón). */
+export function idsDeBotonesSalientes(s: Saliente): string[] {
+  type O = Record<string, unknown>;
+  const o = (x: unknown): O => (x && typeof x === "object" ? x as O : {});
+  const lista = (x: unknown): unknown[] => (Array.isArray(x) ? x : []);
+  const c = o(s.contenido);
+  const ids: string[] = [];
+  for (const b of lista(o(o(c.interactive).action).buttons)) {
+    const id = o(o(b).reply).id;
+    if (typeof id === "string") ids.push(id);
+  }
+  for (const k of lista(o(c.template).components)) {
+    if (o(k).type !== "button") continue;
+    for (const p of lista(o(k).parameters)) if (typeof o(p).payload === "string") ids.push(o(p).payload as string);
+  }
+  return ids;
+}
+
+/** ¿Es la confirmación del pedido (plantilla de la secuencia o mensaje con el botón conf_si:<id>, p. ej. la v4 en ventana)? */
+export function esConfirmacionNuestra(s: Saliente): boolean {
+  if (RE_PLANTILLA_CONF.test(s.texto ?? "")) return true;
+  return idsDeBotonesSalientes(s).some((id) => /^conf_si:\d+$/.test(id));
+}
+
+/** Pedido de los botones conf_si:<id> del mensaje (null si no los trae). */
+export function pedidoDeConfirmacion(s: Saliente): string | null {
+  for (const id of idsDeBotonesSalientes(s)) {
+    const r = /^conf_si:(\d+)$/.exec(id);
+    if (r) return r[1];
+  }
+  return null;
+}
+
+/**
+ * 19-10: el vendedor (o Enrique) le pidió confirmar el pedido TAL CUAL en un texto ("¿me confirmás el pedido? respondé
+ * sí"). El vendedor no tiene herramienta para confirmar un pedido web: sin esto, después de responderle una duda el
+ * "sí" quedaría dando vueltas. Si el texto propone un cambio (#1072: "¿te lo cambio a 2? … respondeme sí y lo
+ * confirmo"), no cuenta: ese "sí" lo resuelve el vendedor con modificar_pedido.
+ */
+export function pideConfirmarTalCual(s: Saliente): boolean {
+  if ((s.tipo ?? "text") !== "text") return false;
+  const n = normalizarTexto(s.texto ?? "");
+  if (!/\bconfirm/.test(n)) return false;
+  return !RE_PROPONE_CAMBIO.test(n);
+}
+
+/** Palabras de un mensaje que propone cambiar el pedido (cantidad, producto, agregar o sacar algo). */
+const RE_PROPONE_CAMBIO =
+  /\b(?:cambi\w*|agreg\w*|sum(?:o|amos|ar|arle|ale|arte)|modific\w*|reemplaz\w*|actualiz\w*|aument\w*|quit\w*|sac(?:o|amos|ar|arle)|en vez|en lugar|(?:los|las) [2-9]|[2-9] (?:unidades|cajas|bolsas|packs?)|x ?[2-9]|combo|pack)\b/;
+
+/** ¿El "sí" escrito confirma el pedido pendiente? Solo si responde a la confirmación o a un pedido de confirmar tal cual. */
+export function siConfirmaPedido(s: Saliente): boolean {
+  return esConfirmacionNuestra(s) || pideConfirmarTalCual(s);
+}
+
 /** "no", "ya no", "no gracias", "cancelalo", "mejor no"… como respuesta completa (nada más en el mensaje). 10-10. */
 export function esNoAConfirmacion(texto: string): boolean {
   const n = normalizarTexto(texto);
@@ -1024,7 +1130,7 @@ export async function conPedidoAbierto(deps: Deps, clienteId: string, telefono: 
     }).sort((a, b) => String(b.creado_en ?? "").localeCompare(String(a.creado_en ?? "")));
     // 13-10: si hay uno con intento fallido, ese manda (es el que el cliente viene a coordinar).
     const abierto = abiertos.find(enReintento) ?? abiertos[0];
-    if (!abierto) return texto;
+    if (!abierto) return esAvisoDePedidoHecho(texto) ? `${PISTA_PEDIDO_OTRO_NUMERO}\n${texto}` : texto;
     if (enReintento(abierto)) return `${textoPedidoEnReintento(abierto)}\n${texto}`;
     const despachado = (abierto.raw ?? {}).fulfillment_status === "fulfilled";
     const r = abierto.raw ?? {};
@@ -1039,10 +1145,25 @@ export async function conPedidoAbierto(deps: Deps, clienteId: string, telefono: 
     const programada = prog ? `, ENTREGA PROGRAMADA ${textoEntregaProgramada(prog)} (no prometas otro día; si pide cambiarla, programar_entrega)` : "";
     return `[pedido ${abierto.nombre ?? ""} de la tienda, ${estado}${programada}: ${prods || "productos sin detalle"}, total Gs ${r.total_price ?? "?"}, ` +
       `dirección "${dir || "sin dirección"}", ciudad ${a.city ?? "?"}. Si el cliente corrige o agrega un dato de la dirección, ` +
-      `llamá actualizar_direccion; si está pendiente y pregunta algo (precio, día de entrega, dirección), respondé y volvé a pedir que confirme respondiendo "sí" en 1 línea. No le preguntes qué producto quiere.]\n${texto}`;
+      `llamá actualizar_direccion; si está pendiente y pregunta algo (precio, día de entrega, dirección), respondé y volvé a pedir que confirme el pedido tal cual respondiendo "sí" en 1 línea. No le preguntes qué producto quiere. ` +
+      `${REGLA_CAMBIOS_PEDIDO}]\n${texto}`;
   } catch {
     return texto;
   }
+}
+
+/** 19-10 (#1072): el vendedor no puede cambiar un pedido con palabras; la herramienta muestra el resumen con Confirmo. */
+export const REGLA_CAMBIOS_PEDIDO = "No podés cambiar productos ni cantidades con palabras: usá modificar_pedido (muestra un resumen con Confirmo). " +
+  "Nunca digas que lo cambiaste si la herramienta no lo hizo.";
+
+/** 19-10 (#1067): "acabo de hacer un pedido" sin pedido a este número → el pedido web puede estar con otro teléfono. */
+export const PISTA_PEDIDO_OTRO_NUMERO = "[posible pedido web con otro número: usá buscar_pedido (por número, nombre o pedidos web de la última hora)]";
+
+/** "Acabo de hacer un pedido", "ya pedí por la web", "hice un pedido", "ya compré en la página"… */
+export function esAvisoDePedidoHecho(texto: string): boolean {
+  const n = normalizarTexto(texto);
+  return /\b(?:acabo de (?:hacer|realizar|mandar|enviar) (?:un|el|mi) pedido|(?:ya )?(?:hice|realice|mande|envie) (?:un|el|mi) pedido|ya (?:pedi|compre|hice la compra|hice el pedido)|(?:pedi|compre) (?:por|en|desde) (?:la )?(?:web|pagina|tienda))\b/
+    .test(n);
 }
 
 /** 13-10: días hacia atrás en que se busca un pedido con intento de entrega fallido para darle contexto al vendedor. */

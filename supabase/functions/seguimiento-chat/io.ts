@@ -3,11 +3,12 @@
 import { deducirProductoAnuncio } from "../_shared/anuncios.ts";
 import { db } from "../_shared/db.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { enviarPlantilla } from "../_shared/wa.ts";
+import { enviarPlantilla, enviarTexto } from "../_shared/wa.ts";
 import { inicioMesAsuncionISO, procesarTurno } from "../_shared/vendedor/orquestador.ts";
 import { depsHerramientasReales, depsOrquestadorReales } from "../_shared/vendedor/io.ts";
 import { registrarBaja } from "../recompra/baja.ts";
 import type { Candidato, CfgSeguimiento, DepsSeguimiento } from "./logica.ts";
+import type { CandidatoDerivacion, DatosDerivacion } from "./derivaciones_plazo.ts";
 import type { HistorialMk, PreciosToque3 } from "./toque3.ts";
 import { esBotonQuiero, PREFIJO_RESCATE, rescateSalio } from "./rescate_datos.ts";
 
@@ -214,7 +215,17 @@ async function enriquecer(convs: FilaConv[], desdeISO: string, cfg: CfgSeguimien
   const entradas = new Map<string, Array<{ texto: string; creado_en: string }>>();
   const primeraRespuesta = new Map<string, string>();
   const plantillas = new Map<string, Set<string>>();
+  // 19-10 (ítem 7): entrantes posteriores a nuestro último saliente (se juntan hasta topar con un saliente no fallido).
+  const bloque = new Map<string, Array<{ texto: string | null; tipo: string }>>();
+  const bloqueCerrado = new Set<string>();
   for (const m of msgs.data ?? []) {
+    if (!bloqueCerrado.has(m.conversacion_id)) {
+      if (m.direccion === "in") {
+        const l = bloque.get(m.conversacion_id) ?? [];
+        if (l.length < 20) l.unshift({ texto: typeof m.texto === "string" ? m.texto.slice(0, 200) : null, tipo: String(m.tipo ?? "") });
+        bloque.set(m.conversacion_id, l);
+      } else if (m.estado !== "fallido") bloqueCerrado.add(m.conversacion_id);
+    }
     if (m.direccion === "in" && typeof m.texto === "string" && m.texto.trim()) {
       const l = entradas.get(m.conversacion_id) ?? [];
       if (l.length < 30) l.push({ texto: m.texto.slice(0, 500), creado_en: m.creado_en });
@@ -260,8 +271,118 @@ async function enriquecer(convs: FilaConv[], desdeISO: string, cfg: CfgSeguimien
       plantillas_enviadas: [...(plantillas.get(c.id) ?? [])],
       consentimiento_marketing: (consentVigente.get(c.cliente_id) as Candidato["consentimiento_marketing"]) ?? null,
       wa_user_id: waUserDe.get(c.cliente_id) ?? null,
+      // Solo si hubo un saliente nuestro antes (si no, no es un "ok" a lo que le dijimos).
+      bloque_cliente: bloqueCerrado.has(c.id) ? (bloque.get(c.id) ?? []) : undefined,
     };
   });
+}
+
+// ---------- 19-10: derivaciones con plazo (derivaciones_plazo.ts) ----------
+
+type HerrTurno = { nombre?: string; input?: Record<string, unknown> };
+
+/** Datos de la derivación de un turno (la herramienta derivar_a_enrique o la del sistema). */
+function datosDerivacion(t: { id: string; creado_en: string; accion: string | null; herramientas: unknown }): DatosDerivacion {
+  const hs = (Array.isArray(t.herramientas) ? t.herramientas : []) as HerrTurno[];
+  const h = [...hs].reverse().find((x) => String(x?.nombre ?? "").startsWith("derivar_a_enrique"));
+  const inp = h?.input ?? {};
+  const txt = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const deAccion = /^derivado:(.+)$/.exec(String(t.accion ?? ""))?.[1];
+  return {
+    turno_id: t.id,
+    en: t.creado_en,
+    motivo: txt(inp.motivo) ?? (deAccion && deAccion !== "herramienta" ? deAccion : "otro"),
+    resumen: txt(inp.resumen),
+    quiere: txt(inp.quiere),
+    datos: txt(inp.datos),
+    falta: txt(inp.falta),
+  };
+}
+
+/**
+ * Conversaciones en 'humano' cuyo último turno del vendedor (sin agrupados ni omitidos) fue una derivación desde
+ * desdeISO. Suma: salidas manuales y "Le escribo yo" posteriores, último saliente posterior, nombre y teléfono.
+ */
+async function candidatosDerivacion(desdeISO: string): Promise<CandidatoDerivacion[]> {
+  const sb = db();
+  const der = await sb.from("vendedor_turnos").select("conversacion_id").eq("derivado", true).gte("creado_en", desdeISO).limit(500);
+  falla("turnos derivados", der.error);
+  const idsDer = [...new Set((der.data ?? []).map((t) => t.conversacion_id as string))].slice(0, 100); // .in() viaja en la URL
+  if (!idsDer.length) return [];
+  const { data: convsData, error } = await sb.from("wa_conversaciones").select("id,estado,cliente_id,ultima_entrada_en,perfil_vendedor")
+    .in("id", idsDer).eq("estado", "humano");
+  falla("conversaciones derivadas", error);
+  const convs = (convsData ?? []) as FilaConv[];
+  if (!convs.length) return [];
+  const ids = convs.map((c) => c.id);
+  const clientes = [...new Set(convs.map((c) => c.cliente_id))];
+  const [turnos, salidas, cli, escribos] = await Promise.all([
+    sb.from("vendedor_turnos").select("id,conversacion_id,derivado,accion,herramientas,creado_en").in("conversacion_id", ids)
+      .gte("creado_en", desdeISO).order("creado_en", { ascending: false }).limit(2000),
+    sb.from("wa_mensajes").select("conversacion_id,creado_en,estado,origen:contenido->>origen").in("conversacion_id", ids)
+      .eq("direccion", "out").neq("estado", "fallido").gte("creado_en", desdeISO).order("creado_en", { ascending: false }).limit(5000),
+    sb.from("wa_clientes").select("id,telefono,nombre,wa_user_id").in("id", clientes),
+    sb.from("eventos_crudos").select("id_externo,recibido_en").eq("fuente", "telegram").like("id_externo", "accion:escribo:%")
+      .gte("recibido_en", desdeISO).limit(200),
+  ]);
+  falla("turnos de las derivadas", turnos.error);
+  falla("salientes de las derivadas", salidas.error);
+  falla("clientes de las derivadas", cli.error);
+  falla("botones escribo", escribos.error);
+
+  // Último turno que es una respuesta (sin agrupados ni omitidos): tiene que ser la derivación.
+  const ultimoTurno = new Map<string, { id: string; creado_en: string; accion: string | null; herramientas: unknown; derivado: boolean }>();
+  for (const t of turnos.data ?? []) {
+    if (ultimoTurno.has(t.conversacion_id) || NO_RESPUESTA.test(String(t.accion ?? ""))) continue;
+    ultimoTurno.set(t.conversacion_id, t as never);
+  }
+  // "Le escribo yo" (accion:escribo:<shopify_order_id>) → cliente del pedido y cuándo lo tocó.
+  const escriboPorPedido = new Map<number, string>();
+  for (const e of escribos.data ?? []) {
+    const n = Number(String(e.id_externo).split(":")[2]);
+    if (Number.isFinite(n) && n > 0) {
+      const prev = escriboPorPedido.get(n);
+      if (!prev || Date.parse(e.recibido_en) > Date.parse(prev)) escriboPorPedido.set(n, e.recibido_en as string);
+    }
+  }
+  const escriboCliente = new Map<string, string>();
+  if (escriboPorPedido.size) {
+    const { data, error: e2 } = await sb.from("shopify_pedidos").select("shopify_order_id,cliente_id")
+      .in("shopify_order_id", [...escriboPorPedido.keys()]).in("cliente_id", clientes);
+    falla("pedidos de los botones escribo", e2);
+    for (const p of data ?? []) {
+      const en = escriboPorPedido.get(Number(p.shopify_order_id));
+      const prev = escriboCliente.get(p.cliente_id as string);
+      if (en && (!prev || Date.parse(en) > Date.parse(prev))) escriboCliente.set(p.cliente_id as string, en);
+    }
+  }
+  const datosCli = new Map((cli.data ?? []).map((c) => [c.id as string, c as { telefono: string | null; nombre: string | null; wa_user_id: string | null }]));
+
+  const out: CandidatoDerivacion[] = [];
+  for (const c of convs) {
+    const t = ultimoTurno.get(c.id);
+    if (!t || t.derivado !== true) continue; // el último turno no fue una derivación: no la derivó el bot
+    const d = datosDerivacion(t);
+    const tDer = Date.parse(d.en);
+    const posteriores = (salidas.data ?? []).filter((m) => m.conversacion_id === c.id && Date.parse(m.creado_en) > tDer);
+    const escribo = escriboCliente.get(c.cliente_id);
+    const k = datosCli.get(c.cliente_id);
+    out.push({
+      conversacion_id: c.id,
+      cliente_id: c.cliente_id,
+      estado: c.estado,
+      nombre: k?.nombre ?? null,
+      telefono: k?.telefono ?? null,
+      wa_user_id: k?.wa_user_id ?? null,
+      perfil: c.perfil_vendedor,
+      ultima_entrada_en: c.ultima_entrada_en,
+      derivacion: d,
+      manual_despues: posteriores.some((m) => m.origen === "manual"),
+      escribo_despues: !!escribo && Date.parse(escribo) > tDer,
+      ultima_salida_tras_derivacion: posteriores[0]?.creado_en ?? null, // vienen del más nuevo al más viejo
+    });
+  }
+  return out;
 }
 
 export const depsReales: DepsSeguimiento = {
@@ -391,6 +512,33 @@ export const depsReales: DepsSeguimiento = {
 
   // ---- 13-10: rescate de datos (rescate_datos.ts) ----
   candidatosRescateDatos,
+
+  // ---- 19-10: derivaciones con plazo (derivaciones_plazo.ts) ----
+  candidatosDerivacion,
+
+  async marcarDerivacion(conversacionId, marca) {
+    // Mismo enfoque que marcarClavesPerfil, con un objeto: perfil_vendedor.derivacion_plazo. El chat está en 'humano'
+    // (el orquestador no lo toca); si el bot retoma y guarda el perfil, la clave se pierde, pero para entonces el
+    // último turno ya no es la derivación y la conversación no vuelve a ser candidata.
+    const sb = db();
+    const { data, error } = await sb.from("wa_conversaciones").select("perfil_vendedor").eq("id", conversacionId).maybeSingle();
+    falla("leer perfil para derivación con plazo", error);
+    const actual = data?.perfil_vendedor && typeof data.perfil_vendedor === "object" && !Array.isArray(data.perfil_vendedor)
+      ? { ...(data.perfil_vendedor as Record<string, unknown>) }
+      : {};
+    actual.derivacion_plazo = marca;
+    const r = await sb.from("wa_conversaciones").update({ perfil_vendedor: actual }).eq("id", conversacionId);
+    falla("marcar derivación con plazo", r.error);
+  },
+
+  async cambiarEstado(conversacionId, estado) {
+    // Igual que la Bandeja (devolverAIA) y que pasarAHumano del vendedor.
+    const cambios = estado === "ia" ? { estado: "ia", asignado_a: null } : { estado: "humano", asignado_a: "enrique" };
+    const { error } = await db().from("wa_conversaciones").update(cambios).eq("id", conversacionId);
+    falla(`pasar a ${estado}`, error);
+  },
+
+  enviarTextoCliente: (to, texto, op) => enviarTexto(to, texto, op),
 
   marcarRescateDatos(conversacionId, enISO) {
     // Mismo enfoque que marcarToque3 (sin RPC propia). Se marca antes del turno y, si no salió nada, se devuelve la

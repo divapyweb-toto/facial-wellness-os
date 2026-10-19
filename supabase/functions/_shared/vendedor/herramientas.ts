@@ -9,6 +9,7 @@
 //     no lo que el modelo reescriba.
 //   - Todo texto que el modelo pone dentro de un interactivo pasa por el mismo filtro que su respuesta.
 import { avisoParaCourier, datosCourierDesdeRaw } from "../texto_courier.ts";
+import { herramientasPedidosWeb } from "./pedidos_web.ts";
 import { digitoVerificadorRuc, normalizarRuc } from "../facturacion.ts";
 import type { Herramienta } from "../claude.ts";
 import {
@@ -135,7 +136,23 @@ const MENSAJE_CLIENTE: Record<string, string> = {
 };
 const MENSAJE_CLIENTE_DEFAULT = "Quiero hacer una consulta.";
 
+/** 19-10: el inhalador todavía no está a la venta (falta DINAVISA y precio). */
+export const NOTA_INHALADOR =
+  "El inhalador todavía no está a la venta: decí \"Llega en unos días, te aviso\" y, si le sirve, ofrecé las tiras o el pack. No des precio ni características del inhalador.";
+
+/**
+ * 19-10 (paquete 1): consulta de salud SIN señales de alerta → no se deriva; el bot responde con este texto seguro
+ * (el del 19-10, caso rinitis) y sigue vendiendo. Sin "tratamiento", "cura" ni "elimina" (palabras prohibidas).
+ */
+export const TEXTO_SALUD_SEGURO =
+  "No es un remedio: es una ayuda para [beneficio simple del producto]. Si tenés indicaciones de tu médico, seguilas igual.";
+
+/** Señales de alerta: con estas, salud SÍ se deriva (y se recomienda el médico). */
+const RE_ALERTA_SALUD = /apnea|deja(?:s|r)? de respirar|pausas? al respirar|ahog|asfixi|embaraz|operaci|cirug|menor de (?:edad|18)|hij[oa] de \d|nene|beb[eé]|ni[nñ]o|dolor|sangr|fiebre|tabique|atm\b|articulaci|bruxismo|brackets|ortodoncia|medicaci|medicament|pastilla|remedio que tomo|presi[oó]n alta|coraz[oó]n/i;
+
 export const HERRAMIENTAS: Herramienta[] = [
+  // 19-10 (paquete 1): buscar_pedido, modificar_pedido y guardar_factura (pedidos_web.ts).
+  ...herramientasPedidosWeb().map((h) => h.definicion),
   {
     name: "consultar_catalogo",
     description:
@@ -200,6 +217,10 @@ export const HERRAMIENTAS: Herramienta[] = [
         motivo: { type: "string", enum: [...MOTIVOS] },
         resumen: { type: "string", description: "Qué pasó, en 1 a 3 oraciones, para que Enrique entienda sin leer el chat." },
         shopify_order_id: { type: "integer", description: "Pedido relacionado, si hay (opcional)." },
+        // 19-10 (paquete 1): las 3 líneas del recordatorio a Enrique (seguimiento-chat las lee de este input).
+        quiere: { type: "string", description: "Qué quiere el cliente, en pocas palabras (opcional)." },
+        datos: { type: "string", description: "Qué datos ya dio: producto, cantidad, ciudad… sin teléfono (opcional)." },
+        falta: { type: "string", description: "Qué falta para resolverlo (opcional)." },
       },
       required: ["motivo", "resumen"],
     },
@@ -486,7 +507,13 @@ async function consultarCatalogo(input: Record<string, unknown>, ctx: CtxTurno, 
   } catch (e) {
     return error(`catalogo_no_disponible: ${e instanceof Error ? e.message : e}. Derivá a Enrique si el cliente necesita el precio.`);
   }
-  const items = buscar(itemsCatalogo(productos, ctx), typeof input.busqueda === "string" ? input.busqueda : undefined);
+  const busqueda = typeof input.busqueda === "string" ? input.busqueda : undefined;
+  // 19-10: el inhalador no se ofrece hasta que Enrique confirme DINAVISA y el precio.
+  // 19-10: también si lo nombró el cliente (el modelo suele buscar "nasal" y la nota no llegaba: simulador).
+  if (/inhalador/i.test(normalizar(`${busqueda ?? ""} ${ctx.textoEntrada ?? ""}`))) {
+    return { resultado: { ok: true, productos: [], nota: NOTA_INHALADOR } };
+  }
+  const items = buscar(itemsCatalogo(productos, ctx), busqueda);
   return {
     resultado: {
       ok: true,
@@ -502,7 +529,7 @@ async function consultarCatalogo(input: Record<string, unknown>, ctx: CtxTurno, 
 
 async function estadoPedido(_i: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
   const pedidos = await deps.pedidosDeCliente(ctx.clienteId, ctx.telefono);
-  if (!pedidos.length) return { resultado: { ok: true, pedidos: [], nota: "No encontré pedidos de este cliente. Ofrecé derivar a Enrique si dice que compró." } };
+  if (!pedidos.length) return { resultado: { ok: true, pedidos: [], nota: "No encontré pedidos con este número. Si dice que compró (por la web o con otro número), buscalo con buscar_pedido (número de pedido o nombre); si tampoco aparece, pedile el número de pedido o el teléfono que puso." } };
   return {
     resultado: {
       ok: true,
@@ -931,6 +958,14 @@ export async function derivarAEnrique(
   if (input.motivo === "otro" && String(input.resumen ?? "").trim().length < 25) {
     return error("derivacion_sin_motivo: no derives sin un motivo real y un resumen claro. Seguí vos: precio con frase_precio y una pregunta corta.");
   }
+  // 19-10 (paquete 1): la factura la guarda el bot (guardar_factura), no se deriva (#1075).
+  if (/\bfactura|\bruc\b|raz[oó]n social/i.test(String(input.resumen ?? "")) && ["otro", "pide_persona", "falla_herramienta"].includes(input.motivo)) {
+    return error("factura_sin_derivar: no derives por la factura. Si el pedido ya existe, guardá el RUC y la razón social con guardar_factura; si todavía no hay pedido, van en el campo factura de crear_pedido_cod.");
+  }
+  // 19-10: salud sin señales de alerta → texto seguro y se sigue vendiendo (la derivación de rinitis tardó 21 h).
+  if (input.motivo === "salud" && !RE_ALERTA_SALUD.test(`${input.resumen ?? ""} ${ctx.textoEntrada ?? ""}`)) {
+    return error(`salud_sin_alerta: no derives. Respondé con este texto, adaptado al producto: "${TEXTO_SALUD_SEGURO}" y seguí con la venta (precio con frase_precio y una pregunta corta). Derivá solo si hay señales de alerta (apnea, ahogos, embarazo, menores, dolor, cirugía, ATM o bruxismo).`);
+  }
   const sigueIa = esDerivacionDeVenta(input.motivo);
   if (!sigueIa) await deps.pasarAHumano(ctx.conversacionId);
   let orderId: number | null = Number.isFinite(Number(input.shopify_order_id)) && input.shopify_order_id ? Number(input.shopify_order_id) : null;
@@ -987,6 +1022,35 @@ export async function derivarAEnrique(
     // Termina solo este turno (el botón ya salió); en 'ia' el próximo mensaje del cliente se atiende normal.
     terminal: true,
     derivado: true,
+  };
+}
+
+/** 19-10 (paquete 1): cuántas horas después del ahora cae el inicio (00:00 PY) de una fecha YYYY-MM-DD. */
+export function horasHastaFecha(fecha: string, ahora: Date): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return null;
+  const t = Date.parse(`${fecha}T00:00:00-03:00`);
+  return Number.isFinite(t) ? (t - ahora.getTime()) / 3_600_000 : null;
+}
+
+/**
+ * registrar_perfil: el orquestador guarda el perfil; acá se valida. 19-10 (paquete 1, informe 01 §6): de 10
+ * "te escribo el lunes", 6 caían fuera de las 24 h y ninguno salió. Si la fecha de recontacto cae fuera de la
+ * ventana y el cliente no dio permiso de avisos, el bot no lo promete: ese día le avisa a Enrique seguimiento-chat.
+ */
+async function registrarPerfil(i: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  const perfil = normalizarPerfil(i, "modelo");
+  const fecha = typeof perfil.recontactar_el === "string" ? perfil.recontactar_el : null;
+  const horas = fecha ? horasHastaFecha(fecha, ctx.ahora) : null;
+  if (horas === null || horas < 20) return { resultado: { ok: true, perfil } };
+  const permiso = await deps.consentimiento?.(ctx.clienteId).catch(() => null) ?? null;
+  if (permiso === "si") return { resultado: { ok: true, perfil, nota: "Tiene permiso de avisos: ese día le escribimos con una plantilla." } };
+  return {
+    resultado: {
+      ok: true,
+      perfil,
+      nota: "Esa fecha cae fuera de las 24 h y no tiene permiso de avisos: NO prometas \"te escribo el …\" (WhatsApp no lo deja). " +
+        "Decile \"cuando estés listo escribime por acá y lo armamos\" o ofrecé dejarlo programado para ese día con programar_entrega. Ese día le avisamos a Enrique.",
+    },
   };
 }
 
@@ -1298,6 +1362,7 @@ export type ExtraEjecucion = {
 export type Ejecutor = (input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas, extra?: ExtraEjecucion) => Promise<ResultadoHerramienta>;
 
 export const EJECUTORES: Record<string, Ejecutor> = {
+  ...Object.fromEntries(herramientasPedidosWeb().map((h) => [h.definicion.name, h.ejecutor])),
   consultar_catalogo: consultarCatalogo,
   estado_pedido: estadoPedido,
   crear_pedido_cod: crearPedidoCod,
@@ -1310,7 +1375,7 @@ export const EJECUTORES: Record<string, Ejecutor> = {
     }, c, d),
   enviar_media: enviarMediaHerr,
   // El orquestador guarda el perfil en la conversación (wa_conversaciones.perfil_vendedor); acá solo se valida.
-  registrar_perfil: (i) => Promise.resolve({ resultado: { ok: true, perfil: normalizarPerfil(i, "modelo") } }),
+  registrar_perfil: registrarPerfil,
   pedir_ubicacion: (i, c, d) => enviarInteractivoRevisado(i, c, d, (t) => ubicacionRequest(t)),
   enviar_formulario: (i, c, d) => {
     const flowId = c.cfg.vendedor.flow_id;

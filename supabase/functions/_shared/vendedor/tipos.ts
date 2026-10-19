@@ -188,6 +188,8 @@ export type ResultadoOrden = {
 };
 
 export type DepsHerramientas = {
+  /** 19-10 (paquete 1): buscar, modificar pedidos y guardar factura (pedidos_web.ts). */
+  pedidosWeb?: import("./pedidos_web.ts").DepsPedidosWeb;
   catalogoShopify(estado: string): Promise<ProductoShopify[]>;
   pedidosDeCliente(clienteId: string, telefono: string | null): Promise<PedidoCliente[]>;
   guardarPedidoChat(fila: Omit<PedidoChat, "id" | "creado_en"> & { id?: string }): Promise<PedidoChat>;

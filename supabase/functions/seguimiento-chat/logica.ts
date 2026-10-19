@@ -28,6 +28,8 @@ import { normalizarPerfil } from "../_shared/vendedor/perfil.ts";
 import { diaLocalMas, instanteLocal } from "../recompra/calendario.ts";
 import { correrToque3, type DepsToque3, type ResumenToque3 } from "./toque3.ts";
 import { correrRescateDatos, type DepsRescateDatos, type ResumenRescateDatos } from "./rescate_datos.ts";
+import { correrDerivaciones, type DepsDerivaciones, type ResumenDerivaciones } from "./derivaciones_plazo.ts";
+import { esOkSuelto, esStickerOEmoji } from "../_shared/vendedor/respuestas_fijas.ts";
 
 export type CfgSeguimiento = {
   activo: boolean;
@@ -192,7 +194,30 @@ export type Candidato = {
   ultimo_resumen_en?: string | null;
   /** Rescates de datos que le llegaron al cliente en los últimos `dias_reinicio` días (vendedor_turnos). */
   rescates_datos?: number;
+  // ── 19-10 (v35, ítem 7): "Ok" al precio. Opcional: sin esto, que el cliente hable último frena el recontacto. ──
+  /**
+   * Entrantes del cliente posteriores a nuestro último saliente no fallido (del más viejo al más nuevo). Vacío o
+   * ausente si hablamos últimos o si no hubo ningún saliente nuestro antes en la ventana.
+   */
+  bloque_cliente?: Array<{ texto: string | null; tipo: string }>;
 };
+
+/**
+ * 19-10 (v35, ítem 7): "Ok", "👌", "Genial", "dale", un sticker o una reacción sueltos. El vendedor a veces no los
+ * contesta (acuse tras un cierre nuestro) y, como el último mensaje es del cliente, los recontactos no salían: 3 chats
+ * de anuncio el 10, 11 y 18-10 se perdieron así. Usa el detector del vendedor (respuestas_fijas.ts).
+ */
+export function esAcuseSuelto(m: { texto: string | null; tipo: string }): boolean {
+  if (m.tipo === "sticker" || m.tipo === "reaction") return true;
+  const t = (m.texto ?? "").trim();
+  if (!t) return false;
+  return esOkSuelto(t) || esStickerOEmoji(t);
+}
+
+/** Todo lo que mandó el cliente después de nuestro último mensaje es un acuse suelto (y hay al menos uno). */
+export function bloqueEsAcuse(bloque: Candidato["bloque_cliente"]): boolean {
+  return !!bloque?.length && bloque.every(esAcuseSuelto);
+}
 
 export type Decision =
   | { tipo: "seguimiento"; numero: number; previo: { seguimientos: number; ultimo_seguimiento_en: string | null } }
@@ -229,7 +254,10 @@ export function decidirSeguimiento(c: Candidato, cfg: CfgSeguimiento, ahora: Dat
   if (perfil.recontactar_el && perfil.recontactar_el > fechaAsuncion(ahora)) return nada("espera_fecha_pedida");
   if (c.baja_marketing) return nada("baja_marketing");
   if (c.pedido_reciente) return nada("pedido_reciente");
-  if (!c.ultimo_mensaje || c.ultimo_mensaje.direccion !== "out") return nada("cliente_hablo_ultimo");
+  // 19-10 (v35, ítem 7): un "Ok"/👌 suelto antes del pedido no es un cierre: el recontacto sigue (las horas se
+  // cuentan desde el acuse). Sin pedido (pedido_reciente) ni rechazo: eso ya cortó arriba.
+  const acuse = c.ultimo_mensaje?.direccion === "in" && bloqueEsAcuse(c.bloque_cliente);
+  if (!c.ultimo_mensaje || (c.ultimo_mensaje.direccion !== "out" && !acuse)) return nada("cliente_hablo_ultimo");
   if (c.ultima_respuesta_derivada) return nada("derivado");
   const n = seguimientosVigentes(c.perfil, ahora, cfg);
   if (n >= cfg.max) return nada("tope_seguimientos");
@@ -278,7 +306,7 @@ export type DepsSeguimiento = {
   ahora(): Date;
   /** Turnos en paralelo (default 4). */
   paralelo?: number;
-} & Partial<DepsToque3> & Partial<DepsRescateDatos>;
+} & Partial<DepsToque3> & Partial<DepsRescateDatos> & Partial<DepsDerivaciones>;
 
 export type ResumenSeguimiento = {
   accion: "inactivo" | "fuera_de_horario" | "tope_gasto" | "corrido";
@@ -297,6 +325,8 @@ export type ResumenSeguimiento = {
   toque3?: ResumenToque3;
   /** 13-10: rescate de datos a quien tocó "Quiero …" y no terminó los datos (rescate_datos.ts). */
   rescate_datos?: ResumenRescateDatos;
+  /** 19-10: derivaciones con plazo (recordatorios a Enrique, retomar o mensaje fijo; derivaciones_plazo.ts). */
+  derivaciones?: ResumenDerivaciones;
 };
 
 /** Resultado del turno que cuenta como falla (se avisa a Enrique, una vez por corrida). */
@@ -333,6 +363,20 @@ export async function correrSeguimientos(deps: DepsSeguimiento): Promise<Resumen
   // estén fuera de horario; si el recontacto de esta misma corrida ya le escribió, lo ve en el perfil y no sale.
   if (deps.candidatosRescateDatos && deps.marcarRescateDatos) {
     r.rescate_datos = await aparte<ResumenRescateDatos>("Rescate de datos", () => correrRescateDatos(deps, crudo), { accion: "error" });
+  }
+  // 19-10: derivaciones con plazo. A cualquier hora (los recordatorios y el plazo miran su propio horario). No mira el
+  // tope de gasto: si el turno de retomar no sale, va el mensaje fijo (sin IA).
+  if (deps.candidatosDerivacion && deps.marcarDerivacion && deps.cambiarEstado && deps.enviarTextoCliente) {
+    const d: Parameters<typeof correrDerivaciones>[0] = {
+      candidatosDerivacion: deps.candidatosDerivacion,
+      marcarDerivacion: deps.marcarDerivacion,
+      cambiarEstado: deps.cambiarEstado,
+      enviarTextoCliente: deps.enviarTextoCliente,
+      turno: deps.turno,
+      avisar: deps.avisar,
+      ahora: deps.ahora,
+    };
+    r.derivaciones = await aparte<ResumenDerivaciones>("Derivaciones con plazo", () => correrDerivaciones(d, crudo), { accion: "error" });
   }
   if (deps.marcarAvisoIntencion) {
     r.avisos_intencion = await aparte<ResumenAvisoIntencion>("Aviso de intención de compra", () => correrAvisosIntencion(deps, crudo), { accion: "error" });
@@ -396,6 +440,8 @@ async function correrRecontactos(deps: DepsSeguimiento, crudo: unknown): Promise
     if (r.accion === "respondido" || r.accion === "terminal" || r.accion === "derivado") enviados++;
     else omitidos++;
     if (esFalla(r)) fallas.push(`${id}: seguimiento ${d.numero} → ${r.accion}${r.motivo ? ` (${r.motivo})` : ""}`);
+    // 19-10 (v35): un recontacto nunca deriva. Si pasa, es que el turno de seguimiento tenía derivar_a_enrique: se avisa.
+    if (r.accion === "derivado") fallas.push(`${id}: seguimiento ${d.numero} derivó a Enrique (no debería)`);
     // No salió nada y no se gastó: se devuelve el contador a como estaba (se puede intentar en la próxima corrida).
     if (r.accion === "omitido" && !esFalla(r) && !(Number(r.costo_usd) > 0)) {
       await deps.marcar(id, d.previo.seguimientos, d.previo.ultimo_seguimiento_en)
@@ -628,6 +674,10 @@ export async function correrAvisosIntencion(deps: DepsSeguimiento, crudo: unknow
 //     de la ventana la API no deja mandar texto libre).
 // Mismo horario que los recontactos [horario_desde, horario_hasta) y se apaga con `activo: false`.
 // Nunca si: la conversación no está en 'ia', rechazo, baja de marketing o pedido reciente del cliente.
+// 19-10 (v35, ítem 6): también cubre "te escribo el [día]" que promete el bot (si lo guarda en recontactar_el). El
+// aviso a Enrique (fuera de la ventana) sale desde recontacto_aviso_desde (8) en vez de las 12, con contexto (lo último
+// que dijo, la nota del perfil y si tiene permiso de ofertas). Con permiso de ofertas y fuera de la ventana igual va
+// el aviso: no hay plantilla de recontacto (el toque 3 excluye a quien tiene fecha pedida).
 
 /** Texto exacto de la entrada del turno de recontacto por cobro (contrato con el prompt del vendedor). */
 export const TEXTO_SEGUIMIENTO_COBRO = "[seguimiento cobro]";
@@ -637,9 +687,19 @@ export type DecisionCobro =
   | { tipo: "avisar" }
   | { tipo: "nada"; motivo: string };
 
-export function decidirRecontactoCobro(c: Candidato, cfg: CfgSeguimiento, ahora: Date): DecisionCobro {
+/** 19-10: hora de Asunción desde la que sale el aviso a Enrique (el turno del bot sigue en [horario_desde, horario_hasta)). */
+export const RECONTACTO_AVISO_DESDE_DEFAULT = 8;
+
+/** config_wa.vendedor_seguimiento.recontacto_aviso_desde (fuera de CfgSeguimiento: la semilla no cambia). */
+export function leerRecontactoAvisoDesde(v: unknown): number {
+  const x = esObj(v) ? v.recontacto_aviso_desde : undefined;
+  return typeof x === "number" && Number.isFinite(x) && x >= 0 && x < 24 ? x : RECONTACTO_AVISO_DESDE_DEFAULT;
+}
+
+export function decidirRecontactoCobro(c: Candidato, cfg: CfgSeguimiento, ahora: Date, avisoDesde = cfg.horario_desde): DecisionCobro {
   const nada = (motivo: string): DecisionCobro => ({ tipo: "nada", motivo });
-  if (!dentroHorario(ahora, cfg)) return nada("fuera_de_horario");
+  const { hora } = partesAsuncion(ahora);
+  if (hora < Math.min(avisoDesde, cfg.horario_desde) || hora >= cfg.horario_hasta) return nada("fuera_de_horario");
   if (c.estado !== "ia") return nada("no_esta_en_ia");
   const perfil = normalizarPerfil(c.perfil);
   if (!perfil.recontactar_el) return nada("sin_fecha");
@@ -649,19 +709,32 @@ export function decidirRecontactoCobro(c: Candidato, cfg: CfgSeguimiento, ahora:
   if (c.baja_marketing) return nada("baja_marketing");
   if (c.pedido_reciente) return nada("pedido_reciente");
   const entrada = c.ultima_entrada_en ? Date.parse(c.ultima_entrada_en) : NaN;
-  if (Number.isFinite(entrada) && (ahora.getTime() - entrada) / H < cfg.ventana_max_h) return { tipo: "turno" };
+  if (Number.isFinite(entrada) && (ahora.getTime() - entrada) / H < cfg.ventana_max_h) {
+    // Escribe el bot: solo en la franja de los recontactos.
+    return dentroHorario(ahora, cfg) ? { tipo: "turno" } : nada("fuera_de_horario");
+  }
+  if (hora < avisoDesde) return nada("fuera_de_horario");
   return { tipo: "avisar" };
 }
 
 /** Un bloque por cliente para Telegram. `porTope`: el bot podía escribir pero el gasto de IA del mes llegó al tope. */
-export function textoAvisoCobro(c: Candidato, porTope = false): string {
+export function textoAvisoCobro(c: Candidato, porTope = false, ahora?: Date): string {
   const perfil = normalizarPerfil(c.perfil);
   const nombre = c.nombre?.trim() || c.telefono || "Un cliente";
   const que = [perfil.producto ?? "producto sin definir", perfil.cantidad ? `x${perfil.cantidad}` : null].filter(Boolean).join(" ");
   const por = porTope
     ? "El bot no le puede escribir (el gasto de IA del mes llegó al tope): escribile vos."
     : "Ya pasaron más de 24 h desde su último mensaje: escribile vos.";
-  const l = [`💰 <b>${escaparHtml(nombre)}</b> dijo que hoy cobraba (${escaparHtml(que)}). ${por}`];
+  // 19-10: la fecha puede ser el día que cobra o un "te escribo el [día]" que prometió el bot.
+  const l = [`📅 <b>${escaparHtml(nombre)}</b>: hoy quedamos en escribirle (${escaparHtml(que)}). ${por}`];
+  const ultimo = c.entradas_recientes?.[0];
+  if (ultimo?.texto) {
+    const dias = ahora ? Math.floor((ahora.getTime() - Date.parse(ultimo.creado_en)) / (24 * H)) : NaN;
+    const hace = Number.isFinite(dias) && dias >= 1 ? ` (hace ${dias} día${dias === 1 ? "" : "s"})` : "";
+    l.push(`Lo último que dijo${hace}: «${escaparHtml(ultimo.texto.replace(/\s+/g, " ").slice(0, 120))}»`);
+  }
+  if (perfil.nota) l.push(`Nota: ${escaparHtml(perfil.nota)}`);
+  if (!porTope && c.consentimiento_marketing === "si") l.push("Tiene permiso de ofertas: también podés mandarle una plantilla.");
   const enlace = enlaceWaMe(c.telefono);
   if (enlace) l.push(`Teléfono: ${escaparHtml(c.telefono)} · <a href="${escaparAtributo(enlace)}">escribirle</a>`);
   else l.push("Sin teléfono: respondele desde la bandeja de Voltra OS.");
@@ -685,14 +758,16 @@ export async function correrRecontactosCobro(deps: DepsSeguimiento, crudo: unkno
   const cfg = leerCfgSeguimiento(crudo);
   if (!buscar || !marcar || !cfg.activo) return { accion: "inactivo" };
   const ahora = deps.ahora();
-  if (!dentroHorario(ahora, cfg)) return { accion: "fuera_de_horario" };
+  const avisoDesde = leerRecontactoAvisoDesde(crudo);
+  const hora = partesAsuncion(ahora).hora;
+  if (hora < Math.min(avisoDesde, cfg.horario_desde) || hora >= cfg.horario_hasta) return { accion: "fuera_de_horario" };
   const candidatos = await buscar(partesAsuncion(ahora).diaISO, cfg);
 
   const motivos: Record<string, number> = {};
   let turnos: Candidato[] = [];
   let avisos: Array<{ c: Candidato; porTope: boolean }> = [];
   for (const c of candidatos) {
-    const d = decidirRecontactoCobro(c, cfg, ahora);
+    const d = decidirRecontactoCobro(c, cfg, ahora, avisoDesde);
     if (d.tipo === "nada") motivos[d.motivo] = (motivos[d.motivo] ?? 0) + 1;
     else if (d.tipo === "turno") turnos.push(c);
     else avisos.push({ c, porTope: false });
@@ -728,6 +803,7 @@ export async function correrRecontactosCobro(deps: DepsSeguimiento, crudo: unkno
     if (r.accion === "respondido" || r.accion === "terminal" || r.accion === "derivado") enviados++;
     else omitidos++;
     if (esFalla(r)) fallas.push(`${id}: recontacto por cobro → ${r.accion}${r.motivo ? ` (${r.motivo})` : ""}`);
+    if (r.accion === "derivado") fallas.push(`${id}: recontacto por cobro derivó a Enrique (no debería)`);
     // No salió nada y no se gastó: se desmarca (se intenta en la próxima corrida).
     if (r.accion === "omitido" && !esFalla(r) && !(Number(r.costo_usd) > 0)) {
       await marcar(id, null).catch((e) => fallas.push(`${id}: no se pudo desmarcar (${e instanceof Error ? e.message : e})`));
@@ -748,7 +824,7 @@ export async function correrRecontactosCobro(deps: DepsSeguimiento, crudo: unkno
   let avisados = 0;
   for (let i = 0; i < marcados.length; i += POR_MENSAJE) {
     const grupo = marcados.slice(i, i + POR_MENSAJE);
-    const cuerpo = grupo.map(({ c, porTope }) => textoAvisoCobro(c, porTope)).join("\n\n");
+    const cuerpo = grupo.map(({ c, porTope }) => textoAvisoCobro(c, porTope, ahora)).join("\n\n");
     const botones: BotonTelegram[][] = grupo.flatMap(({ c }) => {
       const url = enlaceWaMe(c.telefono);
       const quien = (c.nombre?.trim() || c.telefono || "cliente").slice(0, 30);

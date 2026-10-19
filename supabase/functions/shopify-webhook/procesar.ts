@@ -466,6 +466,9 @@ export const OFERTA_WHATSAPP_MAX_MIN = 30;
  * o no corresponde (pagado, retiro, prueba, mayorista, cancelado, ya preparado). procesar-envios lo manda como texto
  * libre solo con la ventana de 24 h abierta y pago_prioridad activo con alias.
  */
+/** 19-10 (paquete 1): pedido creado por modificar_pedido para reemplazar a otro (etiqueta REEMPLAZA_A_#xxxx). */
+export const esReemplazo = (tags: string[]) => tags.some((t) => /^REEMPLAZA_A_/i.test(t));
+
 export function armarOfertaPrioridad(
   ped: PedidoNormalizado,
   clienteId: string,
@@ -474,6 +477,8 @@ export function armarOfertaPrioridad(
 ): FilaEnvio | null {
   const t = ped.tags.map((x) => x.toUpperCase());
   if (ped.esBorrador || ped.cancelado || !t.includes("ORIGEN_WHATSAPP") || !t.includes("CONFIRMADO")) return null;
+  // 19-10 (paquete 1): un pedido que reemplaza a otro (modificar_pedido) no vuelve a recibir la oferta.
+  if (esReemplazo(ped.tags)) return null;
   if (!creadoHaceMenosDe(ped.creadoEn, ahora, OFERTA_WHATSAPP_MAX_MIN)) return null;
   if (motivoSinOfertaPrioridad({ tags: ped.tags, raw: ped.raw, estado_envio: estadoEnvio })) return null;
   return {
@@ -660,7 +665,7 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   // 12-10: "nuevo" = no estaba guardado O Shopify lo creó hace menos de 15 min. El vendedor IA guarda el pedido apenas
   // lo crea (registrarComoReleasit, sin envío a Meta) y el webhook llega segundos después con el pedido ya guardado:
   // con solo `!existente` esos pedidos nunca mandaban el evento. El candado de eventos_crudos evita el doble envío.
-  if ((!existente || creadoHaceMenosDe(ped.creadoEn, deps.ahora(), 15)) && !ped.cancelado && !esPruebaE2E && clienteId && deps.notificarPedidoMeta) {
+  if ((!existente || creadoHaceMenosDe(ped.creadoEn, deps.ahora(), 15)) && !ped.cancelado && !esPruebaE2E && !esReemplazo(ped.tags) && clienteId && deps.notificarPedidoMeta) {
     try {
       deps.notificarPedidoMeta({ shopifyOrderId: ped.shopifyOrderId, clienteId, total: ped.total, creadoEn: ped.creadoEn })
         ?.catch?.((e) => console.warn("notificarPedidoMeta:", e instanceof Error ? e.message : e));

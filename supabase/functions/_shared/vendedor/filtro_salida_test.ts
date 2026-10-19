@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
-import { contarEmojis, extraerMontos, montosDeResultado, revisarRespuesta } from "./filtro_salida.ts";
+import { accionInventada, contarEmojis, extraerMontos, montosDeResultado, revisarRespuesta } from "./filtro_salida.ts";
 
 const PROHIBIDAS = ["garantía", "devolución", "reembolso", "sin riesgo", "cura", "curar", "tratamiento", "oxígeno"];
 const CATALOGO = [79000, 33000, 112000, 125000, 158000];
@@ -143,4 +143,57 @@ Deno.test("filtro cierre: '¿qué te frena?' una sola vez por conversación", ()
 Deno.test("filtro: listas configurables desde config_wa.vendedor_estilo", () => {
   assert(motivosDe("Joya, te paso.", { muletillas: ["joya"] }).includes("muletilla_bot:joya"));
   assertEquals(motivosDe("¡Claro! Te paso.", { muletillas: [] }).filter((m) => m.startsWith("muletilla")), []);
+});
+
+// ---------- 19-10 (paquete 1, punto 2): acciones inventadas ----------
+
+Deno.test("acción inventada: #1072 '¿Te lo cambio a 2?' sin herramienta → bloqueado; con modificar_pedido ok pasa", () => {
+  const t = "Los 2 salen 158.000 con envío gratis. ¿Te lo cambio a 2?";
+  const r = revisarRespuesta(t, { ...op, accionesHechas: [] });
+  assertFalse(r.ok);
+  assert(r.motivos.some((m) => m.startsWith("accion_inventada:cambio:")), r.motivos.join());
+  assert(revisarRespuesta(t, { ...op, accionesHechas: ["modificar_pedido"] }).ok);
+});
+
+Deno.test("acción inventada: cambiar / agregar / cancelar / programar sin la herramienta que lo hace", () => {
+  const casos: Array<[string, string, string]> = [
+    ["Listo, ya lo cambié a 2 unidades.", "cambio", "modificar_pedido"],
+    ["Ya quedó modificado tu pedido.", "cambio", "modificar_pedido"],
+    ["Ya te agregué el raspador al pedido.", "agregado", "modificar_pedido"],
+    ["Listo, lo agregué.", "agregado", "guardar_factura"],
+    ["Ya lo cancelé, no te preocupes.", "cancelacion", "modificar_pedido"],
+    ["Tu pedido quedó cancelado.", "cancelacion", "estado_pedido"],
+    ["Quedó programado para el jueves.", "programacion", "programar_entrega"],
+    ["Ya cambié la dirección.", "cambio", "actualizar_direccion"],
+  ];
+  for (const [t, accion, herr] of casos) {
+    const inv = accionInventada(t, []);
+    assert(inv?.startsWith(`${accion}:`), `${t} → ${inv}`);
+    assertEquals(accionInventada(t, [herr]), null, `${t} con ${herr}`);
+  }
+});
+
+Deno.test("acción inventada: 'quedó confirmado' solo con crear_pedido_cod confirmar=true, estado_pedido, pedido ya creado o marca del sistema", () => {
+  const t = "Listo, quedó confirmado. Te llega el jueves.";
+  assert(accionInventada(t, [])?.startsWith("confirmacion:"));
+  assert(accionInventada(t, ["crear_pedido_cod"])?.startsWith("confirmacion:"), "el resumen (confirmar=false) no confirma nada");
+  for (const h of ["crear_pedido_cod:confirmar", "estado_pedido", "pedido_ya_creado", "pedido_confirmado_sistema"]) {
+    assertEquals(accionInventada(t, [h]), null, h);
+  }
+});
+
+Deno.test("acción inventada: negaciones, ofertas de confirmar y frases normales no se marcan", () => {
+  for (const t of [
+    "No lo cambié todavía: eso lo ve Enrique.",
+    "Eso no lo puedo cambiar desde acá, pero te armo un pedido nuevo con 2. ¿Te parece?",
+    "¿Te lo confirmo así?",
+    "Las tiras salen Gs 79.000, pagás al recibir.",
+    "Cambiar la dirección lo hace Enrique; te paso con él.",
+  ]) {
+    assertEquals(accionInventada(t, []), null, t);
+  }
+});
+
+Deno.test("acción inventada: sin accionesHechas (textos fijos, tests viejos) no se revisa", () => {
+  assert(revisarRespuesta("Ya lo cambié.", op).ok);
 });

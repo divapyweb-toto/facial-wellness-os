@@ -33,6 +33,12 @@ export type OpcionesFiltro = {
   preguntaBot?: boolean;
   /** Ya se preguntó "¿qué te frena?" en esta conversación: no se repite. */
   yaPreguntoFreno?: boolean;
+  /**
+   * 19-10 (paquete 1, punto 2): acciones que una herramienta hizo de verdad en este turno (accionesHechas en
+   * w1_vendedor.ts: nombres de herramientas con ok, "crear_pedido_cod:confirmar", "pedido_ya_creado"…). Sin este
+   * campo (undefined) no se revisa: así lo usan los textos fijos y los tests viejos.
+   */
+  accionesHechas?: string[];
 };
 
 export type ResultadoFiltro = { ok: boolean; motivos: string[] };
@@ -114,6 +120,65 @@ export function primeraLineaSaludoVacio(texto: string): boolean {
 export function frasesConExclamacionInicial(texto: string): number {
   return ((texto ?? "").match(/(?:^|[.!?…\n]\s*)¡/g) ?? []).length;
 }
+
+// ---------- acciones inventadas ----------
+
+/**
+ * 19-10 (informe 02 §3a, #1072: "¿Te lo cambio a 2?" sin herramienta para cambiarlo): frases que dicen que se hizo
+ * (o que se va a hacer) un cambio en un pedido. Solo pasan si en el mismo turno corrió con ok una herramienta que lo
+ * hace. Se comparan sin tildes; una negación delante ("no lo cambié") no cuenta.
+ */
+export const ACCIONES_INVENTADAS: Array<{ accion: string; re: RegExp; permiten: string[] }> = [
+  {
+    accion: "cambio",
+    re: /\b(?:(?:ya )?(?:te |se )?(?:lo|la|los|las) (?:cambio|cambie|cambiamos|modifico|modifique|modificamos|actualice|actualizamos)|ya (?:te )?(?:cambie|modifique|actualice))\b|\b(?:quedo|quedaron|ya esta|ya estan) (?:cambiad|modificad|actualizad)[oa]s?\b/,
+    permiten: ["modificar_pedido", "actualizar_direccion", "programar_entrega", "guardar_factura"],
+  },
+  {
+    accion: "agregado",
+    re: /\b(?:(?:ya )?(?:te )?(?:lo|la|los|las) (?:agregue|agregamos|sume|sumamos)|ya (?:te )?(?:agregue|sume)|te (?:lo|la|los|las) (?:agrego|sumo))\b|\b(?:quedo|quedaron|ya esta|ya estan) (?:agregad|sumad)[oa]s?\b/,
+    permiten: ["modificar_pedido", "guardar_factura", "actualizar_direccion"],
+  },
+  {
+    accion: "cancelacion",
+    re: /\b(?:(?:ya )?(?:te )?(?:lo|la) (?:cancele|cancelamos|cancelo)|ya (?:te )?cancele)\b|\b(?:quedo|ya esta|esta) cancelad[oa]\b/,
+    permiten: ["modificar_pedido", "cancelar_pedido", "estado_pedido", "buscar_pedido"],
+  },
+  {
+    // crear_pedido_cod con confirmar=true confirma de verdad; estado_pedido / buscar_pedido pueden devolver que ya está
+    // confirmado; un pedido del bot ya creado o la marca del sistema "[pedido … CONFIRMADO" también lo respaldan.
+    accion: "confirmacion",
+    re: /\b(?:quedo confirmad[oa]|(?:ya )?esta confirmad[oa]|ya (?:te )?(?:lo|la) confirme|ya confirme|pedido confirmado|quedo (?:cargad|registrad)[oa])\b/,
+    permiten: [
+      "crear_pedido_cod:confirmar", "modificar_pedido", "estado_pedido", "buscar_pedido", "guardar_factura", "actualizar_direccion",
+      "pedido_ya_creado", "pedido_confirmado_sistema",
+    ],
+  },
+  {
+    accion: "programacion",
+    re: /\b(?:quedo (?:programad|agendad)[oa]|ya (?:te )?(?:lo|la) (?:programe|agende)|ya (?:programe|agende))\b/,
+    permiten: ["programar_entrega", "crear_pedido_cod:confirmar", "modificar_pedido"],
+  },
+];
+
+/** Primera acción inventada del texto ("cambio:lo cambie"), o null. */
+export function accionInventada(texto: string, hechas: string[]): string | null {
+  const t = normalizar(texto ?? "").replace(/[¡!¿?.,;:…]+/g, " ").replace(/\s+/g, " ");
+  const set = new Set(hechas);
+  for (const a of ACCIONES_INVENTADAS) {
+    if (a.permiten.some((h) => set.has(h))) continue;
+    for (const m of t.matchAll(new RegExp(a.re.source, "g"))) {
+      // "no lo cambié", "no te lo cancelo": una negación delante no es una acción.
+      if (/\bno (?:te |se |le )?(?:lo |la |los |las )?$/.test(t.slice(0, m.index))) continue;
+      return `${a.accion}:${m[0].trim()}`;
+    }
+  }
+  return null;
+}
+
+/** Instrucción exacta para la regeneración cuando el motivo fue una acción inventada. */
+export const INSTRUCCION_ACCION_INVENTADA =
+  "No confirmes cambios que no hiciste con una herramienta: decí en la primera línea que eso no lo podés hacer desde acá y ofrecé la alternativa real.";
 
 // ---------- precios ----------
 
@@ -247,6 +312,10 @@ export function revisarRespuesta(texto: string, op: OpcionesFiltro): ResultadoFi
     if (anuncia) motivos.push(`se_anuncia_como_ia:${anuncia}`);
   }
   if (op.yaPreguntoFreno && /que te frena|que le frena/.test(nt)) motivos.push("insiste_que_te_frena");
+  if (op.accionesHechas) {
+    const inv = accionInventada(t, op.accionesHechas);
+    if (inv) motivos.push(`accion_inventada:${inv}`);
+  }
 
   return { ok: motivos.length === 0, motivos };
 }

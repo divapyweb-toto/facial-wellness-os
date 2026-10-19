@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
-import { mensajeSinStock } from "./herramientas.ts";
+import { horasHastaFecha, mensajeSinStock, NOTA_INHALADOR, TEXTO_SALUD_SEGURO } from "./herramientas.ts";
+import { productoPorPalabras } from "../anuncios.ts";
 import {
   botonesPrimerTurno,
   cuerpoPrimerTurno,
@@ -22,10 +23,10 @@ import {
 } from "./herramientas.ts";
 import { configPrueba, ctxPrueba, depsPrueba } from "./prueba_utiles.ts";
 
-Deno.test("definiciones: las 9 herramientas del contrato + registrar_perfil, con JSON Schema", () => {
+Deno.test("definiciones: las herramientas del contrato (19-10: + buscar_pedido, modificar_pedido, guardar_factura), con JSON Schema", () => {
   assertEquals(HERRAMIENTAS.map((h) => h.name).sort(), [
-    "actualizar_direccion", "avisar_enrique", "cierre_botones", "confirmar_ubicacion", "consultar_catalogo", "crear_pedido_cod", "datos_transferencia", "derivar_a_enrique", "enviar_formulario", "enviar_media",
-    "enviar_opciones", "estado_pedido", "pedir_telefono", "pedir_ubicacion", "permiso_ofertas", "primer_turno", "programar_entrega", "registrar_perfil",
+    "actualizar_direccion", "avisar_enrique", "buscar_pedido", "cierre_botones", "confirmar_ubicacion", "consultar_catalogo", "crear_pedido_cod", "datos_transferencia", "derivar_a_enrique", "enviar_formulario", "enviar_media",
+    "enviar_opciones", "estado_pedido", "guardar_factura", "modificar_pedido", "pedir_telefono", "pedir_ubicacion", "permiso_ofertas", "primer_turno", "programar_entrega", "registrar_perfil",
   ]);
   for (const h of HERRAMIENTAS) assertEquals(h.input_schema.type, "object");
 });
@@ -231,7 +232,8 @@ Deno.test("derivar_a_enrique por venta (mayorista, pide_persona…): botón y av
 Deno.test("derivar_a_enrique por reclamo, salud, devolución, enojo u otro: el chat pasa a 'humano' (sigue_ia false)", async () => {
   for (const motivo of ["reclamo", "salud", "devolucion", "enojo", "otro", "tope_turnos"]) {
     const { deps, reg } = depsPrueba();
-    const r = await derivarAEnrique({ motivo, resumen: "Le llegó la caja abierta." }, ctxPrueba(), deps);
+    const resumen = motivo === "salud" ? "Pregunta si sirve con apnea." : "Le llegó la caja abierta.";
+    const r = await derivarAEnrique({ motivo, resumen }, ctxPrueba(), deps);
     assertEquals(reg.humano, ["11111111-1111-4111-8111-111111111111"], motivo);
     assertEquals(r.resultado.sigue_ia, false);
     assertEquals(r.resultado.nota, "No escribas nada más.");
@@ -696,4 +698,48 @@ Deno.test("sin stock: no lo ofrece y propone otro disponible de la misma línea 
   const solo = mensajeSinStock(items[0], [items[0], { handle: "raspador", titulo: "Raspador de Lengua", disponible: true }]);
   assertEquals(solo.includes("Raspador de Lengua (raspador)"), true);
   assertEquals(mensajeSinStock(items[0], [items[0]]).includes("se repone pronto"), true);
+});
+
+Deno.test("19-10 salud SIN señales de alerta: no deriva, devuelve el texto seguro; con alerta sí deriva", async () => {
+  const { deps, reg } = depsPrueba();
+  const r = await derivarAEnrique({ motivo: "salud", resumen: "Pregunta si las tiras sirven para la rinitis." }, ctxPrueba(), deps);
+  assert(r.esError);
+  assert(JSON.stringify(r.resultado).includes("salud_sin_alerta"));
+  assertEquals(reg.humano, []);
+  assertEquals(reg.avisos.length, 0);
+  assert(!/tratamiento|cura\b|elimina/i.test(TEXTO_SALUD_SEGURO));
+  const conAlerta = await derivarAEnrique({ motivo: "salud", resumen: "Dice que de noche deja de respirar y se ahoga." }, ctxPrueba(), depsPrueba().deps);
+  assertFalse(conAlerta.esError);
+});
+
+Deno.test("19-10 factura: no se deriva, se pide guardar_factura (#1075)", async () => {
+  const { deps, reg } = depsPrueba();
+  const r = await derivarAEnrique({ motivo: "otro", resumen: "La clienta quiere factura con RUC 1234567-8 para su pedido ya confirmado." }, ctxPrueba(), deps);
+  assert(r.esError);
+  assert(JSON.stringify(r.resultado).includes("guardar_factura"));
+  assertEquals(reg.humano, []);
+});
+
+Deno.test("19-10 registrar_perfil: recontacto fuera de la ventana sin permiso → nota de no prometer; mañana temprano o con permiso, no", async () => {
+  const ahora = new Date("2026-10-19T15:00:00Z"); // lunes 12:00 PY
+  const { deps } = depsPrueba();
+  const lejos = await ejecutarHerramienta("registrar_perfil", { recontactar_el: "2026-10-23" }, ctxPrueba({ ahora }), deps);
+  assert(String(lejos.resultado.nota ?? "").includes("NO prometas"));
+  const manana = await ejecutarHerramienta("registrar_perfil", { recontactar_el: "2026-10-20" }, ctxPrueba({ ahora }), deps);
+  assertEquals(manana.resultado.nota, undefined);
+  const conPermiso = await ejecutarHerramienta("registrar_perfil", { recontactar_el: "2026-10-23" }, ctxPrueba({ ahora }), { ...deps, consentimiento: () => Promise.resolve("si" as const) });
+  assert(String(conPermiso.resultado.nota ?? "").includes("permiso de avisos"));
+  assertEquals(horasHastaFecha("2026-10-20", ahora), 12);
+});
+
+Deno.test("19-10 inhalador: el catálogo no lo ofrece y el anuncio no cae en tiras", async () => {
+  _limpiarCacheCatalogo();
+  const { deps } = depsPrueba();
+  const r = await ejecutarHerramienta("consultar_catalogo", { busqueda: "inhalador nasal" }, ctxPrueba(), deps);
+  assertEquals(r.resultado.productos, []);
+  assertEquals(r.resultado.nota, NOTA_INHALADOR);
+  const porMensaje = await ejecutarHerramienta("consultar_catalogo", { busqueda: "nasal" }, ctxPrueba({ textoEntrada: "¿Tienen inhalador nasal?" }), deps);
+  assertEquals(porMensaje.resultado.nota, NOTA_INHALADOR);
+  assertEquals(productoPorPalabras("Inhalador nasal de mentol"), null);
+  assertEquals(productoPorPalabras("Tiras nasales para dormir"), "tiras-nasales-gudair-30-unidades");
 });

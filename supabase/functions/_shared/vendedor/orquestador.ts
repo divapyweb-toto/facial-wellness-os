@@ -16,6 +16,10 @@
 // fijas y, si el cliente escribió mientras tanto, no manda nada (ese mensaje ya tiene su propio turno). Nunca
 // deriva a Enrique por su cuenta: con tope de gasto o de turnos no hace nada; si la IA o el filtro fallan, no
 // manda nada y queda registrado. Se registra en vendedor_turnos con accion "seguimiento" (o "seguimiento_<…>").
+// 19-10 (paquete 1, w1_vendedor.ts): el tope de gasto baja a un modelo barato (modelo_tope) y solo deriva con el tope
+// duro; avisa por Telegram al 70% / 90% / 100% / duro una vez por mes. El filtro bloquea confirmar acciones que ninguna
+// herramienta hizo en el turno. Un "ok" al precio antes del pedido reenvía los botones (no es un cierre). La espera para
+// agrupar sube a espera_agrupar_datos_s mientras el cliente manda datos. Un seguimiento no puede usar derivar_a_enrique.
 import { lineaPlazosHoy } from "../plazo_zona.ts";
 import { botonesPermisoOfertas, TEXTO_PERMISO_OFERTAS } from "../wa_interactivos.ts";
 import {
@@ -34,7 +38,8 @@ import {
 } from "../claude.ts";
 import { productoDeMarca } from "../anuncios.ts";
 import { partesAsuncion } from "../horario.ts";
-import { montosDeResultado, revisarRespuesta } from "./filtro_salida.ts";
+import { extrasVendedor } from "./config.ts";
+import { INSTRUCCION_ACCION_INVENTADA, montosDeResultado, revisarRespuesta } from "./filtro_salida.ts";
 import { type BloqueImagen, cargarImagen, contenidoConImagenes, type Descarga, type ImagenEntrada, imagenesPendientes, textoImagenNoVista } from "./imagenes.ts";
 import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type MotivoDerivacion } from "./herramientas.ts";
 import {
@@ -48,7 +53,28 @@ import {
   textoPerfil,
 } from "./perfil.ts";
 import { armarPrompt } from "./prompt.ts";
-import { elegirVariante, esCierreNuestro, esGraciasSuelto, esOkSuelto, esStickerOEmoji, tipoRespuestaFija } from "./respuestas_fijas.ts";
+import {
+  ACUSE_PRECIO_DEFAULT,
+  elegirVariante,
+  esCierreNuestro,
+  esGraciasSuelto,
+  esOkSuelto,
+  esStickerOEmoji,
+  tipoRespuestaFija,
+} from "./respuestas_fijas.ts";
+import {
+  accionesHechas,
+  alertasTope,
+  bloqueParaAcuse,
+  confirmacionBloqueada,
+  esOfertaNuestra,
+  handleDeOferta,
+  hayPosteriorParaVendedor,
+  juntandoDatos,
+  mesAsuncion,
+  nivelTope,
+  yaReenvioBotones,
+} from "./w1_vendedor.ts";
 import { calcularDemoraMs, partirEnBurbujas, pausaBurbujaMs } from "./ritmo.ts";
 import type { ConfigTurno, CtxTurno, DepsHerramientas } from "./tipos.ts";
 
@@ -86,6 +112,12 @@ export type DepsOrquestador = {
   historial(conversacionId: string, limite: number): Promise<FilaHistorial[]>;
   ultimoEntranteId(conversacionId: string): Promise<string | null>;
   gastoMesUsd(desdeISO: string): Promise<number>;
+  /**
+   * 19-10 (paquete 1): registra que la alerta `clave` ("70", "90", "100", "duro") del mes `mes` ("2026-10") ya se mandó.
+   * true = es la primera vez (hay que avisar); false = ya estaba. Persistencia en config_wa 'vendedor_alerta_tope'
+   * (RPC vendedor_marcar_alerta_tope, migración 20261019000001). Ausente = no se mandan alertas.
+   */
+  marcarAlertaTope?(mes: string, clave: string): Promise<boolean>;
   /** Montos que devolvieron las herramientas en turnos anteriores de esta conversación. */
   preciosPrevios(conversacionId: string): Promise<number[]>;
   registrarTurno(fila: FilaTurno): Promise<void>;
@@ -264,6 +296,16 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   const v = cfg.vendedor;
   const azar = () => deps.aleatorio?.() ?? Math.random();
   const esSeguimiento = entrada.origen === "seguimiento";
+  const extra = extrasVendedor(v);
+  /**
+   * 19-10 (informe 02 §3d): ¿el último entrante es otro mensaje que SÍ va al vendedor? Una reacción o el botón del
+   * permiso de ofertas (los resuelve el webhook) ya no dejan este turno sin respuesta. Si no se puede saber, agrupa.
+   */
+  const esOtroParaVendedor = async (ultimo: string | null): Promise<boolean> => {
+    if (!ultimo || ultimo === entrada.wa_message_id) return false;
+    const filas = await deps.historial(entrada.conversacion_id, 8).catch(() => null);
+    return (filas ? hayPosteriorParaVendedor(filas, entrada.wa_message_id) : null) ?? true;
+  };
 
   if (!esSeguimiento) await deps.marcarLeidoYEscribiendo(entrada.wa_message_id).catch(() => {});
 
@@ -275,7 +317,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   else if (v.espera_agrupar_s > 0) {
     await deps.dormir(v.espera_agrupar_s * 1000);
     const ultimo = await deps.ultimoEntranteId(entrada.conversacion_id);
-    if (ultimo && ultimo !== entrada.wa_message_id) return { accion: "agrupado" };
+    if (await esOtroParaVendedor(ultimo)) return { accion: "agrupado" };
   }
   const conv = await deps.conversacion(entrada.conversacion_id);
   if (!conv || conv.estado !== "ia") return { accion: "omitido", motivo: "conversacion_paso_a_humano" };
@@ -283,6 +325,12 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   if (!cli) return { accion: "omitido", motivo: "cliente_inexistente" };
 
   const filasHistorial = await deps.historial(conv.id, v.historial_mensajes);
+  // 19-10 (§3d: 4 resúmenes para una dirección mandada en 4 partes): si está mandando datos, se espera más antes de
+  // responder (espera_agrupar_datos_s en total). Si en ese rato llega otro mensaje, responde ese turno con todo junto.
+  if (!esSeguimiento && v.espera_agrupar_s > 0 && extra.espera_agrupar_datos_s > v.espera_agrupar_s && juntandoDatos(filasHistorial, entrada.texto)) {
+    await deps.dormir((extra.espera_agrupar_datos_s - v.espera_agrupar_s) * 1000);
+    if (await esOtroParaVendedor(await deps.ultimoEntranteId(conv.id))) return { accion: "agrupado", motivo: "juntando_datos" };
+  }
   // 08-10: fotos sin responder (la actual y las agrupadas) → bloques de imagen para el modelo. Si la del mensaje
   // actual no se puede ver, el texto lo dice ("[imagen] (no se pudo ver)") y el modelo pide que la reenvíe.
   const imagenes: BloqueImagen[] = [];
@@ -306,6 +354,9 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   const delAnuncio = esSeguimiento ? null : productoDeMarca(textoCliente);
   if (delAnuncio && !perfil.producto) perfil = { ...perfil, producto: delAnuncio.nombre };
   const preguntaBot = !esSeguimiento && preguntaSiEsBot(textoCliente);
+  // 19-10: último pedido del chat (acuses y filtro de acciones inventadas: con un pedido del bot ya creado puede decir "quedó confirmado").
+  const pedidoChat = await deps.herramientas.ultimoPedidoChat(conv.id).catch(() => null);
+  const pedidoConfirmadoSistema = /\[pedido [^\]]*confirmad/i.test(entrada.texto);
 
   const permitidos: number[] = [cfg.envio.costo_gs, ...(await deps.preciosPrevios(conv.id).catch(() => [] as number[]))];
   // 09-10: el total de un pedido real de la tienda que le pasa el sistema ("[pedido #1010 … total Gs 112000") también
@@ -322,6 +373,8 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     niegaIA: cfg.estilo.niega_ia,
     preguntaBot,
     yaPreguntoFreno: !!perfil0.pregunto_freno,
+    // 19-10 (paquete 1, punto 2): nunca confirmar lo que ninguna herramienta devolvió en este turno.
+    accionesHechas: accionesHechas(fila.herramientas, { pedidoYaCreado: pedidoChat?.estado === "creado", pedidoConfirmadoSistema }),
   });
   const ctx: CtxTurno = {
     conversacionId: conv.id,
@@ -436,7 +489,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     } // Si mientras "escribía" el cliente mandó otro mensaje, responde ese turno con todo junto.
     else if (v.espera_agrupar_s > 0) {
       const ultimo = await deps.ultimoEntranteId(conv.id).catch(() => null);
-      if (ultimo && ultimo !== entrada.wa_message_id) return await cerrar({ accion: "agrupado", motivo: "llego_otro_mensaje" }, op);
+      if (await esOtroParaVendedor(ultimo)) return await cerrar({ accion: "agrupado", motivo: "llego_otro_mensaje" }, op);
     }
     fila.respuesta = texto;
     for (let i = 0; i < burbujas.length; i++) {
@@ -444,7 +497,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
       // 13-10 (#1041): si mientras "escribía" la segunda burbuja llegó otro mensaje, ese turno responde todo junto.
       if (i > 0 && !esSeguimiento && v.espera_agrupar_s > 0) {
         const u = await deps.ultimoEntranteId(conv.id).catch(() => null);
-        if (u && u !== entrada.wa_message_id) return await cerrar({ accion: "agrupado", motivo: "llego_otro_mensaje" }, op);
+        if (await esOtroParaVendedor(u)) return await cerrar({ accion: "agrupado", motivo: "llego_otro_mensaje" }, op);
       }
       const envio = await deps.herramientas.enviarTexto(ctx.destino, burbujas[i], { clienteId: cli.id, conversacionId: conv.id });
       if (!envio.ok) {
@@ -457,29 +510,73 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     return await cerrar({ accion: accionOk, motivo: motivoOk, respuesta: texto }, op);
   };
 
-  // Respuestas fijas (sin modelo): sticker al empezar, "gracias" suelto, "ok" después del pedido.
-  if (bloque.length === 1 && !esSeguimiento) {
-    const pedidoChat = await deps.herramientas.ultimoPedidoChat(conv.id).catch(() => null);
+  /**
+   * 19-10 (paquete 1, punto 7): "ok" / 👌 / "genial" al precio con botones ANTES de tener pedido no es un cierre: se
+   * reenvían los 3 botones (cierre_botones, sin modelo) con un texto fijo. Si ya se reenviaron y vuelve a decir "ok", no
+   * se contesta (los seguimientos siguen). null = no se pudo (sin handle o falló el envío): lo resuelve el modelo.
+   */
+  const reenviarBotonesOferta = async (ultimoNuestro: FilaHistorial | undefined): Promise<ResultadoTurno | null> => {
+    const variantes = (cfg.respuestasFijas.acuse_precio?.length ? cfg.respuestasFijas.acuse_precio : ACUSE_PRECIO_DEFAULT)
+      .filter((x) => typeof x === "string" && x.trim());
+    if (yaReenvioBotones(ultimoNuestro, variantes)) return await cerrar({ accion: "omitido", motivo: "acuse_tras_botones_repetido" }, { contarTurno: false });
+    const handle = handleDeOferta(filasHistorial);
+    if (!handle || !variantes.length) return null;
+    const texto = variantes[Math.min(variantes.length - 1, Math.floor(Math.max(0, azar()) * variantes.length))];
+    const resta = calcularDemoraMs({ textoCliente, textoRespuesta: texto, ahora: deps.ahora(), ritmo: cfg.ritmo, azar: azar() }) - (deps.ahora().getTime() - inicio);
+    if (resta > 0) await esperarEscribiendo(resta);
+    if (v.espera_agrupar_s > 0 && await esOtroParaVendedor(await deps.ultimoEntranteId(conv.id).catch(() => null))) {
+      return await cerrar({ accion: "agrupado", motivo: "llego_otro_mensaje" }, { contarTurno: false });
+    }
+    const res = await ejecutarHerramienta("cierre_botones", { handle, texto }, ctx, deps.herramientas);
+    fila.herramientas.push({ nombre: "cierre_botones(sistema)", input: { handle, texto }, resultado: resumirResultado(res.resultado), error: !!res.esError });
+    if (res.esError) {
+      console.warn(`vendedor: no pude reenviar los botones tras el acuse (${JSON.stringify(res.resultado).slice(0, 200)}): uso el modelo`);
+      return null;
+    }
+    fila.modelo = "fija";
+    fila.respuesta = texto;
+    return await cerrar({ accion: "respondido", motivo: "fija:acuse_precio", respuesta: texto }, { contarTurno: false });
+  };
+  /** El acuse al precio no se pudo resolver sin modelo: se le avisa al modelo que no es un cierre. */
+  let notaAcuseOferta = false;
+
+  // Respuestas fijas (sin modelo): sticker al empezar, "gracias" suelto, "ok" después del pedido, "ok" al precio.
+  // 19-10 (#1049): el bloque se cuenta sin lo que no va al vendedor (botón del permiso de ofertas, reacciones): un "ok"
+  // que llega junto con "Sí, avisame" después del pedido tampoco se contesta.
+  if (!esSeguimiento && bloqueParaAcuse(filasHistorial, entrada.wa_message_id, entrada.texto).length === 1) {
     const nuestros = filasHistorial.filter((f) => f.direccion === "out" && f.estado !== "fallido" && (f.texto ?? "").trim());
+    const ultimoNuestro = nuestros.at(-1);
     // 09-10: "ok"/"gracias"/👍 después de que ya cerramos la charla → no se contesta (menos mensajes, menos costo).
     const acuse = esOkSuelto(entrada.texto) || esGraciasSuelto(entrada.texto) || esStickerOEmoji(entrada.texto);
     // 10-10: con el pedido ya creado, el acuse tampoco se contesta (antes le respondió 3 veces a "dale gracias", 👍…).
     // Un "gracias" suelto sí lleva un "de nada" (una vez, lo maneja la respuesta fija).
     const okOEmoji = (esOkSuelto(entrada.texto) && !esGraciasSuelto(entrada.texto)) || esStickerOEmoji(entrada.texto);
-    if (acuse && pedidoChat?.estado !== "resumen" && ((pedidoChat?.estado === "creado" && okOEmoji) || esCierreNuestro(nuestros.at(-1)?.texto))) {
-      return await cerrar({ accion: "omitido", motivo: "acuse_tras_cierre" }, { contarTurno: false });
-    }
-    const tipo = tipoRespuestaFija(entrada.texto, { hayMensajesNuestros: nuestros.length > 0, estadoPedidoChat: pedidoChat?.estado ?? null });
-    if (tipo) {
-      fila.modelo = "fija";
-      const texto = elegirVariante(tipo, cfg.respuestasFijas, nuestros.at(-1)?.texto ?? null, azar());
-      if (texto === null) return await cerrar({ accion: "omitido", motivo: `fija_repetida:${tipo}` }, { contarTurno: false });
-      const rev = revisarRespuesta(texto, opcionesFiltro());
-      fila.filtro.intentos.push(rev);
-      if (rev.ok) return await responder(texto, "respondido", `fija:${tipo}`, { contarTurno: false });
-      console.warn(`vendedor: la respuesta fija ${tipo} no pasa el filtro (${rev.motivos.join(", ")}): uso el modelo`);
-      fila.modelo = v.modelo;
-      fila.filtro.intentos = [];
+    const enResumen = pedidoChat?.estado === "resumen";
+    const hayPedido = pedidoChat?.estado === "creado";
+    // 19-10: "pagás al recibir" del precio contaba como cierre nuestro y el "ok" quedaba sin respuesta (venta perdida).
+    const ofertaSinPedido = !hayPedido && !enResumen && esOfertaNuestra(ultimoNuestro);
+    if (ofertaSinPedido) {
+      if (okOEmoji) {
+        const r = await reenviarBotonesOferta(ultimoNuestro);
+        if (r) return r;
+        notaAcuseOferta = true;
+      } // un "gracias" al precio lo ve el modelo (puede retomar la venta); nunca el "de nada" fijo.
+    } else {
+      if (acuse && !enResumen && ((hayPedido && okOEmoji) || esCierreNuestro(ultimoNuestro?.texto))) {
+        return await cerrar({ accion: "omitido", motivo: "acuse_tras_cierre" }, { contarTurno: false });
+      }
+      const tipo = tipoRespuestaFija(entrada.texto, { hayMensajesNuestros: nuestros.length > 0, estadoPedidoChat: pedidoChat?.estado ?? null });
+      if (tipo) {
+        fila.modelo = "fija";
+        const texto = elegirVariante(tipo, cfg.respuestasFijas, ultimoNuestro?.texto ?? null, azar());
+        if (texto === null) return await cerrar({ accion: "omitido", motivo: `fija_repetida:${tipo}` }, { contarTurno: false });
+        const rev = revisarRespuesta(texto, opcionesFiltro());
+        fila.filtro.intentos.push(rev);
+        if (rev.ok) return await responder(texto, "respondido", `fija:${tipo}`, { contarTurno: false });
+        console.warn(`vendedor: la respuesta fija ${tipo} no pasa el filtro (${rev.motivos.join(", ")}): uso el modelo`);
+        fila.modelo = v.modelo;
+        fila.filtro.intentos = [];
+      }
     }
   }
 
@@ -489,10 +586,26 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     return await derivar("tope_turnos", `La conversación llegó a ${conv.turnos_ia} turnos de IA sin cerrarse. Último mensaje: "${entrada.texto.slice(0, 200)}"`);
   }
   const gasto = await deps.gastoMesUsd(inicioMesAsuncionISO(ctx.ahora));
-  if (gasto >= v.tope_mensual_usd) {
-    if (esSeguimiento) return { accion: "omitido", motivo: "tope_gasto", costo_usd: 0 };
-    return await derivar("tope_gasto", `Se alcanzó el tope mensual de IA (USD ${gasto.toFixed(2)} de ${v.tope_mensual_usd}). Último mensaje: "${entrada.texto.slice(0, 200)}"`);
+  // 19-10: alertas por Telegram al 70% / 90% / 100% / duro, una vez por mes cada una (si io.ts trae la persistencia).
+  if (deps.marcarAlertaTope) {
+    const mes = mesAsuncion(ctx.ahora);
+    for (const a of alertasTope(gasto, v.tope_mensual_usd, extra)) {
+      try {
+        if (await deps.marcarAlertaTope(mes, a.clave)) await deps.herramientas.avisar(a.texto);
+      } catch (e) {
+        console.warn(`vendedor: alerta de tope ${a.clave}:`, e instanceof Error ? e.message : e);
+      }
+    }
   }
+  // 19-10: pasado el tope sigue con el modelo barato; solo con el tope duro deriva como antes. Los seguimientos no salen
+  // pasado el tope (igual que antes y que seguimiento-chat, que corta con el mismo tope): el margen queda para clientes reales.
+  const nivel = nivelTope(gasto, v.tope_mensual_usd, extra);
+  if (nivel !== "normal" && esSeguimiento) return { accion: "omitido", motivo: "tope_gasto", costo_usd: 0 };
+  if (nivel === "duro") {
+    return await derivar("tope_gasto", `Se alcanzó el tope duro mensual de IA (USD ${gasto.toFixed(2)}; tope ${v.tope_mensual_usd}, duro ${extra.tope_duro_usd}). Último mensaje: "${entrada.texto.slice(0, 200)}"`);
+  }
+  const modeloTurno = nivel === "barato" ? extra.modelo_tope : v.modelo;
+  fila.modelo = modeloTurno;
 
   // Prompt: bloque estable (cacheado 1 h) + bloque variable (fecha, cliente y perfil).
   let productos: Awaited<ReturnType<typeof catalogo>> = [];
@@ -513,13 +626,23 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     { type: "text", text: contextoDinamico(ctx.ahora, cli, perfil.producto && !perfil0.producto ? { ...perfil0, producto: perfil.producto } : perfil0) },
   ];
   const mensajes: Mensaje[] = armarHistorial(filasHistorial, entrada);
+  if (notaAcuseOferta) {
+    const ultimo = mensajes[mensajes.length - 1];
+    if (ultimo.role === "user" && typeof ultimo.content === "string") {
+      mensajes[mensajes.length - 1] = {
+        ...ultimo,
+        content: `${ultimo.content}\n[CONTROL INTERNO, no lo ve el cliente] Es un acuse a tu precio y todavía no hay pedido: no es un cierre. ` +
+          `Llevalo a elegir con cierre_botones (handle del producto) o preguntá corto cuál le preparás.`,
+      };
+    }
+  }
   if (imagenes.length) {
     const ultimo = mensajes[mensajes.length - 1];
     mensajes[mensajes.length - 1] = { ...ultimo, content: contenidoConImagenes(ultimo.content, imagenes) };
   }
 
   const pedido = (msgs: Mensaje[]): PedidoClaude => ({
-    modelo: v.modelo,
+    modelo: modeloTurno,
     system,
     mensajes: msgs,
     herramientas: HERRAMIENTAS,
@@ -586,6 +709,22 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
           resultados.push({ type: "tool_result", tool_use_id: u.id, content: JSON.stringify({ ok: true }) });
           continue;
         }
+        // 19-10 (informe 02 §3b): un recontacto automático no deriva (el #1067 quedó 46 h en "humano" por un seguimiento).
+        // Se ignora sin sacarla de la lista (la lista de herramientas es parte de la caché del prompt).
+        // 19-10 (§3d, #1056): el Confirmo de un resumen viejo con otro total, o con una cantidad elegida después, no crea el pedido.
+        let bloqueo: string | null = null;
+        if (esSeguimiento && u.name === "derivar_a_enrique") {
+          bloqueo = "no_disponible_en_seguimiento: en un recontacto automático no se deriva a Enrique. Escribí un recontacto corto para el cliente, sin derivar.";
+        } else if (u.name === "crear_pedido_cod" && (u.input as Record<string, unknown> | undefined)?.confirmar === true) {
+          const vigente = await deps.herramientas.ultimoPedidoChat(conv.id).catch(() => null);
+          bloqueo = confirmacionBloqueada({ textoCliente, filas: filasHistorial, vigente })?.error ?? null;
+        }
+        if (bloqueo) {
+          const resultado = { ok: false, error: bloqueo };
+          fila.herramientas.push({ nombre: u.name, input: u.input, resultado, error: true });
+          resultados.push({ type: "tool_result", tool_use_id: u.id, content: JSON.stringify(resultado), is_error: true });
+          continue;
+        }
         let textoModelo: string | null = null;
         if (u.name === "derivar_a_enrique" && textoAcompana) {
           const revDer = revisarRespuesta(textoAcompana, opcionesFiltro());
@@ -634,7 +773,8 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
           `máximo 1 emoji, sin frases de bot ("¡Claro!", "No dudes en", "¿En qué puedo ayudarte?"), sin markdown ni viñetas, sin urgencia inventada, ` +
           `solo precios de consultar_catalogo, sin palabras prohibidas ni promesas de salud` +
           (preguntaBot ? `, y decí que sos el asistente virtual de Voltra (sin decir que sos una persona)` : "") +
-          `. Respondé solo con el texto para el cliente.`,
+          `.` + (rev.motivos.some((m) => m.startsWith("accion_inventada:")) ? ` ${INSTRUCCION_ACCION_INVENTADA}` : "") +
+          ` Respondé solo con el texto para el cliente.`,
       },
     ];
     try {

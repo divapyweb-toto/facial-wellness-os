@@ -35,6 +35,40 @@ const esObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 const listaStrings = (v: unknown): string[] | null =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "") : null;
 
+/**
+ * 19-10 (paquete 1): campos nuevos de config_wa.vendedor. Viven en la misma fila (el spread de `vendedor` los
+ * conserva) pero se leen acá con su default, sin tocar CfgVendedor (tipos.ts).
+ * - modelo_tope: modelo más barato al pasar tope_mensual_usd (antes pasaba todo a "humano"). Haiku 4.5 porque ya
+ *   está en config_wa.precios_claude (un modelo sin precio no suma al gasto y el tope dejaría de medir).
+ * - tope_duro_usd: recién acá deriva como antes. Default tope × 1,3; nunca menos que el tope.
+ * - alertas_tope_pct: Telegram a Enrique al cruzar cada % del tope (una vez por mes).
+ * - espera_agrupar_datos_s: espera para juntar mensajes mientras el cliente manda datos (dirección en partes).
+ */
+export type CfgVendedorExtra = {
+  modelo_tope: string;
+  tope_duro_usd: number;
+  alertas_tope_pct: number[];
+  espera_agrupar_datos_s: number;
+};
+
+export const MODELO_TOPE_DEFAULT = "claude-haiku-4-5-20251001";
+
+export function extrasVendedor(v: CfgVendedor): CfgVendedorExtra {
+  const x = v as CfgVendedor & Record<string, unknown>;
+  const num = (k: string): number | null => (typeof x[k] === "number" && Number.isFinite(x[k] as number) && (x[k] as number) >= 0 ? x[k] as number : null);
+  const tope = Number(v.tope_mensual_usd) || 0;
+  const duro = num("tope_duro_usd");
+  const pct = Array.isArray(x.alertas_tope_pct)
+    ? (x.alertas_tope_pct as unknown[]).filter((n): n is number => typeof n === "number" && n > 0 && n < 100)
+    : null;
+  return {
+    modelo_tope: typeof x.modelo_tope === "string" && x.modelo_tope.trim() ? x.modelo_tope.trim() : MODELO_TOPE_DEFAULT,
+    tope_duro_usd: Math.max(tope, duro ?? Math.round(tope * 1.3 * 100) / 100),
+    alertas_tope_pct: pct ?? [70, 90],
+    espera_agrupar_datos_s: num("espera_agrupar_datos_s") ?? 18,
+  };
+}
+
 export function armarConfigTurno(filas: Record<string, unknown>): { cfg: ConfigTurno; faltantes: string[] } {
   const faltantes: string[] = [];
   const tomar = <T>(clave: string, validar: (v: unknown) => T | null, porDefecto: T): T => {
