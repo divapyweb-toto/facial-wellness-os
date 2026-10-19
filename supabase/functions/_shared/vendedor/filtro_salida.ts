@@ -264,6 +264,32 @@ export function contarPreguntas(texto: string): number {
 
 // ---------- revisión ----------
 
+const DIA_FUTURO = "(?:el|la|este|esta|proximo|proxima|a fin|fin de|manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo|\\d{1,2}/\\d{1,2}|\\d{1,2} de)";
+const RE_PROMESA = [
+  new RegExp(`\\b(?:te|le) (?:escribo|vuelvo a escribir|hablo|contacto|mando un mensaje)\\b[^.?!\\n]{0,25}\\b${DIA_FUTURO}\\b`),
+  new RegExp(`\\b${DIA_FUTURO}\\b[^.?!\\n]{0,25}\\b(?:te|le) (?:escribo|vuelvo a escribir|hablo|contacto)\\b`),
+];
+/** 19-10: promesa de escribirle otro día (texto ya normalizado: minúsculas y sin tildes). null si no hay. */
+export function promesaRecontacto(nt: string): string | null {
+  for (const re of RE_PROMESA) {
+    const m = re.exec(nt);
+    if (m) return m[0].trim().slice(0, 60);
+  }
+  return null;
+}
+
+/** 19-10: saca las frases con promesa de recontacto (si el modelo insiste, no se deriva a Enrique por esto). */
+export function quitarPromesaRecontacto(texto: string): string {
+  const norm = (x: string) => x.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const frases = texto.split(/(?<=[.!?\n])\s+/).filter((f) => !promesaRecontacto(norm(f)));
+  const limpio = frases.join(" ").trim();
+  return limpio || "Cuando estés listo escribime por acá y lo armamos.";
+}
+
+export const INSTRUCCION_PROMESA_RECONTACTO =
+  "No prometas escribirle otro día (pasadas 24 h WhatsApp no te deja). Decile \"cuando estés listo escribime por acá y lo armamos\" " +
+  "o, si dio un día, ofrecé dejarlo programado para ese día con programar_entrega. El día ya quedó anotado.";
+
 export function revisarRespuesta(texto: string, op: OpcionesFiltro): ResultadoFiltro {
   const motivos: string[] = [];
   const t = (texto ?? "").trim();
@@ -312,6 +338,11 @@ export function revisarRespuesta(texto: string, op: OpcionesFiltro): ResultadoFi
     if (anuncia) motivos.push(`se_anuncia_como_ia:${anuncia}`);
   }
   if (op.yaPreguntoFreno && /que te frena|que le frena/.test(nt)) motivos.push("insiste_que_te_frena");
+  // 19-10 (paquete 1, punto 6): "el viernes 30/10 te escribo" casi siempre cae fuera de las 24 h y WhatsApp no deja
+  // escribir libre (caso real del 19-10, 3 de 3 promesas vencidas sin mandar). El día de recontacto lo anota
+  // registrar_perfil y ese día seguimiento-chat avisa a Enrique.
+  const promesa = promesaRecontacto(nt);
+  if (promesa) motivos.push(`promesa_recontacto:${promesa}`);
   if (op.accionesHechas) {
     const inv = accionInventada(t, op.accionesHechas);
     if (inv) motivos.push(`accion_inventada:${inv}`);

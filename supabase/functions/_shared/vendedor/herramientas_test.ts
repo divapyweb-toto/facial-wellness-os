@@ -561,10 +561,14 @@ Deno.test("permiso_ofertas: sin respuesta previa → tu texto + el pedido de per
   _limpiarCacheCatalogo();
   const { deps, reg } = depsPrueba();
   const nuevo = { ...deps, consentimiento: () => Promise.resolve(null) };
-  const r = await ejecutarHerramienta("permiso_ofertas", { texto: "Dale, tranqui. El lunes te escribo" }, ctxPrueba(), nuevo);
+  const r = await ejecutarHerramienta("permiso_ofertas", { texto: "Dale, tranqui. Cuando quieras escribime" }, ctxPrueba(), nuevo);
   assert(r.terminal);
   const i = reg.interactivos[0].interactive as { body: { text: string }; action: { buttons: Array<{ reply: { id: string; title: string } }> } };
-  assert(i.body.text.startsWith("Dale, tranqui. El lunes te escribo"));
+  assert(i.body.text.startsWith("Dale, tranqui. Cuando quieras escribime"));
+  // 19-10: una promesa de recontacto en el texto se saca antes de mandar.
+  const { deps: d2, reg: r2 } = depsPrueba();
+  await ejecutarHerramienta("permiso_ofertas", { texto: "Dale, tranqui. El viernes 30/10 te escribo y te lo armo." }, ctxPrueba(), { ...d2, consentimiento: () => Promise.resolve(null) });
+  assert((r2.interactivos[0].interactive as { body: { text: string } }).body.text.startsWith("Dale, tranqui.\n\n"));
   assert(i.body.text.includes("Voltra te avise"));
   assert(i.action.buttons[0].reply.id.startsWith("cons_si:"));
   const ya = await ejecutarHerramienta("permiso_ofertas", { texto: "Dale" }, ctxPrueba(), { ...deps, consentimiento: () => Promise.resolve("no") });

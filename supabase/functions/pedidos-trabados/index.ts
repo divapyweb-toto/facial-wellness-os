@@ -7,6 +7,7 @@ import { db } from "../_shared/db.ts";
 import { marcarPreparado } from "../_shared/shopify_preparar.ts";
 import { cancelarEnShopify, candadosTomados, ejecutar, etiqueta, idCandadoAuto, pedidosAbiertos, registrarError, tomarCandado } from "./io.ts";
 import { accionesPara } from "./logica.ts";
+import { avisoRutaPap } from "./aviso_ruta_pap.ts";
 
 type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean; preparar?: boolean };
 
@@ -30,7 +31,9 @@ async function automatico(simular: boolean) {
       hechos.push({ pedido: p.nombre, accion: a, ok: !e, ...(e ? { error: e } : {}) });
     }
   }
-  return { revisados: pedidos.length, acciones: hechos };
+  // 19-10: aviso "en recorrido de reparto" para PaP (aviso_ruta_pap.ts). Un error acá no frena lo demás.
+  const ruta = await avisoRutaPap(ahora, simular).catch((e) => ({ activo: true, error: e instanceof Error ? e.message : String(e), hechos: [] }));
+  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta };
 }
 
 async function manual(acciones: AccionManual[]) {

@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
-import { accionInventada, contarEmojis, extraerMontos, montosDeResultado, revisarRespuesta } from "./filtro_salida.ts";
+import { accionInventada, contarEmojis, extraerMontos, montosDeResultado, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
 
 const PROHIBIDAS = ["garantía", "devolución", "reembolso", "sin riesgo", "cura", "curar", "tratamiento", "oxígeno"];
 const CATALOGO = [79000, 33000, 112000, 125000, 158000];
@@ -196,4 +196,19 @@ Deno.test("acción inventada: negaciones, ofertas de confirmar y frases normales
 
 Deno.test("acción inventada: sin accionesHechas (textos fijos, tests viejos) no se revisa", () => {
   assert(revisarRespuesta("Ya lo cambié.", op).ok);
+});
+
+Deno.test("19-10 promesa de recontacto otro día → bloqueada; avisos del pedido y 'cuando quieras' no", () => {
+  const op = { preciosValidos: [], palabrasProhibidas: [], promesasSalud: [] } as unknown as Parameters<typeof revisarRespuesta>[1];
+  for (const t of ["Dale, tranqui. El viernes 30/10 te escribo y te lo armo.", "Dale, el jueves 5/11 te escribo.", "Mañana te escribo para armarlo.", "Te escribo el lunes y lo vemos."]) {
+    assert(revisarRespuesta(t, op).motivos.some((m) => m.startsWith("promesa_recontacto:")), t);
+  }
+  for (const t of ["Cuando estés listo escribime por acá y lo armamos.", "Te avisamos por acá cuando salga.", "Llega en unos días, te aviso."]) {
+    assertFalse(revisarRespuesta(t, op).motivos.some((m) => m.startsWith("promesa_recontacto:")), t);
+  }
+});
+
+Deno.test("19-10 quitarPromesaRecontacto: saca solo la frase de la promesa", () => {
+  assertEquals(quitarPromesaRecontacto("Dale, tranqui. El viernes 30/10 te escribo y te lo armo."), "Dale, tranqui.");
+  assertEquals(quitarPromesaRecontacto("Mañana te escribo."), "Cuando estés listo escribime por acá y lo armamos.");
 });

@@ -9,6 +9,7 @@
 //     no lo que el modelo reescriba.
 //   - Todo texto que el modelo pone dentro de un interactivo pasa por el mismo filtro que su respuesta.
 import { avisoParaCourier, datosCourierDesdeRaw } from "../texto_courier.ts";
+import { quitarPromesaRecontacto } from "./filtro_salida.ts";
 import { herramientasPedidosWeb } from "./pedidos_web.ts";
 import { digitoVerificadorRuc, normalizarRuc } from "../facturacion.ts";
 import type { Herramienta } from "../claude.ts";
@@ -1289,7 +1290,9 @@ async function cierreBotones(input: Record<string, unknown>, ctx: CtxTurno, deps
 async function permisoOfertas(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
   const ya = deps.consentimiento ? await deps.consentimiento(ctx.clienteId).catch(() => "error" as const) : null;
   if (ya !== null) return { resultado: { ok: true, ya_respondio: true, nota: "Ya respondió el permiso de ofertas (o no se pudo leer): respondé normal, sin preguntarlo." } };
-  return await enviarInteractivoRevisado(input, ctx, deps, (t) => botonesPermisoOfertas(ctx.clienteId, `${t}\n\n${TEXTO_PERMISO_OFERTAS}`));
+  // 19-10: "el viernes te escribo" no se promete (fuera de 24 h no se puede): se saca esa frase y sigue el permiso.
+  const t0 = typeof input.texto === "string" ? quitarPromesaRecontacto(input.texto) : input.texto;
+  return await enviarInteractivoRevisado({ ...input, texto: t0 }, ctx, deps, (t) => botonesPermisoOfertas(ctx.clienteId, `${t}\n\n${TEXTO_PERMISO_OFERTAS}`));
 }
 
 /** 13-10: pin → calle y ciudad (OpenStreetMap) y confirmación en una línea con "Sí, es ahí" / "Corregir". */

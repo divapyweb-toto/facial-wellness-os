@@ -39,7 +39,7 @@ import {
 import { productoDeMarca } from "../anuncios.ts";
 import { partesAsuncion } from "../horario.ts";
 import { extrasVendedor } from "./config.ts";
-import { INSTRUCCION_ACCION_INVENTADA, montosDeResultado, revisarRespuesta } from "./filtro_salida.ts";
+import { INSTRUCCION_ACCION_INVENTADA, INSTRUCCION_PROMESA_RECONTACTO, montosDeResultado, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
 import { type BloqueImagen, cargarImagen, contenidoConImagenes, type Descarga, type ImagenEntrada, imagenesPendientes, textoImagenNoVista } from "./imagenes.ts";
 import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type MotivoDerivacion } from "./herramientas.ts";
 import {
@@ -774,6 +774,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
           `solo precios de consultar_catalogo, sin palabras prohibidas ni promesas de salud` +
           (preguntaBot ? `, y decí que sos el asistente virtual de Voltra (sin decir que sos una persona)` : "") +
           `.` + (rev.motivos.some((m) => m.startsWith("accion_inventada:")) ? ` ${INSTRUCCION_ACCION_INVENTADA}` : "") +
+          (rev.motivos.some((m) => m.startsWith("promesa_recontacto:")) ? ` ${INSTRUCCION_PROMESA_RECONTACTO}` : "") +
           ` Respondé solo con el texto para el cliente.`,
       },
     ];
@@ -789,6 +790,12 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     }
     rev = revisarRespuesta(textoFinal, opcionesFiltro());
     fila.filtro.intentos.push(rev);
+    // 19-10: si lo único que falla es la promesa de recontacto, se saca esa frase en vez de derivar a Enrique.
+    if (!rev.ok && rev.motivos.every((m) => m.startsWith("promesa_recontacto:"))) {
+      textoFinal = quitarPromesaRecontacto(textoFinal);
+      rev = revisarRespuesta(textoFinal, opcionesFiltro());
+      fila.filtro.intentos.push(rev);
+    }
     if (!rev.ok) {
       return await derivar("filtro", `La respuesta de la IA no pasó el filtro dos veces (${rev.motivos.join(", ")}). Mensaje del cliente: "${entrada.texto.slice(0, 200)}"`);
     }
