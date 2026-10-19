@@ -76,8 +76,8 @@ Deno.test("libro de creativos: línea de cansancio (solo aviso)", () => {
   assertStringIncludes(texto, "⚠️ Se está cansando: VID JAWFLEX V4 (formularios/clic -88% contra sus primeros días)");
 });
 
-Deno.test("Lucero en gestión +3 días y PaP en custodia (solo referencias)", () => {
+Deno.test("Lucero en gestión +3 días (solo referencias); custodia sin alerta", () => {
   const { texto } = armarResumen({ ...base, pedidos, meta, luceroGestion: [{ ref: "VT-9001", estado: "Fallido", dias: 4 }], papCustodia: [{ ref: "VT-9002", desde: "2026-10-17T10:00:00Z" }] });
   assertStringIncludes(texto, "📦 Lucero en gestión +3 días (reprogramar): VT-9001 Fallido 4d");
-  assertStringIncludes(texto, "🟠 PaP en custodia: VT-9002 desde 17-10");
+  assert(!texto.includes("custodia"), "custodia: solo se mide, sin alerta");
 });

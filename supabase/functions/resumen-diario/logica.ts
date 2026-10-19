@@ -179,10 +179,7 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
   if (lg.length) {
     l.push(`📦 Lucero en gestión +3 días (reprogramar): ${lg.slice(0, 8).map((x) => `${x.ref} ${escaparHtml(x.estado)} ${x.dias}d`).join(" · ")}${lg.length > 8 ? ` · y ${lg.length - 8} más` : ""}`);
   }
-  const cu = e.papCustodia ?? [];
-  if (cu.length) {
-    l.push(`🟠 PaP en custodia: ${cu.slice(0, 8).map((x) => `${x.ref}${x.desde ? ` desde ${x.desde.slice(8, 10)}-${x.desde.slice(5, 7)}` : ""}`).join(" · ")}`);
-  }
+  // 19-10: la custodia de PaP es inrescatable (Enrique): se mide como PERDIDO, sin alerta de acción.
   for (const c of e.cansados ?? []) {
     const medida = c.canal === "whatsapp" ? "pedidos/chat" : "formularios/clic";
     l.push(`⚠️ Se está cansando: ${escaparHtml(c.anuncio)} (${medida} ${c.caidaPct ?? "−50"}% contra sus primeros días)`);
