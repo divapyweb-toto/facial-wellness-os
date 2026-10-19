@@ -4,7 +4,7 @@
 // Reintenta el envío 2 veces y deja el resultado en eventos_crudos ('telegram', 'resumen_diario:<día>').
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { chatsAnuncio, chatsBotV33, entrega7d, guardarCandado, leerCandado, leerMeta, leerPedidos, stock } from "./io.ts";
+import { cansados, chatsAnuncio, chatsBotV33, entrega7d, guardarCandado, leerCandado, leerMeta, leerPedidos, stock } from "./io.ts";
 import { armarResumen, diaParaguay } from "./logica.ts";
 
 Deno.serve(conServiceRole(async (req: Request) => {
@@ -25,6 +25,7 @@ Deno.serve(conServiceRole(async (req: Request) => {
     ]);
     const ent7 = await entrega7d(new Date(ahora.getTime() - 7 * 24 * 3_600_000).toISOString(), new Date(ahora.getTime() - 14 * 24 * 3_600_000).toISOString())
       .catch((e) => (console.warn("resumen-diario entrega7d:", e instanceof Error ? e.message : e), null));
+    const cans = await cansados().catch((e) => (console.warn("resumen-diario cansados:", e instanceof Error ? e.message : e), []));
     let meta = null;
     try {
       meta = await leerMeta(hoy);
@@ -33,7 +34,7 @@ Deno.serve(conServiceRole(async (req: Request) => {
     }
     const { texto, botV33Listo } = armarResumen({
       hoy, ahora, pedidos, meta, chatsAnuncioHoy: chats, chatsBotV33: botV33,
-      botV33YaAvisado: (v33?.payload?.dia as string) ?? null, stock: prods, entrega7d: ent7, prueba,
+      botV33YaAvisado: (v33?.payload?.dia as string) ?? null, stock: prods, entrega7d: ent7, cansados: cans, prueba,
     });
     let r = await avisar(texto);
     for (let i = 0; i < 2 && !r.ok; i++) {

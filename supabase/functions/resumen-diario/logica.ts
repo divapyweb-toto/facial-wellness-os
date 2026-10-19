@@ -70,6 +70,8 @@ export interface Entrada {
   stock: Array<{ nombre: string; stock: number }>;
   /** Pedidos resueltos en los últimos 7 días (null = no se pudo leer). */
   entrega7d: { entregados: number; rechazados: number } | null;
+  /** 19-10: anuncios en estado 'cansado' del libro de creativos (solo aviso: no se pausa nada). */
+  cansados?: Array<{ anuncio: string; canal: string; caidaPct: number | null }>;
   prueba?: boolean;
 }
 
@@ -170,5 +172,9 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
     if (s.stock < tope) alertas.push(`${f === "Otros" ? escaparHtml(s.nombre) : f}: ${s.stock} unidades`);
   }
   if (alertas.length) l.push("", `⚠️ Alertas: ${alertas.join(" · ")}`);
+  for (const c of e.cansados ?? []) {
+    const medida = c.canal === "whatsapp" ? "pedidos/chat" : "formularios/clic";
+    l.push(`⚠️ Se está cansando: ${escaparHtml(c.anuncio)} (${medida} ${c.caidaPct ?? "−50"}% contra sus primeros días)`);
+  }
   return { texto: l.join("\n"), botV33Listo };
 }

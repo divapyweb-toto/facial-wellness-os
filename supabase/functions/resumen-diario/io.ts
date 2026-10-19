@@ -66,6 +66,13 @@ export async function entrega7d(desde7Iso: string, desde14Iso: string): Promise<
   return { entregados: ent.size, rechazados: rech.size };
 }
 
+/** Anuncios marcados 'cansado' en el libro de creativos (vista libro_creativos). */
+export async function cansados(): Promise<Array<{ anuncio: string; canal: string; caidaPct: number | null }>> {
+  const { data, error } = await db().from("libro_creativos").select("anuncio,canal,caida_pct").eq("estado", "cansado").order("gasto", { ascending: false }).limit(5);
+  if (error) throw new Error(`libro_creativos: ${error.message}`);
+  return (data ?? []).map((x: Obj) => ({ anuncio: String(x.anuncio), canal: String(x.canal), caidaPct: x.caida_pct == null ? null : Number(x.caida_pct) }));
+}
+
 // ── Estado: candados en eventos_crudos (fuente 'telegram') ──
 export async function leerCandado(id: string): Promise<{ payload: Obj; error: string | null } | null> {
   const { data } = await db().from("eventos_crudos").select("payload,error").eq("fuente", "telegram").eq("id_externo", id).maybeSingle();

@@ -70,3 +70,8 @@ Deno.test("línea de meta: arriba de todo, con el valor real; sin rechazos no in
   const b = armarResumen({ ...base, pedidos, meta: null, entrega7d: { entregados: 9, rechazados: 0 } });
   assertStringIncludes(b.texto, "entrega: sin datos de rechazos · CPA —");
 });
+
+Deno.test("libro de creativos: línea de cansancio (solo aviso)", () => {
+  const { texto } = armarResumen({ ...base, pedidos, meta, cansados: [{ anuncio: "VID JAWFLEX V4", canal: "web", caidaPct: -88 }] });
+  assertStringIncludes(texto, "⚠️ Se está cansando: VID JAWFLEX V4 (formularios/clic -88% contra sus primeros días)");
+});
