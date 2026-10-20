@@ -1,5 +1,5 @@
 // src/pages/despacho/DespachoPagina.jsx
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import { limpiarTel, refVoltra, normalizarRef } from '../../lib/referencias'
 import { esPedidoImportable, filasCsvDesdePedidoShopify, esPagoAnticipado, esRetiroConfirmado, METODO_ENVIO_RETIRO, ENVIO_YA_SALIO, envioEntregado } from '../../lib/pedidosVoltra'
 import { getTienda } from '../../lib/tienda'
@@ -12,7 +12,7 @@ import { categorizarPaP as categoriaPaP, importeSano, esImporteCorrupto, cantida
 import { costoFleteActual } from '../../lib/flete'
 import { getEnvioCliente } from '../../lib/config'
 import { tieneCobranzaPaP, zonaPaP } from '../../lib/cobranzaPaP'
-import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, transportadorasDisponibles, transportadoraForzada, ciudadesConocidas, coberturaCiudad, TRANSPORTADORAS, hoyParaguay } from '../../lib/transportadoras'
+import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, tarifaDe, tarifaDetalle, transportadorasDisponibles, transportadoraForzada, ciudadesConocidas, coberturaCiudad, TRANSPORTADORAS, hoyParaguay } from '../../lib/transportadoras'
 import { leerProgramacion, estadoProgramacion, programacionDesdeShopify } from '../../lib/entregaProgramada'
 import { placeholderEntregaLucero, guiaLucero } from '../../lib/rendicionLucero'
 import { familiaProducto } from '../../lib/recompra'
@@ -23,6 +23,8 @@ import { construirHistorialCiudades, evaluarCiudad } from '../../lib/riesgoCiuda
 import { useToast } from '../../lib/toast'
 import { prepararEnShopify } from '../../lib/prepararShopify'
 import { esPrioridad, ordenarGuias, ordenarPorPrioridad, pagadoPorTags, tienePrioridad } from './prioridad'
+import { asegurarTarifasCourier } from '../../lib/tarifasCourier'
+import SugerenciaCosto from './SugerenciaCosto'
 
 // Helpers locales para el cruce ventas ⋈ entregas del historial de riesgo
 const normRefRiesgo = (ref) => {
@@ -261,7 +263,9 @@ function mapearGrupoAPedidos(grupoRows) {
   // rige para TODO el paquete: es una sola caja física, no se reparte.
   const conRegla = items.find(it => transportadoraForzada(it.producto_nombre))
   const productoParaRuteo = conRegla ? conRegla.producto_nombre : items[0].producto_nombre
-  const sugerencia = sugerirTransportadora(ciudad, productoParaRuteo)
+  // 20-10: contra entrega salvo que ya esté pagado (PaP no cobra en todas sus ciudades; ya pagado, sí puede ir).
+  const codRuteo = !pagadoShopify
+  const sugerencia = sugerirTransportadora(ciudad, productoParaRuteo, { cod: codRuteo })
   const transportadora = sugerencia.transportadora
   const cobranzaOk = transportadora != null
   const faltantes = []
@@ -300,6 +304,11 @@ function mapearGrupoAPedidos(grupoRows) {
     // Tarifa real de ESA transportadora en ESA ciudad — solo en la primera
     // línea del pedido (una sola caja, un solo flete; el resto va en 0).
     costo_envio: i === 0 ? sugerencia.tarifa : 0,
+    // 20-10: flete sacado de la zona (ciudad fuera de la tabla de tarifas) o del flete plano de respaldo.
+    flete_estimado: i === 0 ? !!sugerencia.fleteEstimado : false,
+    // Con qué supuesto de pago se ruteó y con qué producto (si cambia el pago en pantalla, se vuelve a rutear).
+    codRuteo,
+    productoRuteo: productoParaRuteo,
     // Se marca explícitamente para que los recálculos posteriores (cambio de
     // ciudad, cambio de transportadora) no le devuelvan el flete a las líneas
     // secundarias. Antes lo hacían y el pedido pagaba el flete N veces.
@@ -459,6 +468,9 @@ function parsearPedidoManual(bloque, catalogo, nRef) {
     motivoTransportadora: sugerencia.motivo,
     bloqueadoPorProducto: !!sugerencia.bloqueadoPorProducto,
     costo_envio: sugerencia.tarifa,
+    flete_estimado: !!sugerencia.fleteEstimado,
+    // 20-10: se ruteó como contra entrega (en pantalla arranca sin "ya pagado"; si se marca, se vuelve a rutear).
+    codRuteo: true,
     // 100% de estos pedidos vienen pagados por transferencia — se marca de
     // entrada (queda editable como cualquier otro prepago en la tabla).
     prepago: true,
@@ -827,7 +839,7 @@ async function descargarGuiasDOCX(pedidos) {
 function ventaAPedido(v) {
   // Si la venta ya tiene transportadora guardada (despachada antes), se respeta.
   // Si no, se sugiere por ciudad — así las ventas viejas también salen ruteadas.
-  const sug = sugerirTransportadora(v.ciudad || '', v.producto_nombre || '')
+  const sug = sugerirTransportadora(v.ciudad || '', v.producto_nombre || '', { cod: !v.pago_anticipado })
   const transportadora = v.transportadora || sug.transportadora
   return {
     n_referencia: v.n_referencia || '',
@@ -924,10 +936,11 @@ function ModalEditarPedido({ pedido, onGuardar, onCerrar }) {
 
   // Efecto de la ciudad elegida: se muestra ANTES de guardar, para que la
   // corrección sea una decisión informada y no a ciegas.
-  const cobertura = useMemo(() => coberturaCiudad(f.ciudad), [f.ciudad])
+  const cod = !pedido.prepago
+  const cobertura = useMemo(() => coberturaCiudad(f.ciudad, { cod }), [f.ciudad, cod])
   const sug = useMemo(
-    () => sugerirTransportadora(f.ciudad, pedido.producto_nombre),
-    [f.ciudad, pedido.producto_nombre]
+    () => sugerirTransportadora(f.ciudad, pedido.producto_nombre, { cod }),
+    [f.ciudad, pedido.producto_nombre, cod]
   )
   const cambioCiudad = f.ciudad !== (pedido.ciudad || '')
 
@@ -1055,6 +1068,8 @@ function filaVentaDePedido(p, catalogo) {
     // Flete REAL de la transportadora elegida en ESA ciudad. Se congela acá:
     // si mañana cambia la tarifa, los reportes viejos no se mueven.
     costo_envio: p.costo_envio ?? tarifaDe(p.transportadora || 'pap', p.ciudad) ?? costoFleteActual(),
+    // 20-10: true = el flete no es el de la tabla para esa ciudad (zona o flete plano de respaldo).
+    flete_estimado: p.costo_envio != null ? !!p.flete_estimado : (tarifaDetalle(p.transportadora || 'pap', p.ciudad)?.estimado ?? true),
     transportadora: p.transportadora || 'pap',
     envio_cliente: 0,
     metodo_envio_nombre: (TRANSPORTADORAS[p.transportadora] || TRANSPORTADORAS.pap).nombre,
@@ -1071,7 +1086,7 @@ function filaVentaDePedido(p, catalogo) {
   if (p.retiroEnPersona) {
     return {
       ...fila,
-      transportadora: 'otra', costo_envio: 0, envio_cliente: 0,
+      transportadora: 'otra', costo_envio: 0, flete_estimado: false, envio_cliente: 0,
       metodo_envio_nombre: METODO_ENVIO_RETIRO,
       estado: p.entregadoRetiro ? 'entregado' : 'pendiente',
       estado_releasit: 'confirmado',
@@ -1199,6 +1214,14 @@ export default function DespachoPagina() {
   // Historial de entrega por ciudad + ciudades forzadas a mano por el admin.
   const [historialCiudad, setHistorialCiudad] = useState(new Map())
   const [ciudadHabilitada, setCiudadHabilitada] = useState(new Set())
+  // 20-10: tabla de tarifas por courier y ciudad. Se carga al iniciar la app; si todavía no estaba (p. ej. la app
+  // arrancó sin sesión), se pide acá. Mientras no carga, rige el flete plano de Config, como antes.
+  const [tarifasListas, setTarifasListas] = useState(false)
+  useEffect(() => {
+    let vivo = true
+    asegurarTarifasCourier().then(ok => { if (vivo) setTarifasListas(ok) })
+    return () => { vivo = false }
+  }, [])
 
   // Aplica los overrides: despacho forzado + marca de prepago + riesgo cliente.
   // Todo esto está indexado por n_referencia y vale SOLO para el archivo que
@@ -1220,11 +1243,14 @@ export default function DespachoPagina() {
       // 1) Se aplican las correcciones manuales ANTES de cualquier cálculo.
       const edit = ediciones[pOriginal.n_referencia]
       let p = edit ? { ...pOriginal, ...edit } : pOriginal
+      // 20-10: PaP no cobra contra entrega en todas sus ciudades: el ruteo depende de si ya está pagado
+      // (misma regla que el campo prepago de abajo).
+      const cod = !(p.pagadoShopify ? !prepagos.has(p.n_referencia) : prepagos.has(p.n_referencia))
       // 2) Si se corrigió la ciudad, el ruteo se recalcula por completo: la
       //    ciudad decide cobertura, transportadora y tarifa. Sin esto, el
       //    pedido quedaría con los datos de la ciudad equivocada.
       if (edit && edit.ciudad && edit.ciudad !== pOriginal.ciudad) {
-        const sug = sugerirTransportadora(p.ciudad, p.producto_nombre)
+        const sug = sugerirTransportadora(p.ciudad, p.productoRuteo || p.producto_nombre, { cod })
         const faltantes = []
         if (!p.cliente_nombre) faltantes.push('nombre')
         if (!p.telefono) faltantes.push('teléfono')
@@ -1239,6 +1265,19 @@ export default function DespachoPagina() {
           faltantes,
           despachar: p.cfg?.despachar !== false && sug.transportadora != null && faltantes.length === 0,
         }
+      } else if (p.codRuteo != null && p.codRuteo !== cod) {
+        // 20-10: se marcó o desmarcó "ya pagado" en pantalla: se vuelve a rutear con ese supuesto
+        // (ej. San Juan Nepomuceno: contra entrega no va por PaP; ya pagado, sí).
+        const sug = sugerirTransportadora(p.ciudad, p.productoRuteo || p.producto_nombre, { cod })
+        p = {
+          ...p,
+          transportadora: sug.transportadora,
+          motivoTransportadora: sug.motivo,
+          bloqueadoPorProducto: !!sug.bloqueadoPorProducto,
+          costo_envio: p.lineaPrincipal === false ? 0 : sug.tarifa,
+          cobranzaOk: sug.transportadora != null,
+          despachar: p.cfg?.despachar !== false && sug.transportadora != null && (!p.origenManual || !(p.faltantes || []).length),
+        }
       }
       p = { ...p, editado: !!edit }
       const tel = normalizarTel(p.telefono)
@@ -1249,9 +1288,10 @@ export default function DespachoPagina() {
       const despacharBase = (p.despachar || forzados.has(p.n_referencia))
       // Transportadora: la elegida a mano, o la sugerida por ciudad.
       const transportadora = transpOverride[p.n_referencia] || p.transportadora
+      const detalleTarifa = transportadora && transportadora !== 'otra' ? tarifaDetalle(transportadora, p.ciudad) : null
       const tarifa = transportadora === 'otra'
         ? (parseInt(costoOtraManual[p.n_referencia]) || 0)
-        : (transportadora ? tarifaDe(transportadora, p.ciudad) : null)
+        : (detalleTarifa?.precio ?? null)
       // Riesgo de la CIUDAD con esa transportadora (0% de entrega = plata quemada).
       const evCiudad = evaluarCiudad(historialCiudad, p.ciudad, transportadora)
       const ciudadOk = ciudadHabilitada.has(p.n_referencia)
@@ -1277,9 +1317,11 @@ export default function DespachoPagina() {
         // Las líneas secundarias de un pedido multiproducto van en 0: es una
         // sola caja y un solo flete.
         costo_envio: p.lineaPrincipal === false ? 0 : tarifa,
+        flete_estimado: p.lineaPrincipal === false ? false : !!detalleTarifa?.estimado,
       }
     }),
-    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual, ediciones]
+    // tarifasListas: cuando termina de cargar la tabla de tarifas, se recalcula el flete con ella.
+    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual, ediciones, tarifasListas]
   )
 
   // 12-10: PRIORIDAD primero (lista, cabecera y guías salen en este orden).
@@ -1780,6 +1822,9 @@ export default function DespachoPagina() {
     trayendoVoltraRef.current = true
     setTrayendoVoltra(true)
     try {
+      // 20-10: el ruteo y el flete que se guardan usan la tabla de tarifas; si todavía no cargó, se espera
+      // (no tira: si falla, sigue con el flete plano de Config, como antes).
+      await asegurarTarifasCourier()
       const desde = new Date(Date.now() - 90 * 86400000).toISOString()
       const { data: filas, error } = await fetchAllSafe(() => supabase
         .from('shopify_pedidos').select('shopify_order_id, nombre, es_borrador, raw, estado_envio, entregado_en')
@@ -2154,7 +2199,10 @@ export default function DespachoPagina() {
                           {v.cliente_nombre || '—'}
                           <BadgeEntrega e={v.entregaProgramada} />
                         </td>
-                        <td data-label="Ciudad" className="muted">{v.ciudad || '—'}</td>
+                        <td data-label="Ciudad" className="muted">
+                          {v.ciudad || '—'}
+                          <SugerenciaCosto ciudad={v.ciudad} cod={!v.pago_anticipado} asignada={v.transportadora} />
+                        </td>
                         <td data-label="Dirección" className="muted" style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11 }}>
                           {v.cliente_direccion
                             ? v.cliente_direccion
@@ -2495,9 +2543,14 @@ export default function DespachoPagina() {
                       </td>
                       <td data-label="Transportadora" onClick={e => e.stopPropagation()}>
                         {(() => {
-                          const disponibles = transportadorasDisponibles(p.ciudad)
+                          const disponibles = transportadorasDisponibles(p.ciudad, { cod: !p.prepago })
                           if (!disponibles.length) {
-                            return <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>Sin cobertura</span>
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>Sin cobertura</span>
+                                <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
+                              </div>
+                            )
                           }
                           const cubre = p.transportadora && disponibles.includes(p.transportadora)
                           return (
@@ -2531,8 +2584,9 @@ export default function DespachoPagina() {
                                     ? 'No cubre esta ciudad'
                                     : p.transportadora === 'otra'
                                       ? null
-                                      : `${formatGs(p.costo_envio || 0)}${p.transpManual ? ' · manual' : ''}`}
+                                      : `${formatGs(p.costo_envio || 0)}${p.flete_estimado ? ' · estimado' : ''}${p.transpManual ? ' · manual' : ''}`}
                               </span>
+                              <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
                               {p.transportadora === 'otra' && (
                                 <input
                                   type="number"

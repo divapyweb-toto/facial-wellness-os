@@ -157,8 +157,18 @@ export type RangoEntrega = {
   habiles: boolean;
 };
 
-/** 12-10: rango de entrega de la ciudad con `courier`, o con el del ruteo oficial si no viene. */
+/**
+ * 12-10: rango de entrega de la ciudad con `courier`, o con el del ruteo oficial si no viene.
+ * 20-10: con la tabla de tarifas cargada (cargarTarifasCourier), los días hábiles salen de tarifas_courier_vigente:
+ * del courier dado o, si no viene, del sugerido (misma regla que la rpc sugerir_courier). Sin tabla, ciudad que la
+ * tabla no conoce, courier "otra" o sin días cargados → el cálculo de siempre (rangoBase).
+ */
 export function rangoEntrega(ciudad: unknown, courier?: string | null): RangoEntrega {
+  return rangoDeTabla(ciudad, courier) ?? rangoBase(ciudad, courier);
+}
+
+/** El rango de siempre (ruteo oficial + velocidad), sin la tabla de tarifas. */
+function rangoBase(ciudad: unknown, courier?: string | null): RangoEntrega {
   const zona = zonaDeCiudad(ciudad);
   const c = idCourier(courier) ?? courierOficial(ciudad);
   const de = (rango: [number, number], fuente: string): RangoEntrega => ({
@@ -173,6 +183,214 @@ export function rangoEntrega(ciudad: unknown, courier?: string | null): RangoEnt
   const vel = (c === "lucero" || c === "pap") && typeof ciudad === "string" ? velocidad(c, ciudad) : null;
   const r = vel ? (c === "lucero" ? RANGO_LUCERO[vel] : RANGO_PAP[vel]) : undefined;
   return r ? de(r, `${c} ${vel}`) : de(RANGO_HABIL[zona], `zona ${zona}`);
+}
+
+// ---------- 20-10: tarifas oficiales por courier y ciudad (tabla tarifas_courier, migración 20261020000001) ----------
+// Caché por instancia, opcional: la carga cargarTarifasCourier(db) en los puntos de entrada (turno del vendedor,
+// shopify-webhook). Se refresca cada 10 min; si la carga falla queda vacía y todo funciona como antes de la tabla.
+
+export type FilaTarifaCourier = {
+  courier: string;
+  /** Clave normalizada (ciudad_norm). */
+  ciudad: string;
+  ciudad_nombre?: string | null;
+  /** Otras grafías, ya normalizadas. */
+  alias?: string[] | null;
+  zona?: string | null;
+  precio: number | string;
+  tiempo?: string | null;
+  dias_min: number | null;
+  dias_max: number | null;
+  aplica_cobranza: boolean;
+  tiene_agencia?: boolean | null;
+};
+export type FilaTasaCourier = { courier: string; tasa_usada: number | string | null; pocos_datos?: boolean | null; resueltos?: number | null };
+
+export type OpcionCourier = {
+  courier: "pap" | "lucero";
+  precio: number;
+  cobranza: boolean;
+  zona: string | null;
+  tiempo: string | null;
+  dias_min: number | null;
+  dias_max: number | null;
+  tasa: number | null;
+  pocos_datos: boolean | null;
+  costo_por_entregado: number | null;
+  valido: boolean;
+};
+export type SugerenciaCourier = {
+  sugerido: "pap" | "lucero" | null;
+  /** Ningún courier de la tabla cobra contra entrega ahí (con cod = false: ninguno llega). */
+  sin_cobertura: boolean;
+  /** La ciudad está en la tabla de algún courier (false: typo o pueblo chico). */
+  ciudad_reconocida: boolean;
+  opciones: OpcionCourier[];
+};
+
+type CacheTarifas = { filas: FilaTarifaCourier[]; tasas: Map<string, { tasa: number | null; pocos_datos: boolean | null }>; cargadaEn: number };
+
+export const REFRESCO_TARIFAS_MS = 10 * 60_000;
+const REINTENTO_TARIFAS_MS = 60_000;
+const TIMEOUT_TARIFAS_MS = 4_000;
+let tarifas: CacheTarifas | null = null;
+let ultimoIntentoTarifas = 0;
+let cargaEnCurso: Promise<boolean> | null = null;
+
+/** Misma normalización que public.ciudad_norm y scripts/tarifas-courier.mjs (`norm`). */
+export const ciudadNorm = (t: unknown): string =>
+  String(t ?? "").toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/\(.*?\)/g, " ")
+    .replace(/\b(cnel|cnl)\.?(\s|$)/g, "coronel ").replace(/\bgral\.?(\s|$)/g, "general ").replace(/\b(pdte|pte)\.?(\s|$)/g, "presidente ")
+    .replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+
+const numero = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Carga la tabla en memoria a mano (tests; también la usa cargarTarifasCourier). Lista vacía = sin tabla. */
+export function fijarTarifasCourier(filas: FilaTarifaCourier[], tasas: FilaTasaCourier[], ahoraMs = Date.now()): void {
+  const validas = filas.filter((f) => (f.courier === "pap" || f.courier === "lucero") && typeof f.ciudad === "string" && f.ciudad);
+  tarifas = validas.length
+    ? {
+      filas: validas,
+      tasas: new Map(tasas.map((t) => [t.courier, { tasa: numero(t.tasa_usada), pocos_datos: t.pocos_datos ?? null }])),
+      cargadaEn: ahoraMs,
+    }
+    : null;
+}
+
+/** Vacía la caché (tests). */
+export function limpiarTarifasCourier(): void {
+  tarifas = null;
+  ultimoIntentoTarifas = 0;
+  cargaEnCurso = null;
+}
+
+export const hayTarifasCourier = (): boolean => tarifas !== null;
+
+type RespuestaSelect = { data: unknown; error: { message: string } | null };
+/** Lo mínimo del cliente de Supabase que hace falta (db() de _shared/db.ts lo cumple). */
+export type ClienteTarifas = { from(tabla: string): { select(columnas: string): PromiseLike<RespuestaSelect> } };
+
+/**
+ * 20-10: carga (o refresca, cada 10 min) tarifas_courier_vigente + tasa_entrega_courier. Nunca lanza: si falla o
+ * tarda más de 4 s, la caché queda vacía (se reintenta al minuto) y rangoEntrega sigue como antes. true = hay tabla.
+ */
+export function cargarTarifasCourier(sb: ClienteTarifas, ahoraMs = Date.now()): Promise<boolean> {
+  if (tarifas && ahoraMs - tarifas.cargadaEn < REFRESCO_TARIFAS_MS) return Promise.resolve(true);
+  if (cargaEnCurso) return cargaEnCurso;
+  if (!tarifas && ultimoIntentoTarifas && ahoraMs - ultimoIntentoTarifas < REINTENTO_TARIFAS_MS) return Promise.resolve(false);
+  ultimoIntentoTarifas = ahoraMs;
+  const carga = (async () => {
+    let reloj: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const vence = new Promise<never>((_, no) => {
+        reloj = setTimeout(() => no(new Error(`más de ${TIMEOUT_TARIFAS_MS / 1000} s`)), TIMEOUT_TARIFAS_MS);
+      });
+      const [f, t] = await Promise.race([
+        Promise.all([
+          sb.from("tarifas_courier_vigente").select("courier,ciudad,ciudad_nombre,alias,zona,precio,tiempo,dias_min,dias_max,aplica_cobranza,tiene_agencia"),
+          sb.from("tasa_entrega_courier").select("courier,tasa_usada,pocos_datos,resueltos"),
+        ]),
+        vence,
+      ]);
+      if (f.error) throw new Error(`tarifas_courier_vigente: ${f.error.message}`);
+      if (t.error) throw new Error(`tasa_entrega_courier: ${t.error.message}`);
+      fijarTarifasCourier((f.data ?? []) as FilaTarifaCourier[], (t.data ?? []) as FilaTasaCourier[], ahoraMs);
+      return tarifas !== null;
+    } catch (e) {
+      tarifas = null;
+      console.warn("plazo_zona: no se pudo cargar la tabla de tarifas, sigo sin ella:", e instanceof Error ? e.message : e);
+      return false;
+    } finally {
+      if (reloj !== undefined) clearTimeout(reloj);
+    }
+  })();
+  cargaEnCurso = carga.finally(() => {
+    cargaEnCurso = null;
+  });
+  return cargaEnCurso;
+}
+
+/** Fila del courier para una ciudad escrita libre (misma regla que public.tarifa_courier, sin el respaldo por zona). */
+function filaTarifa(courier: "pap" | "lucero", k: string): FilaTarifaCourier | null {
+  if (!tarifas || !k) return null;
+  const kk = ` ${k} `;
+  let mejor: FilaTarifaCourier | null = null, mejorOrden = 2, mejorLargo = -1;
+  for (const f of tarifas.filas) {
+    if (f.courier !== courier) continue;
+    const alias = (f.alias ?? []).filter((a) => typeof a === "string" && a);
+    const exacto = f.ciudad === k || alias.includes(k);
+    const aliasDentro = alias.filter((a) => kk.includes(` ${a} `));
+    if (!exacto && !kk.includes(` ${f.ciudad} `) && !aliasDentro.length) continue;
+    const orden = exacto ? 0 : 1;
+    const largo = Math.max(f.ciudad.length, ...aliasDentro.map((a) => a.length));
+    if (orden < mejorOrden || (orden === mejorOrden && largo > mejorLargo)) {
+      mejor = f;
+      mejorOrden = orden;
+      mejorLargo = largo;
+    }
+  }
+  return mejor;
+}
+
+/**
+ * 20-10: courier sugerido con la tabla en memoria, misma regla que la rpc sugerir_courier: entre los que COBRAN
+ * contra entrega en esa ciudad (con cod = false, también donde llegan sin cobranza), el de menor precio ÷ tasa de
+ * entrega; empate → por nombre. null = no hay tabla cargada. Las opciones no incluyen el flete estimado por zona de PaP
+ * (en la rpc nunca es válido ni cuenta para ciudad_reconocida).
+ */
+export function courierSugerido(ciudad: unknown, cod = true): SugerenciaCourier | null {
+  if (!tarifas) return null;
+  const k = ciudadNorm(ciudad);
+  const opciones: OpcionCourier[] = [];
+  for (const c of ["pap", "lucero"] as const) {
+    const f = filaTarifa(c, k);
+    if (!f) continue;
+    const t = tarifas.tasas.get(c);
+    const tasa = t?.tasa ?? null;
+    const precio = numero(f.precio) ?? 0;
+    opciones.push({
+      courier: c,
+      precio,
+      cobranza: f.aplica_cobranza === true,
+      zona: f.zona ?? null,
+      tiempo: f.tiempo ?? null,
+      dias_min: numero(f.dias_min),
+      dias_max: numero(f.dias_max),
+      tasa,
+      pocos_datos: t?.pocos_datos ?? null,
+      costo_por_entregado: tasa ? Math.round(precio / (tasa / 100)) : null,
+      valido: !cod || f.aplica_cobranza === true,
+    });
+  }
+  // order by costo_por_entregado (null al final, como en Postgres), courier
+  const orden = (a: OpcionCourier, b: OpcionCourier) =>
+    (a.costo_por_entregado ?? Infinity) - (b.costo_por_entregado ?? Infinity) || (a.courier < b.courier ? -1 : a.courier > b.courier ? 1 : 0);
+  opciones.sort(orden);
+  const validas = opciones.filter((o) => o.valido);
+  return { sugerido: validas[0]?.courier ?? null, sin_cobertura: !validas.length, ciudad_reconocida: opciones.length > 0, opciones };
+}
+
+/** Rango con los días de la tabla (courier dado o sugerido); null → se usa rangoBase. */
+function rangoDeTabla(ciudad: unknown, courier?: string | null): RangoEntrega | null {
+  if (!tarifas || typeof ciudad !== "string" || !ciudad.trim()) return null;
+  const dado = idCourier(courier);
+  if (dado === "otra") return null;
+  const c = dado ?? courierSugerido(ciudad)?.sugerido ?? null;
+  if (!c) return null;
+  const f = filaTarifa(c, ciudadNorm(ciudad));
+  const a = numero(f?.dias_min), b = numero(f?.dias_max);
+  if (!f || a === null || b === null || a < 0 || b < a) return null;
+  const zona = zonaDeCiudad(ciudad);
+  // "2 a 5 días hábiles" (10-10) solo si el rango de la tabla cabe ahí: interior, o el mismo [2, 5] en cualquier zona.
+  // Interior con un rango más corto (p. ej. [1, 3]) se dice con las fechas.
+  const habiles = a >= 2 && b <= 5 && (zona === "interior" || (a === 2 && b === 5));
+  return { rango: [a, b], zona, courier: c, fuente: `tabla ${c} ${f.ciudad}`, habiles };
 }
 
 /** Días corridos desde hoy hasta la entrega [mín, máx] para un rango en días hábiles después del despacho. */
@@ -272,7 +490,10 @@ export type DiaEntrega = {
  * (diaDespacho: corte 15:00, sin sábado ni domingo).
  */
 export function diaEntrega(ciudad: unknown, ahora: Date, courier?: string | null): DiaEntrega {
-  const r = rangoEntrega(ciudad, courier);
+  return diaEntregaDe(rangoEntrega(ciudad, courier), ahora);
+}
+
+function diaEntregaDe(r: RangoEntrega, ahora: Date): DiaEntrega {
   const hoy = fechaLocal(ahora);
   const despacho = diaDespacho(ahora);
   const [a, b] = r.rango;
@@ -306,8 +527,9 @@ export function lineaPlazosHoy(ahora: Date): string {
   const partes = [
     `Ciudad del Este, Hernandarias, Minga Guazú y Pdte. Franco: ${t("Ciudad del Este")}`,
     ...[...grupos].map(([texto, ciudades]) => `${enLista(ciudades)}: ${texto}`),
-    `Otras ciudades de Central: ${t("Central")}`,
-    `Resto del país: ${t("Encarnación")}`,
+    // 20-10: los dos genéricos no salen de la tabla de tarifas (una ciudad puntual no representa al resto).
+    `Otras ciudades de Central: ${diaEntregaDe(rangoBase("Central"), ahora).texto}`,
+    `Resto del país: ${diaEntregaDe(rangoBase("Encarnación"), ahora).texto}`,
   ];
   return `PLAZOS DESDE HOY (ya calculados con el día y la hora de ahora y el courier de cada ciudad; decí exactamente esto, sin agregar horas): ${partes.join(". ")}.`;
 }

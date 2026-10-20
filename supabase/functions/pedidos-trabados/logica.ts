@@ -14,6 +14,10 @@
 //   6. Confirmado en una ciudad que ni PaP ni Lucero cubren contra entrega (#1056, Enrique 15-10) → se le ofrece al
 //      cliente pagar por adelantado y mandarlo por una transportadora que llegue (una vez, etiqueta SIN_COBERTURA)
 //      y se avisa a Enrique por Telegram.
+//      20-10: la cobertura sale de la rpc sugerir_courier (tabla tarifas_courier: solo cuenta donde el courier COBRA
+//      contra entrega). La lista vieja de transportadoras.js daba a PaP como "con cobranza" en Ayolas, Choré, San José
+//      de los Arroyos y San Juan Nepomuceno (se perdió un pedido contra entrega). Si la tabla no reconoce la ciudad
+//      (typo, pueblo chico) o la rpc falló, se usa la lista vieja como respaldo. io.ts arma el mapa antes de decidir.
 // Cada acción se hace una sola vez por pedido (candado en eventos_crudos): si Enrique la deshace a mano, se respeta.
 
 import { transportadorasDisponibles } from "../_shared/transportadoras.js";
@@ -80,8 +84,23 @@ export function coordenadasPin(p: Pick<PedidoAbierto, "direccion" | "notas">): {
   return m ? { lat: Number(m[1]), lng: Number(m[2]) } : null;
 }
 
-/** ¿Ninguna transportadora con cobro contra entrega (PaP o Lucero) llega a esa ciudad? */
-export const sinCobertura = (ciudad: string) => !transportadorasDisponibles(ciudad).some((t: string) => t === "pap" || t === "lucero");
+/** 20-10: resultado de la rpc sugerir_courier(ciudad) para una ciudad (lo que importa acá). */
+export type Cobertura = { sin_cobertura: boolean; ciudad_reconocida: boolean };
+/** Ciudad tal cual viene en el pedido (sin espacios de los costados) → cobertura según la rpc. */
+export type MapaCobertura = ReadonlyMap<string, Cobertura>;
+export const claveCobertura = (ciudad: string) => ciudad.trim();
+
+/** Respaldo: la lista de transportadoras.js (ruteo del front). */
+export const sinCoberturaLista = (ciudad: string) => !transportadorasDisponibles(ciudad).some((t: string) => t === "pap" || t === "lucero");
+
+/**
+ * ¿Ninguna transportadora con cobro contra entrega (PaP o Lucero) llega a esa ciudad? 20-10: con la ciudad reconocida
+ * por la rpc sugerir_courier, manda su sin_cobertura; si no (typo o sin dato), la lista vieja.
+ */
+export function sinCobertura(ciudad: string, cobertura?: Cobertura | null): boolean {
+  if (cobertura?.ciudad_reconocida) return cobertura.sin_cobertura;
+  return sinCoberturaLista(ciudad);
+}
 
 export const ciudadPendiente = (ciudad: string) => !ciudad.trim() || /^ver mapa$/i.test(ciudad.trim());
 
@@ -89,16 +108,27 @@ const sinDireccion = (p: Pick<PedidoAbierto, "direccion" | "ciudad">) => !p.dire
 
 const tiene = (p: PedidoAbierto, t: string) => p.tags.some((x) => x.toUpperCase() === t);
 
-/** Acciones para un pedido. `puseFaltanDatos` = el sistema puso la etiqueta (candado). */
-export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boolean): Accion[] {
+const ETIQUETAS_SIN_AVISO = ["PAGADO", "RETIRO_EN_CASA", "SIN_COBERTURA"];
+const cancelado = (p: PedidoAbierto) =>
+  p.estado === "cancelado_cliente" || p.estado === "cancelado_sin_respuesta" || tiene(p, "CANCELADO_CLIENTE");
+
+/** 20-10: ¿hay que mirar la cobertura de este pedido? (para que io.ts consulte la rpc solo de esas ciudades) */
+export function necesitaCobertura(p: PedidoAbierto): boolean {
+  return p.estado === "confirmado" && !cancelado(p) && !ciudadPendiente(p.ciudad) && !ETIQUETAS_SIN_AVISO.some((t) => tiene(p, t));
+}
+
+/**
+ * Acciones para un pedido. `puseFaltanDatos` = el sistema puso la etiqueta (candado). `coberturas` = rpc
+ * sugerir_courier por ciudad (claveCobertura); sin dato para la ciudad → lista vieja.
+ */
+export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boolean, coberturas?: MapaCobertura): Accion[] {
   const a: Accion[] = [];
-  const cancelado = p.estado === "cancelado_cliente" || p.estado === "cancelado_sin_respuesta" || tiene(p, "CANCELADO_CLIENTE");
   if (p.estado === "cancelado_cliente" || (tiene(p, "CANCELADO_CLIENTE") && p.estado !== "confirmado")) {
     const t = p.actualizadoEn ? Date.parse(p.actualizadoEn) : NaN;
     if (Number.isFinite(t) && ahora.getTime() - t >= MARGEN_CANCELACION_MS) a.push("cancelar");
     return a; // cancelado: nada más que hacer
   }
-  if (cancelado) return a;
+  if (cancelado(p)) return a;
   if (p.estado === "confirmado" && !tiene(p, "CONFIRMADO")) a.push("agregar_confirmado");
   // 15-10: sin dirección en Shopify pero con los datos en la nota (pedido del bot) → se completa, no se marca.
   if (sinDireccion(p) && direccionDesdeNota(p.notas)) {
@@ -107,8 +137,7 @@ export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boo
     return a;
   }
   if (ciudadPendiente(p.ciudad) && p.direccion.trim() && coordenadasPin(p)) a.push("ciudad_desde_pin");
-  if (p.estado === "confirmado" && !ciudadPendiente(p.ciudad) && sinCobertura(p.ciudad) &&
-    !["PAGADO", "RETIRO_EN_CASA", "SIN_COBERTURA"].some((t) => tiene(p, t))) a.push("avisar_sin_cobertura");
+  if (necesitaCobertura(p) && sinCobertura(p.ciudad, coberturas?.get(claveCobertura(p.ciudad)))) a.push("avisar_sin_cobertura");
   const ok = direccionUtilizable(p);
   if (!ok && !tiene(p, "FALTAN_DATOS") && !tiene(p, "RETIRO_EN_CASA")) a.push("agregar_faltan_datos");
   if (ok && tiene(p, "FALTAN_DATOS") && puseFaltanDatos) a.push("quitar_faltan_datos");

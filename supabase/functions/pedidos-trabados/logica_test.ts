@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { accionesPara, ciudadPendiente, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, type PedidoAbierto } from "./logica.ts";
+import { accionesPara, ciudadPendiente, type Cobertura, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, necesitaCobertura, type PedidoAbierto } from "./logica.ts";
 
 const AHORA = new Date("2026-10-12T18:00:00Z");
 const base = (o: Partial<PedidoAbierto> = {}): PedidoAbierto => ({
@@ -86,4 +86,39 @@ Deno.test("15-10 (#1056): ciudad sin cobertura contra entrega → avisar una vez
 Deno.test("20-10 'Sin calle (ubicación pendiente)' no es una dirección utilizable → FALTAN_DATOS (se pide antes del despacho)", () => {
   assertEquals(direccionUtilizable(base({ direccion: "Sin calle (ubicación pendiente)", ciudad: "Luque" })), false);
   assertEquals(accionesPara(base({ direccion: "Sin calle (ubicación pendiente)", ciudad: "Luque" }), AHORA, false), ["agregar_faltan_datos"]);
+});
+
+// 20-10: la cobertura sale de la rpc sugerir_courier (tabla tarifas_courier); la lista vieja queda de respaldo.
+const SIN: Cobertura = { sin_cobertura: true, ciudad_reconocida: true };
+const CON: Cobertura = { sin_cobertura: false, ciudad_reconocida: true };
+const DESCONOCIDA: Cobertura = { sin_cobertura: true, ciudad_reconocida: false };
+
+Deno.test("20-10: ciudad reconocida por la tabla → manda su sin_cobertura; no reconocida o sin dato → lista vieja", () => {
+  // San Juan Nepomuceno: la lista vieja daba PaP con cobranza (se perdió un pedido); la tabla dice que PaP no cobra ahí.
+  assertEquals(sinCobertura("San Juan Nepomuceno"), false);
+  assertEquals(sinCobertura("San Juan Nepomuceno", SIN), true);
+  for (const c of ["Ayolas", "Choré", "San José de los Arroyos"]) assertEquals(sinCobertura(c, SIN), true, c);
+  assertEquals(sinCobertura("General Isidoro Resquín", CON), false); // la tabla manda aunque la lista diga otra cosa
+  assertEquals(sinCobertura("Luque", { sin_cobertura: true, ciudad_reconocida: false }), false); // typo → lista vieja
+  assertEquals(sinCobertura("Pueblo Inventado", DESCONOCIDA), true); // lista vieja: no está
+  assertEquals(sinCobertura("General Isidoro Resquín", null), true);
+});
+
+Deno.test("20-10: accionesPara usa el mapa ciudad → cobertura (clave = ciudad sin espacios de los costados)", () => {
+  const p = base({ ciudad: "San Juan Nepomuceno ", direccion: "Calle Principal 123" });
+  assertEquals(accionesPara(p, AHORA, false), []); // sin mapa: como antes (lista vieja)
+  assertEquals(accionesPara(p, AHORA, false, new Map([["San Juan Nepomuceno", SIN]])), ["avisar_sin_cobertura"]);
+  assertEquals(accionesPara(p, AHORA, false, new Map([["San Juan Nepomuceno", CON]])), []);
+  assertEquals(accionesPara(p, AHORA, false, new Map([["San Juan Nepomuceno", DESCONOCIDA]])), []); // no reconocida → lista vieja
+  // Ya avisado, pagado, retiro, no confirmado o cancelado: nada, y tampoco hace falta preguntar la cobertura.
+  for (const t of ["PAGADO", "SIN_COBERTURA", "RETIRO_EN_CASA", "CANCELADO_CLIENTE"]) {
+    const q = { ...p, tags: ["CONFIRMADO", t] };
+    assertEquals(accionesPara(q, AHORA, false, new Map([["San Juan Nepomuceno", SIN]])), [], t);
+    assertEquals(necesitaCobertura(q), false, t);
+  }
+  assertEquals(necesitaCobertura({ ...p, estado: "pendiente", tags: [] }), false);
+  assertEquals(necesitaCobertura({ ...p, ciudad: "Ver mapa" }), false);
+  assertEquals(necesitaCobertura(p), true);
+  // Con la ciudad cubierta según la tabla, el resto de las acciones sigue igual.
+  assertEquals(accionesPara(base({ tags: ["ORIGEN_WHATSAPP"], ciudad: "Luque" }), AHORA, false, new Map([["Luque", CON]])), ["agregar_confirmado"]);
 });

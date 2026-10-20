@@ -76,6 +76,8 @@ export interface Entrada {
   luceroGestion?: Array<{ ref: string; estado: string; dias: number }>;
   papCustodia?: Array<{ ref: string; desde: string }>;
   prueba?: boolean;
+  /** 20-10: equilibrio de CPA leído de config equilibrio_producto.Varios; sin dato → EQUILIBRIO_CPA. */
+  equilibrioCpa?: number | null;
 }
 
 const gs = (n: number) => `Gs ${Math.round(n).toLocaleString("es-PY")}`;
@@ -138,8 +140,9 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
     const desde7 = sumarDias(e.hoy, -6);
     const ped7 = validos.filter((p) => { const d = diaParaguay(p.creadoEn); return d >= desde7 && d <= e.hoy; }).length;
     const cpa7 = ped7 ? e.meta.gasto7d / ped7 : null;
-    l.push(`CPA últimos 7 días: ${cpa7 == null ? "—" : gs(cpa7)} · equilibrio ~${EQUILIBRIO_CPA.toLocaleString("es-PY")} ${cpa7 != null && cpa7 <= EQUILIBRIO_CPA ? "✅" : "⚠️"}`);
-    if (cpa7 != null && cpa7 > EQUILIBRIO_CPA) alertas.push(`CPA 7 días ${gs(cpa7)} (arriba del equilibrio)`);
+    const eq = e.equilibrioCpa ?? EQUILIBRIO_CPA;
+    l.push(`CPA últimos 7 días: ${cpa7 == null ? "—" : gs(cpa7)} · equilibrio ~${eq.toLocaleString("es-PY")} ${cpa7 != null && cpa7 <= eq ? "✅" : "⚠️"}`);
+    if (cpa7 != null && cpa7 > eq) alertas.push(`CPA 7 días ${gs(cpa7)} (arriba del equilibrio)`);
     // Web con poco gasto (regla de "rotura" si es el 2.º día seguido).
     const pctWeb = (cs: CampanaMeta[]) => {
       const w = cs.filter((c) => !esWa(c) && c.presupuesto);

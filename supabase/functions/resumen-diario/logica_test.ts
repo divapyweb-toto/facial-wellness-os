@@ -90,3 +90,10 @@ Deno.test("20-10 línea sin pin: cuenta sin pin, entregados y ubicación pendien
   assertEquals(t, "📍 Sin pin (14 días): 2 pedidos · 1 entregados · 1 con ubicación pendiente | Con pin: 1 · 0 entregados");
   assertEquals(lineaSinPin([ped("#3", [])], "2026-10-20"), null);
 });
+
+Deno.test("20-10: el equilibrio del resumen sale de la config (Varios) y, sin dato, del valor fijo 41.000", () => {
+  const con = armarResumen({ ...base, pedidos, meta, equilibrioCpa: 37500 }).texto;
+  assertStringIncludes(con, "equilibrio ~37.500");
+  const sin = armarResumen({ ...base, pedidos, meta, equilibrioCpa: null }).texto;
+  assertStringIncludes(sin, "equilibrio ~41.000");
+});

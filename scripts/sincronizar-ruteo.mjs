@@ -9,6 +9,8 @@
 //                     src/lib/config.js; tarifario de Lucero vacío = el de fábrica de transportadoras.js).
 //   './cobranzaPaP' → './cobranzaPaP.js' (la copia de al lado).
 //   './recompra'    → solo familiaProducto, copiada tal cual (recompra.js trae Supabase y la tienda).
+//   './tarifasCourier' → caché "sin cargar" (20-10): la tabla de tarifas vive en la base y se carga en la web;
+//                     en las funciones rige el comportamiento de antes (flete plano, lista de cobertura del código).
 // Si transportadoras.js suma otro import, el script frena con un error en vez de generar una copia rota.
 //
 // Uso:  node scripts/sincronizar-ruteo.mjs              escribe las copias
@@ -72,6 +74,14 @@ function reemplazoImport(modulo, lista, fuentes) {
       getTarifasLuceroJSON: "const getTarifasLuceroJSON = () => '' // vacío = tarifario de fábrica (TARIFAS_LUCERO_INFO)",
     }
     return ['// [sincronizar-ruteo] en las Edge Functions no hay Config cargada: rigen los valores de fábrica.', ...lista.map((n) => shim[n])].join('\n')
+  }
+  if (modulo === './tarifasCourier') {
+    permitidos(['tarifaCourier', 'tarifasCourierCargadas'])
+    const shim = {
+      tarifaCourier: 'const tarifaCourier = () => null',
+      tarifasCourierCargadas: 'const tarifasCourierCargadas = () => false',
+    }
+    return ['// [sincronizar-ruteo] tarifas de la base (src/lib/tarifasCourier.js): en las funciones no se cargan, rige lo de antes.', ...lista.map((n) => shim[n])].join('\n')
   }
   if (modulo === './cobranzaPaP') return `import { ${lista.join(', ')} } from './cobranzaPaP.js'`
   if (modulo === './recompra') {

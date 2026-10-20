@@ -15,7 +15,7 @@ import { supabase } from './supabase'
 
 // Valores por defecto = los que estaban en el código.
 const DEFAULTS = {
-  flete_pap: 29000,
+  flete_pap: 29000, // 20-10-2026: solo respaldo; el flete real sale de tarifas_courier (src/lib/tarifasCourier.js)
   // Desde el 25/08/2026 el envío va INCLUIDO en el precio y no se cobra
   // aparte: el default tiene que ser 0, igual que la fila de `config`. Si
   // quedaba en 33000 y la carga de config fallaba, cada pedido nuevo salía

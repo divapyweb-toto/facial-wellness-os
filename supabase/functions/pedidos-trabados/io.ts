@@ -3,7 +3,7 @@ import { db } from "../_shared/db.ts";
 import { gql } from "../_shared/shopify.ts";
 import { enviarTexto } from "../_shared/wa.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { type Accion, coordenadasPin, direccionDesdeNota, type PedidoAbierto } from "./logica.ts";
+import { type Accion, claveCobertura, type Cobertura, coordenadasPin, direccionDesdeNota, type PedidoAbierto } from "./logica.ts";
 
 type Obj = Record<string, unknown>;
 const txt = (v: unknown) => (typeof v === "string" ? v : "");
@@ -33,6 +33,28 @@ export async function pedidosAbiertos(ahora: Date): Promise<PedidoAbierto[]> {
       notas: [txt(r.note), ...attrs.map((a) => `${a.name ?? a.key ?? ""}: ${a.value ?? ""}`)].join("\n"),
     }];
   });
+}
+
+/**
+ * 20-10: cobertura contra entrega de cada ciudad según la rpc sugerir_courier (tabla tarifas_courier). Una llamada por
+ * ciudad distinta, en paralelo. Una ciudad cuya llamada falla queda fuera del mapa (logica.ts usa la lista vieja).
+ */
+export async function coberturaCiudades(ciudades: string[]): Promise<Map<string, Cobertura>> {
+  const unicas = [...new Set(ciudades.map(claveCobertura).filter(Boolean))];
+  const mapa = new Map<string, Cobertura>();
+  await Promise.all(unicas.map(async (ciudad) => {
+    try {
+      const { data, error } = await db().rpc("sugerir_courier", { p_ciudad: ciudad, p_cod: true });
+      if (error) throw new Error(error.message);
+      const r = (data ?? {}) as Obj;
+      if (typeof r.sin_cobertura === "boolean" && typeof r.ciudad_reconocida === "boolean") {
+        mapa.set(ciudad, { sin_cobertura: r.sin_cobertura, ciudad_reconocida: r.ciudad_reconocida });
+      }
+    } catch (e) {
+      console.warn(`pedidos-trabados: sugerir_courier('${ciudad}') falló, uso la lista vieja:`, e instanceof Error ? e.message : e);
+    }
+  }));
+  return mapa;
 }
 
 export const idCandadoAuto = (accion: Accion, orderId: number) => `auto_${accion}:${orderId}`;

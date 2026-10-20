@@ -20,6 +20,7 @@
 import { getFlete, getTarifasLuceroJSON } from './config'
 import { tieneCobranzaPaP, emparejarCiudad, normalizarCiudadPaP, CIUDADES_PAP_LISTA } from './cobranzaPaP'
 import { familiaProducto } from './recompra'
+import { tarifaCourier, tarifasCourierCargadas } from './tarifasCourier'
 
 export const TRANSPORTADORAS = {
   pap: {
@@ -290,32 +291,68 @@ export function ciudadLucero(ciudad) {
   return emparejarCiudad(ciudad, Object.keys(infoLucero()))
 }
 
-// ¿La transportadora hace COD en esta ciudad?
+// 20-10: ¿PaP lleva un pedido a esta ciudad? Con la tabla de tarifas cargada (tarifasCourier.js) manda la tabla:
+// contra entrega solo donde aplica_cobranza = true (la lista del código daba como "con cobranza" Ayolas, Choré,
+// San José de los Arroyos y San Juan Nepomuceno, y se perdió un pedido). Pago anticipado: alcanza con que PaP llegue.
+// Ciudad fuera de la tabla → la lista vieja de respaldo, salvo que la ciudad que esa lista reconoce figure en la
+// tabla sin cobranza. Sin tabla cargada → la lista vieja, como antes.
+function cubrePaP(ciudad, cod) {
+  if (!tarifasCourierCargadas()) return tieneCobranzaPaP(ciudad)
+  const t = tarifaCourier('pap', ciudad)
+  if (t && !t.estimado) return cod ? t.cobranza === true : true
+  const vieja = emparejarCiudad(ciudad, CIUDADES_PAP_LISTA)
+  if (!vieja) return false
+  const tv = tarifaCourier('pap', vieja)
+  return tv && !tv.estimado ? (cod ? tv.cobranza === true : true) : true
+}
+
+// ¿La transportadora puede llevar el pedido a esta ciudad?
+// cod = contra entrega (default). Con cod=false (ya pagado) PaP vale también donde llega sin cobranza.
 // 'otra' no tiene lista de cobertura propia: es el catch-all manual, así que
 // siempre "cubre" — la decisión de si sirve para esa ciudad la hace el admin,
 // no el sistema.
-export function cubre(transportadora, ciudad) {
+export function cubre(transportadora, ciudad, { cod = true } = {}) {
   if (transportadora === 'otra') return true
-  if (transportadora === 'lucero') return ciudadLucero(ciudad) != null
-  return tieneCobranzaPaP(ciudad)
+  if (transportadora === 'lucero') {
+    if (ciudadLucero(ciudad) != null) return true
+    const t = tarifasCourierCargadas() ? tarifaCourier('lucero', ciudad) : null
+    return t != null && (!cod || t.cobranza === true)
+  }
+  return cubrePaP(ciudad, cod)
 }
 
-// Tarifa de esa transportadora para esa ciudad.
-// PaP: tarifa plana editable en Config. Lucero: por ciudad. 'otra': no hay
-// tarifa conocida — el admin la carga a mano en Despacho.
-// Devuelve null si la transportadora no cubre la ciudad, o si es 'otra'.
-export function tarifaDe(transportadora, ciudad) {
+// Tarifa de esa transportadora para esa ciudad, con la marca de si es estimada.
+// → { precio, estimado } | null. 'otra': no hay tarifa conocida — el admin la carga a mano en Despacho.
+// 20-10: con la tabla de tarifas cargada, PaP = precio de su ciudad (o de su zona, estimado, si la ciudad no está);
+// Lucero = tabla primero y después el tarifario de Config/fábrica. Sin tabla: PaP plano de Config (estimado: no es
+// el precio de esa ciudad), solo si la lista vieja la cubre — como antes.
+export function tarifaDetalle(transportadora, ciudad) {
   if (transportadora === 'otra') return null
   if (transportadora === 'lucero') {
+    const t = tarifasCourierCargadas() ? tarifaCourier('lucero', ciudad) : null
+    if (t) return { precio: t.precio, estimado: false }
     const c = ciudadLucero(ciudad)
-    return c ? (infoLucero()[c]?.[0] ?? null) : null
+    const p = c ? (infoLucero()[c]?.[0] ?? null) : null
+    return p != null ? { precio: p, estimado: false } : null
   }
-  return tieneCobranzaPaP(ciudad) ? getFlete() : null
+  if (tarifasCourierCargadas()) {
+    const t = tarifaCourier('pap', ciudad)
+    return t ? { precio: t.precio, estimado: !!t.estimado } : { precio: getFlete(), estimado: true }
+  }
+  return tieneCobranzaPaP(ciudad) ? { precio: getFlete(), estimado: true } : null
 }
 
-// Transportadoras que pueden llevar un pedido a esa ciudad.
-export function transportadorasDisponibles(ciudad) {
-  return IDS_TRANSPORTADORA.filter(id => cubre(id, ciudad))
+// Solo el precio (null si no hay tarifa conocida, o si es 'otra').
+export function tarifaDe(transportadora, ciudad) {
+  return tarifaDetalle(transportadora, ciudad)?.precio ?? null
+}
+
+// ¿El flete de esa transportadora en esa ciudad es estimado? (se guarda en ventas.flete_estimado)
+export const fleteEstimado = (transportadora, ciudad) => !!tarifaDetalle(transportadora, ciudad)?.estimado
+
+// Transportadoras que pueden llevar un pedido a esa ciudad (cod: ver cubre).
+export function transportadorasDisponibles(ciudad, opciones = {}) {
+  return IDS_TRANSPORTADORA.filter(id => cubre(id, ciudad, opciones))
 }
 
 
@@ -444,45 +481,50 @@ export function preferirLucero(fecha = hoyParaguay()) {
 // Regla vigente: Lucero si cubre la ciudad Y su tarifa es ≤ 30.000
 // (más barato o +1.000 compensado por cobrar 6 días antes).
 // En las de 35.000 y en todo lo que Lucero no cubre, va PaP.
-// Devuelve { transportadora, motivo } — el motivo se muestra en Despacho
+// Devuelve { transportadora, motivo, tarifa, fleteEstimado } — el motivo se muestra en Despacho
 // para que la decisión sea auditable y no una caja negra.
-export function sugerirTransportadora(ciudad, productoNombre = '') {
+// 20-10: cod=false (pedido ya pagado) deja usar PaP donde llega sin cobranza; contra entrega, nunca.
+// La tarifa sale de tarifaDetalle (tabla de tarifas si cargó; si no, como antes).
+export function sugerirTransportadora(ciudad, productoNombre = '', { cod = true } = {}) {
+  const conTarifa = (r) => {
+    const d = r.transportadora ? tarifaDetalle(r.transportadora, ciudad) : null
+    return { ...r, tarifa: d?.precio ?? null, fleteEstimado: !!d?.estimado }
+  }
   // Regla de producto: pisa la comparación de tarifa/velocidad por completo.
   // Si la transportadora forzada no cubre la ciudad, NO se cae a otra
   // automáticamente — queda sin asignar, bloqueado, para que el admin decida.
   const forzada = transportadoraForzada(productoNombre)
   if (forzada) {
-    if (cubre(forzada, ciudad)) {
-      return {
+    if (cubre(forzada, ciudad, { cod })) {
+      return conTarifa({
         transportadora: forzada,
         motivo: `Regla de producto: solo despacha por ${labelTransportadora(forzada)}`,
-        tarifa: tarifaDe(forzada, ciudad),
         velocidad: forzada === 'lucero' ? velocidadLucero(ciudadLucero(ciudad)) : null,
         bloqueadoPorProducto: false,
-      }
+      })
     }
     return {
       transportadora: null,
       motivo: `Este producto solo despacha por ${labelTransportadora(forzada)} y no cubre esta ciudad — requiere decisión manual`,
-      tarifa: null, velocidad: null,
+      tarifa: null, fleteEstimado: false, velocidad: null,
       bloqueadoPorProducto: true,
     }
   }
 
   const cL = ciudadLucero(ciudad)
-  const hayPaP = tieneCobranzaPaP(ciudad)
-  const flete = getFlete()
+  const hayLucero = cubre('lucero', ciudad, { cod })
+  const hayPaP = cubre('pap', ciudad, { cod })
+  const flete = tarifaDe('pap', ciudad) ?? getFlete()
 
   // ── Preferencia temporal por Lucero (lluvia) ──
   // Después de la regla de producto y ANTES de la lista oficial: esos días, todo lo que Lucero cubre va por Lucero.
-  if (cL && preferirLucero()) {
-    return {
+  if (hayLucero && preferirLucero()) {
+    return conTarifa({
       transportadora: 'lucero',
       motivo: 'Hoy por lluvia: Lucero en toda ciudad que cubre',
-      tarifa: tarifaDe('lucero', ciudad),
       velocidad: velocidadLucero(cL),
       bloqueadoPorProducto: false,
-    }
+    })
   }
 
   // ── La lista oficial manda ──
@@ -490,50 +532,53 @@ export function sugerirTransportadora(ciudad, productoNombre = '') {
   // ANTES de la comparación de costo: si vos ya definiste quién lleva esa
   // ciudad, no hay nada que comparar.
   const oficial = ruteoOficial(ciudad)
-  if (oficial === 'lucero' && cL) {
-    return {
+  if (oficial === 'lucero' && hayLucero) {
+    return conTarifa({
       transportadora: 'lucero',
       motivo: 'Asignada a Lucero en la lista oficial de ciudades',
-      tarifa: infoLucero()[cL]?.[0] ?? null,
       velocidad: velocidadLucero(cL),
-    }
+    })
   }
   if (oficial === 'pap' && hayPaP) {
-    return { transportadora: 'pap', motivo: 'Asignada a PaP en la lista oficial de ciudades', tarifa: flete, velocidad: null }
+    return conTarifa({ transportadora: 'pap', motivo: 'Asignada a PaP en la lista oficial de ciudades', velocidad: null })
   }
 
-  if (cL) {
-    const tarifa = infoLucero()[cL]?.[0]
+  if (hayLucero) {
+    const tarifa = tarifaDe('lucero', ciudad)
     const vel = velocidadLucero(cL)
     const dif = tarifa - flete
     const rapida = vel === 'diaria' || vel === 'frecuente'
 
     if (!hayPaP) {
-      return { transportadora: 'lucero', motivo: 'PaP no cubre esta ciudad', tarifa, velocidad: vel }
+      return conTarifa({ transportadora: 'lucero', motivo: 'PaP no cubre esta ciudad', velocidad: vel })
     }
     if (dif < 0) {
-      return {
+      return conTarifa({
         transportadora: 'lucero',
         motivo: `${Math.abs(dif).toLocaleString('es-PY')} más barato que PaP${rapida ? ' y más rápido' : ''}`,
-        tarifa, velocidad: vel,
-      }
+        velocidad: vel,
+      })
     }
     if (dif <= SOBREPRECIO_ACEPTABLE && rapida) {
-      return {
+      return conTarifa({
         transportadora: 'lucero',
         motivo: dif === 0 ? 'Misma tarifa y rinde al día siguiente' : `+${dif.toLocaleString('es-PY')} pero entrega ${vel === 'diaria' ? 'en 24hs' : 'en 24-48hs'} y rinde al día siguiente`,
-        tarifa, velocidad: vel,
-      }
+        velocidad: vel,
+      })
     }
     // Más caro de lo aceptable, o lento: va PaP.
     const porQue = vel === 'programada'
       ? `Lucero sale ${tarifa.toLocaleString('es-PY')} y entrega 1-2 veces por semana`
       : `Lucero sale +${dif.toLocaleString('es-PY')} acá — no compensa`
-    return { transportadora: 'pap', motivo: porQue, tarifa: flete, velocidad: null }
+    return conTarifa({ transportadora: 'pap', motivo: porQue, velocidad: null })
   }
 
-  if (hayPaP) return { transportadora: 'pap', motivo: 'Lucero no cubre esta ciudad', tarifa: flete, velocidad: null }
-  return { transportadora: null, motivo: 'Ninguna transportadora cubre esta ciudad', tarifa: null, velocidad: null }
+  if (hayPaP) return conTarifa({ transportadora: 'pap', motivo: 'Lucero no cubre esta ciudad', velocidad: null })
+  return {
+    transportadora: null,
+    motivo: 'Ninguna transportadora cubre esta ciudad',
+    tarifa: null, fleteEstimado: false, velocidad: null,
+  }
 }
 
 // Nombre de ciudad tal cual lo espera la planilla de Lucero.
@@ -561,12 +606,13 @@ export function ciudadesConocidas() {
 
 // Info de cobertura de una ciudad, para mostrar el efecto de la corrección
 // antes de guardarla.
-export function coberturaCiudad(ciudad) {
+export function coberturaCiudad(ciudad, opciones = {}) {
   const cL = ciudadLucero(ciudad)
+  const lucero = cubre('lucero', ciudad, opciones)
   return {
-    pap: tieneCobranzaPaP(ciudad),
-    lucero: cL != null,
-    tarifaLucero: cL ? (infoLucero()[cL]?.[0] ?? null) : null,
+    pap: cubre('pap', ciudad, opciones),
+    lucero,
+    tarifaLucero: lucero ? tarifaDe('lucero', ciudad) : null,
     velocidadLucero: cL ? velocidadLucero(cL) : null,
   }
 }

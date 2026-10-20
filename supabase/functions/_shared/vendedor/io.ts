@@ -5,6 +5,7 @@ import { direccionUtilizable } from "../../pedidos-trabados/logica.ts";
 import { unirReferencia } from "./herramientas.ts";
 import { depsPedidosWebReales } from "./pedidos_web_io.ts";
 import { db } from "../db.ts";
+import { cargarTarifasCourier } from "../plazo_zona.ts";
 import { llamarClaude } from "../claude.ts";
 import { gql } from "../shopify.ts";
 import { avisar } from "../telegram.ts";
@@ -339,6 +340,7 @@ const versionActiva = crearCacheVersion(async (): Promise<FilaVersion | null> =>
 });
 
 export const depsOrquestadorReales: DepsOrquestador = {
+  cargarTarifasCourier: () => cargarTarifasCourier(db()),
   async config() {
     if (cacheConfig && cacheConfig.hasta > Date.now()) return cacheConfig.cfg;
     const { data, error } = await db().from("config_wa").select("clave,valor").in("clave", [...CLAVES_CONFIG_VENDEDOR]);

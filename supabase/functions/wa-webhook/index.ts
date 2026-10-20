@@ -15,6 +15,7 @@ import { transcribirAudio } from "../_shared/transcripcion.ts";
 import { resolverLinkMapas } from "../_shared/link_mapas.ts";
 import { registrarBaja } from "../recompra/baja.ts";
 import { ofrecerCobroQR } from "../pago-qr-webhook/io.ts";
+import { cargarTarifasCourier } from "../_shared/plazo_zona.ts";
 import { type Deps, manejarRequest, type MensajeMeta, type Pedido } from "./procesar.ts";
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
@@ -463,8 +464,10 @@ export const depsReales: Deps = {
   },
 };
 
-Deno.serve((req) =>
-  manejarRequest(req, depsReales, {
+// 20-10: plazos con la tabla de tarifas por courier (caché de 10 min; nunca lanza, tope 4 s; si falla, los de siempre).
+Deno.serve(async (req) => {
+  await cargarTarifasCourier(db());
+  return manejarRequest(req, depsReales, {
     verifyToken: Deno.env.get("WA_VERIFY_TOKEN") ?? "",
     appSecret: Deno.env.get("WA_APP_SECRET") ?? "",
     verificarFirma: verificarFirmaMeta,
@@ -472,5 +475,5 @@ Deno.serve((req) =>
       if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(p);
       else p.catch((e) => console.error(e));
     },
-  })
-);
+  });
+});

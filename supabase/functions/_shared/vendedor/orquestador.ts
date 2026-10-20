@@ -129,6 +129,8 @@ export type DepsOrquestador = {
   /** Azar en [0,1) para la variación del ritmo y las variantes fijas (tests: determinista). */
   aleatorio?: () => number;
   marcarLeidoYEscribiendo(waMessageId: string): Promise<unknown>;
+  /** 20-10: carga/refresca la tabla de tarifas por courier (plazo_zona.cargarTarifasCourier). Ausente = plazos de siempre. */
+  cargarTarifasCourier?(): Promise<unknown>;
   llamarModelo(p: PedidoClaude): Promise<RespuestaClaude>;
   dormir(ms: number): Promise<void>;
   ahora(): Date;
@@ -292,6 +294,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   const inicio = deps.ahora().getTime();
   const conv0 = await deps.conversacion(entrada.conversacion_id);
   if (!conv0 || conv0.estado !== "ia") return { accion: "omitido", motivo: "conversacion_no_esta_en_ia" };
+  await deps.cargarTarifasCourier?.().catch(() => {}); // 20-10: plazos con la tabla de tarifas (si falla, los de siempre)
   const cfg = await deps.config();
   const v = cfg.vendedor;
   const azar = () => deps.aleatorio?.() ?? Math.random();

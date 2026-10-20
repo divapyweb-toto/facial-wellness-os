@@ -92,6 +92,17 @@ export async function entrega7d(desde7Iso: string, desde14Iso: string): Promise<
 }
 
 /** Anuncios marcados 'cansado' en el libro de creativos (vista libro_creativos). */
+/** 20-10: equilibrio general (clave "Varios" de config equilibrio_producto, con flete real por courier y ciudad). */
+export async function equilibrioGeneral(): Promise<number | null> {
+  const { data } = await db().from("config").select("valor").eq("clave", "equilibrio_producto").maybeSingle();
+  try {
+    const v = Number(JSON.parse(String(data?.valor ?? "{}")).Varios);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function cansados(): Promise<Array<{ anuncio: string; canal: string; caidaPct: number | null }>> {
   const { data, error } = await db().from("libro_creativos").select("anuncio,canal,caida_pct").eq("estado", "cansado").order("gasto", { ascending: false }).limit(5);
   if (error) throw new Error(`libro_creativos: ${error.message}`);

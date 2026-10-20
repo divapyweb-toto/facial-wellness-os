@@ -391,8 +391,8 @@ function ReglasNegocio() {
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           Tarifa de Punto a Punto. Se usa como respaldo cuando una venta no tiene su propio costo, y en reportes.
         </p>
-        <Campo {...pc} clave="flete_pap" label="Flete PaP" sufijo="Gs. por paquete"
-          ayuda="El día que PaP cambie la tarifa, la cambiás acá y listo — sin tocar código." />
+        <Campo {...pc} clave="flete_pap" label="Flete PaP (solo respaldo)" sufijo="Gs. por paquete"
+          ayuda="Desde el 20-10-2026 ya NO se usa para calcular: el flete sale de la tabla tarifas_courier (precio por courier y ciudad, editable en la base). Este valor solo rige si esa tabla no carga." />
       </div>
 
       <div className="card" style={{ padding: '16px 20px' }}>

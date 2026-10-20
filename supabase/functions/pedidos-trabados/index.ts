@@ -5,8 +5,8 @@
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { db } from "../_shared/db.ts";
 import { marcarPreparado } from "../_shared/shopify_preparar.ts";
-import { cancelarEnShopify, candadosTomados, ejecutar, etiqueta, idCandadoAuto, pedidosAbiertos, registrarError, tomarCandado } from "./io.ts";
-import { accionesPara } from "./logica.ts";
+import { cancelarEnShopify, candadosTomados, coberturaCiudades, ejecutar, etiqueta, idCandadoAuto, pedidosAbiertos, registrarError, tomarCandado } from "./io.ts";
+import { accionesPara, necesitaCobertura } from "./logica.ts";
 import { avisoRutaPap } from "./aviso_ruta_pap.ts";
 
 type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean; preparar?: boolean };
@@ -15,10 +15,12 @@ async function automatico(simular: boolean) {
   const ahora = new Date();
   const pedidos = await pedidosAbiertos(ahora);
   const tomados = await candadosTomados(pedidos.map((p) => p.shopifyOrderId));
+  // 20-10: cobertura contra entrega desde la tabla de tarifas (rpc sugerir_courier), solo de las ciudades que importan.
+  const coberturas = await coberturaCiudades(pedidos.filter(necesitaCobertura).map((p) => p.ciudad));
   const hechos: Array<{ pedido: string; accion: string; ok: boolean; error?: string }> = [];
   for (const p of pedidos) {
     const puse = tomados.has(idCandadoAuto("agregar_faltan_datos", p.shopifyOrderId));
-    for (const a of accionesPara(p, ahora, puse)) {
+    for (const a of accionesPara(p, ahora, puse, coberturas)) {
       const id = idCandadoAuto(a, p.shopifyOrderId);
       if (tomados.has(id)) continue; // ya se hizo una vez: si alguien lo deshizo a mano, se respeta
       if (simular) {

@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import { useAuth } from './lib/AuthContext'
 import { ToastProvider } from './lib/toast'
 import { cargarConfig } from './lib/config'
+import { cargarTarifasCourier } from './lib/tarifasCourier'
 import Layout from './components/layout/Layout'
 import LoginPage from './pages/auth/LoginPage'
 // Páginas más usadas: carga directa (inicio instantáneo)
@@ -65,7 +66,8 @@ function PrivateRoute({ children }) {
 export default function App() {
   // Cargar la configuración central (flete, umbrales, ventanas, pago) una vez
   // al iniciar. Si falla, se usan los defaults y el sistema anda igual.
-  useEffect(() => { cargarConfig() }, [])
+  // 20-10: y las tarifas con cobranza por courier y ciudad (si falla, Despacho sigue con el flete plano de Config).
+  useEffect(() => { cargarConfig(); cargarTarifasCourier() }, [])
   // 11-10: cuando la app ya arrancó y está libre, baja en segundo plano las secciones más usadas,
   // así al tocarlas abren al instante (no compite con el primer pintado).
   useEffect(() => {
