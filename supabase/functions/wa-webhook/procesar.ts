@@ -970,6 +970,7 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
       if (copiaChat?.ok && copiaChat.ruta && esImagenVisible(copiaChat.mime)) imagen = { ruta: copiaChat.ruta, mime: mimeBase(copiaChat.mime) };
       else texto = textoImagenNoVista(texto);
     }
+    await avisarHoraRetiro(deps, cliente.id, telefono, texto);
     texto = await conMarcaDeAnuncio(ctx, texto);
     texto = await conContextoRecompraFw(deps, telefono, texto);
     texto = await conPedidoAbierto(deps, cliente.id, telefono, texto);
@@ -1111,6 +1112,30 @@ export async function reactivarPedido(ctx: Ctx, orderId: string): Promise<void> 
  * bot no lo sabía: a "Dirección casa nro 4237" le contestó "¿Qué producto viste?". El "sí" lo sigue tomando el
  * webhook (esAceptacion → Confirmar); acá el vendedor se entera para corregir datos con actualizar_direccion.
  */
+/**
+ * 20-10 (Enrique, #1089): si le preguntamos a qué hora pasa a retirar y el cliente tiene un retiro abierto, su
+ * respuesta le llega a Enrique por Telegram con el número de pedido (el bot igual la atiende). Solo cuando el
+ * último mensaje nuestro es esa pregunta: después de que el bot responde, ya no se repite.
+ */
+export async function avisarHoraRetiro(deps: Deps, clienteId: string, telefono: string | null, texto: string): Promise<boolean> {
+  try {
+    if (!deps.ultimoSalienteCliente || !texto.trim()) return false;
+    // Primero el retiro abierto (raro): solo ahí se mira el último mensaje nuestro.
+    const desde = new Date(deps.ahora().getTime() - 10 * 86_400_000).toISOString();
+    const conf = await deps.pedidosPorEstado(clienteId, telefono, "confirmado", desde);
+    const p = conf.find((x) => !(x.raw ?? {}).cancelled_at && (x.tags ?? []).some((g) => g.toUpperCase() === "RETIRO_EN_CASA"));
+    if (!p) return false;
+    const ult = await deps.ultimoSalienteCliente(clienteId);
+    const t = String(ult?.texto ?? "");
+    if (!/a qu[eé] hora/i.test(t) || !/retir/i.test(t)) return false;
+    await deps.avisar(`🕐 <b>Retiro ${p.nombre ?? p.shopify_order_id}</b>: le preguntamos a qué hora pasa y respondió:\n«${texto.slice(0, 300)}»`);
+    return true;
+  } catch (e) {
+    console.error("aviso hora retiro:", e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
 export async function conPedidoAbierto(deps: Deps, clienteId: string, telefono: string | null, texto: string): Promise<string> {
   try {
     const ahoraMs = deps.ahora().getTime();

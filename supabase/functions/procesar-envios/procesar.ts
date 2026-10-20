@@ -536,6 +536,9 @@ export interface Horario {
   proxima(d: Date, cfg: { desde: number; hasta: number }): Date;
 }
 
+/** 20-10: envío programado de texto libre (variables.texto). */
+export const PLANTILLA_TEXTO_LIBRE = "texto_libre";
+
 export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horario: Horario): Decision {
   const tipo = tipoEnvio(e);
   const estadoPedido = ctx.pedido?.estado_confirmacion ?? null;
@@ -568,6 +571,17 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
       : { accion: "cancelar", motivo: `pedido_${estadoPedido}` };
   }
 
+  // 20-10: texto libre programado (aprobado por Enrique caso por caso, ej. el recordatorio del retiro del #1089).
+  // Sale por el envío normal (queda en wa_mensajes) solo con la ventana de 24 h abierta; si se cerró, se cancela.
+  if (e.plantilla === PLANTILLA_TEXTO_LIBRE) {
+    const texto = String((e.variables as { texto?: unknown } | null)?.texto ?? "").trim();
+    if (!texto) return { accion: "fallar", motivo: "texto_libre_vacio" };
+    if (ctx.pedido && CANCELADOS.includes(estadoPedido ?? "")) return { accion: "cancelar", motivo: `pedido_${estadoPedido}` };
+    if (!ventanaAbierta(ctx.ultimaEntrada, ahora)) return { accion: "cancelar", motivo: "texto_libre_ventana_cerrada" };
+    const to = ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? null;
+    if (!to) return { accion: "fallar", motivo: "sin_destino" };
+    return { accion: "texto", to, texto };
+  }
   let nombre = nombrePlantilla(e.plantilla);
   let def = PLANTILLAS[nombre];
   if (!def) return { accion: "fallar", motivo: `plantilla_desconocida:${nombre}` };

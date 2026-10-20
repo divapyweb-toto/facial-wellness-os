@@ -630,3 +630,13 @@ Deno.test("13-10: después del reintento, a Enrique le llega el texto para reenv
   assertMatch(log.avisos[0], /Para reenviar a Lucero/);
   assertMatch(log.avisos[0], /volver a intentar/);
 });
+
+Deno.test("20-10 texto libre programado: con ventana abierta sale como texto; ventana cerrada o pedido cancelado → se cancela", () => {
+  const e = envio({ plantilla: "texto_libre", variables: { texto: "¡Buen día! Tu pack ya está listo para retirar." }, clave_unica: "texto_libre:prueba" });
+  const abierta = new Date(AHORA.getTime() - 3 * 3_600_000);
+  const d = decidir(e, ctx({ ultimaEntrada: abierta }, "confirmado"), cfg(), AHORA, horario);
+  assertEquals(d, { accion: "texto", to: "+595981000000", texto: "¡Buen día! Tu pack ya está listo para retirar." });
+  const cerrada = new Date(AHORA.getTime() - 30 * 3_600_000);
+  assertEquals(decidir(e, ctx({ ultimaEntrada: cerrada }, "confirmado"), cfg(), AHORA, horario).accion, "cancelar");
+  assertEquals(decidir(e, ctx({ ultimaEntrada: abierta }, "cancelado_cliente"), cfg(), AHORA, horario).accion, "cancelar");
+});
