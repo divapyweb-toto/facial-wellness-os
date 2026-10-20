@@ -102,9 +102,9 @@ Deno.test("20-10: alerta de CPA de 3 días de JawFlex sobre su equilibrio (con y
   const jaw = (nombre: string, creadoEn: string) => p({ nombre, creadoEn, lineas: [{ titulo: "Ejercitador de mandibula JawFlex Pro", cantidad: 1 }] });
   const conJaw = [...pedidos, jaw("#20", "2026-10-15T15:00:00Z"), jaw("#21", "2026-10-13T15:00:00Z")]; // #21 fuera de los 3 días
   const m = (g: number) => ({ ...meta, gasto3dPorProducto: { JawFlex: g, Raspador: 90000 } });
-  assertStringIncludes(armarResumen({ ...base, pedidos: conJaw, meta: m(70000), equilibrioJawFlex: 33000 }).texto, "CPA de 3 días de JawFlex Gs 70.000 > 33.000");
+  assertStringIncludes(armarResumen({ ...base, pedidos: conJaw, meta: m(70000), equilibrioJawFlex: 33000 }).texto, "CPA 3 días JawFlex Gs 70.000 > 33.000");
   assert(!armarResumen({ ...base, pedidos: conJaw, meta: m(30000), equilibrioJawFlex: 33000 }).texto.includes("JawFlex Gs"));
-  assertStringIncludes(armarResumen({ ...base, pedidos, meta: m(40000), equilibrioJawFlex: 33000 }).texto, "CPA de 3 días de JawFlex sin pedidos (gastó Gs 40.000) > 33.000");
+  assertStringIncludes(armarResumen({ ...base, pedidos, meta: m(40000), equilibrioJawFlex: 33000 }).texto, "CPA 3 días JawFlex sin pedidos (gastó Gs 40.000) > 33.000");
   assert(!armarResumen({ ...base, pedidos, meta: m(40000), equilibrioJawFlex: null }).texto.includes("JawFlex sin"));
 });
 
@@ -115,4 +115,16 @@ Deno.test("20-10: aviso único cuando PaP llega a 20 resueltos en 60 días", () 
   assert(!armarResumen({ ...base, pedidos, meta, pap60d: { resueltos: 19, tasa: 70 } }).papAviso);
   const ya = armarResumen({ ...base, pedidos, meta, pap60d: { resueltos: 25, tasa: 80 }, papAvisoYaDado: true });
   assert(!ya.papAviso && !ya.texto.includes("PaP ya tiene"));
+});
+
+Deno.test("20-10: JawFlex muestra el gasto de anuncios pausados; si los activos solos no pasan, va como aviso ℹ️", () => {
+  const jaw = (nombre: string) => p({ nombre, creadoEn: "2026-10-15T15:00:00Z", lineas: [{ titulo: "JawFlex Pro", cantidad: 1 }] });
+  const ped = [...pedidos, jaw("#30")];
+  const m = (g: number, pausado: number) => ({ ...meta, gasto3dPorProducto: { JawFlex: g }, gasto3dPausadoPorProducto: { JawFlex: pausado } });
+  const a = armarResumen({ ...base, pedidos: ped, meta: m(150959, 20000), equilibrioJawFlex: 33000 }).texto; // activos 130.959 > 33.000
+  assertStringIncludes(a, "⚠️ Alertas:");
+  assertStringIncludes(a, "CPA 3 días JawFlex Gs 150.959 > 33.000 · Gs 20.000 de anuncios ya pausados");
+  const b = armarResumen({ ...base, pedidos: ped, meta: m(150959, 130000), equilibrioJawFlex: 33000 }).texto; // activos 20.959 ≤ 33.000
+  assertStringIncludes(b, "ℹ️ CPA 3 días JawFlex Gs 150.959 > 33.000 · Gs 130.000 de anuncios ya pausados");
+  assert(!b.includes("⚠️ Alertas: CPA 3 días JawFlex") && !b.includes("· CPA 3 días JawFlex"));
 });

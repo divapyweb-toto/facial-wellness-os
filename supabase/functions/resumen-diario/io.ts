@@ -176,15 +176,30 @@ export async function leerMeta(hoy: string): Promise<DatosMeta> {
   }
   // 20-10: gasto de 3 días por producto (nombre del anuncio), para la alerta de CPA de JawFlex.
   let gasto3dPorProducto: Record<string, number> | undefined;
+  let gasto3dPausadoPorProducto: Record<string, number> | undefined;
   try {
-    const r = await get(`${GRAPH}/act_${CUENTA_VOLTRA}/insights?level=ad&fields=ad_name,spend&time_range=${rango(sumarDias(hoy, -2), hoy)}&limit=500`);
+    const r = await get(`${GRAPH}/act_${CUENTA_VOLTRA}/insights?level=ad&fields=ad_id,ad_name,spend&time_range=${rango(sumarDias(hoy, -2), hoy)}&limit=500`);
     gasto3dPorProducto = {};
-    for (const a of (r.data ?? []) as Obj[]) {
+    const filas = (r.data ?? []) as Obj[];
+    for (const a of filas) {
       const f = familia(String(a.ad_name));
       gasto3dPorProducto[f] = (gasto3dPorProducto[f] ?? 0) + n(a.spend);
+    }
+    // Anuncios activos hoy; el resto del gasto (pausados/archivados) se informa aparte. Si falla, no se separa.
+    try {
+      const act = await get(`${GRAPH}/act_${CUENTA_VOLTRA}/ads?fields=id&effective_status=${encodeURIComponent('["ACTIVE"]')}&limit=500`);
+      const activos = new Set(((act.data ?? []) as Obj[]).map((x) => String(x.id)));
+      gasto3dPausadoPorProducto = {};
+      for (const a of filas) {
+        if (activos.has(String(a.ad_id))) continue;
+        const f = familia(String(a.ad_name));
+        gasto3dPausadoPorProducto[f] = (gasto3dPausadoPorProducto[f] ?? 0) + n(a.spend);
+      }
+    } catch (e) {
+      console.warn("resumen-diario anuncios activos:", e instanceof Error ? e.message : e);
     }
   } catch (e) {
     console.warn("resumen-diario gasto 3 días por producto:", e instanceof Error ? e.message : e);
   }
-  return { hoy: cHoy, ayer: cAyer, gasto7d: c7.reduce((s, c) => s + c.gasto, 0), gasto3dPorProducto, prueba };
+  return { hoy: cHoy, ayer: cAyer, gasto7d: c7.reduce((s, c) => s + c.gasto, 0), gasto3dPorProducto, gasto3dPausadoPorProducto, prueba };
 }

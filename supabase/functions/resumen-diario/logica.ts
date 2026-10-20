@@ -59,6 +59,8 @@ export interface DatosMeta {
   gasto7d: number;
   /** 20-10: gasto de los últimos 3 días (hoy incluido) por familia de producto, según el nombre del anuncio. */
   gasto3dPorProducto?: Record<string, number>;
+  /** 20-10: parte de ese gasto que viene de anuncios que hoy NO están activos (pausados/archivados). */
+  gasto3dPausadoPorProducto?: Record<string, number>;
   prueba: { gasto: number; mejor: { nombre: string; ctr: number | null; inicios: number; compras: number } | null } | null;
 }
 export interface Entrada {
@@ -139,6 +141,7 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
   l.push(`Unidades: ${unidades} · Facturado: ${gs(facturado)}`, "");
 
   const alertas: string[] = [];
+  const avisosInfo: string[] = [];
   if (!e.meta) {
     l.push("Meta hoy: Meta no respondió (sin gasto ni CPA)");
   } else {
@@ -163,8 +166,14 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
       }).length;
       const cpaJaw = pedJaw ? gastoJaw / pedJaw : null;
       if (cpaJaw == null ? gastoJaw > eqJaw : cpaJaw > eqJaw) {
-        alertas.push(`CPA de 3 días de JawFlex ${cpaJaw == null ? `sin pedidos (gastó ${gs(gastoJaw)})` : gs(cpaJaw)} > ${eqJaw.toLocaleString("es-PY")}`);
-      }
+        const pausado = e.meta.gasto3dPausadoPorProducto?.JawFlex;
+        const sufijo = pausado != null && pausado > 0 ? ` · ${gs(pausado)} de anuncios ya pausados` : "";
+        const txt = `CPA 3 días JawFlex ${cpaJaw == null ? `sin pedidos (gastó ${gs(gastoJaw)})` : gs(cpaJaw)} > ${eqJaw.toLocaleString("es-PY")}${sufijo}`;
+        // Si los anuncios activos solos no pasan el equilibrio, es un aviso (ℹ️), no una alerta (⚠️).
+        const activo = pausado != null ? gastoJaw - pausado : null;
+        const activosPasan = activo == null ? true : (pedJaw ? activo / pedJaw > eqJaw : activo > eqJaw);
+        if (activosPasan) alertas.push(txt); else avisosInfo.push(txt);
+    }
     }
     // Web con poco gasto (regla de "rotura" si es el 2.º día seguido).
     const pctWeb = (cs: CampanaMeta[]) => {
@@ -216,6 +225,7 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
     if (s.stock < tope) alertas.push(`${f === "Otros" ? escaparHtml(s.nombre) : f}: ${s.stock} unidades`);
   }
   if (alertas.length) l.push("", `⚠️ Alertas: ${alertas.join(" · ")}`);
+  for (const a of avisosInfo) l.push(alertas.length ? `ℹ️ ${a}` : `\nℹ️ ${a}`);
   // 20-10: una sola vez, cuando PaP junta 20 pedidos resueltos en 60 días.
   const papAviso = !e.papAvisoYaDado && !!e.pap60d && e.pap60d.resueltos >= PAP_RESUELTOS_REVISAR;
   if (papAviso) {
