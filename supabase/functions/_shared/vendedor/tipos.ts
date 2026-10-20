@@ -79,6 +79,8 @@ export type ConfigTurno = {
   envio: EnvioVendedor;
   glosario: EntradaGlosario[];
   fichas: Record<string, FichaCfg>;
+  /** 21-10: dirección, días y horario del retiro en CDE + a quién escribir antes (config_wa.vendedor_retiro, texto). */
+  retiro?: string | null;
   afirmaciones: string[];
   aceptaciones: string[];
   prohibidas: string[];
@@ -166,6 +168,8 @@ export type DatosPedidoChat = {
   ubicacionPendiente?: boolean;
   /** 21-10: 2 productos distintos, 1 de cada, a precio de lista y envío 0 (etiqueta OFERTA_2_DISTINTOS). */
   oferta2Distintos?: boolean;
+  /** 21-10: color que eligió el cliente (va a la nota del pedido). */
+  color?: string;
   /** 13-10: entrega programada que pidió el cliente ("YYYY-MM-DD", Asunción) y franja opcional ("antes de las 12"). */
   entregaProgramada?: { fecha: string; franja: string | null };
   telefono: string;

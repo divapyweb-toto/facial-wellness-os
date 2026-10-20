@@ -15,7 +15,7 @@ import {
   TAG_PRIORIDAD,
   textoOfertaPrioridad,
 } from "../_shared/pago_anticipado.ts";
-import { deducirProductoAnuncio, marcaAnuncio, type ReferralMeta } from "../_shared/anuncios.ts";
+import { deducirProductoAnuncio, marcaAnuncio, marcaTextoAnuncio, textoDelAnuncio, type ReferralMeta } from "../_shared/anuncios.ts";
 import { detectarLinkMapas, type LinkMapas, textoLinkMapas } from "../_shared/link_mapas.ts";
 import { enlaceWaMe, escaparHtml } from "../_shared/telegram_formato.ts";
 import {
@@ -1207,8 +1207,10 @@ export async function conMarcaDeAnuncio(
     const mapeo = await deps.config("anuncios_producto");
     const p = deducirProductoAnuncio({ adId, referral, mapeo });
     if (!p) return texto;
-    const marca = marcaAnuncio(p);
-    if (texto.includes(marca)) return texto;
+    const texAnuncio = textoDelAnuncio(referral);
+    // 21-10: debajo de la marca, lo que prometió el anuncio (el vendedor arranca con ESA promesa).
+    const marca = texAnuncio ? `${marcaAnuncio(p)}\n${marcaTextoAnuncio(texAnuncio)}` : marcaAnuncio(p);
+    if (texto.includes(marcaAnuncio(p))) return texto;
     await deps.completarContenidoMensaje(m.id, { marca_anuncio: marca, producto_anuncio: p.handle, producto_anuncio_fuente: p.fuente }).catch(() => {});
     return `${marca}\n${texto}`;
   } catch (e) {

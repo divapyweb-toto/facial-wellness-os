@@ -87,7 +87,8 @@ Deno.test("anuncio: primer mensaje con referral del mapeo → marca + texto, gua
 Deno.test("anuncio: id fuera del mapeo → palabras del headline/body; sin pistas → texto tal cual", async () => {
   const a = mock({ mapeo: {} });
   await procesarMensaje(hola({ referral: { source_id: "999", headline: "Dormí con la boca cerrada", body: "Parches bucales Gudair" } }), contacto, a.deps);
-  assertEquals(a.st.pasados[0].texto, "[vino del anuncio de parches bucales, handle parches-bucales-gudair-30-unidades]\n¡Hola! Quiero más información");
+  // 21-10: debajo de la marca va lo que decía el anuncio (el gancho retoma esa promesa).
+  assertEquals(a.st.pasados[0].texto, "[vino del anuncio de parches bucales, handle parches-bucales-gudair-30-unidades]\n[el anuncio decía: \"Parches bucales Gudair\"]\n¡Hola! Quiero más información");
   const b = mock({ mapeo: {} });
   await procesarMensaje(hola({ referral: { source_id: "999", headline: "Oferta" } }), contacto, b.deps);
   assertEquals(b.st.pasados[0].texto, "¡Hola! Quiero más información");

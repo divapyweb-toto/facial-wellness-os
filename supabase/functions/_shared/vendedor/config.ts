@@ -24,6 +24,7 @@ export const CLAVES_CONFIG_VENDEDOR = [
   "aceptaciones",
   "palabras_prohibidas",
   "pago_anticipado",
+  "vendedor_retiro",
 ] as const;
 
 export const ACEPTACIONES_DEFAULT = ["si", "sí", "ok", "okay", "dale", "ya", "katu", "mandame katu", "si luego", "confirmo"];
@@ -100,6 +101,8 @@ export function armarConfigTurno(filas: Record<string, unknown>): { cfg: ConfigT
       : null, []);
   const fichas = tomar("vendedor_fichas", (v) => (esObj(v) ? v as ConfigTurno["fichas"] : null), {});
   const afirmaciones = tomar("vendedor_afirmaciones", listaStrings, []);
+  // 21-10: retiro en CDE. El teléfono de Enrique vive solo en la base (repo público).
+  const retiro = tomar<string | null>("vendedor_retiro", (v) => (typeof v === "string" && v.trim() ? v.trim() : esObj(v) && typeof v.texto === "string" ? v.texto : null), null);
   const promesasSalud = tomar("vendedor_promesas_salud", listaStrings, PROMESAS_SALUD_DEFAULT);
   const ofertas = tomar("vendedor_ofertas", (v) => (esObj(v) ? v as ConfigTurno["ofertas"] : null), {});
   const media = tomar("vendedor_media", (v) => (esObj(v) ? v as ConfigTurno["media"] : null), {});
@@ -147,7 +150,7 @@ export function armarConfigTurno(filas: Record<string, unknown>): { cfg: ConfigT
 
   return {
     cfg: {
-      vendedor, envio, glosario, fichas, afirmaciones, aceptaciones, prohibidas, promesasSalud, ofertas, media, textos, plantillaPrompt,
+      vendedor, envio, glosario, fichas, retiro, afirmaciones, aceptaciones, prohibidas, promesasSalud, ofertas, media, textos, plantillaPrompt,
       ritmo, respuestasFijas, estilo, transferencia,
     },
     faltantes: faltantes.filter((k) => k !== "vendedor_prompt" && k !== "pago_anticipado"),

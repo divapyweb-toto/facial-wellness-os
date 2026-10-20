@@ -65,6 +65,8 @@ export type Escenario = {
   cliente?: { nombre?: string; telefono?: string };
   /** Handle del producto del anuncio (click-to-WhatsApp): el webhook pone "[vino del anuncio de …, handle …]". */
   anuncio?: string;
+  /** 21-10: texto del anuncio (referral.body) tal como lo manda Meta. */
+  anuncio_texto?: string;
   /** Pedidos en la tienda (Shopify + shopify_pedidos), en memoria. */
   pedidos?: PedidoEscenario[];
   /** Pedido del bot ya creado en este chat (wa_pedidos_chat estado "creado"), por número de `pedidos`. */
@@ -331,6 +333,48 @@ export const ESCENARIOS: Escenario[] = [
     checks: [
       { paso: 1, tipo: "responde" },
       { tipo: "montos_catalogo" },
+      { tipo: "derivado", negar: true },
+    ],
+  },
+  // ─── 21-10 · v37: gancho según el anuncio, retiro y colores ───
+  {
+    nombre: "v37_gancho_anuncio_jawflex",
+    descripcion: "Anuncio del ejercitador ('lo masticás como un chicle, 15 minutos al día. 3 niveles') → el primer mensaje retoma esa promesa.",
+    cliente: { nombre: "Marcos Prueba", telefono: "+595981000401" },
+    anuncio: EJERCITADOR,
+    anuncio_texto: "Entrená tu mandíbula: lo masticás como un chicle, 15 minutos al día. 3 niveles. Escribinos por WhatsApp y te lo mandamos: 79.000",
+    pasos: ["¡Hola! Quiero más información"],
+    checks: [
+      { paso: 0, tipo: "texto", regex: /(chicle|mastic|15 minutos)/i, desc: "el gancho retoma lo que decía el anuncio" },
+      { paso: 0, tipo: "herramienta", nombre: "primer_turno" },
+      { tipo: "texto", regex: /%/, negar: true, desc: "sin porcentajes" },
+    ],
+  },
+  {
+    nombre: "v37_retiro_cde",
+    descripcion: "Pack: '¿dónde están? quiero pasar a buscar' → dirección, horario y pregunta qué día y hora; arma el pedido con retiro.",
+    cliente: { nombre: "Gustavo Prueba", telefono: "+595981000402" },
+    anuncio: "pack-gudair-tiras-nasales-parches-bucales",
+    ahora: "2026-10-21T13:00:00Z",
+    config: { retiro: "Área 1, Avenida Los Lapachos, Ciudad del Este · lunes a viernes de 8:00 a 16:00 (sábados y domingos no hay retiro) · antes de pasar, que le escriba a Enrique al 0990 000 000" },
+    pasos: ["Hola", "¿Dónde están ubicados? Soy de CDE y quiero pasar a buscar", "Mañana a las 10, me llamo Gustavo Prueba"],
+    checks: [
+      { paso: 1, tipo: "texto", regex: /Lapachos/i, desc: "da la dirección" },
+      { paso: 1, tipo: "texto", regex: /(8:00|8 a 16|16:00)/i, desc: "da el horario" },
+      { paso: 2, tipo: "herramienta", nombre: "crear_pedido_cod", desc: "arma el pedido para retirar", suave: true },
+      { tipo: "derivado", negar: true },
+    ],
+  },
+  {
+    nombre: "v37_colores_jawflex",
+    descripcion: "Ejercitador: 'Quiero 1' → no pregunta el color → '¿en qué colores viene?' → blanco, gris o negro → elige negro → va en el pedido.",
+    cliente: { nombre: "Lucas Prueba", telefono: "+595981000403" },
+    anuncio: EJERCITADOR,
+    pasos: ["Hola", "boton:Quiero 1", "¿En qué colores viene?", "Negro. Lucas Prueba, Luque, barrio Itapuamí", "boton:Confirmo"],
+    checks: [
+      { paso: 1, tipo: "texto", regex: /color/i, negar: true, desc: "no pregunta el color al pedir los datos" },
+      { paso: 2, tipo: "texto", regex: /blanco.*gris.*negro|gris.*negro/i, desc: "responde blanco, gris o negro" },
+      { paso: 4, tipo: "escritura", regex: /Color: negro/i, desc: "el color va en la nota del pedido", suave: true },
       { tipo: "derivado", negar: true },
     ],
   },

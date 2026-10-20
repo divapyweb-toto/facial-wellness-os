@@ -228,6 +228,7 @@ export const HERRAMIENTAS: Herramienta[] = [
         fecha_entrega: { type: "string", description: "Solo si el cliente pidió un día futuro: \"YYYY-MM-DD\". No puede ser antes del plazo (el sistema lo valida)." },
         franja_entrega: { type: "string", description: "Franja horaria que pidió, corta (\"antes de las 12\", \"de tarde\"). Opcional." },
         calle_de_pin: { type: "boolean", description: "true si la calle y la ciudad salieron del pin y el cliente tocó \"Sí, es ahí\"" },
+        color: { type: "string", description: "Solo si el cliente ELIGIÓ un color (ej. ejercitador negro). No lo preguntes vos." },
         ubicacion_pendiente: { type: "boolean", description: "true si solo dio la ciudad y, pedida una vez, no tiene o no mandó la calle o el barrio: el pedido sale igual y antes del despacho se le pide el dato." },
         items: {
           type: "array",
@@ -714,6 +715,7 @@ export function armarPedido(
       direccion: retiro ? "Retira en la oficina (CDE)" : (s("direccion") && !esSoloPin(s("direccion")) ? s("direccion") : s("ubicacion") ? "Pin de ubicación" : s("referencia") || (pendiente ? DIRECCION_PENDIENTE : "")),
       ...(pendiente && !(s("direccion") && !esSoloPin(s("direccion"))) && !s("referencia") ? { ubicacionPendiente: true } : {}),
       ...(oferta2 ? { oferta2Distintos: true } : {}),
+      ...(s("color") ? { color: s("color").slice(0, 40) } : {}),
       referencia: s("referencia") || null,
       ubicacion: s("ubicacion") || null,
       ...(input.calle_de_pin === true && s("ubicacion") ? { calleDePin: true } : {}),
@@ -766,6 +768,7 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
     notas.push(`Nombre: ${d.nombre}`, `Celular: ${d.telefono}`, `Ciudad: ${d.ciudad}`, `Calle: ${d.direccion}`);
     if (mapa) notas.push(`Mapa: ${mapa}`);
     if (d.referencia) notas.push(`Referencia: ${d.referencia}`);
+    if (d.color) notas.push(`Color: ${d.color}`);
   } else if (d.ubicacion) notas.push(`Ubicación: ${d.ubicacion}`);
   if (d.retiro) notas.push("Retira en la oficina de CDE, sin envío. Coordinar día y hora por WhatsApp.");
   if (d.factura) notas.push(`Factura: ${d.factura}`);

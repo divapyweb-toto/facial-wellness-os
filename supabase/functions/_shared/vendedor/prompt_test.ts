@@ -142,7 +142,8 @@ Deno.test("seed: ofertas ×2/×3 de tiras y parches, envío, ritmo, fijas y esti
   assertEquals(NIEGA_IA, NIEGA_IA_DEFAULT);
   assertEquals(URGENCIA_INVENTADA, URGENCIA_DEFAULT);
   const { cfg, faltantes } = armarConfigTurno(Object.fromEntries(f));
-  assertEquals(faltantes.filter((k) => k !== "aceptaciones" && k !== "palabras_prohibidas"), []);
+  // 21-10: vendedor_retiro vive solo en la base (lleva el teléfono de Enrique; el repo es público).
+  assertEquals(faltantes.filter((k) => k !== "aceptaciones" && k !== "palabras_prohibidas" && k !== "vendedor_retiro"), []);
   assertEquals(cfg.ritmo.max_s, 25);
   assertEquals(cfg.fichas["tiras-nasales-gudair-30-unidades"].beneficios?.length, 3);
 });

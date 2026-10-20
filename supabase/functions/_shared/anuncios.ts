@@ -87,6 +87,23 @@ export function marcaAnuncio(p: { handle: string; nombre: string }): string {
   return `[vino del anuncio de ${p.nombre}, handle ${p.handle}]`;
 }
 
+/**
+ * 21-10 (paquete 2, gancho según el anuncio): lo que prometió el anuncio que tocó el cliente, para que el primer
+ * mensaje retome ESA promesa. Sin porcentajes ni asteriscos (no se pueden repetir sin respaldo, Ley 1334 art. 39) y
+ * sin la parte de "Escribinos por WhatsApp…". null si el referral no trae texto útil.
+ */
+export function textoDelAnuncio(referral: ReferralMeta | null | undefined): string | null {
+  const body = String(referral?.body ?? "").replace(/\s+/g, " ").trim();
+  if (!body || /prueba e2e/i.test(body)) return null;
+  const sinCierre = body.split(/escrib[ií]nos|pedilo por whatsapp|pagás al recibir/i)[0];
+  const frases = sinCierre.split(/(?<=[.!?])\s+/).filter((f) => f.trim() && !/[%*]/.test(f));
+  const t = frases.join(" ").trim().slice(0, 180);
+  return t.length >= 8 ? t : null;
+}
+
+/** Segunda marca, debajo de la del anuncio: "[el anuncio decía: \"…\"]". */
+export const marcaTextoAnuncio = (t: string) => `[el anuncio decía: "${t.replace(/"/g, "'")}"]`;
+
 const RE_MARCA = /\[vino del anuncio de ([^\]]+?), handle ([a-z0-9-]+)\]/;
 
 /** Lee la marca de un texto (null si no tiene). */

@@ -38,7 +38,7 @@ import { LLAVES_PROMPT } from "../supabase/functions/_shared/vendedor/prompt.ts"
 import { extraerMontos, montosDeResultado } from "../supabase/functions/_shared/vendedor/filtro_salida.ts";
 import { _limpiarCacheCatalogo, itemsCatalogo } from "../supabase/functions/_shared/vendedor/herramientas.ts";
 import { textosVisibles } from "../supabase/functions/_shared/wa_interactivos.ts";
-import { marcaAnuncio, nombreDeHandle, productoDeMarca } from "../supabase/functions/_shared/anuncios.ts";
+import { marcaAnuncio, marcaTextoAnuncio, nombreDeHandle, productoDeMarca, textoDelAnuncio } from "../supabase/functions/_shared/anuncios.ts";
 import { conPedidoAbierto, textoDeMensaje, textoParaVendedor } from "../supabase/functions/wa-webhook/procesar.ts";
 import { db } from "../supabase/functions/_shared/db.ts";
 import { type Check, type Escenario, ESCENARIOS, type Paso, type PedidoEscenario } from "./escenarios-vendedor.ts";
@@ -502,8 +502,11 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
       const contenido: Record<string, unknown> = { ...m };
       const perfilProducto = (perfil as { producto?: string } | null)?.producto;
       if (esc.anuncio && (i === 0 || !perfilProducto)) {
-        const marca = marcaAnuncio({ handle: esc.anuncio, nombre: nombreDeHandle(esc.anuncio) });
-        if (!texto.includes(marca)) {
+        const base = marcaAnuncio({ handle: esc.anuncio, nombre: nombreDeHandle(esc.anuncio) });
+        // 21-10: como wa-webhook, el texto del anuncio (referral.body) va en una segunda marca, solo en el primer mensaje.
+        const tAnuncio = i === 0 ? textoDelAnuncio({ body: esc.anuncio_texto ?? "" }) : null;
+        const marca = tAnuncio ? `${base}\n${marcaTextoAnuncio(tAnuncio)}` : base;
+        if (!texto.includes(base)) {
           texto = `${marca}\n${texto}`;
           contenido.marca_anuncio = marca;
         }

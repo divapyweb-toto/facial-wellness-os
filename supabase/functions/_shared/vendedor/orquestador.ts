@@ -620,6 +620,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     envio: cfg.envio,
     afirmaciones: cfg.afirmaciones,
     aceptaciones: cfg.aceptaciones,
+    retiro: cfg.retiro ?? null,
   }, cfg.plantillaPrompt ?? undefined);
   const system: BloqueTexto[] = [
     { type: "text", text: promptBase },

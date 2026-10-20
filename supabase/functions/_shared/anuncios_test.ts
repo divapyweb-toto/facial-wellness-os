@@ -10,6 +10,7 @@ import {
   productoDeMarca,
   productoPorPalabras,
   PRODUCTOS_ANUNCIO,
+  textoDelAnuncio,
 } from "./anuncios.ts";
 
 const TIRAS = "tiras-nasales-gudair-30-unidades";
@@ -106,4 +107,11 @@ Deno.test("seed_anuncios.sql: los 15 anuncios del 07-10 con su producto y handle
   for (const h of Object.values(mapeo)) assert(h in PRODUCTOS_ANUNCIO, h);
   assert(sql.includes("on conflict (clave) do nothing;"));
   assert(/'::jsonb \|\| valor\s+where clave = 'anuncios_producto'/.test(sql));
+});
+
+Deno.test("21-10 textoDelAnuncio: sin porcentajes ni asteriscos, sin 'Escribinos…', null sin texto útil", () => {
+  assertEquals(textoDelAnuncio({ body: "Hasta 30 % más aire por la nariz*. Ayuda a reducir los ronquidos. Escribinos por WhatsApp y te lo mandamos: 30 tiras" }), "Ayuda a reducir los ronquidos.");
+  assertEquals(textoDelAnuncio({ body: "Entrená tu mandíbula: lo masticás como un chicle, 15 minutos al día. 3 niveles. Escribinos por WhatsApp" }), "Entrená tu mandíbula: lo masticás como un chicle, 15 minutos al día. 3 niveles.");
+  assertEquals(textoDelAnuncio({ body: "Prueba E2E" }), null);
+  assertEquals(textoDelAnuncio(null), null);
 });
