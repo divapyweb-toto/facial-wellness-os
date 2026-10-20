@@ -291,4 +291,47 @@ export const ESCENARIOS: Escenario[] = [
       { tipo: "derivado", negar: true },
     ],
   },
+  // ─── 21-10 · Oferta 2 productos distintos (interruptor prendido solo en la simulación) ───
+  {
+    nombre: "dos_distintos_deboh",
+    descripcion: "Caso Deboh: pregunta por el ejercitador y el parche y '¿y si quiero 1 de cada?' → 158.000 con envío gratis → arma el pedido con OFERTA_2_DISTINTOS.",
+    cliente: { nombre: "Debora Prueba", telefono: "+595981000301" },
+    anuncio: EJERCITADOR,
+    config: { vendedor: { oferta_2_distintos: true } },
+    pasos: ["Hola", "¿Cuánto sale el ejercitador? ¿Y el parche de boca?", "¿Y si quiero 1 de cada? ¿Igual me sale gratis el envío?", "Sí, dale. Debora Prueba, Ciudad del Este, barrio Boquerón, calle Itá", "boton:Confirmo"],
+    checks: [
+      { paso: 2, tipo: "texto", regex: /158\.000/, desc: "dice 158.000 por los 2 distintos" },
+      { paso: 2, tipo: "texto", regex: /191\.000|se paga aparte/i, negar: true, desc: "no cobra el envío aparte" },
+      { paso: 3, tipo: "herramienta", nombre: "crear_pedido_cod", desc: "arma el resumen con los 2" },
+      { paso: 4, tipo: "escritura", regex: /OFERTA_2_DISTINTOS/, desc: "el pedido sale con OFERTA_2_DISTINTOS" },
+      { tipo: "montos_catalogo" },
+      { tipo: "derivado", negar: true },
+    ],
+  },
+  {
+    nombre: "dos_distintos_ofrece_pareja",
+    descripcion: "Tiras: 'Quiero 1' → al pedir los datos ofrece UNA vez sumar el parche (pareja de sueño) por 158.000 con envío gratis.",
+    cliente: { nombre: "Laura Prueba", telefono: "+595981000302" },
+    anuncio: TIRAS,
+    config: { vendedor: { oferta_2_distintos: true } },
+    pasos: ["Hola", "boton:Quiero 1", "Laura Prueba, Luque, barrio San Antonio"],
+    checks: [
+      { paso: 1, tipo: "texto", regex: /(parche|158\.000)/i, desc: "ofrece sumar otro producto o el ×2", suave: true },
+      { paso: 2, tipo: "herramienta", nombre: "crear_pedido_cod" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "dos_distintos_apagada",
+    descripcion: "Con la oferta APAGADA (como hoy): '1 de cada' → envío aparte (sin inventar el 158.000 para 2 distintos).",
+    cliente: { nombre: "Rita Prueba", telefono: "+595981000303" },
+    anuncio: EJERCITADOR,
+    config: { vendedor: { oferta_2_distintos: false } },
+    pasos: ["Hola", "¿Y si quiero 1 ejercitador y 1 parche? ¿Me sale gratis el envío?"],
+    checks: [
+      { paso: 1, tipo: "responde" },
+      { tipo: "montos_catalogo" },
+      { tipo: "derivado", negar: true },
+    ],
+  },
 ];

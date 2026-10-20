@@ -10,6 +10,8 @@
 //   - Todo texto que el modelo pone dentro de un interactivo pasa por el mismo filtro que su respuesta.
 import { avisoParaCourier, datosCourierDesdeRaw } from "../texto_courier.ts";
 import { quitarPromesaRecontacto } from "./filtro_salida.ts";
+import { extrasVendedor } from "./config.ts";
+import { productoPorPalabras } from "../anuncios.ts";
 import { herramientasPedidosWeb } from "./pedidos_web.ts";
 import { digitoVerificadorRuc, normalizarRuc } from "../facturacion.ts";
 import type { Herramienta } from "../claude.ts";
@@ -136,6 +138,45 @@ const MENSAJE_CLIENTE: Record<string, string> = {
   direccion_dudosa: "Quiero coordinar la dirección de entrega.",
 };
 const MENSAJE_CLIENTE_DEFAULT = "Quiero hacer una consulta.";
+
+/** 21-10 (Enrique, 19-10): productos que entran en la oferta de 2 distintos. El pack queda afuera (ya es un combo). */
+export const HANDLES_2_DISTINTOS = new Set([
+  "raspador-de-lengua-de-acero-inoxidable", "tiras-nasales-gudair-30-unidades", "parches-bucales-gudair-30-unidades",
+  "ejercitador-de-mandibula-3-niveles", "botella-flexible-gudair-500-ml",
+]);
+/** Pareja sugerida por línea: sueño (tiras ↔ parches), boca (raspador), gym (ejercitador ↔ botella). */
+export const PAREJA_2_DISTINTOS: Record<string, string> = {
+  "tiras-nasales-gudair-30-unidades": "parches-bucales-gudair-30-unidades",
+  "parches-bucales-gudair-30-unidades": "tiras-nasales-gudair-30-unidades",
+  "ejercitador-de-mandibula-3-niveles": "botella-flexible-gudair-500-ml",
+  "botella-flexible-gudair-500-ml": "ejercitador-de-mandibula-3-niveles",
+  "raspador-de-lengua-de-acero-inoxidable": "tiras-nasales-gudair-30-unidades",
+};
+/** Texto y total de la oferta de 2 distintos para consultar_catalogo (total = 2 productos de la lista a su precio, envío 0). */
+export function oferta2DistintosInfo(items: ItemCatalogo[]) {
+  const disp = items.filter((i) => familia2Distintos(i.handle) && i.disponible);
+  const precio = disp.length ? Math.min(...disp.map((i) => i.precio)) : 0;
+  return {
+    productos: disp.map((i) => i.handle),
+    total: precio * 2,
+    total_texto: gs(precio * 2),
+    texto: `Llevando 2 productos distintos te salen ${gs(precio * 2)} los 2, con envío gratis`,
+    pareja_sugerida: PAREJA_2_DISTINTOS,
+    nota: "Solo 1 de cada uno de 2 productos distintos (el pack no entra). Ofrecelo UNA vez: cuando pide 1 unidad o pregunta por otro producto. Armalo con crear_pedido_cod con los 2 items (cantidad 1 cada uno): el sistema pone el precio y el envío gratis.",
+  };
+}
+
+/** ¿Es la oferta de 2 distintos? Exactamente 2 productos distintos, 1 de cada, los dos de la lista. */
+export function esOferta2Distintos(lineas: Array<{ handle: string; cantidad: number }>, activa: boolean): boolean {
+  if (!activa || lineas.length !== 2 || !lineas.every((l) => l.cantidad === 1)) return false;
+  const [a, b] = lineas.map((l) => familia2Distintos(l.handle));
+  return !!a && !!b && a !== b;
+}
+/** Producto de la oferta (por familia, no por el handle exacto); null si no entra (pack u otro). */
+export function familia2Distintos(handle: string): string | null {
+  const h = productoPorPalabras(handle.replace(/-/g, " "));
+  return h && HANDLES_2_DISTINTOS.has(h) ? h : null;
+}
 
 /** 20-10: address1 de un pedido que salió solo con la ciudad (pedidos-trabados lo toma como dirección NO utilizable). */
 export const DIRECCION_PENDIENTE = "Sin calle (ubicación pendiente)";
@@ -527,6 +568,8 @@ async function consultarCatalogo(input: Record<string, unknown>, ctx: CtxTurno, 
       envio_texto: gs(ctx.cfg.envio.costo_gs),
       plazo: ctx.cfg.envio.plazo,
       productos: items.map(({ imagen: _i, ...resto }) => resto),
+      // 21-10: oferta de 2 distintos (solo si está prendida): montos del catálogo, para que el modelo no escriba números.
+      ...(extrasVendedor(ctx.cfg.vendedor).oferta_2_distintos ? { oferta_2_distintos: oferta2DistintosInfo(items) } : {}),
       nota: "Decí el precio SIEMPRE con frase_precio (precio del anuncio + envío aparte = total), nunca solo el total. ahorro = lo que ahorra la oferta contra comprar por unidad. Usá solo estos montos.",
     },
   };
@@ -659,7 +702,9 @@ export function armarPedido(
       return { ok: false, faltan: ["razón social (a nombre de quién va la factura)"] };
     } else return { ok: false, faltan: ["RUC con guion (ej. 1234567-8)"] };
   }
-  const envio = retiro ? 0 : ctx.cfg.envio.costo_gs;
+  // 21-10: 2 distintos → cada uno a su precio de lista (catálogo) y envío 0. Nunca un monto escrito por la IA.
+  const oferta2 = !retiro && esOferta2Distintos(lineas, extrasVendedor(ctx.cfg.vendedor).oferta_2_distintos);
+  const envio = retiro || oferta2 ? 0 : ctx.cfg.envio.costo_gs;
   const subtotal = lineas.reduce((a, l) => a + l.total, 0);
   return {
     ok: true,
@@ -668,6 +713,7 @@ export function armarPedido(
       ciudad: retiro ? "Ciudad del Este" : s("ciudad") || "Ver mapa",
       direccion: retiro ? "Retira en la oficina (CDE)" : (s("direccion") && !esSoloPin(s("direccion")) ? s("direccion") : s("ubicacion") ? "Pin de ubicación" : s("referencia") || (pendiente ? DIRECCION_PENDIENTE : "")),
       ...(pendiente && !(s("direccion") && !esSoloPin(s("direccion"))) && !s("referencia") ? { ubicacionPendiente: true } : {}),
+      ...(oferta2 ? { oferta2Distintos: true } : {}),
       referencia: s("referencia") || null,
       ubicacion: s("ubicacion") || null,
       ...(input.calle_de_pin === true && s("ubicacion") ? { calleDePin: true } : {}),
@@ -751,7 +797,8 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
       tags: d.retiro ? ["ORIGEN_WHATSAPP", "CONFIRMADO", "RETIRO_EN_CASA"]
         : ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO", ...(d.entregaProgramada ? ["ENTREGA_PROGRAMADA"] : []),
           // 20-10: medir la entrega sin pin contra con pin, y marcar los que salen sin calle.
-          ...(d.ubicacion ? [] : ["SIN_PIN"]), ...(d.ubicacionPendiente ? ["UBICACION_PENDIENTE"] : [])],
+          ...(d.ubicacion ? [] : ["SIN_PIN"]), ...(d.ubicacionPendiente ? ["UBICACION_PENDIENTE"] : []),
+          ...(d.oferta2Distintos ? ["OFERTA_2_DISTINTOS"] : [])],
       note: notas.join("\n"),
       customAttributes: [
         { key: "origen", value: "whatsapp" },
@@ -770,8 +817,10 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
 
 export function textoResumen(d: DatosPedidoChat, ctx: CtxTurno): string {
   // 09-10: un solo producto ×2 o más → se muestra con envío gratis (el total es el mismo: oferta + envío).
-  const gratis = !d.retiro && d.lineas.length === 1 && d.lineas[0].cantidad >= 2;
-  const lineas = gratis
+  const gratis = !d.retiro && ((d.lineas.length === 1 && d.lineas[0].cantidad >= 2) || d.oferta2Distintos === true);
+  const lineas = d.oferta2Distintos
+    ? d.lineas.map((l) => `${l.titulo} x1`).join(" + ")
+    : gratis
     ? `${d.lineas[0].titulo} x${d.lineas[0].cantidad}`
     : d.lineas.map((l) => `${l.titulo} x${l.cantidad} (Gs ${gs(l.total)})`).join(", ");
   const clave = d.retiro ? "resumen_retiro" : gratis ? "resumen_envio_gratis" : "resumen";
@@ -780,13 +829,13 @@ export function textoResumen(d: DatosPedidoChat, ctx: CtxTurno): string {
   const lineaEntrega = d.retiro || !d.ciudad ? "" : d.entregaProgramada
     ? `\n📦 Te llega: el ${textoFechaCorta(d.entregaProgramada.fecha)}${d.entregaProgramada.franja ? ` (${d.entregaProgramada.franja})` : ""}`
     : `\n📦 Te llega: ${diaEntrega(d.ciudad, ctx.ahora).texto}`;
-  return texto(ctx.cfg.textos, clave, TEXTOS_DEFAULT[clave], {
-    lineas,
-    envio: gs(d.envio),
-    total: gs(d.total),
-    direccion: [d.direccion, d.referencia].filter(Boolean).join(", "),
-    ciudad: d.ciudad,
-  }) + lineaEntrega + lineaFactura;
+  const direccion = [d.direccion, d.referencia].filter(Boolean).join(", ");
+  let cuerpo = texto(ctx.cfg.textos, clave, TEXTOS_DEFAULT[clave], { lineas, envio: gs(d.envio), total: gs(d.total), direccion, ciudad: d.ciudad });
+  // 20-10 (Enrique): sin calle, el cliente no ve "Sin calle (ubicación pendiente)": ve la ciudad y que lo llaman.
+  if (d.ubicacionPendiente) {
+    cuerpo = cuerpo.replace(`Lo entregamos en ${direccion}, ${d.ciudad}.`, `Lo entregamos en ${d.ciudad}; el repartidor te llama para la dirección exacta 🙌`);
+  }
+  return cuerpo + lineaEntrega + lineaFactura;
 }
 
 function opts(ctx: CtxTurno) {

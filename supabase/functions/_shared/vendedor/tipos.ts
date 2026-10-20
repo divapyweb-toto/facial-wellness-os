@@ -164,6 +164,8 @@ export type DatosPedidoChat = {
   calleDePin?: boolean;
   /** 20-10: salió solo con la ciudad (etiqueta UBICACION_PENDIENTE; el dato se pide antes del despacho). */
   ubicacionPendiente?: boolean;
+  /** 21-10: 2 productos distintos, 1 de cada, a precio de lista y envío 0 (etiqueta OFERTA_2_DISTINTOS). */
+  oferta2Distintos?: boolean;
   /** 13-10: entrega programada que pidió el cliente ("YYYY-MM-DD", Asunción) y franja opcional ("antes de las 12"). */
   entregaProgramada?: { fecha: string; franja: string | null };
   telefono: string;

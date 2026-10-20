@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
-import { horasHastaFecha, mensajeSinStock, NOTA_INHALADOR, TEXTO_SALUD_SEGURO } from "./herramientas.ts";
+import { esOferta2Distintos, horasHastaFecha, mensajeSinStock, NOTA_INHALADOR, TEXTO_SALUD_SEGURO } from "./herramientas.ts";
 import { productoPorPalabras } from "../anuncios.ts";
 import {
   botonesPrimerTurno,
@@ -783,4 +783,41 @@ Deno.test("20-10 si la 'calle' es la misma ciudad, sale con UBICACION_PENDIENTE"
   const d = reg.pedidosChat.at(-1)!.datos;
   assertEquals(d.direccion, "Sin calle (ubicación pendiente)");
   assert((inputOrderCreate(d as never, ctxPrueba()) as { order: { tags: string[] } }).order.tags.includes("UBICACION_PENDIENTE"));
+});
+
+Deno.test("20-10 resumen con ubicación pendiente: 'Lo entregamos en Luque; el repartidor te llama…'", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", ubicacion_pendiente: true, items: [{ handle: "tiras-prueba", cantidad: 1 }] }, ctxPrueba(), deps);
+  const t = textoResumen(reg.pedidosChat.at(-1)!.datos, ctxPrueba());
+  assert(t.includes("Lo entregamos en Luque; el repartidor te llama para la dirección exacta 🙌"), t);
+  assertFalse(t.includes("Sin calle"));
+});
+
+Deno.test("21-10 oferta 2 distintos: prendida → 2 líneas a precio de lista, envío 0, OFERTA_2_DISTINTOS; apagada → envío aparte", async () => {
+  const items = [{ handle: "tiras-prueba", cantidad: 1 }, { handle: "raspador-prueba", cantidad: 1 }];
+  _limpiarCacheCatalogo();
+  const on = depsPrueba();
+  const cfgOn = configPrueba({ vendedor: { oferta_2_distintos: true } });
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", direccion: "Barrio Centro", items }, ctxPrueba({ cfg: cfgOn }), on.deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  const d = on.reg.pedidosChat.at(-1)!.datos;
+  assertEquals([d.envio, d.oferta2Distintos], [0, true]);
+  assertEquals(d.total, d.lineas[0].total + d.lineas[1].total);
+  assert(textoResumen(d, ctxPrueba({ cfg: cfgOn })).includes("envío gratis"));
+  assert((inputOrderCreate(d as never, ctxPrueba({ cfg: cfgOn })) as { order: { tags: string[] } }).order.tags.includes("OFERTA_2_DISTINTOS"));
+  _limpiarCacheCatalogo();
+  const off = depsPrueba();
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", direccion: "Barrio Centro", items }, ctxPrueba(), off.deps);
+  const d2 = off.reg.pedidosChat.at(-1)!.datos;
+  assertEquals(d2.envio > 0, true);
+  assertFalse(!!d2.oferta2Distintos);
+});
+
+Deno.test("21-10 oferta 2 distintos: no aplica a 2 iguales, a 3 productos, a cantidades 2+1 ni al pack", () => {
+  assert(esOferta2Distintos([{ handle: "tiras-nasales-gudair-30-unidades", cantidad: 1 }, { handle: "raspador-de-lengua-de-acero-inoxidable", cantidad: 1 }], true));
+  assertFalse(esOferta2Distintos([{ handle: "tiras-nasales-gudair-30-unidades", cantidad: 1 }, { handle: "tiras-nasales-gudair-30-unidades", cantidad: 1 }], true));
+  assertFalse(esOferta2Distintos([{ handle: "tiras-nasales-gudair-30-unidades", cantidad: 2 }, { handle: "raspador-de-lengua-de-acero-inoxidable", cantidad: 1 }], true));
+  assertFalse(esOferta2Distintos([{ handle: "pack-gudair-tiras-nasales-parches-bucales", cantidad: 1 }, { handle: "raspador-de-lengua-de-acero-inoxidable", cantidad: 1 }], true));
+  assertFalse(esOferta2Distintos([{ handle: "tiras-nasales-gudair-30-unidades", cantidad: 1 }, { handle: "raspador-de-lengua-de-acero-inoxidable", cantidad: 1 }], false));
 });
