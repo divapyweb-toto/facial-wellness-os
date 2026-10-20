@@ -82,3 +82,8 @@ Deno.test("15-10 (#1056): ciudad sin cobertura contra entrega → avisar una vez
   assertEquals(accionesPara({ ...p, estado: "pendiente", tags: [] }, AHORA, false), []);
   assertEquals(accionesPara(base(), AHORA, false), []); // Asunción: cubierta
 });
+
+Deno.test("20-10 'Sin calle (ubicación pendiente)' no es una dirección utilizable → FALTAN_DATOS (se pide antes del despacho)", () => {
+  assertEquals(direccionUtilizable(base({ direccion: "Sin calle (ubicación pendiente)", ciudad: "Luque" })), false);
+  assertEquals(accionesPara(base({ direccion: "Sin calle (ubicación pendiente)", ciudad: "Luque" }), AHORA, false), ["agregar_faltan_datos"]);
+});

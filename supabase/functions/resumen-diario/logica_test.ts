@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { armarResumen, diaParaguay, type Pedido } from "./logica.ts";
+import { armarResumen, diaParaguay, lineaSinPin, type Pedido } from "./logica.ts";
 
 const AHORA = new Date("2026-10-17T00:30:00Z"); // 21:30 del 16-10 en Paraguay
 const p = (o: Partial<Pedido>): Pedido => ({
@@ -80,4 +80,13 @@ Deno.test("Lucero en gestión +3 días (solo referencias); custodia sin alerta",
   const { texto } = armarResumen({ ...base, pedidos, meta, luceroGestion: [{ ref: "VT-9001", estado: "Fallido", dias: 4 }], papCustodia: [{ ref: "VT-9002", desde: "2026-10-17T10:00:00Z" }] });
   assertStringIncludes(texto, "📦 Lucero en gestión +3 días (reprogramar): VT-9001 Fallido 4d");
   assert(!texto.includes("custodia"), "custodia: solo se mide, sin alerta");
+});
+
+Deno.test("20-10 línea sin pin: cuenta sin pin, entregados y ubicación pendiente contra con pin", () => {
+  const base = { esBorrador: false, canceladoEn: null, nota: "", lineas: [], total: 0, clienteId: null, estadoConfirmacion: "confirmado" };
+  const ped = (n: string, tags: string[], estadoEnvio: string | null = null) =>
+    ({ ...base, nombre: n, tags: ["ORIGEN_WHATSAPP", ...tags], estadoEnvio, creadoEn: "2026-10-20T15:00:00Z" }) as unknown as Parameters<typeof lineaSinPin>[0][number];
+  const t = lineaSinPin([ped("#1", ["SIN_PIN"], "ENTREGADO"), ped("#2", ["SIN_PIN", "UBICACION_PENDIENTE"]), ped("#3", [])], "2026-10-20");
+  assertEquals(t, "📍 Sin pin (14 días): 2 pedidos · 1 entregados · 1 con ubicación pendiente | Con pin: 1 · 0 entregados");
+  assertEquals(lineaSinPin([ped("#3", [])], "2026-10-20"), null);
 });

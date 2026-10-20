@@ -137,6 +137,9 @@ const MENSAJE_CLIENTE: Record<string, string> = {
 };
 const MENSAJE_CLIENTE_DEFAULT = "Quiero hacer una consulta.";
 
+/** 20-10: address1 de un pedido que salió solo con la ciudad (pedidos-trabados lo toma como dirección NO utilizable). */
+export const DIRECCION_PENDIENTE = "Sin calle (ubicación pendiente)";
+
 /** 19-10: el inhalador todavía no está a la venta (falta DINAVISA y precio). */
 export const NOTA_INHALADOR =
   "El inhalador todavía no está a la venta: decí \"Llega en unos días, te aviso\" y, si le sirve, ofrecé las tiras o el pack. No des precio ni características del inhalador.";
@@ -184,6 +187,7 @@ export const HERRAMIENTAS: Herramienta[] = [
         fecha_entrega: { type: "string", description: "Solo si el cliente pidió un día futuro: \"YYYY-MM-DD\". No puede ser antes del plazo (el sistema lo valida)." },
         franja_entrega: { type: "string", description: "Franja horaria que pidió, corta (\"antes de las 12\", \"de tarde\"). Opcional." },
         calle_de_pin: { type: "boolean", description: "true si la calle y la ciudad salieron del pin y el cliente tocó \"Sí, es ahí\"" },
+        ubicacion_pendiente: { type: "boolean", description: "true si solo dio la ciudad y, pedida una vez, no tiene o no mandó la calle o el barrio: el pedido sale igual y antes del despacho se le pide el dato." },
         items: {
           type: "array",
           items: {
@@ -610,7 +614,11 @@ export function armarPedido(
   // 15-10 (Enrique, #1055): "si tenemos nombre, celular y pin de ubicación, ya estamos": con pin no se pide nada más.
   const conPin = /-?\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+/.test(s("ubicacion"));
   if (!retiro && !s("ciudad") && !conPin) faltan.push("ciudad");
-  if (retiro || conPin) { /* retiro en la oficina de CDE, o pin: no hace falta escribir la dirección */ }
+  // 20-10 (Enrique): solo la ciudad + ubicacion_pendiente → sale igual (UBICACION_PENDIENTE); el dato se pide antes del despacho.
+  // 20-10: si el modelo repite la ciudad como "calle" (simulación: "Luque, Luque"), no hay calle: es ubicación pendiente.
+  if (s("direccion") && normalizar(s("direccion")) === normalizar(s("ciudad"))) input = { ...input, direccion: "", ubicacion_pendiente: true };
+  const pendiente = input.ubicacion_pendiente === true && !!s("ciudad") && !conPin && !retiro;
+  if (retiro || conPin || pendiente) { /* retiro en la oficina de CDE, pin o ubicación pendiente: no se exige calle */ }
   // 14-10 (Enrique): alcanza con ciudad + calle o referencia.
   else if ((!s("direccion") || esSoloPin(s("direccion"))) && !s("referencia")) faltan.push("calle o una referencia");
   if (!ctx.telefono) faltan.push("telefono (usá pedir_telefono)");
@@ -658,7 +666,8 @@ export function armarPedido(
     datos: {
       nombre,
       ciudad: retiro ? "Ciudad del Este" : s("ciudad") || "Ver mapa",
-      direccion: retiro ? "Retira en la oficina (CDE)" : (s("direccion") && !esSoloPin(s("direccion")) ? s("direccion") : s("ubicacion") ? "Pin de ubicación" : s("referencia")),
+      direccion: retiro ? "Retira en la oficina (CDE)" : (s("direccion") && !esSoloPin(s("direccion")) ? s("direccion") : s("ubicacion") ? "Pin de ubicación" : s("referencia") || (pendiente ? DIRECCION_PENDIENTE : "")),
+      ...(pendiente && !(s("direccion") && !esSoloPin(s("direccion"))) && !s("referencia") ? { ubicacionPendiente: true } : {}),
       referencia: s("referencia") || null,
       ubicacion: s("ubicacion") || null,
       ...(input.calle_de_pin === true && s("ubicacion") ? { calleDePin: true } : {}),
@@ -740,7 +749,9 @@ export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<stri
       // 10-10: el cliente ya confirmó en el resumen del chat → entra CONFIRMADO y no se le manda la plantilla de
       // confirmación (antes tenía que confirmar dos veces). OFERTA_PAGO_ANTICIPADO: si manda comprobante, se detecta igual.
       tags: d.retiro ? ["ORIGEN_WHATSAPP", "CONFIRMADO", "RETIRO_EN_CASA"]
-        : ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO", ...(d.entregaProgramada ? ["ENTREGA_PROGRAMADA"] : [])],
+        : ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO", ...(d.entregaProgramada ? ["ENTREGA_PROGRAMADA"] : []),
+          // 20-10: medir la entrega sin pin contra con pin, y marcar los que salen sin calle.
+          ...(d.ubicacion ? [] : ["SIN_PIN"]), ...(d.ubicacionPendiente ? ["UBICACION_PENDIENTE"] : [])],
       note: notas.join("\n"),
       customAttributes: [
         { key: "origen", value: "whatsapp" },

@@ -128,7 +128,7 @@ Deno.test("crear_pedido_cod (confirmar): exige un sí claro; con 'dale' crea en 
   assertEquals(r.pedidoCreado, { shopify_order_id: 5550001, nombre: "#1050" });
   const orden = reg.ordenes[0] as { order: Record<string, unknown>; options: Record<string, unknown> };
   assertEquals(orden.order.financialStatus, "PENDING");
-  assertEquals(orden.order.tags, ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"]);
+  assertEquals(orden.order.tags, ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO", "SIN_PIN"]);
   assertEquals((orden.order.shippingAddress as Record<string, unknown>).firstName, "Ana"); // usa el resumen, no lo que reescribe el modelo
   assertEquals(orden.options.inventoryBehaviour, "DECREMENT_OBEYING_POLICY");
   assertEquals(orden.options.sendReceipt, false);
@@ -746,4 +746,41 @@ Deno.test("19-10 inhalador: el catálogo no lo ofrece y el anuncio no cae en tir
   assertEquals(porMensaje.resultado.nota, NOTA_INHALADOR);
   assertEquals(productoPorPalabras("Inhalador nasal de mentol"), null);
   assertEquals(productoPorPalabras("Tiras nasales para dormir"), "tiras-nasales-gudair-30-unidades");
+});
+
+Deno.test("20-10 sin pin: ciudad + calle arma el pedido con SIN_PIN; con pin no lleva SIN_PIN", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", direccion: "Barrio San Antonio", items: [{ handle: "tiras-prueba", cantidad: 1 }] }, ctxPrueba(), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  const d = reg.pedidosChat.at(-1)!.datos;
+  const o = inputOrderCreate(d as never, ctxPrueba()) as { order: { tags: string[] } };
+  assert(o.order.tags.includes("SIN_PIN"));
+  assertFalse(o.order.tags.includes("UBICACION_PENDIENTE"));
+  const conPin = inputOrderCreate({ ...d, ubicacion: "-25.3,-57.2" } as never, ctxPrueba()) as { order: { tags: string[] } };
+  assertFalse(conPin.order.tags.includes("SIN_PIN"));
+});
+
+Deno.test("20-10 solo ciudad: sin ubicacion_pendiente pide la calle; con ubicacion_pendiente sale con UBICACION_PENDIENTE", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const sin = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", items: [{ handle: "tiras-prueba", cantidad: 1 }] }, ctxPrueba(), deps);
+  assert(sin.esError);
+  assert(JSON.stringify(sin.resultado).includes("calle"));
+  const con = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", ubicacion_pendiente: true, items: [{ handle: "tiras-prueba", cantidad: 1 }] }, ctxPrueba(), deps);
+  assertFalse(con.esError, JSON.stringify(con.resultado));
+  const d = reg.pedidosChat.at(-1)!.datos;
+  assertEquals(d.direccion, "Sin calle (ubicación pendiente)");
+  const o = inputOrderCreate(d as never, ctxPrueba()) as { order: { tags: string[] } };
+  assert(o.order.tags.includes("UBICACION_PENDIENTE") && o.order.tags.includes("SIN_PIN"));
+});
+
+Deno.test("20-10 si la 'calle' es la misma ciudad, sale con UBICACION_PENDIENTE", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", direccion: "Luque", items: [{ handle: "tiras-prueba", cantidad: 1 }] }, ctxPrueba(), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  const d = reg.pedidosChat.at(-1)!.datos;
+  assertEquals(d.direccion, "Sin calle (ubicación pendiente)");
+  assert((inputOrderCreate(d as never, ctxPrueba()) as { order: { tags: string[] } }).order.tags.includes("UBICACION_PENDIENTE"));
 });

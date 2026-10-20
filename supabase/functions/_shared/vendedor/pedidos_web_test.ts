@@ -1,6 +1,7 @@
 // Pruebas de pedidos_web.ts (buscar_pedido, modificar_pedido, guardar_factura). Datos inventados: repo público.
 import { assert, assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { _limpiarCacheCatalogo } from "./herramientas.ts";
+import { EDICION_DIRECTA_ACTIVA } from "./pedidos_web.ts";
 import { digitoVerificadorRuc } from "../facturacion.ts";
 import {
   buscarPedidoHerr,
@@ -209,13 +210,18 @@ Deno.test("precios: mantiene la variante que ya tenía el pedido (color)", () =>
 
 // ---------- camino, etiquetas y textos ----------
 
-Deno.test("camino: Voltra OS edita, Releasit reemplaza, tienda online editable edita", () => {
+Deno.test("20-10 camino: con la edición directa apagada, siempre reemplaza (total exacto en Voltra OS)", () => {
+  assertEquals(EDICION_DIRECTA_ACTIVA, false);
+  for (const app of ["Voltra OS", "Releasit COD Form", "Online Store", null]) assertEquals(elegirCamino({ app, merchant_editable: true }), "reemplazar");
+});
+
+Deno.test({ name: "camino: Voltra OS edita, Releasit reemplaza, tienda online editable edita", ignore: !EDICION_DIRECTA_ACTIVA, fn: () => {
   assertEquals(elegirCamino({ app: "Voltra OS", merchant_editable: false }), "editar");
   assertEquals(elegirCamino({ app: "Releasit COD Form", merchant_editable: false }), "reemplazar");
   assertEquals(elegirCamino({ app: "Releasit COD Form", merchant_editable: true }), "reemplazar");
   assertEquals(elegirCamino({ app: "Online Store", merchant_editable: true }), "editar");
   assertEquals(elegirCamino({ app: null, merchant_editable: null }), "reemplazar");
-});
+} });
 
 Deno.test("etiquetas y Telegram", () => {
   assertEquals(tagReemplaza("#1072"), "REEMPLAZA_A_#1072");
@@ -363,7 +369,7 @@ Deno.test("modificar: sí y después Corregir en los mensajes desde el resumen �
   assertMatch(String(r.resultado.error), /^falta_confirmo/);
 });
 
-Deno.test("modificar: pedido del bot (Voltra OS) → edición directa, mismo número", async () => {
+Deno.test({ name: "modificar: pedido del bot (Voltra OS) → edición directa, mismo número", ignore: !EDICION_DIRECTA_ACTIVA, fn: async () => {
   const { deps, reg, regPw } = await conResumen({ pedidos: [pedido({ app: "Voltra OS", tags: ["ORIGEN_WHATSAPP", "CONFIRMADO"] })] });
   const r = await modificar({ confirmar: true }, ctx({ textoEntrada: tapConfirmo("mod-1") }), deps);
   assertEquals(r.resultado.ok, true);
@@ -372,7 +378,7 @@ Deno.test("modificar: pedido del bot (Voltra OS) → edición directa, mismo nú
   assertEquals(regPw.ediciones[0].total, 158000);
   assertEquals(regPw.borradores.length + regPw.cancelados.length, 0);
   assert(reg.avisos.some((a) => a.texto.startsWith("✏️ <b>#1072 modificado</b>")));
-});
+} });
 
 Deno.test("modificar: si Shopify no deja editar, cae a reemplazo", async () => {
   const { deps, regPw } = await conResumen({ pedidos: [pedido({ app: "Voltra OS" })], editar: { ok: false, no_editable: true, error: "The order cannot be edited" } });
@@ -381,14 +387,14 @@ Deno.test("modificar: si Shopify no deja editar, cae a reemplazo", async () => {
   assertEquals(regPw.borradores.length, 1);
 });
 
-Deno.test("modificar: edición que falla por otra cosa → fallido + Telegram, sin reemplazo", async () => {
+Deno.test({ name: "modificar: edición que falla por otra cosa → fallido + Telegram, sin reemplazo", ignore: !EDICION_DIRECTA_ACTIVA, fn: async () => {
   const { deps, reg, regPw } = await conResumen({ pedidos: [pedido({ app: "Voltra OS" })], editar: { ok: false, error: "total_no_coincide" } });
   const r = await modificar({ confirmar: true }, ctx({ textoEntrada: tapConfirmo("mod-1") }), deps);
   assertMatch(String(r.resultado.error), /^edicion_fallida/);
   assertEquals(regPw.modificaciones[0].estado, "fallido");
   assertEquals(regPw.borradores.length, 0);
   assert(reg.avisos.some((a) => a.texto.includes("Falló un cambio de pedido")));
-});
+} });
 
 Deno.test("idempotencia: doble Confirmo no crea dos pedidos", async () => {
   const { deps, regPw } = await conResumen();

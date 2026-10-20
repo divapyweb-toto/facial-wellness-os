@@ -331,9 +331,18 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
         estado_envio: p.despachado ? "EN_CAMINO" : null, courier: null, total: p.total, creado_en: p.creado_en, ultimo_estado: null,
       }))),
     guardarPedidoChat: async (f) => {
+      const nuevo = !f.id;
       const r = await base.guardarPedidoChat(f);
+      // 20-10: el doble de prueba fecha el resumen en 2026-10-06 (reloj fijo): con el reloj del simulador el
+      // "Confirmo" daba resumen_vencido. Se fecha con la hora simulada.
+      if (nuevo) r.creado_en = new Date(reloj).toISOString();
       anotar("db", "guardarPedidoChat", { id: r.id, estado: r.estado, total: r.total });
       return r;
+    },
+    crearOrdenShopify: async (input) => {
+      const o = (input as { order?: { tags?: string[] } }).order;
+      anotar("shopify", "orderCreate", { tags: o?.tags ?? [] });
+      return await base.crearOrdenShopify(input);
     },
     entradasDesde: (_c, desde) => Promise.resolve(historial.filter((f) => f.direccion === "in" && f.creado_en >= desde).map((f) => {
       const c = (f.contenido ?? {}) as Record<string, unknown>;

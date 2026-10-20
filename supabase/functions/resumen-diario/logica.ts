@@ -82,6 +82,18 @@ const gs = (n: number) => `Gs ${Math.round(n).toLocaleString("es-PY")}`;
 const DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
 const esWa = (c: CampanaMeta) => /WHATSAPP/i.test(c.nombre);
 
+/** 20-10: "Sin pin (14 días): N pedidos · E entregados · P con ubicación pendiente | Con pin: …". null si no hay pedidos del bot. */
+export function lineaSinPin(validos: Pedido[], hoy: string): string | null {
+  const desde = sumarDias(hoy, -13);
+  const wa = validos.filter((p) => canal(p) === "wa" && diaParaguay(p.creadoEn) >= desde && diaParaguay(p.creadoEn) <= hoy);
+  const entregado = (p: Pedido) => tieneTag(p, "ENTREGADO") || /ENTREGADO/i.test(p.estadoEnvio ?? "");
+  const sin = wa.filter((p) => tieneTag(p, "SIN_PIN")), con = wa.filter((p) => !tieneTag(p, "SIN_PIN") && !tieneTag(p, "RETIRO_EN_CASA"));
+  if (!sin.length) return null;
+  const pend = sin.filter((p) => tieneTag(p, "UBICACION_PENDIENTE")).length;
+  return `📍 Sin pin (14 días): ${sin.length} pedidos · ${sin.filter(entregado).length} entregados` +
+    `${pend ? ` · ${pend} con ubicación pendiente` : ""} | Con pin: ${con.length} · ${con.filter(entregado).length} entregados`;
+}
+
 export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean } {
   const validos = e.pedidos.filter(esValido);
   const hoy = validos.filter((p) => diaParaguay(p.creadoEn) === e.hoy);
@@ -145,6 +157,9 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
   const clientesWaHoy = new Set(hoy.filter((p) => canal(p) === "wa").map((p) => p.clienteId).filter(Boolean));
   const conPedido = e.chatsAnuncioHoy.filter((c) => c.clienteId && clientesWaHoy.has(c.clienteId)).length;
   l.push(`WhatsApp: ${nChats} chats de anuncios · ${nChats ? Math.round((conPedido / nChats) * 100) : 0}% terminó en pedido`);
+  // 20-10 (Enrique): el pin dejó de ser obligatorio. Se mide la entrega de los pedidos del bot sin pin contra con pin.
+  const pin = lineaSinPin(validos, e.hoy);
+  if (pin) l.push(pin);
   let botV33Listo = false;
   if (e.chatsBotV33 < META_BOT_V33) {
     l.push(`Bot v33: ${e.chatsBotV33}/${META_BOT_V33} chats${META_BOT_V33 - e.chatsBotV33 <= 10 ? " (falta poco para las mejoras)" : ""}`);

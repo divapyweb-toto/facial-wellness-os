@@ -162,6 +162,8 @@ export type DatosPedidoChat = {
   ubicacion: string | null;
   /** 13-10: la calle y la ciudad salieron del pin y el cliente las confirmó (para medir). */
   calleDePin?: boolean;
+  /** 20-10: salió solo con la ciudad (etiqueta UBICACION_PENDIENTE; el dato se pide antes del despacho). */
+  ubicacionPendiente?: boolean;
   /** 13-10: entrega programada que pidió el cliente ("YYYY-MM-DD", Asunción) y franja opcional ("antes de las 12"). */
   entregaProgramada?: { fecha: string; franja: string | null };
   telefono: string;

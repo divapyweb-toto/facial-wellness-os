@@ -248,4 +248,47 @@ export const ESCENARIOS: Escenario[] = [
       { tipo: "derivado", negar: true },
     ],
   },
+  // ─── 20-10 · Ubicación sin pin (encargo prompts/whatsapp-ubicacion-sin-pin-20-10.md) ───
+  {
+    nombre: "sinpin_quiero1_ciudad_calle",
+    descripcion: "Tiras: 'Quiero 1' → el bot pide nombre + ciudad + calle o barrio (sin 'pin', en texto) → los manda → resumen → Confirmo → pedido con SIN_PIN.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000201" },
+    anuncio: TIRAS,
+    pasos: ["Hola", "boton:Quiero 1", "Ana Prueba, Luque, barrio San Antonio, calle Las Palmas", "boton:Confirmo"],
+    checks: [
+      { paso: 1, tipo: "texto", regex: /ciudad/i, desc: "pide la ciudad" },
+      { paso: 1, tipo: "texto", regex: /\bpin\b/i, negar: true, desc: "no dice 'pin' en el primer pedido" },
+      { paso: 1, tipo: "herramienta", nombre: "pedir_ubicacion", negar: true, desc: "no manda el botón de ubicación como primer paso" },
+      { paso: 2, tipo: "herramienta", nombre: "crear_pedido_cod", desc: "arma el resumen con ciudad + calle" },
+      { paso: 3, tipo: "escritura", regex: /SIN_PIN/, desc: "el pedido sale con la etiqueta SIN_PIN", suave: true },
+      { tipo: "derivado", negar: true },
+    ],
+  },
+  {
+    nombre: "sinpin_manana_te_paso",
+    descripcion: "Raspador: 'Quiero 1' → 'no estoy en casa, mañana te paso' → el bot NO posterga: pide ciudad y calle → los manda → resumen.",
+    cliente: { nombre: "Pedro Prueba", telefono: "+595981000202" },
+    anuncio: RASPADOR,
+    pasos: ["Hola", "boton:Quiero 1", "No estoy en casa ahora, mañana te paso mi ubicación", "Pedro Prueba, Capiatá, Mcal López casi Ruta 1"],
+    checks: [
+      { paso: 2, tipo: "texto", regex: /(no hace falta|ciudad|barrio|calle)/i, desc: "no posterga: pide ciudad y calle" },
+      { paso: 2, tipo: "texto", regex: /te escribo/i, negar: true, desc: "no promete escribirle otro día" },
+      { paso: 3, tipo: "herramienta", nombre: "crear_pedido_cod", desc: "arma el pedido en la misma charla" },
+      { tipo: "derivado", negar: true },
+    ],
+  },
+  {
+    nombre: "sinpin_solo_ciudad",
+    descripcion: "Tiras: 'Quiero 1' → manda solo la ciudad → el bot pide UNA vez la calle o barrio → 'no sé' → resumen con ubicación pendiente.",
+    cliente: { nombre: "María Prueba", telefono: "+595981000203" },
+    anuncio: TIRAS,
+    pasos: ["Hola", "boton:Quiero 1", "María Prueba, de Luque", "No sé bien la calle, el repartidor que me llame", "boton:Confirmo"],
+    checks: [
+      { paso: 2, tipo: "texto", regex: /(calle|barrio)/i, desc: "pide la calle o el barrio una vez" },
+      { paso: 3, tipo: "herramienta", nombre: "crear_pedido_cod", desc: "arma el resumen igual" },
+      { paso: 3, tipo: "texto", regex: /(ubicaci[oó]n pendiente|Luque)/i, desc: "resumen con la ciudad (ubicación pendiente)" },
+      { paso: 4, tipo: "escritura", regex: /UBICACION_PENDIENTE/, desc: "el pedido sale con UBICACION_PENDIENTE", suave: true },
+      { tipo: "derivado", negar: true },
+    ],
+  },
 ];

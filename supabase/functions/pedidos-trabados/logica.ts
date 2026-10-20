@@ -41,7 +41,7 @@ export function tienePin(p: Pick<PedidoAbierto, "direccion" | "notas">): boolean
 export function direccionUtilizable(p: Pick<PedidoAbierto, "direccion" | "notas" | "ciudad">): boolean {
   if (tienePin(p)) return true; // 15-10: con el pin se entrega igual, aunque falte la ciudad
   if (!p.ciudad.trim() || p.ciudad.trim() === "-") return false;
-  const calle = p.direccion.replace(/pin de ubicaci[oó]n:?/gi, "").replace(PIN, "").replace(/https?:\/\/\S+/g, "").replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, "");
+  const calle = p.direccion.replace(/pin de ubicaci[oó]n:?/gi, "").replace(/sin calle \(ubicaci[oó]n pendiente\)/gi, "").replace(PIN, "").replace(/https?:\/\/\S+/g, "").replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, "");
   return calle.length >= 6;
 }
 

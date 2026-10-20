@@ -273,7 +273,15 @@ const APPS_EDITABLES = new Set(["online store", "tienda online", "draft orders",
  * Edición directa solo si el pedido lo creó Voltra OS, o salió de la tienda/borrador y Shopify dice merchantEditable.
  * Releasit (y cualquier otra app de terceros): pedido nuevo desde borrador + cancelar el original.
  */
+/**
+ * 20-10: la edición directa deja en Shopify total_price ≠ current_total_price (pedidos de prueba #1080/#1083:
+ * 237.000 contra 158.000) y Voltra OS/Despacho leen total_price → la planilla cobraría de más. Hasta leer el total
+ * actual en todos lados, siempre se reemplaza (borrador → pedido nuevo con el total exacto, como el #1085).
+ */
+export const EDICION_DIRECTA_ACTIVA = false;
+
 export function elegirCamino(p: Pick<PedidoWeb, "app" | "merchant_editable">, nombreApp = "Voltra OS"): CaminoModificacion {
+  if (!EDICION_DIRECTA_ACTIVA) return "reemplazar";
   if (esNuestraApp(p.app, nombreApp)) return "editar";
   if (p.merchant_editable === true && APPS_EDITABLES.has(normalizarTexto(p.app))) return "editar";
   return "reemplazar";
