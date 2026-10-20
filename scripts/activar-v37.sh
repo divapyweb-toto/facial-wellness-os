@@ -16,7 +16,8 @@ fi
 TEL=$(curl -s "$U/config_wa?select=valor->>whatsapp_enrique&clave=eq.vendedor" "${H[@]}" | python3 -c "import json,sys;t=json.load(sys.stdin)[0]['whatsapp_enrique'] or '';t=t[-9:];print(f'0{t[:3]} {t[3:6]} {t[6:]}' if len(t)==9 else '')")
 [ -n "$TEL" ] || { echo "Falta config_wa.vendedor.whatsapp_enrique"; exit 1; }
 TEXTO="Área 1, Avenida Los Lapachos, Ciudad del Este · lunes a viernes de 8:00 a 16:00 (sábados y domingos no hay retiro) · antes de pasar, que le escriba a Enrique al $TEL"
-curl -s -X POST "$U/config_wa?on_conflict=clave" "${H[@]}" -H "Prefer: resolution=merge-duplicates" -d "$(python3 -c "import json,sys;print(json.dumps({'clave':'vendedor_retiro','valor':{'texto':sys.argv[1]}}))" "$TEXTO")" >/dev/null
+CUERPO=$(TEXTO="$TEXTO" python3 -c 'import json,os; print(json.dumps(dict(clave="vendedor_retiro", valor=dict(texto=os.environ["TEXTO"]))))')
+curl -sf -X POST "$U/config_wa?on_conflict=clave" "${H[@]}" -H "Prefer: resolution=merge-duplicates" -d "$CUERPO" >/dev/null
 for f in wa-webhook vendedor; do supabase functions deploy "$f" --project-ref "$SUPABASE_PROJECT_REF" --use-api 2>&1 | grep -E "Deployed|rror"; done
 node scripts/activar-prompt.mjs
 echo "v37 ACTIVA: $(TZ=America/Asuncion date '+%d-%m %H:%M:%S PY')"
