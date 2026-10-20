@@ -103,31 +103,33 @@ Deno.test("rangoEntrega con tabla: courier dado, sugerido, 'otra' y ciudad desco
   assertEquals(rangoEntrega("San Lorenzo").courier, "lucero"); // 2111 contra 2533
   assertEquals(rangoEntrega("Ciudad del Este", "pap").rango, [1, 3]); // PaP cuenta desde Asunción
   assertEquals(rangoEntrega("Ciudad del Este").rango, [0, 1]);
+  // 20-10 (Enrique): el interior NO usa la tabla, siempre "2 a 5 días hábiles" (no prometer de más)
   const v = rangoEntrega("Villarrica");
-  assertEquals([v.courier, v.rango, v.zona, v.habiles], ["pap", [2, 4], "interior", true]);
-  // Interior con un rango más corto que "2 a 5": se dicen las fechas
+  assertEquals([v.rango, v.zona, v.habiles, v.fuente], [[2, 5], "interior", true, "interior"]);
   const e = rangoEntrega("Encarnación");
-  assertEquals([e.courier, e.rango, e.habiles], ["pap", [1, 3], false]);
+  assertEquals([e.rango, e.habiles, e.fuente], [[2, 5], true, "interior"]);
   // Sin cobertura contra entrega y sin courier dado → no hay sugerido → el de siempre
   limpiarTarifasCourier();
   const sjBase = rangoEntrega("San Juan Nepomuceno"), otraBase = rangoEntrega("Asunción", "Aex"), sdBase = rangoEntrega("Sin Dias", "lucero");
   const pBase = rangoEntrega("Pueblo Inventado", "pap"), lpBase = rangoEntrega("Luque", "pap");
   fijarTarifasCourier(FILAS, TASAS);
   assertEquals(rangoEntrega("San Juan Nepomuceno"), sjBase);
-  assertEquals(rangoEntrega("San Juan Nepomuceno", "pap").rango, [3, 5]); // con el courier dado, sus días aunque no cobre
+  assertEquals(rangoEntrega("San Juan Nepomuceno", "pap").rango, [2, 5]); // interior: el de siempre
   assertEquals(rangoEntrega("Asunción", "Aex"), otraBase);
   assertEquals(rangoEntrega("Sin Dias", "lucero"), sdBase); // fila sin días cargados
   assertEquals(rangoEntrega("Pueblo Inventado", "pap"), pBase);
   assertEquals(rangoEntrega("Luque", "pap"), lpBase); // la tabla de ejemplo no tiene Luque
 }));
 
-Deno.test("textos con tabla: interior dentro de 2 a 5, fechas del rango de la tabla", conTabla(() => {
-  // lunes 19/10 10:00, sale hoy: Villarrica PaP [2, 4] → miércoles 21 a viernes 23
+Deno.test("textos con tabla: interior igual que sin tabla (2 a 5 días hábiles); metro con fechas del courier", conTabla(() => {
+  limpiarTarifasCourier();
+  const vBase = diaEntrega("Villarrica", LUNES_10), eBase = diaEntrega("Encarnación", LUNES_10);
+  fijarTarifasCourier(FILAS, TASAS);
   const d = diaEntrega("Villarrica", LUNES_10);
-  assertEquals([d.desde, d.hasta, d.courier], ["2026-10-21", "2026-10-23", "pap"]);
-  assertEquals(d.texto, "en 2 a 5 días hábiles (entre el miércoles 21/10 y el viernes 23/10)");
+  assertEquals([d.desde, d.hasta, d.texto], [vBase.desde, vBase.hasta, vBase.texto]);
+  assertEquals(d.texto.startsWith("en 2 a 5 días hábiles"), true);
   assertEquals(plazoDesdeHoy("Villarrica", LUNES_10), "en 2 a 5 días hábiles");
-  assertEquals(diaEntrega("Encarnación", LUNES_10).texto, "entre mañana martes 20/10 y el jueves 22/10");
+  assertEquals(diaEntrega("Encarnación", LUNES_10).texto, eBase.texto);
   assertEquals(diaEntrega("San Lorenzo", LUNES_10, "pap").texto, "entre mañana martes 20/10 y el jueves 22/10");
 }));
 

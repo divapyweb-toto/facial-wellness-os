@@ -97,3 +97,22 @@ Deno.test("20-10: el equilibrio del resumen sale de la config (Varios) y, sin da
   const sin = armarResumen({ ...base, pedidos, meta, equilibrioCpa: null }).texto;
   assertStringIncludes(sin, "equilibrio ~41.000");
 });
+
+Deno.test("20-10: alerta de CPA de 3 días de JawFlex sobre su equilibrio (con y sin pedidos)", () => {
+  const jaw = (nombre: string, creadoEn: string) => p({ nombre, creadoEn, lineas: [{ titulo: "Ejercitador de mandibula JawFlex Pro", cantidad: 1 }] });
+  const conJaw = [...pedidos, jaw("#20", "2026-10-15T15:00:00Z"), jaw("#21", "2026-10-13T15:00:00Z")]; // #21 fuera de los 3 días
+  const m = (g: number) => ({ ...meta, gasto3dPorProducto: { JawFlex: g, Raspador: 90000 } });
+  assertStringIncludes(armarResumen({ ...base, pedidos: conJaw, meta: m(70000), equilibrioJawFlex: 33000 }).texto, "CPA de 3 días de JawFlex Gs 70.000 > 33.000");
+  assert(!armarResumen({ ...base, pedidos: conJaw, meta: m(30000), equilibrioJawFlex: 33000 }).texto.includes("JawFlex Gs"));
+  assertStringIncludes(armarResumen({ ...base, pedidos, meta: m(40000), equilibrioJawFlex: 33000 }).texto, "CPA de 3 días de JawFlex sin pedidos (gastó Gs 40.000) > 33.000");
+  assert(!armarResumen({ ...base, pedidos, meta: m(40000), equilibrioJawFlex: null }).texto.includes("JawFlex sin"));
+});
+
+Deno.test("20-10: aviso único cuando PaP llega a 20 resueltos en 60 días", () => {
+  const r = armarResumen({ ...base, pedidos, meta, pap60d: { resueltos: 20, tasa: 78.5 } });
+  assert(r.papAviso);
+  assertStringIncludes(r.texto, "PaP ya tiene 20 pedidos resueltos en 60 días (entrega 78.5%)");
+  assert(!armarResumen({ ...base, pedidos, meta, pap60d: { resueltos: 19, tasa: 70 } }).papAviso);
+  const ya = armarResumen({ ...base, pedidos, meta, pap60d: { resueltos: 25, tasa: 80 }, papAvisoYaDado: true });
+  assert(!ya.papAviso && !ya.texto.includes("PaP ya tiene"));
+});

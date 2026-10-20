@@ -4,7 +4,7 @@
 // Reintenta el envío 2 veces y deja el resultado en eventos_crudos ('telegram', 'resumen_diario:<día>').
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { cansados, chatsAnuncio, equilibrioGeneral, chatsBotV33, entregaGrupos, luceroEnGestion, guardarCandado, leerCandado, leerMeta, leerPedidos, stock } from "./io.ts";
+import { cansados, chatsAnuncio, equilibrios, pap60d, chatsBotV33, entregaGrupos, luceroEnGestion, guardarCandado, leerCandado, leerMeta, leerPedidos, stock } from "./io.ts";
 import { armarResumen, diaParaguay } from "./logica.ts";
 
 Deno.serve(conServiceRole(async (req: Request) => {
@@ -27,16 +27,19 @@ Deno.serve(conServiceRole(async (req: Request) => {
       .catch((e) => (console.warn("resumen-diario entrega:", e instanceof Error ? e.message : e), null));
     const lucGest = await luceroEnGestion().catch(() => []);
     const cans = await cansados().catch((e) => (console.warn("resumen-diario cansados:", e instanceof Error ? e.message : e), []));
-    const eqCpa = await equilibrioGeneral().catch(() => null);
+    const eqs = await equilibrios().catch(() => ({} as Record<string, number>));
+    const pap = await pap60d().catch(() => null);
+    const papAvisado = await leerCandado("resumen_pap_20_resueltos").catch(() => null);
     let meta = null;
     try {
       meta = await leerMeta(hoy);
     } catch (e) {
       console.warn("resumen-diario Meta:", e instanceof Error ? e.message : e);
     }
-    const { texto, botV33Listo } = armarResumen({
+    const { texto, botV33Listo, papAviso } = armarResumen({
       hoy, ahora, pedidos, meta, chatsAnuncioHoy: chats, chatsBotV33: botV33,
-      botV33YaAvisado: (v33?.payload?.dia as string) ?? null, stock: prods, entrega7d: ent7, cansados: cans, luceroGestion: lucGest, prueba, equilibrioCpa: eqCpa,
+      botV33YaAvisado: (v33?.payload?.dia as string) ?? null, stock: prods, entrega7d: ent7, cansados: cans, luceroGestion: lucGest, prueba,
+      equilibrioCpa: eqs.Varios ?? null, equilibrioJawFlex: eqs.JawFlex ?? null, pap60d: pap, papAvisoYaDado: !!papAvisado,
     });
     let r = await avisar(texto);
     for (let i = 0; i < 2 && !r.ok; i++) {
@@ -45,6 +48,7 @@ Deno.serve(conServiceRole(async (req: Request) => {
     }
     await guardarCandado(idEnvio, { tipo: "resumen_diario", dia: hoy, prueba, meta_ok: meta !== null }, r.ok ? null : (r.error ?? "error"));
     if (r.ok && botV33Listo && !prueba && !v33) await guardarCandado("resumen_v33_listo", { dia: hoy }, null);
+    if (r.ok && papAviso && !prueba) await guardarCandado("resumen_pap_20_resueltos", { dia: hoy, resueltos: pap?.resueltos }, null);
     console.log("resumen-diario", JSON.stringify({ hoy, prueba, ok: r.ok, meta_ok: meta !== null }));
     return Response.json({ ok: r.ok, hoy, prueba, meta_ok: meta !== null, error: r.ok ? undefined : r.error, texto });
   } catch (e) {

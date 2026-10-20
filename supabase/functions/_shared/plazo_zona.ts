@@ -387,9 +387,10 @@ function rangoDeTabla(ciudad: unknown, courier?: string | null): RangoEntrega | 
   const a = numero(f?.dias_min), b = numero(f?.dias_max);
   if (!f || a === null || b === null || a < 0 || b < a) return null;
   const zona = zonaDeCiudad(ciudad);
-  // "2 a 5 días hábiles" (10-10) solo si el rango de la tabla cabe ahí: interior, o el mismo [2, 5] en cualquier zona.
-  // Interior con un rango más corto (p. ej. [1, 3]) se dice con las fechas.
-  const habiles = a >= 2 && b <= 5 && (zona === "interior" || (a === 2 && b === 5));
+  // 20-10 (Enrique): la tabla solo manda en Asunción, Gran Asunción/Central y Alto Paraná (CDE, Hernandarias,
+  // Pdte. Franco, Minga Guazú). El resto del interior queda en "2 a 5 días hábiles" sin acortar (12-10: no prometer de más).
+  if (zona === "interior") return null;
+  const habiles = a === 2 && b === 5;
   return { rango: [a, b], zona, courier: c, fuente: `tabla ${c} ${f.ciudad}`, habiles };
 }
 

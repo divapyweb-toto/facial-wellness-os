@@ -1,7 +1,7 @@
 // resumen-diario · I/O: Supabase (solo lectura de negocio), Meta Graph API (solo GET) y Telegram (1 mensaje).
 import { db } from "../_shared/db.ts";
 import { GRAPH_VERSION } from "../_shared/meta_capi.ts";
-import { CONJUNTO_PRUEBA, type CampanaMeta, type DatosMeta, DESDE_BOT_V33, type Pedido, sumarDias } from "./logica.ts";
+import { CONJUNTO_PRUEBA, type CampanaMeta, type DatosMeta, DESDE_BOT_V33, familia, type Pedido, sumarDias } from "./logica.ts";
 
 export const CUENTA_VOLTRA = "1829928881223795";
 const GRAPH = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -92,15 +92,22 @@ export async function entrega7d(desde7Iso: string, desde14Iso: string): Promise<
 }
 
 /** Anuncios marcados 'cansado' en el libro de creativos (vista libro_creativos). */
-/** 20-10: equilibrio general (clave "Varios" de config equilibrio_producto, con flete real por courier y ciudad). */
-export async function equilibrioGeneral(): Promise<number | null> {
+/** 20-10: equilibrio por producto (config equilibrio_producto, con flete real por courier y ciudad). */
+export async function equilibrios(): Promise<Record<string, number>> {
   const { data } = await db().from("config").select("valor").eq("clave", "equilibrio_producto").maybeSingle();
   try {
-    const v = Number(JSON.parse(String(data?.valor ?? "{}")).Varios);
-    return Number.isFinite(v) && v > 0 ? v : null;
+    const j = JSON.parse(String(data?.valor ?? "{}")) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(j).map(([k, v]) => [k, Number(v)]).filter(([, v]) => Number.isFinite(v as number) && (v as number) > 0));
   } catch {
-    return null;
+    return {};
   }
+}
+
+/** 20-10: PaP en los últimos 60 días (resueltos y tasa medida), de la vista tasa_entrega_courier. */
+export async function pap60d(): Promise<{ resueltos: number; tasa: number | null } | null> {
+  const { data, error } = await db().from("tasa_entrega_courier").select("resueltos,tasa_medida").eq("courier", "pap").maybeSingle();
+  if (error || !data) return null;
+  return { resueltos: Number(data.resueltos) || 0, tasa: data.tasa_medida == null ? null : Number(data.tasa_medida) };
 }
 
 export async function cansados(): Promise<Array<{ anuncio: string; canal: string; caidaPct: number | null }>> {
@@ -167,5 +174,17 @@ export async function leerMeta(hoy: string): Promise<DatosMeta> {
   } catch (e) {
     console.warn("resumen-diario prueba de productos:", e instanceof Error ? e.message : e);
   }
-  return { hoy: cHoy, ayer: cAyer, gasto7d: c7.reduce((s, c) => s + c.gasto, 0), prueba };
+  // 20-10: gasto de 3 días por producto (nombre del anuncio), para la alerta de CPA de JawFlex.
+  let gasto3dPorProducto: Record<string, number> | undefined;
+  try {
+    const r = await get(`${GRAPH}/act_${CUENTA_VOLTRA}/insights?level=ad&fields=ad_name,spend&time_range=${rango(sumarDias(hoy, -2), hoy)}&limit=500`);
+    gasto3dPorProducto = {};
+    for (const a of (r.data ?? []) as Obj[]) {
+      const f = familia(String(a.ad_name));
+      gasto3dPorProducto[f] = (gasto3dPorProducto[f] ?? 0) + n(a.spend);
+    }
+  } catch (e) {
+    console.warn("resumen-diario gasto 3 días por producto:", e instanceof Error ? e.message : e);
+  }
+  return { hoy: cHoy, ayer: cAyer, gasto7d: c7.reduce((s, c) => s + c.gasto, 0), gasto3dPorProducto, prueba };
 }

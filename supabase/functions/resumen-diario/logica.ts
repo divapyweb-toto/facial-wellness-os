@@ -57,6 +57,8 @@ export interface DatosMeta {
   hoy: CampanaMeta[];
   ayer: CampanaMeta[];
   gasto7d: number;
+  /** 20-10: gasto de los últimos 3 días (hoy incluido) por familia de producto, según el nombre del anuncio. */
+  gasto3dPorProducto?: Record<string, number>;
   prueba: { gasto: number; mejor: { nombre: string; ctr: number | null; inicios: number; compras: number } | null } | null;
 }
 export interface Entrada {
@@ -78,7 +80,15 @@ export interface Entrada {
   prueba?: boolean;
   /** 20-10: equilibrio de CPA leído de config equilibrio_producto.Varios; sin dato → EQUILIBRIO_CPA. */
   equilibrioCpa?: number | null;
+  /** 20-10: equilibrio de JawFlex (config equilibrio_producto.JawFlex): el más bajo, alerta de CPA de 3 días. */
+  equilibrioJawFlex?: number | null;
+  /** 20-10: PaP en los últimos 60 días (vista tasa_entrega_courier) y si ya se avisó que llegó a 20 resueltos. */
+  pap60d?: { resueltos: number; tasa: number | null } | null;
+  papAvisoYaDado?: boolean;
 }
+
+/** 20-10: con 20 resueltos de PaP en 60 días se revisa si la sugerencia de courier pasa a asignar sola. */
+export const PAP_RESUELTOS_REVISAR = 20;
 
 const gs = (n: number) => `Gs ${Math.round(n).toLocaleString("es-PY")}`;
 const DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
@@ -96,7 +106,7 @@ export function lineaSinPin(validos: Pedido[], hoy: string): string | null {
     `${pend ? ` · ${pend} con ubicación pendiente` : ""} | Con pin: ${con.length} · ${con.filter(entregado).length} entregados`;
 }
 
-export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean } {
+export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean; papAviso: boolean } {
   const validos = e.pedidos.filter(esValido);
   const hoy = validos.filter((p) => diaParaguay(p.creadoEn) === e.hoy);
   const web = hoy.filter((p) => canal(p) === "web").length, wa = hoy.length - web;
@@ -143,6 +153,19 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
     const eq = e.equilibrioCpa ?? EQUILIBRIO_CPA;
     l.push(`CPA últimos 7 días: ${cpa7 == null ? "—" : gs(cpa7)} · equilibrio ~${eq.toLocaleString("es-PY")} ${cpa7 != null && cpa7 <= eq ? "✅" : "⚠️"}`);
     if (cpa7 != null && cpa7 > eq) alertas.push(`CPA 7 días ${gs(cpa7)} (arriba del equilibrio)`);
+    // 20-10 (Enrique): JawFlex tiene el equilibrio más bajo → alerta si su CPA de 3 días lo supera.
+    const eqJaw = e.equilibrioJawFlex ?? null, gastoJaw = e.meta.gasto3dPorProducto?.JawFlex ?? 0;
+    if (eqJaw && gastoJaw > 0) {
+      const desde3 = sumarDias(e.hoy, -2);
+      const pedJaw = validos.filter((p) => {
+        const d = diaParaguay(p.creadoEn);
+        return d >= desde3 && d <= e.hoy && p.lineas.some((x) => familia(x.titulo) === "JawFlex");
+      }).length;
+      const cpaJaw = pedJaw ? gastoJaw / pedJaw : null;
+      if (cpaJaw == null ? gastoJaw > eqJaw : cpaJaw > eqJaw) {
+        alertas.push(`CPA de 3 días de JawFlex ${cpaJaw == null ? `sin pedidos (gastó ${gs(gastoJaw)})` : gs(cpaJaw)} > ${eqJaw.toLocaleString("es-PY")}`);
+      }
+    }
     // Web con poco gasto (regla de "rotura" si es el 2.º día seguido).
     const pctWeb = (cs: CampanaMeta[]) => {
       const w = cs.filter((c) => !esWa(c) && c.presupuesto);
@@ -193,6 +216,11 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
     if (s.stock < tope) alertas.push(`${f === "Otros" ? escaparHtml(s.nombre) : f}: ${s.stock} unidades`);
   }
   if (alertas.length) l.push("", `⚠️ Alertas: ${alertas.join(" · ")}`);
+  // 20-10: una sola vez, cuando PaP junta 20 pedidos resueltos en 60 días.
+  const papAviso = !e.papAvisoYaDado && !!e.pap60d && e.pap60d.resueltos >= PAP_RESUELTOS_REVISAR;
+  if (papAviso) {
+    l.push(`🚚 PaP ya tiene ${e.pap60d!.resueltos} pedidos resueltos en 60 días (entrega ${e.pap60d!.tasa ?? "—"}%): revisar si la sugerencia de courier pasa a asignar sola`);
+  }
   const lg = e.luceroGestion ?? [];
   if (lg.length) {
     l.push(`📦 Lucero en gestión +3 días (reprogramar): ${lg.slice(0, 8).map((x) => `${x.ref} ${escaparHtml(x.estado)} ${x.dias}d`).join(" · ")}${lg.length > 8 ? ` · y ${lg.length - 8} más` : ""}`);
@@ -202,5 +230,5 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean 
     const medida = c.canal === "whatsapp" ? "pedidos/chat" : "formularios/clic";
     l.push(`⚠️ Se está cansando: ${escaparHtml(c.anuncio)} (${medida} ${c.caidaPct ?? "−50"}% contra sus primeros días)`);
   }
-  return { texto: l.join("\n"), botV33Listo };
+  return { texto: l.join("\n"), botV33Listo, papAviso };
 }
