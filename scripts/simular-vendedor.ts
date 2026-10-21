@@ -24,6 +24,7 @@ import {
   type FilaTurno,
   procesarTurno,
   type ResultadoTurno,
+  TEXTO_SEGUIMIENTO_CONTEXTO,
 } from "../supabase/functions/_shared/vendedor/orquestador.ts";
 import { depsPrueba } from "../supabase/functions/_shared/vendedor/prueba_utiles.ts";
 import type { ConfigTurno, DepsHerramientas, PedidoChat, PedidoCliente, ProductoShopify } from "../supabase/functions/_shared/vendedor/tipos.ts";
@@ -458,18 +459,25 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
     ),
   };
 
+  /** 21-10: recontactos que salieron en la simulación (seguimiento-chat los marca en el perfil). */
+  let segSim = { seguimientos: 0, ultimo_seguimiento_en: null as string | null };
+  let ultimaDecision: { contexto: boolean } = { contexto: false };
   /** 21-10: la decisión real de seguimiento-chat (config por defecto) con el chat simulado; null = el seguimiento sale. */
   const motivoSinSeguimiento = (filas: Array<FilaHistorial & { creado_en: string }>, perfilActual: unknown, en: Date): string | null => {
     const ultimoIn = [...filas].reverse().find((f) => f.direccion === "in");
     const ultimo = filas.filter((f) => f.estado !== "fallido").at(-1);
     const resumen = reg.pedidosChat.at(-1)?.estado === "resumen";
     const d = decidirSeguimiento({
-      conversacion_id: CONV, cliente_id: CLIENTE, estado: "ia", ultima_entrada_en: ultimoIn?.creado_en ?? null, perfil: perfilActual ?? {},
+      conversacion_id: CONV, cliente_id: CLIENTE, estado: "ia", ultima_entrada_en: ultimoIn?.creado_en ?? null,
+      perfil: { ...((perfilActual ?? {}) as Record<string, unknown>), ...(segSim.ultimo_seguimiento_en ? segSim : {}) },
       ultimo_mensaje: ultimo ? { direccion: ultimo.direccion as "in" | "out", creado_en: ultimo.creado_en } : null,
       ultima_respuesta_derivada: false, pedido_reciente: reg.pedidosChat.some((p) => p.estado === "creado"), baja_marketing: false,
       datos_pedido_parciales: hayDatosPedidoParciales(filas.map((f) => ({ direccion: f.direccion as "in" | "out", tipo: f.tipo ?? null, texto: f.texto ?? null, estado: f.estado })), resumen),
     }, leerCfgSeguimiento(undefined), en);
-    return d.tipo === "nada" ? d.motivo : null;
+    if (d.tipo === "nada") return d.motivo;
+    ultimaDecision = { contexto: !!d.contexto };
+    segSim = { seguimientos: d.numero, ultimo_seguimiento_en: en.toISOString() };
+    return null;
   };
   const pasos: ResultadoPaso[] = [];
   let numSeg = 0;
@@ -540,6 +548,11 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
     if (noSale) {
       pasos.push({ entrada: paso.texto, alVendedor, origen: paso.origen, salidas: [], textos: [], botones: [], turnos: [], escrituras: [], resultado: { accion: "omitido", motivo: `seguimiento-chat:${noSale}` }, costo: 0, derivado: false });
       continue;
+    }
+    // 21-10: con el pedido a medio armar, seguimiento-chat manda "[seguimiento con datos]" en lugar de "[seguimiento N]".
+    if (paso.origen === "seguimiento" && paso.decidir && ultimaDecision.contexto) {
+      alVendedor = TEXTO_SEGUIMIENTO_CONTEXTO;
+      waId = `seguimiento:${numSeg}:${CONV}:${ahora().toISOString()}`;
     }
     try {
       resultado = await procesarTurno({ conversacion_id: CONV, wa_message_id: waId, texto: alVendedor, origen: paso.origen }, deps);

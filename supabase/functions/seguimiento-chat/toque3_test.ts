@@ -413,11 +413,13 @@ Deno.test("wa-webhook: 'No me escribas más' (mk_baja:0) es la baja de recompra;
 
 // ---------- 21-10: no interrumpir una compra en curso (regla de Enrique) ----------
 
-Deno.test("toque 3 (21-10): pedido a medio armar (pin, resumen o datos) no sale; frenar_medio_armado false lo apaga", () => {
-  assertEquals(motivo(cand({ datos_pedido_parciales: true })), "pedido_a_medio_armar");
-  assertEquals(motivo(cand({ datos_pedido_parciales: false })), "toque3");
-  const d = decidirToque3(cand({ datos_pedido_parciales: true }), { ...CFG, frenar_medio_armado: false }, T3, AHORA);
-  assertEquals(d.tipo, "toque3");
+Deno.test("toque 3 (21-10, segunda vuelta): pedido a medio armar → sale al día siguiente (ventana cerrada) sin esperar desde_h; sin permiso no", () => {
+  // Primera respuesta hace 30 h (antes de desde_h = 48) y el cliente se calló hace 26 h.
+  const armado = cand({ datos_pedido_parciales: true, primera_respuesta_en: hace(30), ultima_entrada_en: hace(26) });
+  assertEquals(motivo(armado), "toque3");
+  assertEquals(motivo({ ...armado, datos_pedido_parciales: false }), "esperando");
+  assertEquals(motivo({ ...armado, ultima_entrada_en: hace(10) }), "escribio_hace_poco");
+  assertEquals(motivo({ ...armado, consentimiento_marketing: null }), "sin_consentimiento");
 });
 
 Deno.test("toque 3 (21-10): la regla de los minutos también aplica (con 24 h de sin_escribir_h casi nunca corta); 0 la apaga", () => {

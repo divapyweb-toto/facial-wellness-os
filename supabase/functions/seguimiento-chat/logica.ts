@@ -12,6 +12,10 @@
 // pidió 2, mandó nombre y pin, el bot armó el resumen y preguntó la entrega; a los 93 min salió el recontacto 1 con
 // un video genérico y cortó la compra. Vale para los recontactos 1 y 2 y el toque 3; el rescate de datos solo frena
 // por datos a medio armar (sigue a los 10-20 min del "Quiero"). El recontacto el día que cobra no cambia.
+// 21-10 (Enrique, segunda vuelta): el que dejó datos a medias es el cliente más caliente, no queda sin recontacto. Con
+// datos a medio armar y ≥ horas_contexto (3) h sin escribir: UN solo recontacto con contexto ("[seguimiento con datos]":
+// nombra lo que ya hay y lo que falta, solo texto, nunca el video), en horario y en la ventana de 24 h; uno por silencio
+// y aunque se haya llegado al tope. Al día siguiente, con permiso de avisos, el toque 3 (plantilla). Después, nada.
 //
 // Cuándo toca (config_wa.vendedor_seguimiento, hora de Asunción):
 //   · Recontacto 1: el bot habló último, hace ≥ horas_1 (1,5 h; 2 h hasta el 12-10) que no responde y su última
@@ -29,7 +33,7 @@
 // Sin I/O: todo entra por DepsSeguimiento (io.ts en producción).
 import { partesAsuncion } from "../_shared/horario.ts";
 import { type BotonTelegram, enlaceWaMe, escaparAtributo, escaparHtml, recortar } from "../_shared/telegram_formato.ts";
-import { type EntradaTurno, type ResultadoTurno, textoSeguimiento } from "../_shared/vendedor/orquestador.ts";
+import { type EntradaTurno, type ResultadoTurno, TEXTO_SEGUIMIENTO_CONTEXTO, textoSeguimiento } from "../_shared/vendedor/orquestador.ts";
 import { normalizarPerfil } from "../_shared/vendedor/perfil.ts";
 import { diaLocalMas, instanteLocal } from "../recompra/calendario.ts";
 import { correrToque3, type DepsToque3, type ResumenToque3 } from "./toque3.ts";
@@ -75,6 +79,8 @@ export type CfgSeguimiento = {
    * (Candidato.datos_pedido_parciales).
    */
   frenar_medio_armado: boolean;
+  /** 21-10: con datos a medio armar, horas sin escribir para el único recontacto con contexto (3). */
+  horas_contexto: number;
 };
 
 // 12-10: horas_1 2 → 1,5 y horario_desde 8 → 12 (plan de ventas por WhatsApp, fase 2).
@@ -96,6 +102,7 @@ export const CFG_SEGUIMIENTO_DEFAULT: CfgSeguimiento = {
   margen_2_h: 0.5,
   min_desde_cliente_min: 120,
   frenar_medio_armado: true,
+  horas_contexto: 3,
 };
 
 const esObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -224,7 +231,8 @@ export type Candidato = {
   /**
    * Hay datos del pedido a medio armar en la ventana leída (`desdeISO`): el cliente mandó un pin, hay un
    * wa_pedidos_chat en 'resumen' sin confirmar, o mandó un texto (no acuse, sin "?") después de que el bot le pidió
-   * los datos (hayDatosPedidoParciales). Con cfg.frenar_medio_armado, no sale ningún recontacto ni rescate.
+   * los datos (hayDatosPedidoParciales). Con cfg.frenar_medio_armado: solo el recontacto con contexto (horas_contexto)
+   * y el toque 3 al día siguiente; nada de recontactos 1 y 2 comunes ni rescate.
    */
   datos_pedido_parciales?: boolean;
 };
@@ -236,7 +244,7 @@ export type MensajeDatosPedido = { direccion: "in" | "out"; tipo: string | null;
  * 21-10: saliente del bot que pide los datos del pedido ("Pasame tu nombre, tu ciudad y la calle o barrio", "Solo me
  * falta tu ciudad"). Sobre texto normalizado (minúsculas, sin tildes).
  */
-const RE_PIDE_DATOS = /pasame tu nombre|tu nombre,? (?:tu )?ciudad|nombre, (?:tu )?ciudad|solo me falta tu|me falta tu (?:ciudad|calle|barrio|nombre)/u;
+const RE_PIDE_DATOS = /pasame (?:tu |el )?(?:nombre|ciudad|calle|barrio|direccion|ubicacion)|tu nombre,? (?:tu )?ciudad|nombre, (?:tu )?ciudad|solo me falta tu|me falta tu (?:ciudad|calle|barrio|nombre)/u;
 
 export function pideDatosPedido(texto: string | null | undefined): boolean {
   return RE_PIDE_DATOS.test(norm(texto ?? ""));
@@ -283,7 +291,13 @@ export function bloqueEsAcuse(bloque: Candidato["bloque_cliente"]): boolean {
 }
 
 export type Decision =
-  | { tipo: "seguimiento"; numero: number; previo: { seguimientos: number; ultimo_seguimiento_en: string | null } }
+  | {
+    tipo: "seguimiento";
+    numero: number;
+    previo: { seguimientos: number; ultimo_seguimiento_en: string | null };
+    /** 21-10: recontacto con contexto (pedido a medio armar): "[seguimiento con datos]", solo texto. */
+    contexto?: boolean;
+  }
   | { tipo: "nada"; motivo: string };
 
 const H = 3_600_000;
@@ -328,11 +342,19 @@ export function decidirSeguimiento(c: Candidato, cfg: CfgSeguimiento, ahora: Dat
   if (!c.ultimo_mensaje || (c.ultimo_mensaje.direccion !== "out" && !acuse)) return nada("cliente_hablo_ultimo");
   if (c.ultima_respuesta_derivada) return nada("derivado");
   const n = seguimientosVigentes(c.perfil, ahora, cfg);
-  if (n >= cfg.max) return nada("tope_seguimientos");
   // 21-10 (regla de Enrique): el seguimiento es solo para quien dejó de responder. ultima_entrada_en es el último
   // mensaje del cliente (también si fue un "Ok" suelto).
   if (clienteEscribioHacePoco(entrada, cfg, ahora)) return nada("cliente_escribio_hace_poco");
-  if (cfg.frenar_medio_armado && c.datos_pedido_parciales) return nada("pedido_a_medio_armar");
+  const previo0 = { seguimientos: perfil.seguimientos ?? 0, ultimo_seguimiento_en: perfil.ultimo_seguimiento_en ?? null };
+  // 21-10 (segunda vuelta): pedido a medio armar → UN recontacto con contexto por silencio, aunque se haya llegado al tope.
+  if (cfg.frenar_medio_armado && c.datos_pedido_parciales) {
+    const ultimoSeg = perfil.ultimo_seguimiento_en ? Date.parse(perfil.ultimo_seguimiento_en) : NaN;
+    if (Number.isFinite(ultimoSeg) && ultimoSeg >= entrada) return nada("contexto_ya_enviado");
+    if (hEntrada < cfg.horas_contexto) return nada("pedido_a_medio_armar");
+    if (!dentroHorario(ahora, cfg)) return nada("fuera_de_horario");
+    return { tipo: "seguimiento", numero: n + 1, previo: previo0, contexto: true };
+  }
+  if (n >= cfg.max) return nada("tope_seguimientos");
   if (!dentroHorario(ahora, cfg)) return nada("fuera_de_horario");
   const hBot = (ahora.getTime() - Date.parse(c.ultimo_mensaje.creado_en)) / H;
   if (!(hBot >= cfg.horas_1)) return nada("esperando");
@@ -502,7 +524,7 @@ async function correrRecontactos(deps: DepsSeguimiento, crudo: unknown): Promise
       r = await deps.turno({
         conversacion_id: id,
         wa_message_id: `seguimiento:${d.numero}:${id}:${enISO}`,
-        texto: textoSeguimiento(d.numero),
+        texto: d.contexto ? TEXTO_SEGUIMIENTO_CONTEXTO : textoSeguimiento(d.numero),
         origen: "seguimiento",
       });
     } catch (e) {

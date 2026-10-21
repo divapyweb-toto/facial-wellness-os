@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
-import { accionInventada, contarEmojis, extraerMontos, montosDeResultado, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
+import { accionInventada, contarEmojis, extraerMontos, montosDeResultado, quitarFrasesConMontos, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
 
 const PROHIBIDAS = ["garantía", "devolución", "reembolso", "sin riesgo", "cura", "curar", "tratamiento", "oxígeno"];
 const CATALOGO = [79000, 33000, 112000, 125000, 158000];
@@ -211,4 +211,9 @@ Deno.test("19-10 promesa de recontacto otro día → bloqueada; avisos del pedid
 Deno.test("19-10 quitarPromesaRecontacto: saca solo la frase de la promesa", () => {
   assertEquals(quitarPromesaRecontacto("Dale, tranqui. El viernes 30/10 te escribo y te lo armo."), "Dale, tranqui.");
   assertEquals(quitarPromesaRecontacto("Mañana te escribo."), "Cuando estés listo escribime por acá y lo armamos.");
+});
+
+Deno.test("21-10 quitarFrasesConMontos: saca solo las frases con los montos frenados", () => {
+  assertEquals(quitarFrasesConMontos("Genial! Pasame tu ciudad. Te ahorrás 40.000. Los 2 salen 158.000.", [40000]), "Genial! Pasame tu ciudad. Los 2 salen 158.000.");
+  assertEquals(quitarFrasesConMontos("Te ahorrás 40 mil.", [40000]), "");
 });

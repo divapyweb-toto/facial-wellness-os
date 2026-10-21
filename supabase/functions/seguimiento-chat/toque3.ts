@@ -127,13 +127,15 @@ export function decidirToque3(c: Candidato, cfg: CfgSeguimiento, t3: CfgToque3, 
   // 21-10 (regla de Enrique, la misma de los recontactos 1 y 2): nada si escribió hace poco o el pedido está a medio
   // armar. La de los minutos casi nunca corta acá (sin_escribir_h ya pide 24 h), queda por si se baja la config.
   if (clienteEscribioHacePoco(entrada, cfg, ahora)) return nada("cliente_escribio_hace_poco");
-  if (cfg.frenar_medio_armado && c.datos_pedido_parciales) return nada("pedido_a_medio_armar");
+  // 21-10 (segunda vuelta): con el pedido a medio armar, el toque 3 sí sale y "al día siguiente": alcanza con que la
+  // ventana de 24 h esté cerrada (abajo), sin esperar desde_h.
+  const medioArmado = cfg.frenar_medio_armado && !!c.datos_pedido_parciales;
   // Nunca con la ventana de 24 h abierta: ahí todavía pueden salir los recontactos 1 y 2 (gratis, con la IA).
   if ((ahora.getTime() - entrada) / H < Math.max(t3.sin_escribir_h, cfg.ventana_max_h)) return nada("escribio_hace_poco");
   const primera = c.primera_respuesta_en ? Date.parse(c.primera_respuesta_en) : NaN;
   if (!Number.isFinite(primera)) return nada("sin_respuesta_del_bot");
   const h = (ahora.getTime() - primera) / H;
-  if (h < t3.desde_h) return nada("esperando");
+  if (h < t3.desde_h && !medioArmado) return nada("esperando");
   if (h >= t3.hasta_h) return nada("fuera_de_las_72h");
   if (!enHorario(ahora, cfg)) return nada("fuera_de_horario");
   return { tipo: "toque3" };

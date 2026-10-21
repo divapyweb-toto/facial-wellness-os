@@ -57,7 +57,7 @@ function cand(over: Partial<Candidato> = {}): Candidato {
 
 const motivo = (c: Candidato, ahora = AHORA, cfg = CFG) => {
   const d = decidirSeguimiento(c, cfg, ahora);
-  return d.tipo === "nada" ? d.motivo : `seguimiento ${d.numero}`;
+  return d.tipo === "nada" ? d.motivo : `seguimiento ${d.numero}${d.contexto ? " con datos" : ""}`;
 };
 
 // ---------- config ----------
@@ -77,7 +77,7 @@ Deno.test("semilla seed_seguimiento.sql = defaults del código (con toque3), arr
   const semilla = JSON.parse(m[1]);
   // 13-10: con las claves del rescate de datos. 21-10: min_desde_cliente_min y frenar_medio_armado todavía no están en
   // la semilla (la base viva toma el default del código: 120 y true).
-  const { min_desde_cliente_min: _m, frenar_medio_armado: _f, ...cfgSemilla } = CFG;
+  const { min_desde_cliente_min: _m, frenar_medio_armado: _f, horas_contexto: _h, ...cfgSemilla } = CFG;
   assertEquals(semilla, { ...cfgSemilla, ...CFG_RESCATE_DATOS_DEFAULT, toque3: CFG_TOQUE3_DEFAULT });
   assertEquals(leerCfgSeguimiento(semilla), CFG);
   assertEquals(leerCfgToque3(semilla), CFG_TOQUE3_DEFAULT);
@@ -904,12 +904,18 @@ Deno.test("21-10 caso real: pidió 2, mandó nombre y pin, resumen sin confirmar
     datos_pedido_parciales: datos,
   });
   assertEquals(motivo(real), "cliente_escribio_hace_poco");
-  // Y aunque pasen las 2 h, el pedido a medio armar sigue frenando (recontacto 1 y 2).
-  assertEquals(motivo({ ...real, ultima_entrada_en: hace(3), ultimo_mensaje: { direccion: "out", creado_en: hace(2.9) } }), "pedido_a_medio_armar");
+  // 21-10 (segunda vuelta): a las 2,5 h todavía nada; a las 3 h, UN recontacto con contexto (aunque esté en el tope).
+  assertEquals(motivo({ ...real, ultima_entrada_en: hace(2.5), ultimo_mensaje: { direccion: "out", creado_en: hace(2.4) } }), "pedido_a_medio_armar");
+  const tres: Candidato = { ...real, ultima_entrada_en: hace(3.1), ultimo_mensaje: { direccion: "out", creado_en: hace(3) } };
+  assertEquals(motivo(tres), "seguimiento 1 con datos");
+  assertEquals(motivo({ ...tres, perfil: { seguimientos: 2, ultimo_seguimiento_en: hace(30) } }), "seguimiento 3 con datos");
+  // Uno solo por silencio: si ya salió un recontacto después de su último mensaje, nada más.
   assertEquals(
-    motivo({ ...real, ultima_entrada_en: hace(20), ultimo_mensaje: { direccion: "out", creado_en: hace(19.9) }, perfil: { seguimientos: 1, ultimo_seguimiento_en: hace(18) } }),
-    "pedido_a_medio_armar",
+    motivo({ ...real, ultima_entrada_en: hace(20), ultimo_mensaje: { direccion: "out", creado_en: hace(16) }, perfil: { seguimientos: 1, ultimo_seguimiento_en: hace(16) } }),
+    "contexto_ya_enviado",
   );
+  // De noche espera (horario 12 a 21 de Asunción).
+  assertEquals(motivo(tres, new Date("2026-10-08T02:00:00Z")), "fuera_de_horario");
 });
 
 Deno.test("21-10: 119 min desde el último mensaje del cliente frena; 121 min sale (recontacto 1)", () => {
@@ -922,7 +928,7 @@ Deno.test("21-10: min_desde_cliente_min 0 apaga la regla de los minutos; frenar_
   const reciente = cand({ ultima_entrada_en: hace(1.6), ultimo_mensaje: { direccion: "out", creado_en: hace(1.5) } });
   assertEquals(motivo(reciente), "cliente_escribio_hace_poco");
   assertEquals(motivo(reciente, AHORA, { ...CFG, min_desde_cliente_min: 0 }), "seguimiento 1");
-  const armado = cand({ datos_pedido_parciales: true });
+  const armado = cand({ datos_pedido_parciales: true, ultima_entrada_en: hace(2.5), ultimo_mensaje: { direccion: "out", creado_en: hace(2.4) } });
   assertEquals(motivo(armado), "pedido_a_medio_armar");
   assertEquals(motivo(armado, AHORA, { ...CFG, frenar_medio_armado: false }), "seguimiento 1");
 });
@@ -942,6 +948,7 @@ Deno.test("21-10 hayDatosPedidoParciales: pin, resumen, datos tras pedírselos �
   // Nombre después de "Pasame tu nombre, tu ciudad y la calle o barrio".
   assert(hayDatosPedidoParciales([sale(PIDE), entra("Ana Prueba")], false));
   assert(hayDatosPedidoParciales([sale("Solo me falta tu ciudad"), entra("Ciudad del Este")], false));
+  assert(hayDatosPedidoParciales([sale("Genial! Pasame tu ciudad y la calle o barrio 🙌"), entra("Marta Prueba")], false));
   // Una pregunta después del pedido de datos: todavía no dio datos.
   assertFalse(hayDatosPedidoParciales([sale(PIDE), entra("cuánto tarda?")], false));
   assertFalse(hayDatosPedidoParciales([sale(PIDE), entra("¿Y llega a Luque")], false));
@@ -965,7 +972,7 @@ Deno.test("21-10 pideDatosPedido: los textos del bot que piden datos (sin tildes
 
 Deno.test("21-10 corrida: el de compra en curso no sale y queda en motivos; el que dejó de responder sí", async () => {
   const x = corrida([
-    cand({ conversacion_id: "conv-armado", datos_pedido_parciales: true }),
+    cand({ conversacion_id: "conv-armado", datos_pedido_parciales: true, ultima_entrada_en: hace(2.5), ultimo_mensaje: { direccion: "out", creado_en: hace(2.4) } }),
     cand({ conversacion_id: "conv-reciente", ultima_entrada_en: hace(1.6), ultimo_mensaje: { direccion: "out", creado_en: hace(1.5) } }),
     cand({ conversacion_id: "conv-callado" }),
   ]);
@@ -973,4 +980,14 @@ Deno.test("21-10 corrida: el de compra en curso no sale y queda en motivos; el q
   assertEquals(r.enviados, 1);
   assertEquals(r.motivos, { pedido_a_medio_armar: 1, cliente_escribio_hace_poco: 1 });
   assertEquals(r.resultados?.map((y) => y.conversacion_id), ["conv-callado"]);
+});
+
+Deno.test("21-10 corrida: pedido a medio armar con 3 h de silencio → el turno recibe '[seguimiento con datos]'", async () => {
+  const textos: string[] = [];
+  const x = corrida([cand({ conversacion_id: "conv-armado", datos_pedido_parciales: true, ultima_entrada_en: hace(3.2), ultimo_mensaje: { direccion: "out", creado_en: hace(3.1) } })], {
+    turno: (e: { texto: string }) => (textos.push(e.texto), { accion: "respondido", costo_usd: 0.001 }),
+  });
+  const r = await correrSeguimientos(x.deps);
+  assertEquals(r.enviados, 1);
+  assertEquals(textos, ["[seguimiento con datos]"]);
 });

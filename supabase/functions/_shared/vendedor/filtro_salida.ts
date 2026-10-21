@@ -286,6 +286,15 @@ export function quitarPromesaRecontacto(texto: string): string {
   return limpio || "Cuando estés listo escribime por acá y lo armamos.";
 }
 
+/**
+ * 21-10: saca las frases con montos que no salen del catálogo (precio_no_catalogo:N). "" si no queda nada. Se usa solo
+ * cuando la IA, al regenerar, devolvió vacío: el resto de su primera respuesta (pedido de datos, beneficio) sale igual.
+ */
+export function quitarFrasesConMontos(texto: string, montos: number[]): string {
+  const malos = new Set(montos);
+  return texto.split(/(?<=[.!?\n\p{Extended_Pictographic}])\s+/u).filter((f) => !extraerMontos(f).some((n) => malos.has(n))).join(" ").trim();
+}
+
 export const INSTRUCCION_PROMESA_RECONTACTO =
   "No prometas escribirle otro día (pasadas 24 h WhatsApp no te deja). Decile \"cuando estés listo escribime por acá y lo armamos\" " +
   "o, si dio un día, ofrecé dejarlo programado para ese día con programar_entrega. El día ya quedó anotado.";

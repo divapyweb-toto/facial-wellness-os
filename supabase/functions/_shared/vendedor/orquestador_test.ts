@@ -1001,3 +1001,25 @@ Deno.test("21-10 intención escrita: no aplica a una pregunta, con el switch apa
   await procesarTurno({ ...ENTRADA, texto: "Mándame 2" }, dosBurbujas.deps);
   assertFalse(String(dosBurbujas.pedidos[0].mensajes.at(-1)!.content).includes("ESCRIBIÓ que lo quiere"));
 });
+
+Deno.test("21-10 '[seguimiento con datos]': el video, los botones o el resumen se bloquean; sale solo el texto", async () => {
+  const e = escenario((_p, n) => n === 1
+    ? herramienta("enviar_media", { handle: "tiras-prueba", tipo: "uso", texto: "x" })
+    : texto("¿Te dejo armadas las 2 tiras para mañana? Solo me falta tu calle o barrio 🙌"));
+  const r = await procesarTurno({ conversacion_id: CONV, wa_message_id: "seguimiento:1:x", texto: "[seguimiento con datos]", origen: "seguimiento" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  const m = e.turnos[0].herramientas.find((h) => h.nombre === "enviar_media");
+  assert(m?.error && JSON.stringify(m.resultado).includes("solo_texto"), JSON.stringify(e.turnos[0].herramientas));
+  assertEquals(e.reg.medias.length, 0);
+  assertEquals(e.reg.textos.length, 1);
+});
+
+Deno.test("21-10 monto inventado + regeneración vacía: sale la primera respuesta sin esa frase, sin derivar", async () => {
+  const e = escenario((_p, n) => n === 1
+    ? texto("Genial! Pasame tu nombre, tu ciudad y la calle o barrio 🙌 Te ahorrás 40.000 llevando 2.")
+    : texto(""), { historial: [{ direccion: "in", texto: "[botón] 2 con envío gratis (vend_p1:q2:tiras-prueba)", tipo: "interactive", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" }] });
+  const r = await procesarTurno({ ...ENTRADA, texto: "[botón] 2 con envío gratis (vend_p1:q2:tiras-prueba)" }, e.deps);
+  assertEquals(r.accion, "respondido");
+  assertEquals(e.reg.textos.map((t) => t.texto).join(" "), "Genial! Pasame tu nombre, tu ciudad y la calle o barrio 🙌");
+  assertEquals(e.reg.humano, []);
+});

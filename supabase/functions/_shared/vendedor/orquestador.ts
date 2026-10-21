@@ -39,7 +39,7 @@ import {
 import { productoDeMarca, productoPorPalabras } from "../anuncios.ts";
 import { partesAsuncion } from "../horario.ts";
 import { extrasVendedor } from "./config.ts";
-import { INSTRUCCION_ACCION_INVENTADA, INSTRUCCION_PROMESA_RECONTACTO, montosDeResultado, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
+import { INSTRUCCION_ACCION_INVENTADA, INSTRUCCION_PROMESA_RECONTACTO, montosDeResultado, quitarFrasesConMontos, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
 import { type BloqueImagen, cargarImagen, contenidoConImagenes, type Descarga, type ImagenEntrada, imagenesPendientes, textoImagenNoVista } from "./imagenes.ts";
 import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type ItemCatalogo, itemsCatalogo, type MotivoDerivacion } from "./herramientas.ts";
 import { type IntencionEscrita, intencionEnBloque, lineaPrecioIntencion, notaIntencion, yaPidioDatos } from "./intencion.ts";
@@ -150,6 +150,13 @@ export type EntradaTurno = {
 };
 
 /** Texto exacto de la entrada de un turno de seguimiento (contrato con el prompt). */
+/**
+ * 21-10 (Enrique): recontacto con contexto para un pedido a medio armar (seguimiento-chat): UN mensaje de texto que
+ * nombra lo que ya hay y lo que falta. En ese turno solo se permite escribir (sin video, foto, botones ni resumen).
+ */
+export const TEXTO_SEGUIMIENTO_CONTEXTO = "[seguimiento con datos]";
+const HERRAMIENTAS_CONTEXTO = new Set(["consultar_catalogo"]);
+
 export function textoSeguimiento(numero: number): string {
   return `[seguimiento ${numero}]`;
 }
@@ -481,7 +488,8 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
 
   /** Demora de leer + escribir (descontando lo que ya pasó), burbujas y envío. */
   const responder = async (texto: string, accionOk: ResultadoTurno["accion"], motivoOk?: string, op: { contarTurno?: boolean } = {}) => {
-    const burbujas = partirEnBurbujas(texto, cfg.ritmo.partir_desde_caracteres);
+    // 21-10: el recontacto con contexto es UN mensaje (sin partir en burbujas).
+    const burbujas = esSeguimiento && entrada.texto.startsWith(TEXTO_SEGUIMIENTO_CONTEXTO) ? [texto] : partirEnBurbujas(texto, cfg.ritmo.partir_desde_caracteres);
     const objetivo = calcularDemoraMs({ textoCliente, textoRespuesta: burbujas[0] ?? texto, ahora: deps.ahora(), ritmo: cfg.ritmo, azar: azar() });
     const resta = objetivo - (deps.ahora().getTime() - inicio);
     // En un seguimiento no hay nadie esperando la respuesta: sale sin la demora de "leer + escribir".
@@ -748,7 +756,9 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         // Se ignora sin sacarla de la lista (la lista de herramientas es parte de la caché del prompt).
         // 19-10 (§3d, #1056): el Confirmo de un resumen viejo con otro total, o con una cantidad elegida después, no crea el pedido.
         let bloqueo: string | null = null;
-        if (intencion && u.name === "primer_turno") {
+        if (esSeguimiento && entrada.texto.startsWith(TEXTO_SEGUIMIENTO_CONTEXTO) && !HERRAMIENTAS_CONTEXTO.has(u.name)) {
+          bloqueo = "solo_texto: en este recontacto va UN mensaje de texto corto con lo que ya tenés y lo que falta, sin video, foto, botones ni resumen.";
+        } else if (intencion && u.name === "primer_turno") {
           bloqueo = "el_cliente_ya_dijo_que_lo_quiere: no uses primer_turno. Pedí los datos con el precio en una línea (ver CONTROL INTERNO).";
         } else if (esSeguimiento && u.name === "derivar_a_enrique") {
           bloqueo = "no_disponible_en_seguimiento: en un recontacto automático no se deriva a Enrique. Escribí un recontacto corto para el cliente, sin derivar.";
@@ -800,6 +810,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   fila.filtro.intentos.push(rev);
   if (!rev.ok) {
     fila.regenerado = true;
+    const primero = { texto: textoFinal, motivos: rev.motivos };
     const intento: Mensaje[] = [
       ...mensajes,
       {
@@ -832,6 +843,17 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
       textoFinal = quitarPromesaRecontacto(textoFinal);
       rev = revisarRespuesta(textoFinal, opcionesFiltro());
       fila.filtro.intentos.push(rev);
+    }
+    // 21-10: la primera respuesta solo tenía montos inventados y al regenerar volvió vacía (pasó en "2 con envío gratis":
+    // calculaba ahorros por su cuenta): sale la primera sin esas frases, si lo que queda pasa el filtro.
+    if (!rev.ok && rev.motivos.every((m) => m === "respuesta_vacia") && primero.motivos.every((m) => m.startsWith("precio_no_catalogo:"))) {
+      const limpio = quitarFrasesConMontos(primero.texto, primero.motivos.flatMap((m) => m.split(":")[1].split(",").map(Number)));
+      const revLimpio = revisarRespuesta(limpio, opcionesFiltro());
+      fila.filtro.intentos.push(revLimpio);
+      if (revLimpio.ok) {
+        textoFinal = limpio;
+        rev = revLimpio;
+      }
     }
     if (!rev.ok) {
       return await derivar("filtro", `La respuesta de la IA no pasó el filtro dos veces (${rev.motivos.join(", ")}). Mensaje del cliente: "${entrada.texto.slice(0, 200)}"`);
