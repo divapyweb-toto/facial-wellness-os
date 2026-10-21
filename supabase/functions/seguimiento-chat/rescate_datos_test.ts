@@ -24,7 +24,7 @@ const haceMin = (m: number, base = AHORA) => new Date(base.getTime() - m * MIN).
 const CFG = CFG_SEGUIMIENTO_DEFAULT;
 const RD = CFG_RESCATE_DATOS_DEFAULT;
 
-/** Tocó "Quiero 1" hace 14 min, el bot le pidió los datos, mandó el nombre hace 12 min y se calló. */
+/** Tocó "Quiero 1" hace 14 min, escribió hace 12 min (sin datos del pedido: datos_pedido_parciales ausente) y se calló. */
 function cand(over: Partial<Candidato> = {}): Candidato {
   return {
     conversacion_id: "conv-r",
@@ -379,4 +379,18 @@ Deno.test("integración rescate: si el cliente escribe mientras tanto no sale; c
   assertEquals(g.reg.humano, []);
   assertEquals(g.turnos, []);
   assertEquals(y.marcasRescate, [[CONV, AHORA.toISOString()], [CONV, null]], "sin gasto: se desmarca");
+});
+
+// ---------- 21-10: no interrumpir una compra en curso (regla de Enrique) ----------
+
+Deno.test("rescate (21-10): con datos a medio armar (pin, resumen o datos tras pedírselos) no sale; frenar_medio_armado false lo apaga", () => {
+  assertEquals(motivo(cand({ datos_pedido_parciales: true })), "pedido_a_medio_armar");
+  assertEquals(motivo(cand({ datos_pedido_parciales: true }), AHORA, RD, { ...CFG, frenar_medio_armado: false }), "rescate");
+  assertEquals(motivo(cand({ datos_pedido_parciales: false })), "rescate");
+});
+
+Deno.test("rescate (21-10): la regla de los 120 min NO aplica: sigue saliendo a los 10-20 min del último mensaje", () => {
+  assertEquals(CFG.min_desde_cliente_min, 120);
+  assertEquals(motivo(cand({ ultima_entrada_en: haceMin(12) })), "rescate");
+  assertEquals(motivo(cand({ ultima_entrada_en: haceMin(19), ultimo_mensaje: { direccion: "out", creado_en: haceMin(18) } })), "rescate");
 });

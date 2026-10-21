@@ -794,6 +794,26 @@ Deno.test("20-10 resumen con ubicación pendiente: 'Lo entregamos en Luque; el r
   assertFalse(t.includes("Sin calle"));
 });
 
+Deno.test("21-10 resumen con solo el pin: 'en la ubicación que mandaste', nunca 'Pin de ubicación'", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const pedir = (extra: Record<string, unknown>) =>
+    ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ubicacion: "-25.3000000,-57.5000000", items: [{ handle: "tiras-prueba", cantidad: 2 }], ...extra }, ctxPrueba(), deps);
+  await pedir({ ciudad: "Asunción" });
+  const t = textoResumen(reg.pedidosChat.at(-1)!.datos, ctxPrueba());
+  assert(t.includes("Lo entregamos en la ubicación que mandaste, Asunción."), t);
+  assertFalse(/pin de ubicaci/i.test(t), t);
+  await pedir({ ciudad: "Asunción", referencia: "Barrio Obrero" });
+  const r = textoResumen(reg.pedidosChat.at(-1)!.datos, ctxPrueba());
+  assert(r.includes("Lo entregamos en la ubicación que mandaste (Barrio Obrero), Asunción."), r);
+  await pedir({});
+  const v = textoResumen(reg.pedidosChat.at(-1)!.datos, ctxPrueba());
+  assert(v.includes("Lo entregamos en la ubicación que mandaste."), v);
+  assertFalse(v.includes("Ver mapa"), v);
+  // El dato interno para Shopify/Despacho no cambia.
+  assertEquals(reg.pedidosChat.at(-1)!.datos.direccion, "Pin de ubicación");
+});
+
 Deno.test("21-10 oferta 2 distintos: prendida → 2 líneas a precio de lista, envío 0, OFERTA_2_DISTINTOS; apagada → envío aparte", async () => {
   const items = [{ handle: "tiras-prueba", cantidad: 1 }, { handle: "raspador-prueba", cantidad: 1 }];
   _limpiarCacheCatalogo();

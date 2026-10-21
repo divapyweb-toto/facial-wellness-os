@@ -41,6 +41,7 @@ import { textosVisibles } from "../supabase/functions/_shared/wa_interactivos.ts
 import { marcaAnuncio, marcaTextoAnuncio, nombreDeHandle, productoDeMarca, textoDelAnuncio } from "../supabase/functions/_shared/anuncios.ts";
 import { conPedidoAbierto, textoDeMensaje, textoParaVendedor } from "../supabase/functions/wa-webhook/procesar.ts";
 import { db } from "../supabase/functions/_shared/db.ts";
+import { decidirSeguimiento, hayDatosPedidoParciales, leerCfgSeguimiento } from "../supabase/functions/seguimiento-chat/logica.ts";
 import { type Check, type Escenario, ESCENARIOS, type Paso, type PedidoEscenario } from "./escenarios-vendedor.ts";
 
 // ---------- entorno ----------
@@ -410,7 +411,7 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
     },
     consentimiento: () => Promise.resolve(esc.consentimiento === undefined ? "preguntado" : esc.consentimiento),
     estadoOfertaPrioridad: () => Promise.resolve(null),
-    direccionDePin: () => Promise.resolve({ calle: "Calle Inventada", ciudad: "Ciudad del Este" }),
+    direccionDePin: () => Promise.resolve(esc.mapa ?? { calle: "Calle Inventada", ciudad: "Ciudad del Este" }),
   };
 
   const ultimoEntrante = () => [...historial].reverse().find((f) => f.direccion === "in")?.wa_message_id ?? null;
@@ -457,12 +458,25 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
     ),
   };
 
+  /** 21-10: la decisión real de seguimiento-chat (config por defecto) con el chat simulado; null = el seguimiento sale. */
+  const motivoSinSeguimiento = (filas: Array<FilaHistorial & { creado_en: string }>, perfilActual: unknown, en: Date): string | null => {
+    const ultimoIn = [...filas].reverse().find((f) => f.direccion === "in");
+    const ultimo = filas.filter((f) => f.estado !== "fallido").at(-1);
+    const resumen = reg.pedidosChat.at(-1)?.estado === "resumen";
+    const d = decidirSeguimiento({
+      conversacion_id: CONV, cliente_id: CLIENTE, estado: "ia", ultima_entrada_en: ultimoIn?.creado_en ?? null, perfil: perfilActual ?? {},
+      ultimo_mensaje: ultimo ? { direccion: ultimo.direccion as "in" | "out", creado_en: ultimo.creado_en } : null,
+      ultima_respuesta_derivada: false, pedido_reciente: reg.pedidosChat.some((p) => p.estado === "creado"), baja_marketing: false,
+      datos_pedido_parciales: hayDatosPedidoParciales(filas.map((f) => ({ direccion: f.direccion as "in" | "out", tipo: f.tipo ?? null, texto: f.texto ?? null, estado: f.estado })), resumen),
+    }, leerCfgSeguimiento(undefined), en);
+    return d.tipo === "nada" ? d.motivo : null;
+  };
   const pasos: ResultadoPaso[] = [];
   let numSeg = 0;
   for (const [i, paso0] of esc.pasos.entries()) {
-    const paso: { texto: string; origen: "cliente" | "seguimiento"; espera_min?: number } = typeof paso0 === "string"
+    const paso: { texto: string; origen: "cliente" | "seguimiento"; espera_min?: number; agrupar?: boolean; decidir?: boolean } = typeof paso0 === "string"
       ? { texto: paso0, origen: "cliente" }
-      : { texto: paso0.texto, origen: paso0.origen ?? "cliente", espera_min: paso0.espera_min };
+      : { texto: paso0.texto, origen: paso0.origen ?? "cliente", espera_min: paso0.espera_min, agrupar: paso0.agrupar, decidir: paso0.decidir };
     escrituras = [];
     salidas = [];
     const turnosAntes = turnosTodos.length;
@@ -518,6 +532,15 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
       alVendedor = texto;
     }
     let resultado: ResultadoPaso["resultado"];
+    if (paso.agrupar && paso.origen === "cliente") {
+      pasos.push({ entrada: paso.texto, alVendedor, origen: paso.origen, salidas: [], textos: [], botones: [], turnos: [], escrituras: [], resultado: { accion: "agrupado", motivo: "llega_junto_con_el_siguiente" }, costo: 0, derivado: false });
+      continue;
+    }
+    const noSale = paso.origen === "seguimiento" && paso.decidir ? motivoSinSeguimiento(historial, perfil, ahora()) : null;
+    if (noSale) {
+      pasos.push({ entrada: paso.texto, alVendedor, origen: paso.origen, salidas: [], textos: [], botones: [], turnos: [], escrituras: [], resultado: { accion: "omitido", motivo: `seguimiento-chat:${noSale}` }, costo: 0, derivado: false });
+      continue;
+    }
     try {
       resultado = await procesarTurno({ conversacion_id: CONV, wa_message_id: waId, texto: alVendedor, origen: paso.origen }, deps);
     } catch (e) {

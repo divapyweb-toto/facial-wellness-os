@@ -410,3 +410,22 @@ Deno.test("wa-webhook: 'No me escribas más' (mk_baja:0) es la baja de recompra;
   assertEquals([leerBotonConfirmacion(pedir), leerBotonPostventa(pedir), leerBotonMarketing(pedir)], [null, null, null]);
   assertEquals(textoParaVendedor(pedir), `[botón] Quiero pedirlo (vend_p1:pedir:${TIRAS})`);
 });
+
+// ---------- 21-10: no interrumpir una compra en curso (regla de Enrique) ----------
+
+Deno.test("toque 3 (21-10): pedido a medio armar (pin, resumen o datos) no sale; frenar_medio_armado false lo apaga", () => {
+  assertEquals(motivo(cand({ datos_pedido_parciales: true })), "pedido_a_medio_armar");
+  assertEquals(motivo(cand({ datos_pedido_parciales: false })), "toque3");
+  const d = decidirToque3(cand({ datos_pedido_parciales: true }), { ...CFG, frenar_medio_armado: false }, T3, AHORA);
+  assertEquals(d.tipo, "toque3");
+});
+
+Deno.test("toque 3 (21-10): la regla de los minutos también aplica (con 24 h de sin_escribir_h casi nunca corta); 0 la apaga", () => {
+  const t = (cfg: typeof CFG) => {
+    const d = decidirToque3(cand({ ultima_entrada_en: hace(30) }), cfg, T3, AHORA);
+    return d.tipo === "nada" ? d.motivo : d.tipo;
+  };
+  assertEquals(t(CFG), "toque3");
+  assertEquals(t({ ...CFG, min_desde_cliente_min: 31 * 60 }), "cliente_escribio_hace_poco");
+  assertEquals(t({ ...CFG, min_desde_cliente_min: 0 }), "toque3");
+});

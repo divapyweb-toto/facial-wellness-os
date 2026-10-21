@@ -7,7 +7,7 @@ import { enviarPlantilla, enviarTexto } from "../_shared/wa.ts";
 import { inicioMesAsuncionISO, procesarTurno } from "../_shared/vendedor/orquestador.ts";
 import { depsHerramientasReales, depsOrquestadorReales } from "../_shared/vendedor/io.ts";
 import { registrarBaja } from "../recompra/baja.ts";
-import type { Candidato, CfgSeguimiento, DepsSeguimiento } from "./logica.ts";
+import { type Candidato, type CfgSeguimiento, type DepsSeguimiento, hayDatosPedidoParciales, type MensajeDatosPedido } from "./logica.ts";
 import type { CandidatoDerivacion, DatosDerivacion } from "./derivaciones_plazo.ts";
 import type { HistorialMk, PreciosToque3 } from "./toque3.ts";
 import { esBotonQuiero, PREFIJO_RESCATE, rescateSalio } from "./rescate_datos.ts";
@@ -157,6 +157,7 @@ function textoError(e: unknown): string {
  * nombre y teléfono. `desdeISO`: desde cuándo leer mensajes y turnos (≤ la última entrada de cada conversación).
  * 12-10 (toque 3): también primera respuesta y plantillas enviadas desde `desdeISO`, consentimiento vigente,
  * wa_user_id y si el último saliente lo mandó Enrique a mano.
+ * 21-10: datos_pedido_parciales (pin, wa_pedidos_chat en 'resumen' o datos tras pedírselos desde `desdeISO`).
  */
 async function enriquecer(convs: FilaConv[], desdeISO: string, cfg: CfgSeguimiento): Promise<Candidato[]> {
   if (!convs.length) return [];
@@ -165,7 +166,7 @@ async function enriquecer(convs: FilaConv[], desdeISO: string, cfg: CfgSeguimien
   const clientes = [...new Set(convs.map((c) => c.cliente_id))];
   const desdePedido = new Date(Date.now() - cfg.dias_pedido * DIA).toISOString();
 
-  const [msgs, turnos, telefonos, pedidosChat, consent] = await Promise.all([
+  const [msgs, turnos, telefonos, pedidosChat, consent, resumenes] = await Promise.all([
     // El último mensaje siempre es posterior a ultima_entrada_en (≥ desdeISO).
     sb.from("wa_mensajes").select("conversacion_id,direccion,estado,texto,creado_en,tipo,plantilla:contenido->template->>name,origen:contenido->>origen").in("conversacion_id", ids)
       .gte("creado_en", desdeISO).order("creado_en", { ascending: false }).limit(10000),
@@ -175,12 +176,16 @@ async function enriquecer(convs: FilaConv[], desdeISO: string, cfg: CfgSeguimien
     sb.from("wa_pedidos_chat").select("conversacion_id,creado_en").in("conversacion_id", ids).eq("estado", "creado").gte("creado_en", desdePedido),
     sb.from("wa_consentimientos").select("cliente_id,estado,creado_en").in("cliente_id", clientes).eq("tipo", "marketing")
       .order("creado_en", { ascending: false }),
+    // 21-10: resumen sin confirmar en la ventana = pedido a medio armar (aparte de pedidosChat, que es solo 'creado').
+    sb.from("wa_pedidos_chat").select("conversacion_id").in("conversacion_id", ids).eq("estado", "resumen").gte("creado_en", desdeISO),
   ]);
   falla("mensajes", msgs.error);
   falla("turnos", turnos.error);
   falla("clientes", telefonos.error);
   falla("pedidos del chat", pedidosChat.error);
   falla("consentimientos", consent.error);
+  falla("resúmenes sin confirmar", resumenes.error);
+  const convsConResumen = new Set((resumenes.data ?? []).map((p) => p.conversacion_id as string));
 
   // Pedidos de Shopify del cliente (por cliente_id o por teléfono), no borradores, en los últimos días.
   const telDe = new Map((telefonos.data ?? []).map((c) => [c.id as string, (c.telefono as string | null) ?? null]));
@@ -218,7 +223,12 @@ async function enriquecer(convs: FilaConv[], desdeISO: string, cfg: CfgSeguimien
   // 19-10 (ítem 7): entrantes posteriores a nuestro último saliente (se juntan hasta topar con un saliente no fallido).
   const bloque = new Map<string, Array<{ texto: string | null; tipo: string }>>();
   const bloqueCerrado = new Set<string>();
+  // 21-10: mensajes por conversación para hayDatosPedidoParciales (llegan del más nuevo al más viejo; se invierten).
+  const paraDatos = new Map<string, MensajeDatosPedido[]>();
   for (const m of msgs.data ?? []) {
+    const ld = paraDatos.get(m.conversacion_id) ?? [];
+    ld.push({ direccion: m.direccion, tipo: (m.tipo as string | null) ?? null, texto: typeof m.texto === "string" ? m.texto.slice(0, 500) : null, estado: m.estado ?? null });
+    paraDatos.set(m.conversacion_id, ld);
     if (!bloqueCerrado.has(m.conversacion_id)) {
       if (m.direccion === "in") {
         const l = bloque.get(m.conversacion_id) ?? [];
@@ -273,6 +283,7 @@ async function enriquecer(convs: FilaConv[], desdeISO: string, cfg: CfgSeguimien
       wa_user_id: waUserDe.get(c.cliente_id) ?? null,
       // Solo si hubo un saliente nuestro antes (si no, no es un "ok" a lo que le dijimos).
       bloque_cliente: bloqueCerrado.has(c.id) ? (bloque.get(c.id) ?? []) : undefined,
+      datos_pedido_parciales: hayDatosPedidoParciales([...(paraDatos.get(c.id) ?? [])].reverse(), convsConResumen.has(c.id)),
     };
   });
 }

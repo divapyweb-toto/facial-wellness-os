@@ -52,6 +52,8 @@ export type CfgVendedorExtra = {
   espera_agrupar_datos_s: number;
   /** 21-10 (Enrique, 19-10): 2 productos distintos por el precio de 2 iguales con envío gratis, solo WhatsApp. */
   oferta_2_distintos: boolean;
+  /** 21-10 (v38): "quiero", "me interesa", "mandame"… escrito = tocar "Quiero 1" (intencion.ts). Apagar: false. */
+  intencion_escrita: boolean;
 };
 
 export const MODELO_TOPE_DEFAULT = "claude-haiku-4-5-20251001";
@@ -70,6 +72,7 @@ export function extrasVendedor(v: CfgVendedor): CfgVendedorExtra {
     alertas_tope_pct: pct ?? [70, 90],
     espera_agrupar_datos_s: num("espera_agrupar_datos_s") ?? 18,
     oferta_2_distintos: x.oferta_2_distintos === true,
+    intencion_escrita: x.intencion_escrita !== false,
   };
 }
 

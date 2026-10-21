@@ -954,3 +954,50 @@ Deno.test("19-10 espera variable: mandando la dirección en partes espera 18 s e
   assertEquals(rr.accion, "respondido");
   assertEquals(r.reg.textos.length, 1);
 });
+
+// ---------- 21-10 (v38): "Quiero" escrito = botón "Quiero 1" ----------
+
+Deno.test("21-10 'Quiero' escrito al abrir el chat (caso 1877): nota con datos + precio en una línea y primer_turno bloqueado", async () => {
+  const marca = "[vino del anuncio de tiras nasales, handle tiras-prueba]";
+  const historial: FilaHistorial[] = [
+    { direccion: "in", texto: `${marca}\n¡Hola! Quiero más información`, tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.A" },
+    { direccion: "in", texto: `${marca}\nQuiero`, tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.B" },
+  ];
+  const e = escenario((_p, n) => n === 1
+    ? herramienta("primer_turno", { handle: "tiras-prueba", gancho: "x" })
+    : texto("Genial! Pasame tu nombre, tu ciudad y la calle o barrio 🙌 El repartidor te llama antes de ir."), { historial, ultimo: "wamid.B" });
+  const r = await procesarTurno({ conversacion_id: CONV, wa_message_id: "wamid.B", texto: `${marca}\nQuiero` }, e.deps);
+  assertEquals(r.accion, "respondido");
+  const ultimo = e.pedidos[0].mensajes.at(-1)!;
+  assert(String(ultimo.content).includes("El cliente ESCRIBIÓ que lo quiere"), String(ultimo.content));
+  assert(String(ultimo.content).includes("pagás al recibir"), String(ultimo.content));
+  const pt = e.turnos[0].herramientas.find((h) => h.nombre === "primer_turno");
+  assert(pt?.error && JSON.stringify(pt.resultado).includes("el_cliente_ya_dijo_que_lo_quiere"), JSON.stringify(e.turnos[0].herramientas));
+  assert(e.turnos[0].herramientas.some((h) => h.nombre === "intencion_escrita(sistema)"));
+  assertEquals(e.reg.interactivos.length, 0);
+});
+
+Deno.test("21-10 intención escrita: no aplica a una pregunta, con el switch apagado ni si ya pedimos los datos", async () => {
+  const preg = escenario(() => texto("Sale 79.000."), { historial: [{ direccion: "in", texto: "quiero saber el precio", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" }] });
+  await procesarTurno({ ...ENTRADA, texto: "quiero saber el precio" }, preg.deps);
+  assertFalse(String(preg.pedidos[0].mensajes.at(-1)!.content).includes("ESCRIBIÓ que lo quiere"));
+  const base = configPrueba();
+  const apagado = escenario(() => texto("ok"), { cfg: { ...base, vendedor: { ...base.vendedor, intencion_escrita: false } as never }, historial: [{ direccion: "in", texto: "quiero", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" }] });
+  await procesarTurno({ ...ENTRADA, texto: "quiero" }, apagado.deps);
+  assertFalse(String(apagado.pedidos[0].mensajes.at(-1)!.content).includes("ESCRIBIÓ que lo quiere"));
+  const yaPidio = escenario(() => texto("Dale"), { historial: [
+    { direccion: "out", texto: "Genial! Pasame tu nombre, tu ciudad y la calle o barrio 🙌", tipo: "text", contenido: {}, estado: "entregado", wa_message_id: "wamid.O1" },
+    { direccion: "in", texto: "quiero", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" },
+  ] });
+  await procesarTurno({ ...ENTRADA, texto: "quiero" }, yaPidio.deps);
+  assertFalse(String(yaPidio.pedidos[0].mensajes.at(-1)!.content).includes("ESCRIBIÓ que lo quiere"));
+  // Pidió los datos en la primera burbuja y ofreció 2 en la segunda: "Mándame 2" no repite el pedido de datos.
+  const dosBurbujas = escenario(() => texto("Dale, 2"), { historial: [
+    { direccion: "in", texto: "[botón] Quiero 1 (vend_p1:q1:tiras-prueba)", tipo: "interactive", contenido: {}, estado: "recibido", wa_message_id: "wamid.I0" },
+    { direccion: "out", texto: "Genial! Pasame tu nombre, tu ciudad y la calle o barrio 🙌", tipo: "text", contenido: {}, estado: "entregado", wa_message_id: "wamid.O1" },
+    { direccion: "out", texto: "Si preferís 2 te sale 158.000 y el envío es gratis.", tipo: "text", contenido: {}, estado: "entregado", wa_message_id: "wamid.O2" },
+    { direccion: "in", texto: "Mándame 2", tipo: "text", contenido: {}, estado: "recibido", wa_message_id: "wamid.IN1" },
+  ] });
+  await procesarTurno({ ...ENTRADA, texto: "Mándame 2" }, dosBurbujas.deps);
+  assertFalse(String(dosBurbujas.pedidos[0].mensajes.at(-1)!.content).includes("ESCRIBIÓ que lo quiere"));
+});

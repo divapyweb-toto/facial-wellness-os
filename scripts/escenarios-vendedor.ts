@@ -24,7 +24,12 @@
 import { validarRuc } from "../supabase/functions/_shared/sifen/cdc.ts";
 
 /** espera_min: minutos simulados desde el paso anterior (default 0,5). Ej. un seguimiento 3 h después: 180. */
-export type Paso = string | { texto: string; origen?: "cliente" | "seguimiento"; espera_min?: number };
+/**
+ * 21-10: `agrupar: true` = el mensaje llega pegado al siguiente (se guarda sin turno; el turno del siguiente ve los dos,
+ * como el vendedor real con espera_agrupar_s). `decidir: true` (solo seguimientos) = antes del turno pasa por la decisión
+ * real de seguimiento-chat (horas, 120 min, pedido a medio armar); si no corresponde, no sale nada.
+ */
+export type Paso = string | { texto: string; origen?: "cliente" | "seguimiento"; espera_min?: number; agrupar?: boolean; decidir?: boolean };
 
 export type PedidoEscenario = {
   numero: number; // 1072 → "#1072"
@@ -77,6 +82,8 @@ export type Escenario = {
   ahora?: string;
   /** Pisa campos de la config real (merge de un nivel por clave: { ofertas: {...} }, { vendedor: { modelo } }). */
   config?: Record<string, unknown>;
+  /** 21-10: lo que devuelve el mapa para un pin (por defecto calle y ciudad inventadas). calle null = el mapa no la da. */
+  mapa?: { calle: string | null; ciudad: string | null };
   pasos: Paso[];
   checks: Check[];
 };
@@ -375,6 +382,66 @@ export const ESCENARIOS: Escenario[] = [
       { paso: 1, tipo: "texto", regex: /color/i, negar: true, desc: "no pregunta el color al pedir los datos" },
       { paso: 2, tipo: "texto", regex: /blanco.*gris.*negro|gris.*negro/i, desc: "responde blanco, gris o negro" },
       { paso: 4, tipo: "escritura", regex: /Color: negro/i, desc: "el color va en la nota del pedido", suave: true },
+      { tipo: "derivado", negar: true },
+    ],
+  },
+  // ─── 21-10 · v38: "Quiero" escrito, seguimiento que no interrumpe una compra, resumen con pin ───
+  {
+    nombre: "v38_quiero_escrito_al_abrir",
+    descripcion: "Caso real 21-10 ('1877'): abre el chat del anuncio del raspador y escribe 'Quiero' al segundo → el bot pide nombre, ciudad y calle o barrio con el precio en una línea (sin gancho ni botones de bienvenida).",
+    cliente: { nombre: "Laura Prueba", telefono: "+595981000501" },
+    anuncio: RASPADOR,
+    pasos: [{ texto: "¡Hola! Quiero más información", agrupar: true }, "Quiero"],
+    checks: [
+      { paso: 1, tipo: "herramienta", nombre: "primer_turno", negar: true, desc: "no manda el primer turno (gancho + botones)" },
+      { paso: 1, tipo: "texto", regex: /nombre/i, desc: "pide el nombre" },
+      { paso: 1, tipo: "texto", regex: /ciudad/i, desc: "pide la ciudad" },
+      { paso: 1, tipo: "texto", regex: /(calle|barrio)/i, desc: "pide calle o barrio" },
+      { paso: 1, tipo: "texto", regex: /79\.000/, desc: "el precio en una línea" },
+      { paso: 1, tipo: "texto", regex: /\bpin\b/i, negar: true, desc: "no dice 'pin'" },
+      { tipo: "montos_catalogo" },
+      { tipo: "derivado", negar: true },
+    ],
+  },
+  {
+    nombre: "v38_compra_en_curso_sin_seguimiento",
+    descripcion: "Caso real 21-10 ('9168'): pide 2 tiras, manda nombre y pin, pregunta por otra cosa, resumen con 'la ubicación que mandaste'; quiere hoy, viaja mañana; a los 93 min el seguimiento NO sale (compra a medio armar); vuelve y dice que alguien recibe → resumen → Confirmo → pedido.",
+    cliente: { nombre: "Ricardo Prueba", telefono: "+595981000502" },
+    anuncio: TIRAS,
+    ahora: "2026-10-21T14:22:00Z",
+    mapa: { calle: null, ciudad: "Asunción" },
+    pasos: [
+      "¡Hola! Quiero más información",
+      "boton:Quiero 1",
+      "Mándame 2",
+      "Ricardo Prueba",
+      "ubicacion:-25.2900,-57.6000",
+      "No disponen riñonera para correr?",
+      "Quiero que me llegue hoy",
+      "Mañana voy a viajar",
+      { texto: "[seguimiento 1]", origen: "seguimiento", espera_min: 93, decidir: true },
+      { texto: "Sí, mi señora lo recibe mañana en casa", espera_min: 60 },
+      "boton:Confirmo",
+    ],
+    checks: [
+      { tipo: "texto", regex: /pin de ubicaci/i, negar: true, desc: "el cliente nunca ve 'Pin de ubicación'" },
+      { tipo: "texto", regex: /ubicaci[oó]n que mandaste/i, desc: "el resumen dice 'la ubicación que mandaste'" },
+      { paso: 8, tipo: "fn", fn: (r) => r.pasos[8].salidas.length === 0 && /seguimiento-chat:/.test(String(r.pasos[8].resultado.motivo)) ? true : `salió algo: ${JSON.stringify(r.pasos[8].resultado)}`, desc: "a los 93 min no sale ningún seguimiento ni video" },
+      { paso: -1, tipo: "herramienta", nombre: "crear_pedido_cod", desc: "con el Confirmo crea el pedido" },
+      { paso: -1, tipo: "escritura", regex: /158000|158\.000/, desc: "2 tiras a 158.000", suave: true },
+      { tipo: "montos_catalogo" },
+      { tipo: "derivado", negar: true },
+    ],
+  },
+  {
+    nombre: "v38_silencio_sin_datos_si_recibe_seguimiento",
+    descripcion: "Control: ve el precio y se calla 3 h sin dar datos → el seguimiento 1 SÍ sale (el freno es solo para compras en curso).",
+    cliente: { nombre: "Sofía Prueba", telefono: "+595981000503" },
+    anuncio: RASPADOR,
+    ahora: "2026-10-21T15:30:00Z",
+    pasos: ["¡Hola! Quiero más información", { texto: "[seguimiento 1]", origen: "seguimiento", espera_min: 180, decidir: true }],
+    checks: [
+      { paso: 1, tipo: "responde", desc: "el seguimiento sale" },
       { tipo: "derivado", negar: true },
     ],
   },

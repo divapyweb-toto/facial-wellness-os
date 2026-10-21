@@ -36,12 +36,13 @@ import {
   USO_CERO,
   usosDeHerramientas,
 } from "../claude.ts";
-import { productoDeMarca } from "../anuncios.ts";
+import { productoDeMarca, productoPorPalabras } from "../anuncios.ts";
 import { partesAsuncion } from "../horario.ts";
 import { extrasVendedor } from "./config.ts";
 import { INSTRUCCION_ACCION_INVENTADA, INSTRUCCION_PROMESA_RECONTACTO, montosDeResultado, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
 import { type BloqueImagen, cargarImagen, contenidoConImagenes, type Descarga, type ImagenEntrada, imagenesPendientes, textoImagenNoVista } from "./imagenes.ts";
-import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type MotivoDerivacion } from "./herramientas.ts";
+import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type ItemCatalogo, itemsCatalogo, type MotivoDerivacion } from "./herramientas.ts";
+import { type IntencionEscrita, intencionEnBloque, lineaPrecioIntencion, notaIntencion, yaPidioDatos } from "./intencion.ts";
 import {
   fusionarPerfil,
   marcasDeRespuesta,
@@ -640,6 +641,36 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
       };
     }
   }
+  // 21-10 (v38, Enrique): "quiero", "me interesa", "mandame"… escrito = tocar "Quiero 1": datos + precio en una línea,
+  // sin primer_turno (intencion.ts). Con un resumen o un pedido ya armado, o si ya le pedimos los datos, no aplica.
+  let intencion: IntencionEscrita | null = null;
+  if (!esSeguimiento && extra.intencion_escrita && pedidoChat?.estado !== "resumen" && pedidoChat?.estado !== "creado") {
+    const nuestros = filasHistorial.filter((f) => f.direccion === "out" && f.estado !== "fallido");
+    // Todas las burbujas del último turno nuestro (desde el mensaje anterior del cliente): "Pasame tu nombre…" + "Si preferís 2…".
+    const iUltimoIn = filasHistorial.findLastIndex((f, i) => f.direccion === "in" && filasHistorial.slice(i + 1).some((g) => g.direccion === "out"));
+    const ultimoTurno = filasHistorial.slice(iUltimoIn + 1).filter((f) => f.direccion === "out" && f.estado !== "fallido");
+    if (!ultimoTurno.some((f) => yaPidioDatos(f.texto))) intencion = intencionEnBloque(bloque, nuestros.length > 0);
+  }
+  if (intencion) {
+    const handle = delAnuncio?.handle ?? (perfil.producto ? productoPorPalabras(perfil.producto) : null) ?? handleDeOferta(filasHistorial);
+    let prod: ItemCatalogo | null = null;
+    try {
+      prod = handle ? itemsCatalogo(productos, ctx).find((p) => p.handle === handle) ?? null : null;
+    } catch {
+      prod = null;
+    }
+    // Sin stock: lo resuelve el modelo con su regla (ofrece otro de la línea).
+    if (prod && !prod.disponible) intencion = null;
+    else {
+      if (prod) permitidos.push(...montosDeResultado(lineaPrecioIntencion(prod, intencion.cantidad)));
+      if (intencion.cantidad && !perfil.cantidad) perfil = { ...perfil, cantidad: intencion.cantidad };
+      fila.herramientas.push({ nombre: "intencion_escrita(sistema)", input: { frase: intencion.frase, cantidad: intencion.cantidad }, resultado: { ok: true, handle: prod?.handle ?? null }, error: false });
+      const ultimo = mensajes[mensajes.length - 1];
+      if (ultimo.role === "user" && typeof ultimo.content === "string") {
+        mensajes[mensajes.length - 1] = { ...ultimo, content: `${ultimo.content}\n${notaIntencion(intencion, prod)}` };
+      }
+    }
+  }
   if (imagenes.length) {
     const ultimo = mensajes[mensajes.length - 1];
     mensajes[mensajes.length - 1] = { ...ultimo, content: contenidoConImagenes(ultimo.content, imagenes) };
@@ -717,7 +748,9 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         // Se ignora sin sacarla de la lista (la lista de herramientas es parte de la caché del prompt).
         // 19-10 (§3d, #1056): el Confirmo de un resumen viejo con otro total, o con una cantidad elegida después, no crea el pedido.
         let bloqueo: string | null = null;
-        if (esSeguimiento && u.name === "derivar_a_enrique") {
+        if (intencion && u.name === "primer_turno") {
+          bloqueo = "el_cliente_ya_dijo_que_lo_quiere: no uses primer_turno. Pedí los datos con el precio en una línea (ver CONTROL INTERNO).";
+        } else if (esSeguimiento && u.name === "derivar_a_enrique") {
           bloqueo = "no_disponible_en_seguimiento: en un recontacto automático no se deriva a Enrique. Escribí un recontacto corto para el cliente, sin derivar.";
         } else if (u.name === "crear_pedido_cod" && (u.input as Record<string, unknown> | undefined)?.confirmar === true) {
           const vigente = await deps.herramientas.ultimoPedidoChat(conv.id).catch(() => null);

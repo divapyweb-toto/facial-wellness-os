@@ -6,6 +6,12 @@
 // (toque3.ts) dentro de las 72 h gratis del anuncio; los 1 y 2 siguen acá.
 // 13-10: rescate de datos (rescate_datos.ts): tocó "Quiero …" y no terminó los datos → a los 10-20 min el vendedor le
 // pide solo lo que falta. No cuenta para el tope de recontactos.
+// 21-10 (regla de Enrique): si el cliente escribió en los últimos min_desde_cliente_min (120) minutos, o ya hay datos
+// del pedido a medio armar (pin, resumen sin confirmar o datos mandados tras pedírselos: hayDatosPedidoParciales),
+// NO sale ningún recontacto automático ni video. El seguimiento es solo para quien dejó de responder. Caso real 21-10:
+// pidió 2, mandó nombre y pin, el bot armó el resumen y preguntó la entrega; a los 93 min salió el recontacto 1 con
+// un video genérico y cortó la compra. Vale para los recontactos 1 y 2 y el toque 3; el rescate de datos solo frena
+// por datos a medio armar (sigue a los 10-20 min del "Quiero"). El recontacto el día que cobra no cambia.
 //
 // Cuándo toca (config_wa.vendedor_seguimiento, hora de Asunción):
 //   · Recontacto 1: el bot habló último, hace ≥ horas_1 (1,5 h; 2 h hasta el 12-10) que no responde y su última
@@ -59,9 +65,20 @@ export type CfgSeguimiento = {
   horas_2_min: number;
   /** 12-10: margen (horas) que tiene que quedar antes de que cierre la franja o la ventana (el cron corre cada 10 min). */
   margen_2_h: number;
+  /**
+   * 21-10: ningún recontacto (1, 2 ni toque 3) si el último mensaje del cliente fue hace menos de estos minutos
+   * (120). 0 = apagado.
+   */
+  min_desde_cliente_min: number;
+  /**
+   * 21-10: true = ningún recontacto (1, 2, toque 3 ni rescate de datos) si hay datos del pedido a medio armar
+   * (Candidato.datos_pedido_parciales).
+   */
+  frenar_medio_armado: boolean;
 };
 
 // 12-10: horas_1 2 → 1,5 y horario_desde 8 → 12 (plan de ventas por WhatsApp, fase 2).
+// 21-10: min_desde_cliente_min 120 y frenar_medio_armado true (regla de Enrique: no interrumpir una compra en curso).
 export const CFG_SEGUIMIENTO_DEFAULT: CfgSeguimiento = {
   activo: true,
   horas_1: 1.5,
@@ -77,6 +94,8 @@ export const CFG_SEGUIMIENTO_DEFAULT: CfgSeguimiento = {
   dias_pedido: 7,
   horas_2_min: 8,
   margen_2_h: 0.5,
+  min_desde_cliente_min: 120,
+  frenar_medio_armado: true,
 };
 
 const esObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -86,8 +105,9 @@ export function leerCfgSeguimiento(v: unknown): CfgSeguimiento {
   const c: CfgSeguimiento = { ...CFG_SEGUIMIENTO_DEFAULT };
   if (!esObj(v)) return c;
   if (typeof v.activo === "boolean") c.activo = v.activo;
+  if (typeof v.frenar_medio_armado === "boolean") c.frenar_medio_armado = v.frenar_medio_armado;
   for (const k of Object.keys(CFG_SEGUIMIENTO_DEFAULT) as (keyof CfgSeguimiento)[]) {
-    if (k === "activo") continue;
+    if (typeof CFG_SEGUIMIENTO_DEFAULT[k] !== "number") continue; // los booleanos se leen arriba
     const x = v[k];
     if (typeof x === "number" && Number.isFinite(x) && x >= 0) (c[k] as number) = x;
   }
@@ -200,7 +220,50 @@ export type Candidato = {
    * ausente si hablamos últimos o si no hubo ningún saliente nuestro antes en la ventana.
    */
   bloque_cliente?: Array<{ texto: string | null; tipo: string }>;
+  // ── 21-10: pedido a medio armar. Opcional: sin esto (ausente = false) no frena nada. ──
+  /**
+   * Hay datos del pedido a medio armar en la ventana leída (`desdeISO`): el cliente mandó un pin, hay un
+   * wa_pedidos_chat en 'resumen' sin confirmar, o mandó un texto (no acuse, sin "?") después de que el bot le pidió
+   * los datos (hayDatosPedidoParciales). Con cfg.frenar_medio_armado, no sale ningún recontacto ni rescate.
+   */
+  datos_pedido_parciales?: boolean;
 };
+
+/** 21-10: mensaje mínimo para hayDatosPedidoParciales (del más viejo al más nuevo). */
+export type MensajeDatosPedido = { direccion: "in" | "out"; tipo: string | null; texto: string | null; estado?: string | null };
+
+/**
+ * 21-10: saliente del bot que pide los datos del pedido ("Pasame tu nombre, tu ciudad y la calle o barrio", "Solo me
+ * falta tu ciudad"). Sobre texto normalizado (minúsculas, sin tildes).
+ */
+const RE_PIDE_DATOS = /pasame tu nombre|tu nombre,? (?:tu )?ciudad|nombre, (?:tu )?ciudad|solo me falta tu|me falta tu (?:ciudad|calle|barrio|nombre)/u;
+
+export function pideDatosPedido(texto: string | null | undefined): boolean {
+  return RE_PIDE_DATOS.test(norm(texto ?? ""));
+}
+
+/**
+ * 21-10: ¿hay datos del pedido a medio armar? (mensajes del más viejo al más nuevo). true si:
+ *   · hay un wa_pedidos_chat en 'resumen' sin confirmar (resumenPendiente);
+ *   · el cliente mandó un pin (entrante tipo 'location');
+ *   · el cliente mandó un texto que no es un acuse ("ok", "gracias", 👍) ni tiene "?" después de un saliente del bot
+ *     que le pidió los datos (pideDatosPedido). Una pregunta ("¿cuánto tarda?") no cuenta: todavía no dio datos.
+ */
+export function hayDatosPedidoParciales(mensajes: MensajeDatosPedido[], resumenPendiente: boolean): boolean {
+  if (resumenPendiente) return true;
+  let pidio = false;
+  for (const m of mensajes) {
+    if (m.direccion === "in") {
+      if (m.tipo === "location") return true;
+      if (!pidio || m.tipo !== "text") continue;
+      const t = (m.texto ?? "").trim();
+      if (t && !/[?¿]/.test(t) && !esAcuseSuelto({ texto: t, tipo: m.tipo })) return true;
+    } else if (m.estado !== "fallido" && pideDatosPedido(m.texto)) {
+      pidio = true;
+    }
+  }
+  return false;
+}
 
 /**
  * 19-10 (v35, ítem 7): "Ok", "👌", "Genial", "dale", un sticker o una reacción sueltos. El vendedor a veces no los
@@ -241,6 +304,11 @@ function fechaAsuncion(d: Date): string {
   return `${p.anio}-${String(p.mes).padStart(2, "0")}-${String(p.dia).padStart(2, "0")}`;
 }
 
+/** 21-10: el cliente escribió hace menos de min_desde_cliente_min minutos (0 = regla apagada). entradaMs: su último mensaje. */
+export function clienteEscribioHacePoco(entradaMs: number, cfg: Pick<CfgSeguimiento, "min_desde_cliente_min">, ahora: Date): boolean {
+  return cfg.min_desde_cliente_min > 0 && Number.isFinite(entradaMs) && ahora.getTime() - entradaMs < cfg.min_desde_cliente_min * 60_000;
+}
+
 export function decidirSeguimiento(c: Candidato, cfg: CfgSeguimiento, ahora: Date): Decision {
   const nada = (motivo: string): Decision => ({ tipo: "nada", motivo });
   if (c.estado !== "ia") return nada("no_esta_en_ia");
@@ -261,6 +329,10 @@ export function decidirSeguimiento(c: Candidato, cfg: CfgSeguimiento, ahora: Dat
   if (c.ultima_respuesta_derivada) return nada("derivado");
   const n = seguimientosVigentes(c.perfil, ahora, cfg);
   if (n >= cfg.max) return nada("tope_seguimientos");
+  // 21-10 (regla de Enrique): el seguimiento es solo para quien dejó de responder. ultima_entrada_en es el último
+  // mensaje del cliente (también si fue un "Ok" suelto).
+  if (clienteEscribioHacePoco(entrada, cfg, ahora)) return nada("cliente_escribio_hace_poco");
+  if (cfg.frenar_medio_armado && c.datos_pedido_parciales) return nada("pedido_a_medio_armar");
   if (!dentroHorario(ahora, cfg)) return nada("fuera_de_horario");
   const hBot = (ahora.getTime() - Date.parse(c.ultimo_mensaje.creado_en)) / H;
   if (!(hBot >= cfg.horas_1)) return nada("esperando");

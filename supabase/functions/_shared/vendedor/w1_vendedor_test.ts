@@ -25,10 +25,11 @@ const botones = (id: string, cuerpo: string, ids: string[]): FilaW1 => ({
 });
 
 Deno.test("extrasVendedor: defaults (Haiku 4.5, duro = tope × 1,3, alertas 70/90, 18 s) y valores de config", () => {
-  assertEquals(extrasVendedor(cfgV()), { modelo_tope: MODELO_TOPE_DEFAULT, tope_duro_usd: 58.5, alertas_tope_pct: [70, 90], espera_agrupar_datos_s: 18, oferta_2_distintos: false });
+  assertEquals(extrasVendedor(cfgV()), { modelo_tope: MODELO_TOPE_DEFAULT, tope_duro_usd: 58.5, alertas_tope_pct: [70, 90], espera_agrupar_datos_s: 18, oferta_2_distintos: false, intencion_escrita: true });
   const x = extrasVendedor(cfgV({ tope_mensual_usd: 90, modelo_tope: "m", tope_duro_usd: 120, alertas_tope_pct: [50, 80, 150, "x"], espera_agrupar_datos_s: 15 }));
-  assertEquals(x, { modelo_tope: "m", tope_duro_usd: 120, alertas_tope_pct: [50, 80], espera_agrupar_datos_s: 15, oferta_2_distintos: false });
+  assertEquals(x, { modelo_tope: "m", tope_duro_usd: 120, alertas_tope_pct: [50, 80], espera_agrupar_datos_s: 15, oferta_2_distintos: false, intencion_escrita: true });
   assertEquals(extrasVendedor(cfgV({ oferta_2_distintos: true })).oferta_2_distintos, true);
+  assertEquals(extrasVendedor(cfgV({ intencion_escrita: false })).intencion_escrita, false);
   assertEquals(extrasVendedor(cfgV({ tope_mensual_usd: 90 })).tope_duro_usd, 117);
   // Un tope duro menor que el tope no vale: queda el tope.
   assertEquals(extrasVendedor(cfgV({ tope_mensual_usd: 90, tope_duro_usd: 10 })).tope_duro_usd, 90);

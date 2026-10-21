@@ -17,6 +17,8 @@
 // Nunca si: no está en 'ia', rechazo, fecha pedida a futuro (recontactar_el), baja de marketing, pedido en
 // dias_pedido días, la última respuesta fue una derivación o un mensaje de Enrique, el cliente habló último (su
 // mensaje no tuvo respuesta: ahí está el aviso de intención) o ya salió un recontacto después del toque.
+// 21-10: tampoco si hay datos del pedido a medio armar (Candidato.datos_pedido_parciales, con frenar_medio_armado).
+// La regla de los 120 min de los recontactos NO aplica acá: el rescate sigue saliendo a los 10-20 min.
 // El aviso de intención a Enrique (logica.ts, 15 min) sigue igual: convive con este.
 // Se apaga con rescate_datos_activo: false (o con `activo: false` de los recontactos).
 import { escaparHtml } from "../_shared/telegram_formato.ts";
@@ -112,6 +114,9 @@ export function decidirRescateDatos(c: Candidato, rd: CfgRescateDatos, cfg: CfgS
   // Ya mandó los datos: el vendedor armó el resumen (o el pedido) después del toque.
   const resumen = c.ultimo_resumen_en ? Date.parse(c.ultimo_resumen_en) : NaN;
   if (Number.isFinite(resumen) && resumen >= toque) return nada("ya_hay_resumen");
+  // 21-10 (regla de Enrique): si ya hay datos a medio armar (pin, resumen sin confirmar o datos tras pedírselos), no se
+  // interrumpe. Solo esta regla: la de los 120 min no aplica (el rescate es el empujón de los 10-20 min sin ningún dato).
+  if (cfg.frenar_medio_armado && c.datos_pedido_parciales) return nada("pedido_a_medio_armar");
   const previo = perfil.rescate_datos_en ? Date.parse(perfil.rescate_datos_en) : NaN;
   if (Number.isFinite(previo) && previo >= toque) return nada("ya_rescatado");
   // Un recontacto (1, 2 o el del cobro) que ya salió después del toque ya hizo este trabajo.

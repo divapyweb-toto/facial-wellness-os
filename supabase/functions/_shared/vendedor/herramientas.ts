@@ -832,12 +832,19 @@ export function textoResumen(d: DatosPedidoChat, ctx: CtxTurno): string {
   const lineaEntrega = d.retiro || !d.ciudad ? "" : d.entregaProgramada
     ? `\n📦 Te llega: el ${textoFechaCorta(d.entregaProgramada.fecha)}${d.entregaProgramada.franja ? ` (${d.entregaProgramada.franja})` : ""}`
     : `\n📦 Te llega: ${diaEntrega(d.ciudad, ctx.ahora).texto}`;
-  const direccion = [d.direccion, d.referencia].filter(Boolean).join(", ");
+  // 21-10 (Enrique): con solo el pin, el cliente no ve la etiqueta interna "Pin de ubicación": ve el barrio o la calle
+  // si los dio, o "la ubicación que mandaste".
+  const soloPin = !!d.direccion && esSoloPin(d.direccion);
+  const direccion = soloPin
+    ? (d.referencia?.trim() ? `la ubicación que mandaste (${d.referencia.trim()})` : "la ubicación que mandaste")
+    : [d.direccion, d.referencia].filter(Boolean).join(", ");
   let cuerpo = texto(ctx.cfg.textos, clave, TEXTOS_DEFAULT[clave], { lineas, envio: gs(d.envio), total: gs(d.total), direccion, ciudad: d.ciudad });
   // 20-10 (Enrique): sin calle, el cliente no ve "Sin calle (ubicación pendiente)": ve la ciudad y que lo llaman.
   if (d.ubicacionPendiente) {
     cuerpo = cuerpo.replace(`Lo entregamos en ${direccion}, ${d.ciudad}.`, `Lo entregamos en ${d.ciudad}; el repartidor te llama para la dirección exacta 🙌`);
   }
+  // 21-10: con el pin y sin ciudad del mapa ("Ver mapa"), sin la ciudad.
+  if (soloPin && /^ver mapa$/i.test(d.ciudad.trim())) cuerpo = cuerpo.replace(`${direccion}, ${d.ciudad}.`, `${direccion}.`);
   return cuerpo + lineaEntrega + lineaFactura;
 }
 

@@ -9,6 +9,8 @@
 // baja ni "no" de marketing, sin fecha pedida (recontactar_el: eso lo maneja el recontacto por cobro), la última
 // respuesta no fue una derivación ni un mensaje de Enrique, el bot habló último y el cliente no escribe hace
 // ≥ sin_escribir_h (24 h): la ventana de 24 h ya cerró, así que los recontactos 1 y 2 ya salieron o se saltearon.
+// 21-10: tampoco si el cliente escribió hace < min_desde_cliente_min o hay datos del pedido a medio armar (pin, resumen
+// sin confirmar o datos tras pedírselos; con frenar_medio_armado), igual que los recontactos 1 y 2 (logica.ts).
 // Opt-in: con toque3.requiere_consentimiento (default true) solo con consentimiento de marketing 'si'. Topes por
 // cliente: los mismos de recompra (evaluarTope con config_wa.recompra.topes; cuentan voltra_mk_* y esta plantilla).
 // Arranca APAGADO (toque3.activo: false): se prende cuando Meta aprueba la plantilla y se confirma la regla de opt-in.
@@ -26,7 +28,7 @@ import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { gs, precioPorCantidad } from "../_shared/vendedor/herramientas.ts";
 import { normalizarPerfil } from "../_shared/vendedor/perfil.ts";
 import { configDesdeValor, evaluarTope, type MensajeMk, type RecompraCfg } from "../recompra/calendario.ts";
-import type { Candidato, CfgSeguimiento, DepsSeguimiento } from "./logica.ts";
+import { type Candidato, type CfgSeguimiento, clienteEscribioHacePoco, type DepsSeguimiento } from "./logica.ts";
 
 export type CfgToque3 = {
   /** Arranca apagado: se prende con la plantilla aprobada por Meta y la regla de opt-in confirmada. */
@@ -122,6 +124,10 @@ export function decidirToque3(c: Candidato, cfg: CfgSeguimiento, t3: CfgToque3, 
   if (c.ultimo_mensaje.manual) return nada("enrique_escribio");
   const entrada = c.ultima_entrada_en ? Date.parse(c.ultima_entrada_en) : NaN;
   if (!Number.isFinite(entrada)) return nada("sin_entrada_del_cliente");
+  // 21-10 (regla de Enrique, la misma de los recontactos 1 y 2): nada si escribió hace poco o el pedido está a medio
+  // armar. La de los minutos casi nunca corta acá (sin_escribir_h ya pide 24 h), queda por si se baja la config.
+  if (clienteEscribioHacePoco(entrada, cfg, ahora)) return nada("cliente_escribio_hace_poco");
+  if (cfg.frenar_medio_armado && c.datos_pedido_parciales) return nada("pedido_a_medio_armar");
   // Nunca con la ventana de 24 h abierta: ahí todavía pueden salir los recontactos 1 y 2 (gratis, con la IA).
   if ((ahora.getTime() - entrada) / H < Math.max(t3.sin_escribir_h, cfg.ventana_max_h)) return nada("escribio_hace_poco");
   const primera = c.primera_respuesta_en ? Date.parse(c.primera_respuesta_en) : NaN;
