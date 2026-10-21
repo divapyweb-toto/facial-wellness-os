@@ -122,3 +122,19 @@ Deno.test("20-10: accionesPara usa el mapa ciudad → cobertura (clave = ciudad 
   // Con la ciudad cubierta según la tabla, el resto de las acciones sigue igual.
   assertEquals(accionesPara(base({ tags: ["ORIGEN_WHATSAPP"], ciudad: "Luque" }), AHORA, false, new Map([["Luque", CON]])), ["agregar_confirmado"]);
 });
+
+Deno.test("21-10: sin cobertura → a las 48 h del aviso sin pago se cancela; con foto/archivo se pide revisar", () => {
+  const AH = new Date("2026-10-21T15:00:00Z");
+  const base = { shopifyOrderId: 7, nombre: "#7", estado: "confirmado", actualizadoEn: null, direccion: "Calle Larga 123", ciudad: "Pueblo X", notas: "" };
+  const p = (tags: string[]) => ({ ...base, tags: ["CONFIRMADO", "SIN_COBERTURA", ...tags] });
+  const m = (avisoEn: string | null, adjuntoDespues = false) => new Map([[7, { avisoEn, adjuntoDespues }]]);
+  assertEquals(accionesPara(p([]), AH, false, undefined, m("2026-10-19T14:00:00Z")), ["cancelar_sin_cobertura"]); // 49 h
+  assertEquals(accionesPara(p([]), AH, false, undefined, m("2026-10-19T16:00:00Z")).includes("cancelar_sin_cobertura"), false); // 47 h
+  assertEquals(accionesPara(p([]), AH, false, undefined, m("2026-10-19T14:00:00Z", true)).includes("revisar_comprobante_sin_cobertura"), true);
+  for (const t of ["PAGADO", "PAGO_VERIFICADO", "PAGO_ANTICIPADO_COMPROBANTE", "SIN_COBERTURA_CANCELADO", "RETIRO_EN_CASA"]) {
+    const r = accionesPara(p([t]), AH, false, undefined, m("2026-10-15T14:00:00Z"));
+    assertEquals(r.includes("cancelar_sin_cobertura") || r.includes("revisar_comprobante_sin_cobertura"), false, t);
+  }
+  assertEquals(accionesPara(p([]), AH, false, undefined, m(null)).includes("cancelar_sin_cobertura"), false); // sin registro del aviso
+  assertEquals(accionesPara(p([]), AH, false).includes("cancelar_sin_cobertura"), false); // sin datos
+});

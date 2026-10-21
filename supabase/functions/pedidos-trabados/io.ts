@@ -3,7 +3,7 @@ import { db } from "../_shared/db.ts";
 import { gql } from "../_shared/shopify.ts";
 import { enviarTexto } from "../_shared/wa.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { type Accion, claveCobertura, type Cobertura, coordenadasPin, direccionDesdeNota, type PedidoAbierto } from "./logica.ts";
+import { type Accion, claveCobertura, type Cobertura, coordenadasPin, direccionDesdeNota, type EstadoSinCobertura, type PedidoAbierto } from "./logica.ts";
 
 type Obj = Record<string, unknown>;
 const txt = (v: unknown) => (typeof v === "string" ? v : "");
@@ -57,12 +57,80 @@ export async function coberturaCiudades(ciudades: string[]): Promise<Map<string,
   return mapa;
 }
 
+/**
+ * 21-10: para los pedidos con SIN_COBERTURA, cuándo salió el aviso (candado auto_avisar_sin_cobertura) y si el cliente
+ * mandó una foto o un archivo después (posible comprobante).
+ */
+export async function estadoSinCobertura(pedidos: PedidoAbierto[]): Promise<Map<number, EstadoSinCobertura>> {
+  const ids = pedidos.filter((p) => p.tags.some((t) => t.toUpperCase() === "SIN_COBERTURA")).map((p) => p.shopifyOrderId);
+  const mapa = new Map<number, EstadoSinCobertura>();
+  if (!ids.length) return mapa;
+  const sb = db();
+  const [{ data: cand }, { data: peds }] = await Promise.all([
+    sb.from("eventos_crudos").select("id_externo,procesado_en,recibido_en").in("id_externo", ids.map((id) => idCandadoAuto("avisar_sin_cobertura", id))),
+    sb.from("shopify_pedidos").select("shopify_order_id,cliente_id").in("shopify_order_id", ids),
+  ]);
+  for (const id of ids) {
+    const c = (cand ?? []).find((x: Obj) => x.id_externo === idCandadoAuto("avisar_sin_cobertura", id)) as Obj | undefined;
+    const avisoEn = c ? txt(c.procesado_en || c.recibido_en) || null : null;
+    const cliente = (peds ?? []).find((x: Obj) => Number(x.shopify_order_id) === id)?.cliente_id as string | undefined;
+    let adjuntoDespues = false;
+    if (avisoEn && cliente) {
+      const { count } = await sb.from("wa_mensajes").select("id", { count: "exact", head: true })
+        .eq("cliente_id", cliente).eq("direccion", "in").in("tipo", ["image", "document"]).gte("creado_en", avisoEn);
+      adjuntoDespues = (count ?? 0) > 0;
+    }
+    mapa.set(id, { avisoEn, adjuntoDespues });
+  }
+  return mapa;
+}
+
+/** 21-10: 48 h sin pago tras el aviso de "sin cobertura" → cancelar en Shopify, mensaje amable (ventana abierta) y Telegram. */
+async function cancelarSinCobertura(orderId: number): Promise<string | null> {
+  const sb = db();
+  const { data: ped } = await sb.from("shopify_pedidos").select("nombre,cliente_id,telefono").eq("shopify_order_id", orderId).maybeSingle();
+  if (!ped) return "pedido no encontrado";
+  const e = await cancelarEnShopify(orderId);
+  if (e) {
+    await avisar(`⚠️ <b>${ped.nombre}</b>: no lo pude cancelar en Shopify (sin cobertura, 48 h sin pago): ${e}`).catch(() => null);
+    return e;
+  }
+  await etiqueta(orderId, "SIN_COBERTURA_CANCELADO", true);
+  let enviado = false, motivo = "";
+  const { data: conv } = ped.cliente_id
+    ? await sb.from("wa_conversaciones").select("id,ultima_entrada_en").eq("cliente_id", ped.cliente_id).order("ultima_entrada_en", { ascending: false, nullsFirst: false }).limit(1).maybeSingle()
+    : { data: null };
+  const abierta = conv?.ultima_entrada_en && Date.now() - Date.parse(conv.ultima_entrada_en) < 23 * 3_600_000;
+  if (!ped.telefono) motivo = "sin teléfono";
+  else if (!abierta) motivo = "ventana de 24 h cerrada";
+  else {
+    const r = await enviarTexto(String(ped.telefono).replace(/\D/g, ""),
+      `Como no pudimos coordinar el pago, cancelamos el pedido ${ped.nombre}. Si querés retomarlo, escribinos cuando quieras 🙌`,
+      { clienteId: ped.cliente_id, conversacionId: conv?.id ?? null });
+    enviado = r.ok;
+    if (!r.ok) motivo = `WhatsApp: ${r.error ?? "falló"}`;
+  }
+  await avisar(`❌ <b>${ped.nombre}</b> cancelado: sin cobertura contra entrega y 48 h sin pago anticipado.\n` +
+    (enviado ? "Le avisé al cliente." : `No le avisé al cliente (${motivo}).`)).catch(() => null);
+  return null;
+}
+
+/** 21-10: mandó foto o archivo después del aviso → no se cancela; Enrique revisa si es el comprobante (una vez). */
+async function revisarComprobanteSinCobertura(orderId: number): Promise<string | null> {
+  const { data: ped } = await db().from("shopify_pedidos").select("nombre,telefono").eq("shopify_order_id", orderId).maybeSingle();
+  if (!ped) return "pedido no encontrado";
+  const tel = String(ped.telefono ?? "").replace(/\D/g, "");
+  await avisar(`🧾 <b>${ped.nombre}</b> (sin cobertura): pasaron 48 h y el cliente mandó una foto o un archivo. No lo cancelé: ` +
+    `revisá si es el comprobante y marcalo PAGADO, o cancelalo a mano.${tel ? ` https://wa.me/${tel}` : ""}`);
+  return null;
+}
+
 export const idCandadoAuto = (accion: Accion, orderId: number) => `auto_${accion}:${orderId}`;
 
 /** Candados auto_* ya tomados para estos pedidos. */
 export async function candadosTomados(ids: number[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
-  const claves = ids.flatMap((id) => (["agregar_confirmado", "cancelar", "agregar_faltan_datos", "quitar_faltan_datos", "completar_direccion", "ciudad_desde_pin", "avisar_sin_cobertura"] as Accion[]).map((a) => idCandadoAuto(a, id)));
+  const claves = ids.flatMap((id) => (["agregar_confirmado", "cancelar", "agregar_faltan_datos", "quitar_faltan_datos", "completar_direccion", "ciudad_desde_pin", "avisar_sin_cobertura", "cancelar_sin_cobertura", "revisar_comprobante_sin_cobertura"] as Accion[]).map((a) => idCandadoAuto(a, id)));
   const { data, error } = await db().from("eventos_crudos").select("id_externo").eq("fuente", "shopify").in("id_externo", claves);
   if (error) throw new Error(`eventos_crudos: ${error.message}`);
   return new Set((data ?? []).map((x) => x.id_externo as string));
@@ -196,6 +264,8 @@ async function avisarSinCobertura(orderId: number): Promise<string | null> {
 
 export async function ejecutar(accion: Accion, orderId: number, notas = "", direccion = ""): Promise<string | null> {
   if (accion === "avisar_sin_cobertura") return await avisarSinCobertura(orderId);
+  if (accion === "cancelar_sin_cobertura") return await cancelarSinCobertura(orderId);
+  if (accion === "revisar_comprobante_sin_cobertura") return await revisarComprobanteSinCobertura(orderId);
   if (accion === "ciudad_desde_pin") return await cargarCiudadDePin(orderId, { direccion, notas });
   if (accion === "completar_direccion") return await completarDireccion(orderId, notas);
   if (accion === "agregar_confirmado") return await etiqueta(orderId, "CONFIRMADO", true);

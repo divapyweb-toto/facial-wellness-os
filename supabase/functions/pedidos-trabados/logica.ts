@@ -22,7 +22,7 @@
 
 import { transportadorasDisponibles } from "../_shared/transportadoras.js";
 
-export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura";
+export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura";
 
 export interface PedidoAbierto {
   shopifyOrderId: number;
@@ -118,10 +118,29 @@ export function necesitaCobertura(p: PedidoAbierto): boolean {
 }
 
 /**
+ * 21-10 (Enrique): pedido SIN_COBERTURA al que se le ofreció pagar por adelantado. A las 48 h del aviso sin pago
+ * (PAGADO / PAGO_VERIFICADO / PAGADO_QR / PAGO_ANTICIPADO_COMPROBANTE) ni foto o archivo del cliente en el chat → se
+ * cancela (etiqueta SIN_COBERTURA_CANCELADO). Si mandó una foto o un archivo, no se cancela: se avisa a Enrique para
+ * que revise si es el comprobante.
+ */
+export const PLAZO_PAGO_SIN_COBERTURA_MS = 48 * 3_600_000;
+export const ETIQUETAS_PAGO = ["PAGADO", "PAGO_VERIFICADO", "PAGADO_QR", "PAGO_ANTICIPADO_COMPROBANTE"];
+export type EstadoSinCobertura = { avisoEn: string | null; adjuntoDespues: boolean };
+export type MapaSinCobertura = ReadonlyMap<number, EstadoSinCobertura>;
+
+export function accionSinCobertura(p: PedidoAbierto, ahora: Date, s?: EstadoSinCobertura): Accion | null {
+  if (!tiene(p, "SIN_COBERTURA") || tiene(p, "SIN_COBERTURA_CANCELADO") || tiene(p, "RETIRO_EN_CASA")) return null;
+  if (ETIQUETAS_PAGO.some((t) => tiene(p, t)) || !s?.avisoEn) return null;
+  const t = Date.parse(s.avisoEn);
+  if (!Number.isFinite(t) || ahora.getTime() - t < PLAZO_PAGO_SIN_COBERTURA_MS) return null;
+  return s.adjuntoDespues ? "revisar_comprobante_sin_cobertura" : "cancelar_sin_cobertura";
+}
+
+/**
  * Acciones para un pedido. `puseFaltanDatos` = el sistema puso la etiqueta (candado). `coberturas` = rpc
  * sugerir_courier por ciudad (claveCobertura); sin dato para la ciudad → lista vieja.
  */
-export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boolean, coberturas?: MapaCobertura): Accion[] {
+export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boolean, coberturas?: MapaCobertura, sinCob?: MapaSinCobertura): Accion[] {
   const a: Accion[] = [];
   if (p.estado === "cancelado_cliente" || (tiene(p, "CANCELADO_CLIENTE") && p.estado !== "confirmado")) {
     const t = p.actualizadoEn ? Date.parse(p.actualizadoEn) : NaN;
@@ -129,6 +148,9 @@ export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boo
     return a; // cancelado: nada más que hacer
   }
   if (cancelado(p)) return a;
+  const sc = accionSinCobertura(p, ahora, sinCob?.get(p.shopifyOrderId));
+  if (sc === "cancelar_sin_cobertura") return [sc]; // se cancela: nada más que hacer
+  if (sc) a.push(sc);
   if (p.estado === "confirmado" && !tiene(p, "CONFIRMADO")) a.push("agregar_confirmado");
   // 15-10: sin dirección en Shopify pero con los datos en la nota (pedido del bot) → se completa, no se marca.
   if (sinDireccion(p) && direccionDesdeNota(p.notas)) {

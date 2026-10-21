@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { armarResumen, diaParaguay, lineaSinPin, type Pedido } from "./logica.ts";
+import { armarResumen, diaParaguay, lineaSinCobertura, lineaSinPin, type Pedido } from "./logica.ts";
 
 const AHORA = new Date("2026-10-17T00:30:00Z"); // 21:30 del 16-10 en Paraguay
 const p = (o: Partial<Pedido>): Pedido => ({
@@ -127,4 +127,19 @@ Deno.test("20-10: JawFlex muestra el gasto de anuncios pausados; si los activos 
   const b = armarResumen({ ...base, pedidos: ped, meta: m(150959, 130000), equilibrioJawFlex: 33000 }).texto; // activos 20.959 ≤ 33.000
   assertStringIncludes(b, "ℹ️ CPA 3 días JawFlex Gs 150.959 > 33.000 · Gs 130.000 de anuncios ya pausados");
   assert(!b.includes("⚠️ Alertas: CPA 3 días JawFlex") && !b.includes("· CPA 3 días JawFlex"));
+});
+
+Deno.test("21-10: línea de sin cobertura de la semana (desde el lunes): pagaron y cancelados", () => {
+  // viernes 16-10 → semana desde el lunes 12-10
+  const sc = (nombre: string, dia: string, tags: string[]) => p({ nombre, creadoEn: `${dia}T15:00:00Z`, tags: ["SIN_COBERTURA", ...tags] });
+  const ped = [
+    sc("#40", "2026-10-13", ["PAGADO"]),
+    sc("#41", "2026-10-15", ["SIN_COBERTURA_CANCELADO"]),
+    sc("#42", "2026-10-16", []),
+    sc("#43", "2026-10-11", []), // domingo anterior: otra semana
+    p({ nombre: "#44" }),
+  ];
+  assertEquals(lineaSinCobertura(ped, "2026-10-16"), "📍 Sin cobertura: 3 pedidos esta semana · pagaron 1 · cancelados 1");
+  assertEquals(lineaSinCobertura([p({ nombre: "#1" })], "2026-10-16"), null);
+  assertStringIncludes(armarResumen({ ...base, pedidos: [...pedidos, ...ped], meta }).texto, "Sin cobertura: 3 pedidos esta semana");
 });

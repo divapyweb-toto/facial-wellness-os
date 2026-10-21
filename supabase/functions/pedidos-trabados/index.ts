@@ -5,7 +5,7 @@
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { db } from "../_shared/db.ts";
 import { marcarPreparado } from "../_shared/shopify_preparar.ts";
-import { cancelarEnShopify, candadosTomados, coberturaCiudades, ejecutar, etiqueta, idCandadoAuto, pedidosAbiertos, registrarError, tomarCandado } from "./io.ts";
+import { cancelarEnShopify, candadosTomados, coberturaCiudades, ejecutar, estadoSinCobertura, etiqueta, idCandadoAuto, pedidosAbiertos, registrarError, tomarCandado } from "./io.ts";
 import { accionesPara, necesitaCobertura } from "./logica.ts";
 import { avisoRutaPap } from "./aviso_ruta_pap.ts";
 
@@ -17,10 +17,11 @@ async function automatico(simular: boolean) {
   const tomados = await candadosTomados(pedidos.map((p) => p.shopifyOrderId));
   // 20-10: cobertura contra entrega desde la tabla de tarifas (rpc sugerir_courier), solo de las ciudades que importan.
   const coberturas = await coberturaCiudades(pedidos.filter(necesitaCobertura).map((p) => p.ciudad));
+  const sinCob = await estadoSinCobertura(pedidos).catch((e) => (console.warn("pedidos-trabados sin cobertura:", e instanceof Error ? e.message : e), new Map()));
   const hechos: Array<{ pedido: string; accion: string; ok: boolean; error?: string }> = [];
   for (const p of pedidos) {
     const puse = tomados.has(idCandadoAuto("agregar_faltan_datos", p.shopifyOrderId));
-    for (const a of accionesPara(p, ahora, puse, coberturas)) {
+    for (const a of accionesPara(p, ahora, puse, coberturas, sinCob)) {
       const id = idCandadoAuto(a, p.shopifyOrderId);
       if (tomados.has(id)) continue; // ya se hizo una vez: si alguien lo deshizo a mano, se respeta
       if (simular) {

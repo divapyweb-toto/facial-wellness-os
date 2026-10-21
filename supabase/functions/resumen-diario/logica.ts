@@ -89,6 +89,22 @@ export interface Entrada {
   papAvisoYaDado?: boolean;
 }
 
+/** 21-10: "Sin cobertura: N pedidos esta semana (desde el lunes) · pagaron X · cancelados Y"; null si no hubo. */
+export function lineaSinCobertura(pedidos: Pedido[], hoy: string): string | null {
+  const dow = new Date(`${hoy}T12:00:00Z`).getUTCDay();
+  const lunes = sumarDias(hoy, -((dow + 6) % 7));
+  const t = (p: Pedido) => p.tags.map((x) => x.toUpperCase());
+  const sc = pedidos.filter((p) => {
+    const d = diaParaguay(p.creadoEn);
+    return d >= lunes && d <= hoy && !p.esBorrador && !/prueba/i.test(p.nombre) &&
+      t(p).some((x) => x === "SIN_COBERTURA" || x === "SIN_COBERTURA_CANCELADO");
+  });
+  if (!sc.length) return null;
+  const pagaron = sc.filter((p) => t(p).some((x) => ["PAGADO", "PAGO_VERIFICADO", "PAGADO_QR"].includes(x))).length;
+  const cancelados = sc.filter((p) => t(p).includes("SIN_COBERTURA_CANCELADO")).length;
+  return `📍 Sin cobertura: ${sc.length} pedido${sc.length > 1 ? "s" : ""} esta semana · pagaron ${pagaron} · cancelados ${cancelados}`;
+}
+
 /** 20-10: con 20 resueltos de PaP en 60 días se revisa si la sugerencia de courier pasa a asignar sola. */
 export const PAP_RESUELTOS_REVISAR = 20;
 
@@ -226,6 +242,8 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
   }
   if (alertas.length) l.push("", `⚠️ Alertas: ${alertas.join(" · ")}`);
   for (const a of avisosInfo) l.push(alertas.length ? `ℹ️ ${a}` : `\nℹ️ ${a}`);
+  const sinCob = lineaSinCobertura(e.pedidos, e.hoy);
+  if (sinCob) l.push(sinCob);
   // 20-10: una sola vez, cuando PaP junta 20 pedidos resueltos en 60 días.
   const papAviso = !e.papAvisoYaDado && !!e.pap60d && e.pap60d.resueltos >= PAP_RESUELTOS_REVISAR;
   if (papAviso) {
