@@ -155,3 +155,10 @@ Deno.test("21-10: pedidos sin despachar: lista con ciudad, horas y courier; excl
   const muchos = Array.from({ length: 12 }, (_, i) => mk(`#M${i}`, 30 + i, "Luque"));
   assertStringIncludes(armarResumen({ ...base, pedidos: muchos, meta }).texto, "y 2 más");
 });
+
+Deno.test("21-10: pedido de JawFlex cuyo courier sugerido no es Lucero se marca 'decidir a mano'", () => {
+  const ped = p({ nombre: "#J", ciudad: "Santa Rosa del Aguaray", lineas: [{ titulo: "JawFlex Pro", cantidad: 1 }], estadoEnvio: null,
+    creadoEn: new Date(AHORA.getTime() - 100 * 3_600_000).toISOString() });
+  const t = armarResumen({ ...base, pedidos: [ped], meta, courierPorCiudad: { "Santa Rosa del Aguaray": "pap" } }).texto;
+  assertStringIncludes(t, "#J Santa Rosa del Aguaray 100 h → PaP ⚠ JawFlex solo Lucero: decidir a mano");
+});

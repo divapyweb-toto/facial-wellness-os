@@ -246,7 +246,9 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
       const h = Math.floor((e.ahora.getTime() - Date.parse(p.creadoEn)) / 3_600_000);
       const c = p.ciudad?.trim() ? escaparHtml(p.ciudad.trim()) : "ciudad ?";
       const cr = p.ciudad ? e.courierPorCiudad?.[p.ciudad] : undefined;
-      return `${escaparHtml(p.nombre)} ${c} ${h} h${cr === undefined ? "" : cr ? ` → ${cr === "pap" ? "PaP" : "Lucero"}` : " → sin courier"}`;
+      // JawFlex solo sale por Lucero (regla de producto): si Lucero no llega, Despacho no lo carga solo ("decidir a mano").
+      const jaw = cr && cr !== "lucero" && p.lineas.some((x) => familia(x.titulo) === "JawFlex") ? " ⚠ JawFlex solo Lucero: decidir a mano" : "";
+      return `${escaparHtml(p.nombre)} ${c} ${h} h${cr === undefined ? "" : cr ? ` → ${cr === "pap" ? "PaP" : "Lucero"}` : " → sin courier"}${jaw}`;
     };
     const lista = sinDespachar.slice(0, 10).map(item).join(" · ");
     const mas = sinDespachar.length > 10 ? ` · y ${sinDespachar.length - 10} más` : "";
