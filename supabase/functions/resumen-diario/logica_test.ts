@@ -143,3 +143,15 @@ Deno.test("21-10: línea de sin cobertura de la semana (desde el lunes): pagaron
   assertEquals(lineaSinCobertura([p({ nombre: "#1" })], "2026-10-16"), null);
   assertStringIncludes(armarResumen({ ...base, pedidos: [...pedidos, ...ped], meta }).texto, "Sin cobertura: 3 pedidos esta semana");
 });
+
+Deno.test("21-10: pedidos sin despachar: lista con ciudad, horas y courier; excluye retiro y sin cobertura esperando pago; máx 10", () => {
+  const mk = (n: string, h: number, ciudad: string, tags: string[] = []) =>
+    p({ nombre: n, ciudad, tags, creadoEn: new Date(AHORA.getTime() - h * 3_600_000).toISOString(), estadoEnvio: null });
+  const ped = [mk("#A", 30, "Villarrica"), mk("#B", 100, "Luque"), mk("#R", 50, "Luque", ["RETIRO_EN_CASA"]),
+    mk("#S", 60, "X", ["SIN_COBERTURA"]), mk("#P", 40, "X", ["SIN_COBERTURA", "PAGADO"])];
+  const t = armarResumen({ ...base, pedidos: ped, meta, courierPorCiudad: { Villarrica: "pap", Luque: "lucero", X: null } }).texto;
+  assertStringIncludes(t, "3 pedidos sin despachar hace +24 h: #B Luque 100 h → Lucero · #P X 40 h → sin courier · #A Villarrica 30 h → PaP");
+  assert(!t.includes("#R") && !t.includes("#S"));
+  const muchos = Array.from({ length: 12 }, (_, i) => mk(`#M${i}`, 30 + i, "Luque"));
+  assertStringIncludes(armarResumen({ ...base, pedidos: muchos, meta }).texto, "y 2 más");
+});

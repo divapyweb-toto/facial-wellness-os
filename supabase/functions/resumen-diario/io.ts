@@ -10,7 +10,7 @@ const n = (x: unknown) => Number(x) || 0;
 
 export async function leerPedidos(desdeIso: string): Promise<Pedido[]> {
   const { data, error } = await db().from("shopify_pedidos")
-    .select("nombre,creado_en,total,tags,es_borrador,estado_confirmacion,estado_envio,cliente_id,raw->>created_at,raw->>cancelled_at,raw->>note,raw->line_items")
+    .select("nombre,creado_en,total,tags,es_borrador,estado_confirmacion,estado_envio,cliente_id,raw->>created_at,raw->>cancelled_at,raw->>note,raw->shipping_address->>city,raw->line_items")
     .gte("creado_en", desdeIso);
   if (error) throw new Error(`shopify_pedidos: ${error.message}`);
   return (data ?? []).map((p: Obj) => ({
@@ -21,6 +21,7 @@ export async function leerPedidos(desdeIso: string): Promise<Pedido[]> {
     canceladoEn: (p.cancelled_at as string) || null,
     esBorrador: p.es_borrador === true,
     nota: String(p.note ?? ""),
+    ciudad: String(p.city ?? ""),
     lineas: ((p.line_items ?? []) as Obj[]).map((l) => ({ titulo: String(l.title ?? l.name ?? ""), cantidad: n(l.quantity) || 1 })),
     estadoConfirmacion: (p.estado_confirmacion as string) ?? null,
     estadoEnvio: (p.estado_envio as string) ?? null,
@@ -202,4 +203,14 @@ export async function leerMeta(hoy: string): Promise<DatosMeta> {
     console.warn("resumen-diario gasto 3 días por producto:", e instanceof Error ? e.message : e);
   }
   return { hoy: cHoy, ayer: cAyer, gasto7d: c7.reduce((s, c) => s + c.gasto, 0), gasto3dPorProducto, gasto3dPausadoPorProducto, prueba };
+}
+
+/** 21-10: courier sugerido (rpc sugerir_courier) por cada ciudad distinta; null = sin cobertura o ciudad no reconocida. */
+export async function couriersPorCiudad(ciudades: string[]): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {};
+  await Promise.all([...new Set(ciudades.filter(Boolean))].map(async (c) => {
+    const { data, error } = await db().rpc("sugerir_courier", { p_ciudad: c, p_cod: true });
+    if (!error) out[c] = ((data as Obj | null)?.sugerido as string) ?? null;
+  }));
+  return out;
 }

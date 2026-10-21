@@ -22,6 +22,8 @@ export interface Pedido {
   estadoConfirmacion: string | null;
   estadoEnvio: string | null;
   clienteId: string | null;
+  /** 21-10: ciudad de envío (para la lista de pedidos sin despachar). */
+  ciudad?: string;
 }
 
 /** Fecha AAAA-MM-DD en hora de Paraguay (UTC−3 fijo desde octubre de 2024). */
@@ -80,6 +82,8 @@ export interface Entrada {
   luceroGestion?: Array<{ ref: string; estado: string; dias: number }>;
   papCustodia?: Array<{ ref: string; desde: string }>;
   prueba?: boolean;
+  /** 21-10: courier sugerido por ciudad (rpc sugerir_courier; null = sin cobertura / no reconocida). Clave: ciudad tal cual. */
+  courierPorCiudad?: Record<string, string | null>;
   /** 20-10: equilibrio de CPA leído de config equilibrio_producto.Varios; sin dato → EQUILIBRIO_CPA. */
   equilibrioCpa?: number | null;
   /** 20-10: equilibrio de JawFlex (config equilibrio_producto.JawFlex): el más bajo, alerta de CPA de 3 días. */
@@ -229,12 +233,25 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
 
   // Pedidos confirmados de más de 24 h que todavía no salieron (últimos 14 días).
   const limite = e.ahora.getTime() - 24 * 3_600_000, desde14 = e.ahora.getTime() - 14 * 24 * 3_600_000;
+  const PAGOS = ["PAGADO", "PAGO_VERIFICADO", "PAGADO_QR", "PAGO_ANTICIPADO_COMPROBANTE"];
   const sinDespachar = validos.filter((p) => {
     const t = Date.parse(p.creadoEn);
+    const esperaPago = tieneTag(p, "SIN_COBERTURA") && !PAGOS.some((x) => tieneTag(p, x));
     return t < limite && t > desde14 && p.estadoConfirmacion === "confirmado" && !p.estadoEnvio &&
-      !tieneTag(p, "DESPACHADO") && !tieneTag(p, "ENTREGADO") && !tieneTag(p, "RETIRO_EN_CASA");
-  }).length;
-  if (sinDespachar) alertas.push(`${sinDespachar} pedido${sinDespachar > 1 ? "s" : ""} sin despachar hace +24 h`);
+      !tieneTag(p, "DESPACHADO") && !tieneTag(p, "ENTREGADO") && !tieneTag(p, "RETIRO_EN_CASA") &&
+      !tieneTag(p, "SIN_COBERTURA_CANCELADO") && !esperaPago;
+  }).sort((a, b) => Date.parse(a.creadoEn) - Date.parse(b.creadoEn));
+  if (sinDespachar.length) {
+    const item = (p: Pedido) => {
+      const h = Math.floor((e.ahora.getTime() - Date.parse(p.creadoEn)) / 3_600_000);
+      const c = p.ciudad?.trim() ? escaparHtml(p.ciudad.trim()) : "ciudad ?";
+      const cr = p.ciudad ? e.courierPorCiudad?.[p.ciudad] : undefined;
+      return `${escaparHtml(p.nombre)} ${c} ${h} h${cr === undefined ? "" : cr ? ` → ${cr === "pap" ? "PaP" : "Lucero"}` : " → sin courier"}`;
+    };
+    const lista = sinDespachar.slice(0, 10).map(item).join(" · ");
+    const mas = sinDespachar.length > 10 ? ` · y ${sinDespachar.length - 10} más` : "";
+    alertas.push(`${sinDespachar.length} pedido${sinDespachar.length > 1 ? "s" : ""} sin despachar hace +24 h: ${lista}${mas}`);
+  }
   for (const s of e.stock) {
     const f = familia(s.nombre);
     const tope = f === "Raspador" || f === "Tiras" ? 30 : 20;
