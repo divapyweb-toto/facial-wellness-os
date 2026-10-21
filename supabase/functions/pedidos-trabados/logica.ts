@@ -22,7 +22,7 @@
 
 import { transportadorasDisponibles } from "../_shared/transportadoras.js";
 
-export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura";
+export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura" | "avisar_jawflex_pap";
 
 export interface PedidoAbierto {
   shopifyOrderId: number;
@@ -33,6 +33,8 @@ export interface PedidoAbierto {
   direccion: string; // address1 + address2
   ciudad: string;
   notas: string; // note + note_attributes (para el pin)
+  /** 21-10: títulos de los productos del pedido (regla "solo Lucero"). */
+  productos?: string[];
 }
 
 export const MARGEN_CANCELACION_MS = 2 * 3_600_000;
@@ -85,7 +87,7 @@ export function coordenadasPin(p: Pick<PedidoAbierto, "direccion" | "notas">): {
 }
 
 /** 20-10: resultado de la rpc sugerir_courier(ciudad) para una ciudad (lo que importa acá). */
-export type Cobertura = { sin_cobertura: boolean; ciudad_reconocida: boolean };
+export type Cobertura = { sin_cobertura: boolean; ciudad_reconocida: boolean; /** 21-10: cobranza contra entrega por courier (de sugerir_courier) */ lucero?: boolean; pap?: boolean };
 /** Ciudad tal cual viene en el pedido (sin espacios de los costados) → cobertura según la rpc. */
 export type MapaCobertura = ReadonlyMap<string, Cobertura>;
 export const claveCobertura = (ciudad: string) => ciudad.trim();
@@ -123,6 +125,17 @@ export function necesitaCobertura(p: PedidoAbierto): boolean {
  * cancela (etiqueta SIN_COBERTURA_CANCELADO). Si mandó una foto o un archivo, no se cancela: se avisa a Enrique para
  * que revise si es el comprobante.
  */
+/** 21-10: productos con la regla "solo sale por Lucero" (hoy JawFlex; mismo criterio que el resto del sistema). */
+export const esProductoSoloLucero = (titulo: string) => /jaw|mand[ií]bula|ejercitador/i.test(titulo);
+
+/**
+ * 21-10 (Enrique): pedido con un producto "solo Lucero" en una ciudad donde Lucero NO cobra pero PaP SÍ → Despacho lo
+ * manda por PaP solo; esto avisa por Telegram (una vez por pedido). Si ninguno cobra, es el flujo de sin cobertura.
+ */
+export function necesitaAvisoJawflexPap(p: PedidoAbierto, c?: Cobertura | null): boolean {
+  return necesitaCobertura(p) && (p.productos ?? []).some(esProductoSoloLucero) && c?.lucero === false && c?.pap === true;
+}
+
 export const PLAZO_PAGO_SIN_COBERTURA_MS = 48 * 3_600_000;
 export const ETIQUETAS_PAGO = ["PAGADO", "PAGO_VERIFICADO", "PAGADO_QR", "PAGO_ANTICIPADO_COMPROBANTE"];
 export type EstadoSinCobertura = { avisoEn: string | null; adjuntoDespues: boolean };
@@ -160,6 +173,7 @@ export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boo
   }
   if (ciudadPendiente(p.ciudad) && p.direccion.trim() && coordenadasPin(p)) a.push("ciudad_desde_pin");
   if (necesitaCobertura(p) && sinCobertura(p.ciudad, coberturas?.get(claveCobertura(p.ciudad)))) a.push("avisar_sin_cobertura");
+  else if (necesitaAvisoJawflexPap(p, coberturas?.get(claveCobertura(p.ciudad)))) a.push("avisar_jawflex_pap");
   const ok = direccionUtilizable(p);
   if (!ok && !tiene(p, "FALTAN_DATOS") && !tiene(p, "RETIRO_EN_CASA")) a.push("agregar_faltan_datos");
   if (ok && tiene(p, "FALTAN_DATOS") && puseFaltanDatos) a.push("quitar_faltan_datos");

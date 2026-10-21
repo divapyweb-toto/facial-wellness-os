@@ -31,6 +31,7 @@ export async function pedidosAbiertos(ahora: Date): Promise<PedidoAbierto[]> {
       direccion: [txt(dir.address1), txt(dir.address2)].filter(Boolean).join(", "),
       ciudad: txt(dir.city),
       notas: [txt(r.note), ...attrs.map((a) => `${a.name ?? a.key ?? ""}: ${a.value ?? ""}`)].join("\n"),
+      productos: ((r.line_items ?? r.lineItems ?? []) as Obj[]).map((l) => txt(l.title ?? l.name)),
     }];
   });
 }
@@ -48,7 +49,9 @@ export async function coberturaCiudades(ciudades: string[]): Promise<Map<string,
       if (error) throw new Error(error.message);
       const r = (data ?? {}) as Obj;
       if (typeof r.sin_cobertura === "boolean" && typeof r.ciudad_reconocida === "boolean") {
-        mapa.set(ciudad, { sin_cobertura: r.sin_cobertura, ciudad_reconocida: r.ciudad_reconocida });
+        const ops = (Array.isArray(r.opciones) ? r.opciones : []) as Obj[];
+        const cobra = (c: string) => ops.some((o) => o.courier === c && o.valido === true);
+        mapa.set(ciudad, { sin_cobertura: r.sin_cobertura, ciudad_reconocida: r.ciudad_reconocida, lucero: cobra("lucero"), pap: cobra("pap") });
       }
     } catch (e) {
       console.warn(`pedidos-trabados: sugerir_courier('${ciudad}') falló, uso la lista vieja:`, e instanceof Error ? e.message : e);
@@ -125,12 +128,32 @@ async function revisarComprobanteSinCobertura(orderId: number): Promise<string |
   return null;
 }
 
+/**
+ * 21-10: JawFlex va por PaP porque Lucero no llega a la ciudad (lo asigna Despacho). Telegram, una vez por pedido; si
+ * Telegram falla 3 veces se suelta el candado y el cron lo reintenta en 10 min.
+ */
+async function avisarJawflexPap(orderId: number): Promise<string | null> {
+  const { data: ped } = await db().from("shopify_pedidos").select("nombre,raw").eq("shopify_order_id", orderId).maybeSingle();
+  if (!ped) return "pedido no encontrado";
+  const ciudad = txt((((ped.raw as Obj | null)?.shipping_address ?? {}) as Obj).city);
+  const texto = `⚠ JawFlex ${ped.nombre} → PaP (Lucero no llega a ${ciudad || "esa ciudad"}). Entrega histórica PaP 60%. Si no querés mandarlo, avisá antes del despacho.`;
+  let ultimo = "";
+  for (let i = 0; i < 3; i++) {
+    const r = await avisar(texto);
+    if (r.ok) return null;
+    ultimo = r.error ?? "Telegram falló";
+    await new Promise((z) => setTimeout(z, 1500));
+  }
+  await db().from("eventos_crudos").delete().eq("fuente", "shopify").eq("id_externo", idCandadoAuto("avisar_jawflex_pap", orderId));
+  return `Telegram: ${ultimo}`;
+}
+
 export const idCandadoAuto = (accion: Accion, orderId: number) => `auto_${accion}:${orderId}`;
 
 /** Candados auto_* ya tomados para estos pedidos. */
 export async function candadosTomados(ids: number[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
-  const claves = ids.flatMap((id) => (["agregar_confirmado", "cancelar", "agregar_faltan_datos", "quitar_faltan_datos", "completar_direccion", "ciudad_desde_pin", "avisar_sin_cobertura", "cancelar_sin_cobertura", "revisar_comprobante_sin_cobertura"] as Accion[]).map((a) => idCandadoAuto(a, id)));
+  const claves = ids.flatMap((id) => (["agregar_confirmado", "cancelar", "agregar_faltan_datos", "quitar_faltan_datos", "completar_direccion", "ciudad_desde_pin", "avisar_sin_cobertura", "cancelar_sin_cobertura", "revisar_comprobante_sin_cobertura", "avisar_jawflex_pap"] as Accion[]).map((a) => idCandadoAuto(a, id)));
   const { data, error } = await db().from("eventos_crudos").select("id_externo").eq("fuente", "shopify").in("id_externo", claves);
   if (error) throw new Error(`eventos_crudos: ${error.message}`);
   return new Set((data ?? []).map((x) => x.id_externo as string));
@@ -264,6 +287,7 @@ async function avisarSinCobertura(orderId: number): Promise<string | null> {
 
 export async function ejecutar(accion: Accion, orderId: number, notas = "", direccion = ""): Promise<string | null> {
   if (accion === "avisar_sin_cobertura") return await avisarSinCobertura(orderId);
+  if (accion === "avisar_jawflex_pap") return await avisarJawflexPap(orderId);
   if (accion === "cancelar_sin_cobertura") return await cancelarSinCobertura(orderId);
   if (accion === "revisar_comprobante_sin_cobertura") return await revisarComprobanteSinCobertura(orderId);
   if (accion === "ciudad_desde_pin") return await cargarCiudadDePin(orderId, { direccion, notas });

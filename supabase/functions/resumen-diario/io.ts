@@ -206,11 +206,15 @@ export async function leerMeta(hoy: string): Promise<DatosMeta> {
 }
 
 /** 21-10: courier sugerido (rpc sugerir_courier) por cada ciudad distinta; null = sin cobertura o ciudad no reconocida. */
-export async function couriersPorCiudad(ciudades: string[]): Promise<Record<string, string | null>> {
-  const out: Record<string, string | null> = {};
+export async function couriersPorCiudad(ciudades: string[]): Promise<Record<string, { sugerido: string | null; lucero: boolean; pap: boolean }>> {
+  const out: Record<string, { sugerido: string | null; lucero: boolean; pap: boolean }> = {};
   await Promise.all([...new Set(ciudades.filter(Boolean))].map(async (c) => {
     const { data, error } = await db().rpc("sugerir_courier", { p_ciudad: c, p_cod: true });
-    if (!error) out[c] = ((data as Obj | null)?.sugerido as string) ?? null;
+    if (error) return;
+    const d = (data ?? {}) as Obj;
+    const ops = (Array.isArray(d.opciones) ? d.opciones : []) as Obj[];
+    const cobra = (k: string) => ops.some((o) => o.courier === k && o.valido === true);
+    out[c] = { sugerido: (d.sugerido as string) ?? null, lucero: cobra("lucero"), pap: cobra("pap") };
   }));
   return out;
 }

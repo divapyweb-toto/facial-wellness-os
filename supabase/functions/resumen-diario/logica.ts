@@ -83,7 +83,7 @@ export interface Entrada {
   papCustodia?: Array<{ ref: string; desde: string }>;
   prueba?: boolean;
   /** 21-10: courier sugerido por ciudad (rpc sugerir_courier; null = sin cobertura / no reconocida). Clave: ciudad tal cual. */
-  courierPorCiudad?: Record<string, string | null>;
+  courierPorCiudad?: Record<string, { sugerido: string | null; lucero: boolean; pap: boolean }>;
   /** 20-10: equilibrio de CPA leído de config equilibrio_producto.Varios; sin dato → EQUILIBRIO_CPA. */
   equilibrioCpa?: number | null;
   /** 20-10: equilibrio de JawFlex (config equilibrio_producto.JawFlex): el más bajo, alerta de CPA de 3 días. */
@@ -245,10 +245,17 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
     const item = (p: Pedido) => {
       const h = Math.floor((e.ahora.getTime() - Date.parse(p.creadoEn)) / 3_600_000);
       const c = p.ciudad?.trim() ? escaparHtml(p.ciudad.trim()) : "ciudad ?";
-      const cr = p.ciudad ? e.courierPorCiudad?.[p.ciudad] : undefined;
-      // JawFlex solo sale por Lucero (regla de producto): si Lucero no llega, Despacho no lo carga solo ("decidir a mano").
-      const jaw = cr && cr !== "lucero" && p.lineas.some((x) => familia(x.titulo) === "JawFlex") ? " ⚠ JawFlex solo Lucero: decidir a mano" : "";
-      return `${escaparHtml(p.nombre)} ${c} ${h} h${cr === undefined ? "" : cr ? ` → ${cr === "pap" ? "PaP" : "Lucero"}` : " → sin courier"}${jaw}`;
+      const info = p.ciudad ? e.courierPorCiudad?.[p.ciudad] : undefined;
+      let destino = "";
+      if (info) {
+        // JawFlex solo sale por Lucero; si Lucero no llega pero PaP cobra, Despacho lo manda por PaP solo (21-10).
+        if (p.lineas.some((x) => familia(x.titulo) === "JawFlex")) {
+          destino = info.lucero ? " → Lucero" : info.pap ? " → PaP (JawFlex: Lucero no llega)" : " → sin courier: decidir a mano";
+        } else {
+          destino = info.sugerido ? ` → ${info.sugerido === "pap" ? "PaP" : "Lucero"}` : " → sin courier";
+        }
+      }
+      return `${escaparHtml(p.nombre)} ${c} ${h} h${destino}`;
     };
     const lista = sinDespachar.slice(0, 10).map(item).join(" · ");
     const mas = sinDespachar.length > 10 ? ` · y ${sinDespachar.length - 10} más` : "";

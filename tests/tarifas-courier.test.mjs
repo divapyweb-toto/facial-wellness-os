@@ -204,3 +204,30 @@ test('sugerirTransportadora nunca preasigna PaP contra entrega donde PaP no cobr
   assert.deepEqual([cde.transportadora, cde.tarifa], ['lucero', 24000])
   fijarTarifasCourier(null)
 })
+
+test('21-10: producto "solo Lucero" (JawFlex): Lucero si llega; PaP con nota si Lucero no llega; sin cobertura si nadie cobra', () => {
+  fijarTarifasCourier({
+    ...FIXTURE,
+    tarifas: [...FIXTURE.tarifas, fila('pap', 'pueblo de prueba', 'Pueblo de Prueba', 36000, { zona: 'INTERIOR 2' })],
+  })
+  const jaw = 'Ejercitador de mandibula JawFlex Pro'
+  // Lucero llega: Lucero, sin nota (como hoy)
+  const cde = sugerirTransportadora('Ciudad del Este', jaw)
+  assert.deepEqual([cde.transportadora, !!cde.fallbackProducto], ['lucero', false])
+  const fr = sugerirTransportadora('Fram', jaw)
+  assert.deepEqual([fr.transportadora, !!fr.fallbackProducto], ['lucero', false])
+  // Lucero no llega y PaP cobra: PaP solo, con la nota
+  const pp = sugerirTransportadora('Pueblo de Prueba', jaw)
+  assert.deepEqual([pp.transportadora, pp.fallbackProducto, pp.bloqueadoPorProducto, pp.tarifa], ['pap', true, false, 36000])
+  assert.equal(pp.motivo, 'JawFlex por PaP: Lucero no llega')
+  // Nadie cobra contra entrega (PaP sin cobranza, Lucero no llega): sin asignar → flujo de sin cobertura
+  const sj = sugerirTransportadora('San Juan Nepomuceno', jaw)
+  assert.deepEqual([sj.transportadora, !!sj.fallbackProducto, sj.bloqueadoPorProducto], [null, false, true])
+  // Ya pagado (sin cobranza que cobrar): PaP llega aunque no cobre
+  const sjPagado = sugerirTransportadora('San Juan Nepomuceno', jaw, { cod: false })
+  assert.deepEqual([sjPagado.transportadora, sjPagado.fallbackProducto], ['pap', true])
+  // Otro producto en la misma ciudad: igual que siempre, sin nota
+  const tiras = sugerirTransportadora('Pueblo de Prueba', 'Tiras nasales')
+  assert.deepEqual([tiras.transportadora, !!tiras.fallbackProducto], ['pap', false])
+  fijarTarifasCourier(null)
+})

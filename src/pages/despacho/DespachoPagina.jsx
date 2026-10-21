@@ -301,6 +301,7 @@ function mapearGrupoAPedidos(grupoRows) {
     transportadora,                  // 'pap' | 'lucero' | 'otra' — editable después en la UI
     motivoTransportadora: sugerencia.motivo,
     bloqueadoPorProducto: !!sugerencia.bloqueadoPorProducto,
+    fallbackProducto: !!sugerencia.fallbackProducto,
     // Tarifa real de ESA transportadora en ESA ciudad — solo en la primera
     // línea del pedido (una sola caja, un solo flete; el resto va en 0).
     costo_envio: i === 0 ? sugerencia.tarifa : 0,
@@ -467,6 +468,7 @@ function parsearPedidoManual(bloque, catalogo, nRef) {
     transportadora,
     motivoTransportadora: sugerencia.motivo,
     bloqueadoPorProducto: !!sugerencia.bloqueadoPorProducto,
+    fallbackProducto: !!sugerencia.fallbackProducto,
     costo_envio: sugerencia.tarifa,
     flete_estimado: !!sugerencia.fleteEstimado,
     // 20-10: se ruteó como contra entrega (en pantalla arranca sin "ya pagado"; si se marca, se vuelve a rutear).
@@ -860,6 +862,7 @@ function ventaAPedido(v) {
     transportadora,
     motivoTransportadora: sug.motivo,
     bloqueadoPorProducto: !!sug.bloqueadoPorProducto,
+    fallbackProducto: !!sug.fallbackProducto,
     costo_envio: v.costo_envio ?? sug.tarifa,
     // Sin esto, una venta ya pagada salía como "efectivo a cobrar" en la
     // cabecera y la guía, y el courier le cobraba de nuevo al cliente.
@@ -1147,6 +1150,13 @@ function programadasPorRef(filas, hoy = hoyParaguay()) {
   return m
 }
 
+// 21-10: JawFlex (o cualquier producto de "solo un courier") que va por el otro porque el suyo no llega: nota visible.
+function NotaFallbackProducto({ ciudad, producto, cod, transportadora }) {
+  const sug = sugerirTransportadora(ciudad || '', producto || '', { cod })
+  if (!sug.fallbackProducto || !transportadora || sug.transportadora !== transportadora) return null
+  return <div style={{ marginTop: 3, fontSize: 10, fontWeight: 700, whiteSpace: 'normal', color: 'var(--yellow)' }}>⚠ {sug.motivo}</div>
+}
+
 // 13-10: badge de la entrega programada en las listas (no frena el despacho).
 function BadgeEntrega({ e }) {
   if (!e) return null
@@ -1260,6 +1270,7 @@ export default function DespachoPagina() {
           transportadora: sug.transportadora,
           motivoTransportadora: sug.motivo,
           bloqueadoPorProducto: !!sug.bloqueadoPorProducto,
+          fallbackProducto: !!sug.fallbackProducto,
           costo_envio: p.lineaPrincipal === false ? 0 : sug.tarifa,
           cobranzaOk: sug.transportadora != null,
           faltantes,
@@ -1274,6 +1285,7 @@ export default function DespachoPagina() {
           transportadora: sug.transportadora,
           motivoTransportadora: sug.motivo,
           bloqueadoPorProducto: !!sug.bloqueadoPorProducto,
+          fallbackProducto: !!sug.fallbackProducto,
           costo_envio: p.lineaPrincipal === false ? 0 : sug.tarifa,
           cobranzaOk: sug.transportadora != null,
           despachar: p.cfg?.despachar !== false && sug.transportadora != null && (!p.origenManual || !(p.faltantes || []).length),
@@ -1860,7 +1872,7 @@ export default function DespachoPagina() {
       const pendientesDecidir = new Map()
       for (const p of sinCobertura) {
         if (cuenta.has(String(p.n_referencia)) || pendientesDecidir.has(p.n_referencia)) continue
-        pendientesDecidir.set(p.n_referencia, { ref: p.n_referencia, ciudad: p.ciudad, motivo: p.motivoTransportadora || 'Ninguna transportadora cubre esta ciudad' })
+        pendientesDecidir.set(p.n_referencia, { ref: p.n_referencia, ciudad: p.ciudad, dias: Math.max(0, Math.round((Date.parse(hoyParaguay()) - Date.parse(String(p.fecha || hoyParaguay()).slice(0, 10))) / 86400000)), motivo: p.motivoTransportadora || 'Ninguna transportadora cubre esta ciudad' })
       }
       setVoltraSinCobertura([...pendientesDecidir.values()])
       if (pendientesDecidir.size && !silencioso) {
@@ -2052,12 +2064,12 @@ export default function DespachoPagina() {
         <>
           {/* 12-10: pedidos de Voltra sin cobertura — no se cargan con PaP por defecto */}
           {voltraSinCobertura.length > 0 && (
-            <div className="alert" style={{ background: 'var(--yellow-dim)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
-              <AlertTriangle size={14} color="var(--yellow)" style={{ flexShrink: 0, marginTop: 1 }} />
+            <div className="alert" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+              <AlertTriangle size={14} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
               <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
                 <strong>{voltraSinCobertura.length} pedido{voltraSinCobertura.length === 1 ? '' : 's'} de Voltra sin cobertura: decidir a mano.</strong>{' '}
                 No se pasaron a Ventas ni se les puso PaP por defecto:{' '}
-                {voltraSinCobertura.map(x => `${x.ref} (${x.ciudad || 'sin ciudad'})`).join(' · ')}.{' '}
+                {voltraSinCobertura.map(x => `${x.ref} (${x.ciudad || 'sin ciudad'}) · ${x.dias} día${x.dias === 1 ? '' : 's'} esperando`).join(' · ')}.{' '}
                 Corregí la ciudad en Shopify, o subí el CSV de pedidos, elegí la transportadora y tocá "Sin cobranza · forzar".
               </span>
             </div>
@@ -2201,6 +2213,7 @@ export default function DespachoPagina() {
                         </td>
                         <td data-label="Ciudad" className="muted">
                           {v.ciudad || '—'}
+                          <NotaFallbackProducto ciudad={v.ciudad} producto={v.producto_nombre} cod={!v.pago_anticipado} transportadora={v.transportadora} />
                           <SugerenciaCosto ciudad={v.ciudad} cod={!v.pago_anticipado} asignada={v.transportadora} />
                         </td>
                         <td data-label="Dirección" className="muted" style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11 }}>
@@ -2586,6 +2599,7 @@ export default function DespachoPagina() {
                                       ? null
                                       : `${formatGs(p.costo_envio || 0)}${p.flete_estimado ? ' · estimado' : ''}${p.transpManual ? ' · manual' : ''}`}
                               </span>
+                              {p.fallbackProducto && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'normal' }}>⚠ {p.motivoTransportadora}</div>}
                               <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
                               {p.transportadora === 'otra' && (
                                 <input

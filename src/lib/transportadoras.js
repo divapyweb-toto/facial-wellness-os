@@ -492,7 +492,7 @@ export function sugerirTransportadora(ciudad, productoNombre = '', { cod = true 
   }
   // Regla de producto: pisa la comparación de tarifa/velocidad por completo.
   // Si la transportadora forzada no cubre la ciudad, NO se cae a otra
-  // automáticamente — queda sin asignar, bloqueado, para que el admin decida.
+  // automáticamente salvo el caso de abajo (21-10): el otro courier cobra ahí → va por el otro con nota.
   const forzada = transportadoraForzada(productoNombre)
   if (forzada) {
     if (cubre(forzada, ciudad, { cod })) {
@@ -503,9 +503,23 @@ export function sugerirTransportadora(ciudad, productoNombre = '', { cod = true 
         bloqueadoPorProducto: false,
       })
     }
+    // 21-10 (Enrique): si el courier forzado NO llega pero el otro SÍ cobra contra entrega en esa ciudad, va por el otro
+    // solo, con nota visible (fallbackProducto). Despachar rinde más que dejarlo parado (JawFlex por PaP ~60% entrega).
+    // Si ninguno cobra ahí, sigue sin asignar: entra al flujo de sin cobertura (pago anticipado) de siempre.
+    const otro = forzada === 'lucero' ? 'pap' : forzada === 'pap' ? 'lucero' : null
+    if (otro && cubre(otro, ciudad, { cod })) {
+      const nombre = { jaw: 'JawFlex' }[familiaProducto(productoNombre)] || 'Producto'
+      return conTarifa({
+        transportadora: otro,
+        motivo: `${nombre} por ${otro === 'pap' ? 'PaP' : 'Lucero'}: ${forzada === 'pap' ? 'PaP' : 'Lucero'} no llega`,
+        velocidad: otro === 'lucero' ? velocidadLucero(ciudadLucero(ciudad)) : null,
+        bloqueadoPorProducto: false,
+        fallbackProducto: true,
+      })
+    }
     return {
       transportadora: null,
-      motivo: `Este producto solo despacha por ${labelTransportadora(forzada)} y no cubre esta ciudad — requiere decisión manual`,
+      motivo: `Este producto solo despacha por ${labelTransportadora(forzada)} y ninguna transportadora cobra contra entrega en esta ciudad — sin cobertura`,
       tarifa: null, fleteEstimado: false, velocidad: null,
       bloqueadoPorProducto: true,
     }

@@ -149,16 +149,19 @@ Deno.test("21-10: pedidos sin despachar: lista con ciudad, horas y courier; excl
     p({ nombre: n, ciudad, tags, creadoEn: new Date(AHORA.getTime() - h * 3_600_000).toISOString(), estadoEnvio: null });
   const ped = [mk("#A", 30, "Villarrica"), mk("#B", 100, "Luque"), mk("#R", 50, "Luque", ["RETIRO_EN_CASA"]),
     mk("#S", 60, "X", ["SIN_COBERTURA"]), mk("#P", 40, "X", ["SIN_COBERTURA", "PAGADO"])];
-  const t = armarResumen({ ...base, pedidos: ped, meta, courierPorCiudad: { Villarrica: "pap", Luque: "lucero", X: null } }).texto;
+  const t = armarResumen({ ...base, pedidos: ped, meta, courierPorCiudad: { Villarrica: { sugerido: "pap", lucero: false, pap: true }, Luque: { sugerido: "lucero", lucero: true, pap: true }, X: { sugerido: null, lucero: false, pap: false } } }).texto;
   assertStringIncludes(t, "3 pedidos sin despachar hace +24 h: #B Luque 100 h → Lucero · #P X 40 h → sin courier · #A Villarrica 30 h → PaP");
   assert(!t.includes("#R") && !t.includes("#S"));
   const muchos = Array.from({ length: 12 }, (_, i) => mk(`#M${i}`, 30 + i, "Luque"));
   assertStringIncludes(armarResumen({ ...base, pedidos: muchos, meta }).texto, "y 2 más");
 });
 
-Deno.test("21-10: pedido de JawFlex cuyo courier sugerido no es Lucero se marca 'decidir a mano'", () => {
-  const ped = p({ nombre: "#J", ciudad: "Santa Rosa del Aguaray", lineas: [{ titulo: "JawFlex Pro", cantidad: 1 }], estadoEnvio: null,
+Deno.test("21-10: JawFlex en la lista de sin despachar: Lucero si llega; PaP si Lucero no llega; decidir a mano si ninguno", () => {
+  const mk = (n: string, ciudad: string) => p({ nombre: n, ciudad, lineas: [{ titulo: "JawFlex Pro", cantidad: 1 }], estadoEnvio: null,
     creadoEn: new Date(AHORA.getTime() - 100 * 3_600_000).toISOString() });
-  const t = armarResumen({ ...base, pedidos: [ped], meta, courierPorCiudad: { "Santa Rosa del Aguaray": "pap" } }).texto;
-  assertStringIncludes(t, "#J Santa Rosa del Aguaray 100 h → PaP ⚠ JawFlex solo Lucero: decidir a mano");
+  const cpc = { A: { sugerido: "pap", lucero: true, pap: true }, B: { sugerido: "pap", lucero: false, pap: true }, C: { sugerido: null, lucero: false, pap: false } };
+  const t = armarResumen({ ...base, pedidos: [mk("#1", "A"), mk("#2", "B"), mk("#3", "C")], meta, courierPorCiudad: cpc }).texto;
+  assertStringIncludes(t, "#1 A 100 h → Lucero");
+  assertStringIncludes(t, "#2 B 100 h → PaP (JawFlex: Lucero no llega)");
+  assertStringIncludes(t, "#3 C 100 h → sin courier: decidir a mano");
 });

@@ -138,3 +138,15 @@ Deno.test("21-10: sin cobertura → a las 48 h del aviso sin pago se cancela; co
   assertEquals(accionesPara(p([]), AH, false, undefined, m(null)).includes("cancelar_sin_cobertura"), false); // sin registro del aviso
   assertEquals(accionesPara(p([]), AH, false).includes("cancelar_sin_cobertura"), false); // sin datos
 });
+
+Deno.test("21-10: JawFlex donde Lucero no cobra pero PaP sí → aviso (una vez); otros casos no", () => {
+  const AH = new Date("2026-10-21T15:00:00Z");
+  const ped = (productos: string[], tags: string[] = []) => ({ shopifyOrderId: 9, nombre: "#9", estado: "confirmado", tags: ["CONFIRMADO", ...tags], actualizadoEn: null, direccion: "Calle Larga 123", ciudad: "Pueblo X", notas: "", productos });
+  const cob = (lucero: boolean, pap: boolean) => new Map([["Pueblo X", { sin_cobertura: !lucero && !pap, ciudad_reconocida: true, lucero, pap }]]);
+  assertEquals(accionesPara(ped(["Ejercitador de mandibula JawFlex Pro"]), AH, false, cob(false, true)).includes("avisar_jawflex_pap"), true);
+  assertEquals(accionesPara(ped(["Ejercitador de mandibula JawFlex Pro"]), AH, false, cob(true, true)).includes("avisar_jawflex_pap"), false); // Lucero llega: como hoy
+  assertEquals(accionesPara(ped(["Tiras nasales"]), AH, false, cob(false, true)).includes("avisar_jawflex_pap"), false); // otro producto
+  const ninguno = accionesPara(ped(["JawFlex Pro"]), AH, false, cob(false, false));
+  assertEquals(ninguno.includes("avisar_sin_cobertura") && !ninguno.includes("avisar_jawflex_pap"), true); // flujo de sin cobertura
+  assertEquals(accionesPara(ped(["JawFlex Pro"], ["PAGADO"]), AH, false, cob(false, true)).includes("avisar_jawflex_pap"), false);
+});
