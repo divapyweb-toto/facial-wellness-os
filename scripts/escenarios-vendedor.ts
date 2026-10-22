@@ -482,4 +482,20 @@ export const ESCENARIOS: Escenario[] = [
       { tipo: "derivado", negar: true },
     ],
   },
+  {
+    nombre: "reactivar_cancelado",
+    descripcion: "Canceló el pedido del formulario; le escribimos para reactivarlo; contesta 'Sí, dale' → resumen con los mismos datos (sin volver a pedirlos) → Confirmo → pedido nuevo.",
+    cliente: { nombre: "Juan Prueba", telefono: "+595981000506" },
+    pasos: [
+      "marca:[plantilla voltra_confirmacion_pedido_v4] #1099 | Juan | 2 Raspador de Lengua: aliento más limpio | 158.000 | Calle Inventada 281 casi San José | Concepcion | en 2 a 5 días hábiles\n[el cliente tocó Cancelar pedido y Cancelar igual: el pedido #1099 quedó CANCELADO]\n[nosotros le escribimos: «Buen día Juan 🙌 Vimos que cancelaste los 2 raspadores. ¿Fue por algo que podamos resolver? Si querés lo reactivamos tal cual: 158.000 con envío gratis a Concepción y pagás recién cuando lo tenés en la mano.»]|Sí, dale",
+      "boton:Confirmo",
+    ],
+    checks: [
+      { paso: 0, tipo: "herramienta", nombre: "crear_pedido_cod", desc: "arma el resumen con los datos que ya tiene" },
+      { paso: 0, tipo: "texto", regex: /Pasame tu nombre/i, negar: true, desc: "no vuelve a pedir los datos" },
+      { paso: -1, tipo: "escritura", regex: /158000|158\.000/, desc: "158.000", suave: true },
+      { tipo: "montos_catalogo" },
+      { tipo: "derivado", negar: true },
+    ],
+  },
 ];
