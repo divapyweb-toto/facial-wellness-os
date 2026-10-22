@@ -51,8 +51,12 @@ Deno.serve(conServiceRole(async () => {
       return r.ok ? null : (r.error ?? "no se pudo cancelar");
     },
     avisar: (t) => avisar(escaparHtml(t)),
+    vaciar: async () => {
+      const { error } = await db().from("config_wa").update({ valor: { lista: [] } }).eq("clave", "reactivaciones");
+      if (error) throw new Error(`config_wa.reactivaciones: ${error.message}`);
+    },
   }, new Date(), false)
-    .then((r) => r.hechos.length && console.log("seguimiento-chat reactivaciones", JSON.stringify(r)))
+    .then((r) => (r.hechos.length || r.vaciada) && console.log("seguimiento-chat reactivaciones", JSON.stringify(r)))
     .catch(async (e) => {
       const msg = e instanceof Error ? e.message : String(e);
       await avisar(`<b>Reactivaciones: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`).catch(() => {});

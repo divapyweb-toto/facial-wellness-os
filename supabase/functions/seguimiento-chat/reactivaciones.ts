@@ -34,6 +34,8 @@ export type DepsReactivaciones = {
   tomar(id: string, payload: unknown): Promise<boolean>;
   cancelarEnShopify(orderId: number): Promise<string | null>;
   avisar(texto: string): Promise<unknown>;
+  /** 22-10: vacía config_wa.reactivaciones (el freno del webhook queda inactivo). */
+  vaciar?(): Promise<void>;
 };
 
 export async function correrReactivaciones(deps: DepsReactivaciones, ahora: Date, simular: boolean) {
@@ -65,5 +67,9 @@ export async function correrReactivaciones(deps: DepsReactivaciones, ahora: Date
     await deps.avisar(aviso).catch((e) => console.error("reactivación: Telegram:", e));
     hechos.push({ pedido: r.pedido, motivo, accion: r.modo === "reabrir" ? "cancelar" : "avisar", ok: !error, ...(error ? { error } : {}) });
   }
-  return { activas: lista.length, hechos };
+  // 22-10 (Enrique): con todos los casos cerrados (sí, o cierre hecho), la lista se vacía y el freno queda inactivo.
+  const cerradosAhora = new Set([...cerrados, ...hechos.filter((h) => h.ok !== false).map((h) => lista.find((r) => r.pedido === h.pedido)?.shopify_order_id)]);
+  const todos = lista.every((r) => decisiones.get(r.shopify_order_id) === "si" || cerradosAhora.has(r.shopify_order_id));
+  if (todos && !simular && deps.vaciar) await deps.vaciar();
+  return { activas: lista.length, hechos, vaciada: todos && !simular && !!deps.vaciar };
 }

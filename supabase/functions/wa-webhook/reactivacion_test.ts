@@ -64,6 +64,7 @@ function mundo() {
         return Promise.resolve(null);
       },
       avisar: (t) => (avisos.push(t), Promise.resolve()),
+      vaciar: () => ((cfg.lista = []), Promise.resolve()),
     }, reloj, simular);
   /**
    * Lo que Despacho vería: las ventas ya cargadas + los pedidos de Shopify despachables (src/pages/despacho/
@@ -178,4 +179,13 @@ Deno.test("21-10 respuestaReactivacion: sí, no y lo que no es ni una cosa ni la
   for (const t of ["No", "no gracias", "ya no lo quiero", "No, ya compré en otro lado", "cancelalo"]) assertEquals(respuestaReactivacion(t), "no", t);
   for (const t of ["¿Cuándo llega?", "sí pero el viernes", "No tengo número de casa", "hola", "Sí, no tengo número"]) assertEquals(respuestaReactivacion(t), null, t);
   assertEquals(leerReactivaciones({ lista: [{ cliente_id: "x" }, null] }), []);
+});
+
+Deno.test("22-10 reactivación · con los dos casos cerrados la lista se vacía (el freno queda inactivo)", async () => {
+  const w = mundo();
+  await atender(w, "cli-a", "sí");
+  assertFalse((await w.cierre()).vaciada); // falta el otro
+  await atender(w, "cli-b", "no");
+  assert((await w.cierre()).vaciada);
+  assertEquals(await atender(w, "cli-b", "sí"), { manejado: false });
 });
