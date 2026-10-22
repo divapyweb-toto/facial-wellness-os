@@ -9,25 +9,28 @@ DEST="${1:-$HOME/Negocios/datos-meta}"
 mkdir -p "$DEST"
 ARCH="$DEST/excluir-rechazos-$(date +%Y-%m-%d).csv"
 TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
+trap 'rm -f "$TMP" "$TMP.err"' EXIT
 cd "$(dirname "$0")/.."
 SQL="select phone_sha256, coalesce(email_sha256, '') as email_sha256 from public.publico_excluir_rechazos order by 1"
 
 for intento in 1 2 3; do
-  SALIDA="$(supabase db query --linked "$SQL" 2>&1)"
+  # -o csv: mismo formato en cualquier terminal (sin esto, la terminal interactiva muestra una tabla).
+  # Solo stdout son datos; los avisos de la herramienta (login, versión nueva) van a stderr y se guardan aparte.
+  SALIDA="$(supabase db query --linked -o csv "$SQL" 2>"$TMP.err")"
   if printf '%s' "$SALIDA" | python3 -c '
-import sys, json, re
-s = sys.stdin.read()
-if "\"rows\"" not in s:
+import sys, csv
+lineas = [l for l in sys.stdin.read().splitlines() if l.strip()]
+try:
+    i = next(k for k, l in enumerate(lineas) if l.startswith("phone_sha256"))
+except StopIteration:
     sys.exit(1)
-t = s[s.index("{"):s.rindex("}") + 1]
-t = re.sub(r",(\s*[}\]])", r"\1", t)
-filas = json.loads(t)["rows"]
-if not filas or any(len(r["phone_sha256"]) != 64 for r in filas):
+import re
+filas = [r for r in csv.DictReader(lineas[i:]) if re.fullmatch(r"[0-9a-f]{64}", r.get("phone_sha256") or "")]
+if not filas:
     sys.exit(2)
 print("phone,email")
 for r in filas:
-    print(r["phone_sha256"] + "," + r["email_sha256"])
+    print(r["phone_sha256"] + "," + (r.get("email_sha256") or ""))
 ' > "$TMP"; then
     mv "$TMP" "$ARCH"
     echo "$(($(wc -l < "$ARCH") - 1)) clientes → $ARCH"
@@ -37,6 +40,6 @@ for r in filas:
   sleep 5
 done
 echo "No se pudo exportar. Último mensaje de la base:" >&2
-printf '%s\n' "$SALIDA" | grep -vE "new version|recommend" | tail -5 >&2
+{ printf '%s\n' "$SALIDA"; cat "$TMP.err" 2>/dev/null; } | grep -vE "new version|recommend|Initialising" | tail -5 >&2
 echo "El archivo anterior (si había) quedó sin tocar." >&2
 exit 1
