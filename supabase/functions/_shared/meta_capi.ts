@@ -107,6 +107,8 @@ export interface DatosCliente {
   ciudad?: string | null;
   ip?: string | null;
   fbc?: string | null;
+  /** 22-10: cookie _fbp si el pedido la trae (hoy Releasit no la guarda). Sin hash. */
+  fbp?: string | null;
 }
 
 /** Puntuación ASCII + signos tipográficos/españoles. Se conservan letras con tilde y la ñ. */
@@ -201,7 +203,9 @@ export function datosClienteDesdeRaw(raw: Raw): DatosCliente {
     const t = new Date(String(raw.created_at ?? "")).getTime();
     if (clid && Number.isFinite(t)) fbc = `fb.1.${t}.${clid}`;
   }
-  return { nombre, apellido, ciudad, ip, fbc: fbc ?? null };
+  let fbp = notaAttr(raw, "_fbp") ?? notaAttr(raw, "fbp");
+  if (fbp && !/^fb\.\d+\.\d+\..+/.test(fbp)) fbp = null;
+  return { nombre, apellido, ciudad, ip, fbc: fbc ?? null, fbp: fbp ?? null };
 }
 
 export function eventId(orderId: number | string): string {
@@ -244,6 +248,8 @@ export async function armarPayloadPrincipal(
   if (ip) ud.client_ip_address = ip;
   const fbc = c.fbc?.trim();
   if (fbc && /^fb\.\d+\.\d+\..+/.test(fbc)) ud.fbc = fbc;
+  const fbp = c.fbp?.trim();
+  if (fbp && /^fb\.\d+\.\d+\..+/.test(fbp)) ud.fbp = fbp;
   const evento: Record<string, unknown> = {
     event_name: EVENTO_PROPIO,
     event_time: eventTime(e.pedido.entregado_en, o.ahora),
@@ -280,6 +286,33 @@ export function armarPayloadMensajeria(
   };
   if (o.testEventCode) p.test_event_code = o.testEventCode;
   return p;
+}
+
+// ─── 22-10: PedidoConfirmado (web) ─────────────────────────────────────
+// Evento PROPIO al dataset de campañas web ("datos de voltra", META_DATASET_ID) cuando un pedido web pasa a confirmado,
+// para que un conjunto aprenda de confirmados y no de formularios (el 26 % de los formularios web se cancelaba).
+// Mismos datos de cliente que PedidoEntregado. event_time = hora real de la confirmación (shopify_pedidos.confirmado_en).
+// event_id propio "confirmado:<order_id>": Meta descarta repetidos con el mismo event_id + event_name. NO toca el Purchase
+// de Releasit (web) ni el Purchase de WhatsApp (dataset de mensajería).
+export const EVENTO_CONFIRMADO = "PedidoConfirmado";
+export const eventIdConfirmado = (orderId: number | string) => `confirmado:${orderId}`;
+
+export async function armarPayloadConfirmado(
+  e: EntradaEvento & { confirmado_en: string },
+  o: { ahora: Date; testEventCode?: string | null },
+): Promise<Record<string, unknown>> {
+  const p = await armarPayloadPrincipal({ ...e, pedido: { ...e.pedido, entregado_en: e.confirmado_en } }, o);
+  const ev = (p.data as Record<string, unknown>[])[0];
+  ev.event_name = EVENTO_CONFIRMADO;
+  ev.event_id = eventIdConfirmado(e.pedido.shopify_order_id);
+  return p;
+}
+
+/** 22-10: manda un payload ya armado al dataset de campañas (META_DATASET_ID). Sin token o dataset: no llama a Meta. */
+export async function enviarAlDatasetPrincipal(payload: unknown, opc: { fetch?: typeof fetch } = {}): Promise<ResultadoEnvio> {
+  const token = envOpcional("META_CAPI_TOKEN"), ds = envOpcional("META_DATASET_ID");
+  if (!token || !ds || envOpcional("MODO_SIMULADO") === "1") return { ok: false, error: "sin META_CAPI_TOKEN o META_DATASET_ID (o modo simulado)" };
+  return await postear(opc.fetch ?? fetch, ds, token, payload, AbortSignal.timeout(10_000));
 }
 
 // ─── Envío ────────────────────────────────────────────────────────────────

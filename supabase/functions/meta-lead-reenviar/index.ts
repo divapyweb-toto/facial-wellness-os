@@ -4,6 +4,7 @@
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { depsReales } from "./io.ts";
 import { automatico, type Modo, reenviar } from "./logica.ts";
+import { enviarConfirmadosWeb, depsReales as depsConfirmado } from "./confirmado_web.ts";
 import { armarPayloadLead, configLead, EVENTO_PURCHASE, GRAPH_VERSION } from "../_shared/meta_capi.ts";
 import { db } from "../_shared/db.ts";
 
@@ -67,8 +68,14 @@ Deno.serve(conServiceRole(async (req: Request) => {
       const enviado = { ...ev, user_data: { ...(ev.user_data as object), ctwa_clid: `${ref.ctwa_clid.slice(0, 4)}…(${ref.ctwa_clid.length})` } };
       return Response.json({ ok: r.ok, http: r.status, meta: j, clic: { hora: data[0].creado_en, anuncio: ref.source_id }, enviado });
     }
+    // 22-10: PedidoConfirmado (web). A mano: {modo:"confirmado_web", simular?, test_event_code?}.
+    if ((b as { modo?: string }).modo === "confirmado_web") {
+      const o = b as { simular?: boolean; test_event_code?: string };
+      return Response.json({ ok: true, confirmado_web: await enviarConfirmadosWeb(depsConfirmado, new Date(), { simular: o.simular === true, testEventCode: o.test_event_code ?? null }) });
+    }
     if (b.origen === "pg_cron") {
-      const r = await automatico(depsReales());
+      const confirmadoWeb = await enviarConfirmadosWeb(depsConfirmado).catch((e) => [{ pedido: "-", resultado: `error: ${e instanceof Error ? e.message : String(e)}` }]);
+      const r = { ...(await automatico(depsReales())), confirmado_web: confirmadoWeb };
       console.log("meta-lead-reenviar cron", JSON.stringify(r));
       return Response.json({ ok: true, ...r });
     }
