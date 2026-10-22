@@ -193,6 +193,8 @@ export const PLANTILLAS: Record<string, DefPlantilla> = {
   // 10-10: no entregado → se reintenta siempre, sin preguntar (sin botón de cancelar).
   voltra_reintento_entrega_v2: { vars: ["nombre", "productos"], botones: [{ prefijo: "ne_direccion", titulo: "Cambiar dirección" }] },
   voltra_completar_direccion: { vars: ["nombre", "pedido"], botones: [] },
+  // 21-10: entrega fallida de Lucero → pedir horario y ubicación para reprogramar (la encola pedidos-trabados/entregas_actuar.ts).
+  voltra_entrega_reprogramar: { vars: ["nombre"], botones: AYUDA },
   voltra_no_entregado: {
     vars: ["nombre", "productos"],
     botones: [
@@ -229,6 +231,7 @@ export const AVISOS_ENVIO_CON_HORARIO = new Set([
   "voltra_reintento_entrega_v2",
   "voltra_completar_direccion",
   "voltra_no_entregado",
+  "voltra_entrega_reprogramar",
 ]);
 
 /** 09-10: avisos previos a la entrega ("ya salió", "hoy te llega", "ya está por llegar"). */
@@ -251,7 +254,7 @@ export const TEXTOS_AVISO_PAGADO: Record<string, string> = {
 };
 
 /** 13-10: aviso de "no se pudo entregar" con reintento automático (la v1 voltra_no_entregado ya no se programa). */
-export const AVISOS_REINTENTO = new Set(["voltra_reintento_entrega_v2"]);
+export const AVISOS_REINTENTO = new Set(["voltra_reintento_entrega_v2", "voltra_entrega_reprogramar"]);
 /** 13-10: con el envío en uno de estos estados ya no hay entrega que reintentar. */
 export const ESTADOS_SIN_REINTENTO = new Set(["ENTREGADO", "RENDIDO", "NO_ENTREGADO", "CANCELADO"]);
 

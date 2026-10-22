@@ -25,6 +25,12 @@ import { prepararEnShopify } from '../../lib/prepararShopify'
 import { esPrioridad, ordenarGuias, ordenarPorPrioridad, pagadoPorTags, tienePrioridad } from './prioridad'
 import { asegurarTarifasCourier } from '../../lib/tarifasCourier'
 import SugerenciaCosto from './SugerenciaCosto'
+import LineaMotor from './LineaMotor'
+// 21-10: motor de courier (ganancia esperada). Detrás del interruptor config 'motor_courier': apagado = solo sugiere.
+import {
+  asegurarMotorConfig, motorActivo, decisionGuardada, limpiarCacheMotor, paramsMotorDePedido, paramsMotorDeVenta,
+  infoPorReferencia, pedirDecisiones, aplicarMotorAPedido, filasCambioDePedidos, registrarCambiosCourier, resumenPedidosParados, insertarTolerante,
+} from '../../lib/motorCourier'
 
 // Helpers locales para el cruce ventas ⋈ entregas del historial de riesgo
 const normRefRiesgo = (ref) => {
@@ -1082,6 +1088,9 @@ function filaVentaDePedido(p, catalogo) {
     // CI/RUC del pedido manual (columna opcional — ver nota de guardado tolerante abajo).
     notas: p.notas || null,
   }
+  // 21-10: lo que decidió el motor de courier (aunque esté apagado: queda para medir). Columnas opcionales: si no
+  // existieran, el insert tolerante las saca y reintenta.
+  if (p.courier_motor) { fila.courier_motor = p.courier_motor; fila.courier_regla = p.courier_regla || null }
   // 12-10: RETIRO_EN_CASA confirmado. Venta sin courier: transportadora 'otra'
   // (la columna no acepta null), flete 0 y método "Retiro en persona", que la
   // deja fuera de la planilla, las guías y la salida. Entregada si Shopify ya
@@ -1096,6 +1105,33 @@ function filaVentaDePedido(p, catalogo) {
     }
   }
   return fila
+}
+
+// 21-10: completa con el motor de courier los pedidos que están por guardarse como venta NUEVA (CSV, WhatsApp, "Traer de
+// Voltra"): espera las decisiones que falten (tope de 4 s por una; si fallan, el pedido queda como hoy) y deja anotado
+// courier_motor / courier_regla. Con el motor activo asigna el ganador, salvo lo elegido a mano (p.transpManual).
+// Las ventas ya cargadas no pasan por acá. Nunca tira.
+async function aplicarMotorLote(lista) {
+  try {
+    await asegurarMotorConfig().catch(() => {})
+    const activo = motorActivo()
+    const codDe = (p) => (p.prepago != null ? !p.prepago : (p.codRuteo ?? true))
+    await pedirDecisiones(lista.filter(p => p.cfg?.despachar !== false && !p.retiroEnPersona && !p.retiroConfirmado && p.ciudad)
+      .map(p => paramsMotorDePedido(p, codDe(p))))
+    return lista.map((p) => {
+      const dec = decisionGuardada(paramsMotorDePedido(p, codDe(p)))
+      if (!dec) return p
+      return aplicarMotorAPedido(p, dec, {
+        activo,
+        manual: p.transpManual ? p.transportadora : null,
+        disponibles: activo ? transportadorasDisponibles(p.ciudad, { cod: codDe(p) }) : undefined,
+        detalleTarifa: tarifaDetalle,
+      })
+    })
+  } catch (e) {
+    console.warn('Motor de courier no aplicado:', e?.message)
+    return lista
+  }
 }
 
 // 12-10: separa lo que trae "Traer pedidos de Voltra":
@@ -1196,6 +1232,8 @@ export default function DespachoPagina() {
   // 21-10: ventas de pedidos cancelados en Shopify que YA están en el courier (no se cancelan solas).
   const [canceladosEnCourier, setCanceladosEnCourier] = useState([])
   const [busqVentas, setBusqVentas] = useState('')
+  // 21-10: pedidos confirmados de más de 24 h que todavía no salieron (vista pedidos_parados). Si la vista falla, queda vacío.
+  const [pedidosParados, setPedidosParados] = useState([])
 
   // ── Memos CSV ──────────────────────────────────────────
   // Pedidos que el usuario fuerza a despachar aunque la ciudad no matchee
@@ -1232,6 +1270,16 @@ export default function DespachoPagina() {
   useEffect(() => {
     let vivo = true
     asegurarTarifasCourier().then(ok => { if (vivo) setTarifasListas(ok) })
+    return () => { vivo = false }
+  }, [])
+
+  // 21-10: MOTOR DE COURIER. motorOn = interruptor (config 'motor_courier'); motorVer sube cada vez que llegan decisiones
+  // (así los memos releen la caché). Apagado: solo muestra la sugerencia. Si el interruptor o la rpc fallan, todo sigue como hoy.
+  const [motorOn, setMotorOn] = useState(() => motorActivo())
+  const [motorVer, setMotorVer] = useState(0)
+  useEffect(() => {
+    let vivo = true
+    asegurarMotorConfig().then(() => { if (vivo) setMotorOn(motorActivo()) }, () => {})
     return () => { vivo = false }
   }, [])
 
@@ -1294,6 +1342,17 @@ export default function DespachoPagina() {
         }
       }
       p = { ...p, editado: !!edit }
+      // 21-10: motor de courier. Apagado: solo anota la decisión (sugerencia + registro). Activo: asigna el ganador salvo
+      // que Enrique haya elegido a mano (transpOverride gana siempre) o el courier no cubra la ciudad.
+      const decMotor = decisionGuardada(paramsMotorDePedido(p, cod))
+      if (decMotor) {
+        p = aplicarMotorAPedido(p, decMotor, {
+          activo: motorOn,
+          manual: transpOverride[p.n_referencia] || null,
+          disponibles: motorOn ? transportadorasDisponibles(p.ciudad, { cod }) : undefined,
+          detalleTarifa: tarifaDetalle,
+        })
+      }
       const tel = normalizarTel(p.telefono)
       const ev = evaluarRiesgo(historialRiesgo.get(tel))
       const habilitado = riesgoHabilitado.has(p.n_referencia)
@@ -1335,8 +1394,27 @@ export default function DespachoPagina() {
       }
     }),
     // tarifasListas: cuando termina de cargar la tabla de tarifas, se recalcula el flete con ella.
-    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual, ediciones, tarifasListas]
+    [todos, forzados, prepagos, historialRiesgo, riesgoHabilitado, transpOverride, historialCiudad, ciudadHabilitada, costoOtraManual, ediciones, tarifasListas, motorOn, motorVer]
   )
+
+  // 21-10: pide la decisión del motor de cada pedido a despachar (en paralelo, una vez por clave; la caché evita repetir).
+  // Se basa en lo mismo que el memo de arriba (ediciones y prepagos), pero sin depender de él.
+  const paramsMotorCsv = useMemo(() => {
+    const out = []
+    for (const pO of todos) {
+      const edit = ediciones[pO.n_referencia]
+      const p = edit ? { ...pO, ...edit } : pO
+      if (p.cfg?.despachar === false || p.retiroConfirmado || !p.ciudad) continue
+      const cod = !(p.pagadoShopify ? !prepagos.has(p.n_referencia) : prepagos.has(p.n_referencia))
+      out.push(paramsMotorDePedido(p, cod))
+    }
+    return out
+  }, [todos, ediciones, prepagos])
+  useEffect(() => {
+    let vivo = true
+    pedirDecisiones(paramsMotorCsv, { activo: () => vivo, alTerminarTanda: () => setMotorVer(v => v + 1) }).catch(() => {})
+    return () => { vivo = false }
+  }, [paramsMotorCsv])
 
   // 12-10: PRIORIDAD primero (lista, cabecera y guías salen en este orden).
   const paraDespacho = useMemo(() => ordenarPorPrioridad(todosConOverride.filter(p => p.despachar)), [todosConOverride])
@@ -1450,6 +1528,7 @@ export default function DespachoPagina() {
       })
 
       limpiarMarcasDelArchivo()
+      limpiarCacheMotor()
       setTodos(pedidos)
       setStep('preview')
       toast(`${pedidos.length} pedido${pedidos.length > 1 ? 's' : ''} procesado${pedidos.length > 1 ? 's' : ''}`, 'success')
@@ -1481,10 +1560,31 @@ export default function DespachoPagina() {
   const todosSeleccionados = ventasFiltradas.length > 0 && ventasFiltradas.every(v => selVentas.has(v.id))
   const valorSeleccionado = pedidosSeleccionados.reduce((s, p) => s + p.total, 0)
 
+  // 21-10: motor de courier en "Desde Ventas". Las ventas ya cargadas NUNCA se reasignan (se respeta v.transportadora):
+  // acá el motor solo muestra su sugerencia por pedido. Una decisión por pedido (todas sus líneas = una caja).
+  const infoMotorVentas = useMemo(() => infoPorReferencia(ventasPend, transportadoraForzada), [ventasPend])
+  const paramsMotorVentas = useMemo(() => {
+    const vistos = new Set(), out = []
+    for (const v of ventasPend) {
+      const ref = String(v.n_referencia ?? '')
+      if (!ref || vistos.has(ref) || !v.ciudad || v.metodo_envio_nombre === METODO_ENVIO_RETIRO) continue
+      vistos.add(ref)
+      out.push(paramsMotorDeVenta(v, infoMotorVentas.get(ref)))
+    }
+    return out
+  }, [ventasPend, infoMotorVentas])
+  useEffect(() => {
+    let vivo = true
+    if (modo === 'ventas') pedirDecisiones(paramsMotorVentas, { activo: () => vivo, alTerminarTanda: () => setMotorVer(x => x + 1) }).catch(() => {})
+    return () => { vivo = false }
+  }, [paramsMotorVentas, modo])
+  const decisionDeVenta = (v) => decisionGuardada(paramsMotorDeVenta(v, infoMotorVentas.get(String(v.n_referencia ?? ''))))   // se relee en cada render: motorVer lo dispara
+
   // ── Handlers CSV ───────────────────────────────────────
   const handleFile = (file) => {
     if (!file?.name.endsWith('.csv')) { toast('Solo archivos .csv', 'error'); return }
     limpiarMarcasDelArchivo()
+    limpiarCacheMotor()   // 21-10: archivo nuevo → decisiones del motor frescas
     setNombreArchivo(file.name)
     const reader = new FileReader()
     reader.onload = (e) => {
@@ -1617,7 +1717,7 @@ export default function DespachoPagina() {
     const refsExistentes = new Set(countExistentePorRef.keys())
 
     const vistosPorRef = new Map()   // cuántas líneas de esta ref ya se procesaron EN ESTE lote
-    const nuevas = []
+    let nuevas = []
     const duplicados = []
     for (const p of paraDespacho) {
       const ref = String(p.n_referencia)
@@ -1674,22 +1774,32 @@ export default function DespachoPagina() {
       return
     }
 
+    // 21-10: motor de courier. Anota courier_motor/courier_regla y, si está ACTIVO, asigna el ganador a lo que todavía no
+    // tenía decisión a tiempo (lo elegido a mano no se toca). Si el motor deja un pedido sin cobertura que antes tenía
+    // courier, NO se carga (no se lo manda por PaP sin cobranza): queda para decidir a mano.
+    const nuevasAntes = nuevas
+    const nuevasMotor = await aplicarMotorLote(nuevasAntes)
+    const sinCoberturaMotor = nuevasMotor.filter((p, i) => nuevasAntes[i].transportadora && !p.transportadora)
+    if (sinCoberturaMotor.length) {
+      nuevas = nuevasMotor.filter((p, i) => !(nuevasAntes[i].transportadora && !p.transportadora))
+      toast(`${new Set(sinCoberturaMotor.map(p => p.n_referencia)).size} pedido(s) sin cobertura según el motor de courier: no se cargaron (pago anticipado o decidir a mano)`, 'error')
+      if (!nuevas.length) { setResultado({ ok: 0, fail: 0, duplicados }); setCargando(false); return }
+    } else {
+      nuevas = nuevasMotor
+    }
+
     const ventasArr = nuevas.map(p => filaVentaDePedido(p, catalogo))
     const insertadas = []   // solo las filas que la base aceptó (para los placeholders de Lucero)
     for (let i = 0; i < ventasArr.length; i += 50) {
-      let chunk = ventasArr.slice(i, i + 50)
-      let { error } = await supabase.from('ventas').insert(chunk)
-      // Guardado tolerante: si la tabla todavía no tiene la columna `notas`
-      // (falta correr la migración), se reintenta sin ese campo en vez de
-      // perder el lote entero — igual patrón que ya usamos para Lucero.
-      if (error && /Could not find the '(\w+)' column/.test(error.message || '')) {
-        const col = error.message.match(/Could not find the '(\w+)' column/)[1]
-        chunk = chunk.map(r => { const o = { ...r }; delete o[col]; return o })
-        ;({ error } = await supabase.from('ventas').insert(chunk))
-      }
+      // Guardado tolerante: si la tabla todavía no tiene alguna columna opcional (`notas`, `courier_motor`…; falta correr
+      // la migración), se reintenta sin ese campo en vez de perder el lote entero — igual patrón que ya usamos para Lucero.
+      const { error, filas: chunk } = await insertarTolerante(supabase, 'ventas', ventasArr.slice(i, i + 50))
       if (error) fail += chunk.length
       else { ok += chunk.length; insertadas.push(...chunk) }
     }
+    // 21-10: si el courier final difiere del que eligió el motor (cambio manual), queda registrado para medirlo.
+    // (solo con el motor ACTIVO: apagado, la diferencia contra el motor queda en ventas.courier_motor, no es un "cambio manual")
+    if (motorActivo()) await registrarCambiosCourier(filasCambioDePedidos(nuevas, new Set(insertadas.map(v => String(v.n_referencia)))))
 
     // ── Placeholder en `entregas` para cada venta de Lucero ──
     // "Estilo Amazon": el envío existe para el sistema desde el momento en que
@@ -1822,6 +1932,9 @@ export default function DespachoPagina() {
       supabase.from('ventas_cancelacion_shopify').select('nombre, courier_real, transportadora, estado_courier').eq('clase', 'cancelado_en_courier')
         .then(({ data: cc }) => setCanceladosEnCourier((cc || []).map(c => ({ nombre: c.nombre, courier: c.courier_real || c.transportadora, estado: c.estado_courier }))),
           () => setCanceladosEnCourier([]))
+      // 21-10: pedidos confirmados de más de 24 h que todavía no salieron (vista pedidos_parados). Si falla, no se muestra.
+      supabase.from('pedidos_parados').select('ref, nombre, ciudad, horas, dias, etapa, courier, producto').order('horas', { ascending: false }).limit(200)
+        .then(({ data: pp, error: ePP }) => setPedidosParados(ePP ? [] : (pp || [])), () => setPedidosParados([]))
     } catch (e) {
       toast('Error al cargar ventas pendientes: ' + (e.message || ''), 'error')
     }
@@ -1859,8 +1972,8 @@ export default function DespachoPagina() {
       // 12-10: los retiros en persona confirmados entran SIN courier, y los
       // que no tienen transportadora que cubra NO entran (antes iban como PaP
       // con flete de respaldo sin que nadie lo decidiera).
-      const { listos: conCourier, retiros, sinCobertura } = separarPedidosVoltra(pedidos, envioPorRef)
-      const listos = [...conCourier, ...retiros]
+      let { listos: conCourier, retiros, sinCobertura } = separarPedidosVoltra(pedidos, envioPorRef)
+      let listos = [...conCourier, ...retiros]
       const sinConfirmar = new Set(pedidos.filter(p => !p.cfg?.despachar && !p.retiroConfirmado && p.estado_releasit !== 'cancelado').map(p => p.n_referencia)).size
       if (!listos.length && !sinCobertura.length) {
         setVoltraSinCobertura([])
@@ -1874,6 +1987,20 @@ export default function DespachoPagina() {
       // Sin saber qué ya existe, insertar duplicaría ventas: se aborta.
       if (errYa) throw errYa
       ;(ya || []).forEach(d => cuenta.set(String(d.n_referencia), (cuenta.get(String(d.n_referencia)) || 0) + 1))
+      // 21-10: motor de courier, SOLO para pedidos que todavía no están en Ventas (los ya cargados no se reasignan nunca).
+      // Anota courier_motor/courier_regla y, si el interruptor está activo, asigna el ganador; un pedido puede pasar de
+      // "con courier" a "sin cobertura" (y al revés). Si el motor falla o tarda, todo queda como hoy.
+      {
+        const frescos = [...conCourier, ...sinCobertura].filter(p => !cuenta.has(String(p.n_referencia)))
+        if (frescos.length) {
+          const conMotor = await aplicarMotorLote(frescos)
+          const nuevoDe = new Map(frescos.map((p, i) => [p, conMotor[i]]))
+          const todosP = [...conCourier, ...sinCobertura].map(p => nuevoDe.get(p) || p)
+          conCourier = todosP.filter(p => p.transportadora)
+          sinCobertura = todosP.filter(p => !p.transportadora)
+          listos = [...conCourier, ...retiros]
+        }
+      }
       // 12-10: sin cobertura y todavía fuera de Ventas → aviso "decidir a mano" (uno por pedido).
       const pendientesDecidir = new Map()
       for (const p of sinCobertura) {
@@ -1922,14 +2049,11 @@ export default function DespachoPagina() {
       // Sin catálogo se guardaría costo_prod 0: se aborta.
       const { data: catalogo, error: errCat } = await supabase.from('productos').select('id, nombre, costo_unit').eq('activo', true)
       if (errCat) throw errCat
-      let filasVenta = nuevas.map(p => filaVentaDePedido(p, catalogo || []))
-      let { error: errIns } = await supabase.from('ventas').insert(filasVenta)
-      if (errIns && /Could not find the '(\w+)' column/.test(errIns.message || '')) {
-        const col = errIns.message.match(/Could not find the '(\w+)' column/)[1]
-        filasVenta = filasVenta.map(r => { const o = { ...r }; delete o[col]; return o })
-        ;({ error: errIns } = await supabase.from('ventas').insert(filasVenta))
-      }
+      // Guardado tolerante a columnas opcionales que falten (notas, courier_motor, courier_regla…).
+      const { error: errIns } = await insertarTolerante(supabase, 'ventas', nuevas.map(p => filaVentaDePedido(p, catalogo || [])))
       if (errIns) throw errIns
+      // 21-10: si el courier final difiere del que eligió el motor, queda registrado para medirlo (mejor esfuerzo).
+      if (motorActivo()) await registrarCambiosCourier(filasCambioDePedidos(nuevas))
       const nPedidos = new Set(nuevas.map(p => p.n_referencia)).size
       toast(`${nPedidos} pedido${nPedidos === 1 ? '' : 's'} de Voltra pasaron a Ventas`, 'success')
       fetchVentasPendientes()
@@ -2106,6 +2230,19 @@ export default function DespachoPagina() {
             </div>
           )}
 
+          {/* 21-10: confirmados hace más de 24 h que todavía no salieron (vista pedidos_parados) */}
+          {pedidosParados.length > 0 && (() => {
+            const r = resumenPedidosParados(pedidosParados)
+            return (
+              <div className="alert" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+                <AlertTriangle size={14} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
+                <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                  <strong>{r.n} pedido{r.n === 1 ? '' : 's'} sin despachar hace +24 h:</strong>{' '}{r.texto}.
+                </span>
+              </div>
+            )
+          })()}
+
           {/* 21-10: cancelado por el cliente pero con el paquete ya en el courier: no se cancela solo */}
           {canceladosEnCourier.length > 0 && (
             <div className="alert" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
@@ -2258,6 +2395,7 @@ export default function DespachoPagina() {
                           {v.ciudad || '—'}
                           <NotaFallbackProducto ciudad={v.ciudad} producto={v.producto_nombre} cod={!v.pago_anticipado} transportadora={v.transportadora} />
                           <SugerenciaCosto ciudad={v.ciudad} cod={!v.pago_anticipado} asignada={v.transportadora} />
+                          <LineaMotor decision={decisionDeVenta(v)} asignada={v.transportadora} activo={motorOn} />
                         </td>
                         <td data-label="Dirección" className="muted" style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11 }}>
                           {v.cliente_direccion
@@ -2605,6 +2743,7 @@ export default function DespachoPagina() {
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                 <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>Sin cobertura</span>
                                 <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
+                                <LineaMotor decision={p.motorDecision} asignada={p.transportadora} activo={motorOn} />
                               </div>
                             )
                           }
@@ -2644,6 +2783,7 @@ export default function DespachoPagina() {
                               </span>
                               {p.fallbackProducto && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'normal' }}>⚠ {p.motivoTransportadora}</div>}
                               <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
+                              <LineaMotor decision={p.motorDecision} asignada={p.transportadora} activo={motorOn} />
                               {p.transportadora === 'otra' && (
                                 <input
                                   type="number"

@@ -13,11 +13,11 @@ const ESPERADAS = [
   'voltra_pedido_despachado', 'voltra_recordatorio_confirmacion', 'voltra_seguimiento_entrega',
   'voltra_recuperar_borrador', 'voltra_reintento_entrega_v2', 'voltra_factura', 'voltra_aviso_demora_clima', 'voltra_completar_direccion', 'voltra_entrega_proxima', 'voltra_ultimo_aviso_confirmacion', 'voltra_pedido_cancelado_sin_respuesta',
   'voltra_mk_cruzada', 'voltra_mk_recompra_fw', 'voltra_mk_lanzamiento', 'voltra_mk_pack', 'voltra_mk_reposicion', 'voltra_mk_seguimiento_oferta', 'voltra_mk_recuperar_pedido',
-  'voltra_confirmacion_pedido_v4', 'voltra_entrega_manana', 'voltra_pago_prioridad'
+  'voltra_confirmacion_pedido_v4', 'voltra_entrega_manana', 'voltra_pago_prioridad', 'voltra_entrega_reprogramar'
 ].sort();
 const palabras = cargarPalabrasProhibidas();
 
-test('las 26 plantillas (19 de utilidad + 7 voltra_mk_ de marketing) existen y pasan la validación', () => {
+test('las 27 plantillas (20 de utilidad + 7 voltra_mk_ de marketing) existen y pasan la validación', () => {
   const r = validarTodas();
   assert.deepEqual(r.map((x) => x.plantilla.name).sort(), ESPERADAS);
   for (const { archivo, errores } of r) assert.deepEqual(errores, [], archivo);

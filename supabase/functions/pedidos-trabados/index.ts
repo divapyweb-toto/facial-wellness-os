@@ -9,6 +9,7 @@ import { cancelarEnShopify, candadosTomados, coberturaCiudades, ejecutar, estado
 import { accionesPara, necesitaCobertura } from "./logica.ts";
 import { avisoRutaPap } from "./aviso_ruta_pap.ts";
 import { sincronizarCancelaciones } from "./cancelaciones_ventas.ts";
+import { entregasParaActuar } from "./entregas_actuar_io.ts";
 
 type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean; preparar?: boolean };
 
@@ -39,7 +40,9 @@ async function automatico(simular: boolean) {
   const ruta = await avisoRutaPap(ahora, simular).catch((e) => ({ activo: true, error: e instanceof Error ? e.message : String(e), hechos: [] }));
   // 21-10: pedido cancelado en Shopify → la venta de Voltra OS se entera (cancelaciones_ventas.ts). Un error acá no frena lo demás.
   const cancelaciones = await sincronizarCancelaciones(simular).catch((e) => [{ pedido: "-", clase: "error", resultado: e instanceof Error ? e.message : String(e) }]);
-  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, cancelaciones };
+  // 21-10: que nada quede parado: entregas fallidas de Lucero, última chance de PaP, pedidos parados (9:00) y rendición atrasada (entregas_actuar.ts).
+  const actuar = await entregasParaActuar(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, cancelaciones, que_nada_quede_parado: actuar };
 }
 
 async function manual(acciones: AccionManual[]) {

@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { armarResumen, diaParaguay, lineaSinCobertura, lineaSinPin, type Pedido } from "./logica.ts";
+import { armarResumen, diaParaguay, lineaRendicion, lineaSinCobertura, lineaSinPin, listaParados, type Pedido, type PedidoParado } from "./logica.ts";
 
 const AHORA = new Date("2026-10-17T00:30:00Z"); // 21:30 del 16-10 en Paraguay
 const p = (o: Partial<Pedido>): Pedido => ({
@@ -18,6 +18,8 @@ const pedidos = [
   p({ nombre: "#7", creadoEn: "2026-10-16T02:00:00Z" }), // 15-10 23:00 en Paraguay: es de ayer
   p({ nombre: "#8", creadoEn: "2026-10-14T12:00:00Z", estadoEnvio: null }), // confirmado, +24 h, sin despachar
 ];
+const par = (nombre: string, horas: number, ciudad: string | null, o: Partial<PedidoParado> = {}): PedidoParado =>
+  ({ nombre, ciudad, horas, dias: Math.floor(horas / 24), etapa: "sin_despachar", courier: null, producto: "Raspador de Lengua", ...o });
 const meta = {
   hoy: [{ nombre: "CAMPAÑA VENTAS WEB", gasto: 40000, presupuesto: 100000 }, { nombre: "CAMPAÑA VENTAS WHATSAPP", gasto: 60000, presupuesto: 100000 }],
   ayer: [{ nombre: "CAMPAÑA VENTAS WEB", gasto: 30000, presupuesto: 100000 }],
@@ -31,7 +33,7 @@ Deno.test("día en hora de Paraguay (UTC−3)", () => {
 });
 
 Deno.test("cuenta solo pedidos válidos del día, por canal y producto; CPA; alertas", () => {
-  const { texto } = armarResumen({ ...base, pedidos, meta });
+  const { texto } = armarResumen({ ...base, pedidos, meta, pedidosParados: [par("#8", 60, "Luque")] });
   assertStringIncludes(texto, "Pedidos válidos hoy: <b>3</b> (web 2 · WhatsApp 1) · piso 5-6/día ⚠️");
   assertStringIncludes(texto, "Raspador 1 · Tiras 1 · Pack 1 · JawFlex 0");
   assertStringIncludes(texto, "Unidades: 4 · Facturado: Gs 382.000");
@@ -144,24 +146,37 @@ Deno.test("21-10: línea de sin cobertura de la semana (desde el lunes): pagaron
   assertStringIncludes(armarResumen({ ...base, pedidos: [...pedidos, ...ped], meta }).texto, "Sin cobertura: 3 pedidos esta semana");
 });
 
-Deno.test("21-10: pedidos sin despachar: lista con ciudad, horas y courier; excluye retiro y sin cobertura esperando pago; máx 10", () => {
-  const mk = (n: string, h: number, ciudad: string, tags: string[] = []) =>
-    p({ nombre: n, ciudad, tags, creadoEn: new Date(AHORA.getTime() - h * 3_600_000).toISOString(), estadoEnvio: null });
-  const ped = [mk("#A", 30, "Villarrica"), mk("#B", 100, "Luque"), mk("#R", 50, "Luque", ["RETIRO_EN_CASA"]),
-    mk("#S", 60, "X", ["SIN_COBERTURA"]), mk("#P", 40, "X", ["SIN_COBERTURA", "PAGADO"])];
-  const t = armarResumen({ ...base, pedidos: ped, meta, courierPorCiudad: { Villarrica: { sugerido: "pap", lucero: false, pap: true }, Luque: { sugerido: "lucero", lucero: true, pap: true }, X: { sugerido: null, lucero: false, pap: false } } }).texto;
-  assertStringIncludes(t, "3 pedidos sin despachar hace +24 h: #B Luque 100 h → Lucero · #P X 40 h → sin courier · #A Villarrica 30 h → PaP");
-  assert(!t.includes("#R") && !t.includes("#S"));
-  const muchos = Array.from({ length: 12 }, (_, i) => mk(`#M${i}`, 30 + i, "Luque"));
-  assertStringIncludes(armarResumen({ ...base, pedidos: muchos, meta }).texto, "y 2 más");
+Deno.test("21-10: pedidos sin despachar salen de la vista pedidos_parados: número, ciudad, días, etapa y courier; más viejo primero; máx 10", () => {
+  const cpc = { Villarrica: { sugerido: "pap", lucero: false, pap: true }, Luque: { sugerido: "lucero", lucero: true, pap: true }, X: { sugerido: null, lucero: false, pap: false } };
+  const ps = [par("#A", 30, "Villarrica"), par("#B", 100, "Luque"), par("#P", 40, "X"), par("#C", 130, "Luque", { etapa: "sin_cargar" }), par("#D", 60, null, { courier: "lucero" })];
+  const t = armarResumen({ ...base, pedidos, meta, pedidosParados: ps, courierPorCiudad: cpc }).texto;
+  assertStringIncludes(t, "5 pedidos sin despachar hace +24 h: #C Luque 5 d · sin cargar en Ventas → Lucero · #B Luque 4 d · sin despachar → Lucero · #D ciudad ? 2 d · sin despachar → Lucero · #P X 1 d · sin despachar → sin courier · #A Villarrica 1 d · sin despachar → PaP");
+  const muchos = Array.from({ length: 12 }, (_, i) => par(`#M${i}`, 30 + i, "Luque"));
+  assertStringIncludes(armarResumen({ ...base, pedidos, meta, pedidosParados: muchos }).texto, "12 pedidos sin despachar hace +24 h:");
+  assertStringIncludes(listaParados(muchos).lista, "y 2 más");
+  assertEquals(listaParados(muchos).lista.split("sin despachar").length - 1, 10); // 10 ítems listados
+  // sin parados (o sin pedir la vista): no hay línea; vista ilegible (null): aviso de que no se pudo leer
+  assert(!armarResumen({ ...base, pedidos, meta, pedidosParados: [] }).texto.includes("sin despachar hace"));
+  assert(!armarResumen({ ...base, pedidos, meta }).texto.includes("sin despachar hace"));
+  assertStringIncludes(armarResumen({ ...base, pedidos, meta, pedidosParados: null }).texto, "No pude leer los pedidos parados");
 });
 
-Deno.test("21-10: JawFlex en la lista de sin despachar: Lucero si llega; PaP si Lucero no llega; decidir a mano si ninguno", () => {
-  const mk = (n: string, ciudad: string) => p({ nombre: n, ciudad, lineas: [{ titulo: "JawFlex Pro", cantidad: 1 }], estadoEnvio: null,
-    creadoEn: new Date(AHORA.getTime() - 100 * 3_600_000).toISOString() });
+Deno.test("21-10: pedido con courier ya asignado muestra ese; JawFlex: Lucero si llega; PaP si Lucero no llega; decidir a mano si ninguno", () => {
+  const mk = (n: string, ciudad: string) => par(n, 100, ciudad, { producto: "JawFlex Pro" });
   const cpc = { A: { sugerido: "pap", lucero: true, pap: true }, B: { sugerido: "pap", lucero: false, pap: true }, C: { sugerido: null, lucero: false, pap: false } };
-  const t = armarResumen({ ...base, pedidos: [mk("#1", "A"), mk("#2", "B"), mk("#3", "C")], meta, courierPorCiudad: cpc }).texto;
-  assertStringIncludes(t, "#1 A 100 h → Lucero");
-  assertStringIncludes(t, "#2 B 100 h → PaP (JawFlex: Lucero no llega)");
-  assertStringIncludes(t, "#3 C 100 h → sin courier: decidir a mano");
+  const t = armarResumen({ ...base, pedidos, meta, pedidosParados: [mk("#1", "A"), mk("#2", "B"), mk("#3", "C")], courierPorCiudad: cpc }).texto;
+  assertStringIncludes(t, "#1 A 4 d · sin despachar → Lucero");
+  assertStringIncludes(t, "#2 B 4 d · sin despachar → PaP (JawFlex: Lucero no llega)");
+  assertStringIncludes(t, "#3 C 4 d · sin despachar → sin courier: decidir a mano");
+  // sin datos de cobertura de la ciudad, JawFlex con courier asignado muestra el asignado
+  assertStringIncludes(listaParados([par("#4", 130, "Z", { producto: "JawFlex Pro", courier: "pap" })]).lista, "#4 Z 5 d · sin despachar → PaP");
+});
+
+Deno.test("21-10: línea de rendición atrasada con monto y total; sin filas no hay línea", () => {
+  const rs = [{ ref: "VT-2", courier: "pap", dias: 16, montoNeto: 250000 }, { ref: "VT-1", courier: "lucero", dias: 5, montoNeto: 100000 }];
+  assertEquals(lineaRendicion(rs), "💰 Rendición atrasada: PaP VT-2 16 días Gs 250.000 · Lucero VT-1 5 días Gs 100.000 · total Gs 350.000");
+  assertEquals(lineaRendicion([]), null);
+  assertEquals(lineaRendicion(null), null);
+  assertStringIncludes(armarResumen({ ...base, pedidos, meta, rendicionAtrasada: rs }).texto, "total Gs 350.000");
+  assert(!armarResumen({ ...base, pedidos, meta, rendicionAtrasada: [] }).texto.includes("Rendición atrasada"));
 });

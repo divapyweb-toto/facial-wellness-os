@@ -91,6 +91,56 @@ export interface Entrada {
   /** 20-10: PaP en los últimos 60 días (vista tasa_entrega_courier) y si ya se avisó que llegó a 20 resueltos. */
   pap60d?: { resueltos: number; tasa: number | null } | null;
   papAvisoYaDado?: boolean;
+  /** 21-10: vista pedidos_parados (confirmados de +24 h que no salieron). null = no se pudo leer; undefined = no se pidió. */
+  pedidosParados?: PedidoParado[] | null;
+  /** 21-10: vista rendicion_atrasada (entregados sin rendir pasado el umbral del courier). */
+  rendicionAtrasada?: RendicionAtrasada[] | null;
+}
+
+/** 21-10: fila de la vista pedidos_parados. etapa: sin_cargar (no está en Ventas) | sin_despachar. */
+export interface PedidoParado {
+  nombre: string; ciudad: string | null; horas: number; dias: number; etapa: string; courier: string | null; producto: string | null;
+}
+/** 21-10: fila de la vista rendicion_atrasada (monto neto = cobrado − flete). */
+export interface RendicionAtrasada { ref: string; courier: string; dias: number; montoNeto: number }
+type InfoCourier = { sugerido: string | null; lucero: boolean; pap: boolean };
+
+const NOMBRE_CUR = (c: string | null | undefined) => (c === "pap" ? "PaP" : c === "lucero" ? "Lucero" : null);
+
+/**
+ * 21-10: lista "#1064 Ciudad 5 d · sin despachar → PaP" del más viejo al más nuevo, máximo `max` + "y N más".
+ * Courier: el ya asignado en Ventas; si no hay, el sugerido por ciudad. JawFlex solo sale por Lucero (si Lucero no llega
+ * pero PaP cobra, Despacho lo manda por PaP solo) y lleva su marca.
+ */
+export function listaParados(ps: PedidoParado[], courierPorCiudad?: Record<string, InfoCourier>, max = 10): { n: number; lista: string } {
+  const orden = [...ps].sort((a, b) => b.horas - a.horas);
+  const item = (p: PedidoParado) => {
+    const ciudad = p.ciudad?.trim() ? escaparHtml(p.ciudad.trim()) : "ciudad ?";
+    const info = p.ciudad ? courierPorCiudad?.[p.ciudad] : undefined;
+    const asignado = NOMBRE_CUR(p.courier);
+    let destino = "";
+    if (info && familia(p.producto ?? "") === "JawFlex") {
+      destino = info.lucero ? " → Lucero" : info.pap ? " → PaP (JawFlex: Lucero no llega)" : " → sin courier: decidir a mano";
+    } else if (asignado) {
+      destino = ` → ${asignado}`;
+    } else if (info) {
+      destino = info.sugerido ? ` → ${NOMBRE_CUR(info.sugerido) ?? "Lucero"}` : " → sin courier";
+    }
+    const tiempo = p.dias >= 1 ? `${p.dias} d` : `${Math.floor(p.horas)} h`;
+    const etapa = p.etapa === "sin_cargar" ? "sin cargar en Ventas" : "sin despachar";
+    return `${escaparHtml(p.nombre)} ${ciudad} ${tiempo} · ${etapa}${destino}`;
+  };
+  const mas = orden.length > max ? ` · y ${orden.length - max} más` : "";
+  return { n: orden.length, lista: orden.slice(0, max).map(item).join(" · ") + mas };
+}
+
+/** 21-10: "💰 Rendición atrasada: Lucero VT-1080 5 días Gs 100.000 · … · total Gs …". null si no hay. */
+export function lineaRendicion(rs: RendicionAtrasada[] | null | undefined, max = 8): string | null {
+  if (!rs?.length) return null;
+  const orden = [...rs].sort((a, b) => b.dias - a.dias);
+  const total = orden.reduce((s, r) => s + (Number(r.montoNeto) || 0), 0);
+  const items = orden.slice(0, max).map((r) => `${NOMBRE_CUR(r.courier) ?? escaparHtml(r.courier)} ${escaparHtml(r.ref)} ${r.dias} días ${gs(r.montoNeto)}`);
+  return `💰 Rendición atrasada: ${items.join(" · ")}${orden.length > max ? ` · y ${orden.length - max} más` : ""} · total ${gs(total)}`;
 }
 
 /** 21-10: "Sin cobertura: N pedidos esta semana (desde el lunes) · pagaron X · cancelados Y"; null si no hubo. */
@@ -231,35 +281,13 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
     }
   }
 
-  // Pedidos confirmados de más de 24 h que todavía no salieron (últimos 14 días).
-  const limite = e.ahora.getTime() - 24 * 3_600_000, desde14 = e.ahora.getTime() - 14 * 24 * 3_600_000;
-  const PAGOS = ["PAGADO", "PAGO_VERIFICADO", "PAGADO_QR", "PAGO_ANTICIPADO_COMPROBANTE"];
-  const sinDespachar = validos.filter((p) => {
-    const t = Date.parse(p.creadoEn);
-    const esperaPago = tieneTag(p, "SIN_COBERTURA") && !PAGOS.some((x) => tieneTag(p, x));
-    return t < limite && t > desde14 && p.estadoConfirmacion === "confirmado" && !p.estadoEnvio &&
-      !tieneTag(p, "DESPACHADO") && !tieneTag(p, "ENTREGADO") && !tieneTag(p, "RETIRO_EN_CASA") &&
-      !tieneTag(p, "SIN_COBERTURA_CANCELADO") && !esperaPago;
-  }).sort((a, b) => Date.parse(a.creadoEn) - Date.parse(b.creadoEn));
-  if (sinDespachar.length) {
-    const item = (p: Pedido) => {
-      const h = Math.floor((e.ahora.getTime() - Date.parse(p.creadoEn)) / 3_600_000);
-      const c = p.ciudad?.trim() ? escaparHtml(p.ciudad.trim()) : "ciudad ?";
-      const info = p.ciudad ? e.courierPorCiudad?.[p.ciudad] : undefined;
-      let destino = "";
-      if (info) {
-        // JawFlex solo sale por Lucero; si Lucero no llega pero PaP cobra, Despacho lo manda por PaP solo (21-10).
-        if (p.lineas.some((x) => familia(x.titulo) === "JawFlex")) {
-          destino = info.lucero ? " → Lucero" : info.pap ? " → PaP (JawFlex: Lucero no llega)" : " → sin courier: decidir a mano";
-        } else {
-          destino = info.sugerido ? ` → ${info.sugerido === "pap" ? "PaP" : "Lucero"}` : " → sin courier";
-        }
-      }
-      return `${escaparHtml(p.nombre)} ${c} ${h} h${destino}`;
-    };
-    const lista = sinDespachar.slice(0, 10).map(item).join(" · ");
-    const mas = sinDespachar.length > 10 ? ` · y ${sinDespachar.length - 10} más` : "";
-    alertas.push(`${sinDespachar.length} pedido${sinDespachar.length > 1 ? "s" : ""} sin despachar hace +24 h: ${lista}${mas}`);
+  // 21-10: pedidos confirmados de más de 24 h que todavía no salieron. Fuente única: vista pedidos_parados
+  // (excluye retiro en casa, cancelados y sin cobertura esperando pago). null = no se pudo leer la vista.
+  if (e.pedidosParados === null) {
+    avisosInfo.push("No pude leer los pedidos parados (vista pedidos_parados): revisá Despacho");
+  } else if (e.pedidosParados?.length) {
+    const { n, lista } = listaParados(e.pedidosParados, e.courierPorCiudad);
+    alertas.push(`${n} pedido${n > 1 ? "s" : ""} sin despachar hace +24 h: ${lista}`);
   }
   for (const s of e.stock) {
     const f = familia(s.nombre);
@@ -270,6 +298,8 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
   for (const a of avisosInfo) l.push(alertas.length ? `ℹ️ ${a}` : `\nℹ️ ${a}`);
   const sinCob = lineaSinCobertura(e.pedidos, e.hoy);
   if (sinCob) l.push(sinCob);
+  const rend = lineaRendicion(e.rendicionAtrasada);
+  if (rend) l.push(rend);
   // 20-10: una sola vez, cuando PaP junta 20 pedidos resueltos en 60 días.
   const papAviso = !e.papAvisoYaDado && !!e.pap60d && e.pap60d.resueltos >= PAP_RESUELTOS_REVISAR;
   if (papAviso) {

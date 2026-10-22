@@ -4,6 +4,7 @@ import { useAuth } from './lib/AuthContext'
 import { ToastProvider } from './lib/toast'
 import { cargarConfig } from './lib/config'
 import { cargarTarifasCourier } from './lib/tarifasCourier'
+import { cargarMotorConfig } from './lib/motorCourier'
 import Layout from './components/layout/Layout'
 import LoginPage from './pages/auth/LoginPage'
 // Páginas más usadas: carga directa (inicio instantáneo)
@@ -67,7 +68,8 @@ export default function App() {
   // Cargar la configuración central (flete, umbrales, ventanas, pago) una vez
   // al iniciar. Si falla, se usan los defaults y el sistema anda igual.
   // 20-10: y las tarifas con cobranza por courier y ciudad (si falla, Despacho sigue con el flete plano de Config).
-  useEffect(() => { cargarConfig(); cargarTarifasCourier() }, [])
+  // 21-10: y el interruptor del motor de courier (config 'motor_courier'; si falla, queda apagado = todo como hoy).
+  useEffect(() => { cargarConfig(); cargarTarifasCourier(); cargarMotorConfig() }, [])
   // 11-10: cuando la app ya arrancó y está libre, baja en segundo plano las secciones más usadas,
   // así al tocarlas abren al instante (no compite con el primer pintado).
   useEffect(() => {

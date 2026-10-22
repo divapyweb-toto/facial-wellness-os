@@ -4,7 +4,7 @@
 // Reintenta el envío 2 veces y deja el resultado en eventos_crudos ('telegram', 'resumen_diario:<día>').
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { cansados, chatsAnuncio, equilibrios, pap60d, couriersPorCiudad, chatsBotV33, entregaGrupos, luceroEnGestion, guardarCandado, leerCandado, leerMeta, leerPedidos, stock } from "./io.ts";
+import { cansados, chatsAnuncio, equilibrios, pap60d, couriersPorCiudad, chatsBotV33, entregaGrupos, luceroEnGestion, guardarCandado, leerCandado, leerMeta, leerPedidos, leerPedidosParados, leerRendicionAtrasada, stock } from "./io.ts";
 import { armarResumen, diaParaguay } from "./logica.ts";
 
 Deno.serve(conServiceRole(async (req: Request) => {
@@ -27,7 +27,10 @@ Deno.serve(conServiceRole(async (req: Request) => {
       .catch((e) => (console.warn("resumen-diario entrega:", e instanceof Error ? e.message : e), null));
     const lucGest = await luceroEnGestion().catch(() => []);
     const cans = await cansados().catch((e) => (console.warn("resumen-diario cansados:", e instanceof Error ? e.message : e), []));
-    const courierPorCiudad = await couriersPorCiudad(pedidos.filter((p) => p.estadoConfirmacion === "confirmado" && !p.estadoEnvio).map((p) => p.ciudad ?? "")).catch(() => ({}));
+    // 21-10: pedidos parados y rendición atrasada salen de sus vistas (una sola fuente con Despacho y los avisos). null = no se pudo leer.
+    const parados = await leerPedidosParados().catch((e) => (console.warn("resumen-diario parados:", e instanceof Error ? e.message : e), null));
+    const rendicion = await leerRendicionAtrasada().catch((e) => (console.warn("resumen-diario rendición:", e instanceof Error ? e.message : e), null));
+    const courierPorCiudad = await couriersPorCiudad((parados ?? []).map((p) => p.ciudad ?? "")).catch(() => ({}));
     const eqs = await equilibrios().catch(() => ({} as Record<string, number>));
     const pap = await pap60d().catch(() => null);
     const papAvisado = await leerCandado("resumen_pap_20_resueltos").catch(() => null);
@@ -39,7 +42,7 @@ Deno.serve(conServiceRole(async (req: Request) => {
     }
     const { texto, botV33Listo, papAviso } = armarResumen({
       hoy, ahora, pedidos, meta, chatsAnuncioHoy: chats, chatsBotV33: botV33,
-      botV33YaAvisado: (v33?.payload?.dia as string) ?? null, stock: prods, entrega7d: ent7, cansados: cans, luceroGestion: lucGest, prueba, courierPorCiudad,
+      botV33YaAvisado: (v33?.payload?.dia as string) ?? null, stock: prods, entrega7d: ent7, cansados: cans, luceroGestion: lucGest, prueba, courierPorCiudad, pedidosParados: parados, rendicionAtrasada: rendicion,
       equilibrioCpa: eqs.Varios ?? null, equilibrioJawFlex: eqs.JawFlex ?? null, pap60d: pap, papAvisoYaDado: !!papAvisado,
     });
     let r = await avisar(texto);

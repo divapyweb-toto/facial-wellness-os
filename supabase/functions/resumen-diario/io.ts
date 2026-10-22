@@ -1,7 +1,7 @@
 // resumen-diario · I/O: Supabase (solo lectura de negocio), Meta Graph API (solo GET) y Telegram (1 mensaje).
 import { db } from "../_shared/db.ts";
 import { GRAPH_VERSION } from "../_shared/meta_capi.ts";
-import { CONJUNTO_PRUEBA, type CampanaMeta, type DatosMeta, DESDE_BOT_V33, familia, type Pedido, sumarDias } from "./logica.ts";
+import { CONJUNTO_PRUEBA, type CampanaMeta, type DatosMeta, DESDE_BOT_V33, familia, type Pedido, type PedidoParado, type RendicionAtrasada, sumarDias } from "./logica.ts";
 
 export const CUENTA_VOLTRA = "1829928881223795";
 const GRAPH = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -217,4 +217,21 @@ export async function couriersPorCiudad(ciudades: string[]): Promise<Record<stri
     out[c] = { sugerido: (d.sugerido as string) ?? null, lucero: cobra("lucero"), pap: cobra("pap") };
   }));
   return out;
+}
+
+/** 21-10: vista pedidos_parados (confirmados de Voltra de +24 h que no salieron). Más viejo primero. */
+export async function leerPedidosParados(): Promise<PedidoParado[]> {
+  const { data, error } = await db().from("pedidos_parados").select("nombre,ciudad,horas,dias,etapa,courier,producto").order("horas", { ascending: false });
+  if (error) throw new Error(`pedidos_parados: ${error.message}`);
+  return (data ?? []).map((x: Obj) => ({
+    nombre: String(x.nombre), ciudad: x.ciudad == null ? null : String(x.ciudad), horas: n(x.horas), dias: n(x.dias),
+    etapa: String(x.etapa), courier: x.courier == null ? null : String(x.courier), producto: x.producto == null ? null : String(x.producto),
+  }));
+}
+
+/** 21-10: vista rendicion_atrasada (entregados de Voltra sin rendir pasado el umbral del courier). */
+export async function leerRendicionAtrasada(): Promise<RendicionAtrasada[]> {
+  const { data, error } = await db().from("rendicion_atrasada").select("ref,courier,dias,monto_neto");
+  if (error) throw new Error(`rendicion_atrasada: ${error.message}`);
+  return (data ?? []).map((x: Obj) => ({ ref: String(x.ref), courier: String(x.courier), dias: n(x.dias), montoNeto: n(x.monto_neto) }));
 }

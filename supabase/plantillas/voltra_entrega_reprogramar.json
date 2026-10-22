@@ -1,0 +1,18 @@
+{
+  "name": "voltra_entrega_reprogramar",
+  "language": "es",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, no pudimos entregar tu pedido de Voltra.\nPara coordinar una nueva entrega, respondé a este mensaje con el horario en que estás disponible y tu ubicación (podés mandar el pin de WhatsApp).",
+      "example": { "body_text": [["Ana"]] }
+    },
+    { "type": "BUTTONS", "buttons": [{ "type": "QUICK_REPLY", "text": "Necesito ayuda" }] }
+  ],
+  "_notas": {
+    "variables": ["nombre"],
+    "botones_payload": ["ayuda"],
+    "origen": "21-10: entrega fallida de Lucero → pedir horario y ubicación para reprogramar. Sale solo con config reprogramar_lucero {\"plantilla_aprobada\": true} (Enrique la prende al aprobarla Meta). No dice 'hoy': el reporte de Lucero puede llegar días después."
+  }
+}
