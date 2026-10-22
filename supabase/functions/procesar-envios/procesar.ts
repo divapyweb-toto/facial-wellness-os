@@ -194,7 +194,7 @@ export const PLANTILLAS: Record<string, DefPlantilla> = {
   voltra_reintento_entrega_v2: { vars: ["nombre", "productos"], botones: [{ prefijo: "ne_direccion", titulo: "Cambiar dirección" }] },
   voltra_completar_direccion: { vars: ["nombre", "pedido"], botones: [] },
   // 21-10: entrega fallida de Lucero → pedir horario y ubicación para reprogramar (la encola pedidos-trabados/entregas_actuar.ts).
-  voltra_entrega_reprogramar: { vars: ["nombre"], botones: AYUDA },
+  voltra_entrega_reprogramar: { vars: ["nombre", "complemento"], botones: AYUDA },
   voltra_no_entregado: {
     vars: ["nombre", "productos"],
     botones: [

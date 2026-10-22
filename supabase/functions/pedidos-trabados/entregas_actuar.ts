@@ -32,7 +32,7 @@ export interface DepsActuar {
   existeCandado(id: string): Promise<boolean>;
   avisar(texto: string): Promise<{ ok: boolean; error?: string }>;
   /** Encola el mensaje al cliente (idempotente por clave_unica). Solo se llama si la plantilla figura aprobada. */
-  encolarReprogramar(f: FilaActuar): Promise<ResultadoReprogramar>;
+  encolarReprogramar?(f: FilaActuar): Promise<ResultadoReprogramar>;
   esperar(ms: number): Promise<void>;
 }
 
@@ -84,6 +84,10 @@ export function decidirReprogramar(f: FilaActuar, cfg: CfgReprogramar, ahora: Da
 }
 
 const NOTA_CLIENTE: Record<string, string> = {
+  // 22-10 (Enrique): UN solo mensaje por falla, y sale de la importación del reporte de Lucero (importar-courier):
+  // con la plantilla voltra_entrega_reprogramar aprobada reemplaza al aviso de reintento; mientras tanto, el de siempre.
+  importacion_nuevo: "El cliente recibe UN solo mensaje por WhatsApp (Lucero reintenta el próximo día hábil y se le pide confirmar el horario).",
+  importacion_reintento: "El cliente recibe el aviso de reintento habitual por WhatsApp.",
   encolado: "Le escribí al cliente por WhatsApp para coordinar la nueva entrega.",
   plantilla_sin_aprobar: "No le escribí al cliente: la plantilla de reprogramación todavía no está aprobada. Escribile vos.",
   evento_viejo: "No le escribí al cliente (el fallo es de hace varios días). Escribile vos.",
@@ -93,7 +97,7 @@ const NOTA_CLIENTE: Record<string, string> = {
   error: "No pude escribirle al cliente. Escribile vos.",
 };
 
-export function textoLucero(f: FilaActuar, cliente: ResultadoReprogramar | "plantilla_sin_aprobar" | "evento_viejo"): string {
+export function textoLucero(f: FilaActuar, cliente: ResultadoReprogramar | "plantilla_sin_aprobar" | "evento_viejo" | "importacion_nuevo" | "importacion_reintento"): string {
   const motivo = f.motivo.trim() ? ` (${escaparHtml(f.motivo.trim())})` : "";
   return `⚠ <b>${escaparHtml(f.ref)}</b> · Lucero: entrega fallida${motivo}. Hay que reprogramar la entrega con el cliente. ${NOTA_CLIENTE[cliente] ?? NOTA_CLIENTE.error}`;
 }
@@ -156,12 +160,11 @@ export async function procesarEntregasActuar(
       hechos.push({ ref: f.ref, evento: f.estado, resultado: await avisarUnaVez(d, id, { ref: f.ref, estado: f.estado }, textoPap(f), simular) });
       continue;
     }
-    // Lucero: primero el mensaje al cliente (idempotente), después el Telegram contando cómo salió.
-    const decision = decidirReprogramar(f, cfg, ahora);
-    let cliente: ResultadoReprogramar = decision === "enviar" ? "error" : decision;
-    if (decision === "enviar") cliente = simular ? "encolado" : await d.encolarReprogramar(f).catch(() => "error" as const);
+    // Lucero: el mensaje al cliente NO se manda desde acá (así nunca hay dos por falla): lo manda la importación del
+    // reporte. Acá solo el Telegram, contando cuál de los dos mensajes recibe el cliente.
+    const cliente = cfg.plantillaAprobada ? "importacion_nuevo" as const : "importacion_reintento" as const;
     hechos.push({
-      ref: f.ref, evento: f.estado, cliente: simular && decision === "enviar" ? "se encolaría" : cliente,
+      ref: f.ref, evento: f.estado, cliente,
       resultado: await avisarUnaVez(d, id, { ref: f.ref, estado: f.estado, fecha_ingreso: f.fechaIngreso }, textoLucero(f, cliente), simular),
     });
   }

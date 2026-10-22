@@ -72,6 +72,8 @@ export interface Repo {
    *  courier:<id>:INTENTO_FALLIDO…, en cualquier estado). Opcional: un Repo sin este método avisa solo el
    *  primer intento (comportamiento anterior). */
   intentosAvisados?(orderId: number): Promise<IntentoAvisado[]>
+  /** 22-10: ¿la plantilla voltra_entrega_reprogramar está aprobada y activa (config reprogramar_lucero)? Opcional: sin este método, no. */
+  reprogramarLucero?(): Promise<boolean>
 }
 
 export interface IntentoAvisado {
@@ -112,6 +114,14 @@ export const PLANTILLA_POR_ESTADO: Partial<Record<EstadoEnvio, string>> = {
   NO_ENTREGADO_RESCATABLE: 'voltra_reintento_entrega_v2',
   ENTREGADO: 'voltra_seguimiento_entrega',
 }
+
+// 22-10 (Enrique): plantilla UNICA para la falla de Lucero. {{2}} pide el horario; si el motivo es la ubicación, también el pin.
+export const PLANTILLA_REPROGRAMAR = 'voltra_entrega_reprogramar'
+export const COMPLEMENTO_REPROGRAMAR = 'Respondé a este mensaje con el horario en que vas a estar disponible.'
+export const COMPLEMENTO_REPROGRAMAR_UBICACION = 'Respondé con el horario en que vas a estar disponible y mandanos el pin de tu ubicación de WhatsApp.'
+export const esMotivoUbicacion = (motivo: unknown) => /ubicaci|\bpin\b|direcci[oó]n|localiz|mapa/i.test(String(motivo ?? ''))
+export const complementoReprogramar = (motivo: unknown) =>
+  esMotivoUbicacion(motivo) ? COMPLEMENTO_REPROGRAMAR_UBICACION : COMPLEMENTO_REPROGRAMAR
 
 export const TAG_POR_ESTADO: Partial<Record<EstadoEnvio, string>> = {
   DESPACHADO: 'DESPACHADO',
@@ -316,8 +326,11 @@ export function armarEnvio(
   cfg: ConfigImport,
   /** 13-10: fecha del evento ('YYYY-MM-DD') para la clave del aviso de intento fallido; sin fecha, la clave vieja. */
   fechaIntento?: string | null,
+  /** 22-10: con la plantilla de reprogramación activa, la falla de LUCERO manda ESA (un solo mensaje: reemplaza al aviso de reintento). */
+  opc: { reprogramarLucero?: boolean; motivo?: string | null } = {},
 ): EnvioNuevo | null {
-  const plantilla = PLANTILLA_POR_ESTADO[estado]
+  const reprogramar = estado === 'INTENTO_FALLIDO' && courier === 'lucero' && !!opc.reprogramarLucero
+  const plantilla = reprogramar ? PLANTILLA_REPROGRAMAR : PLANTILLA_POR_ESTADO[estado]
   if (!plantilla || !pedido.cliente_id) return null
   // 12-10 (coordinación con Seguimiento): el reintento automático no va a pedidos que retiran en persona ni a
   // cancelados por cualquier motivo (no solo por el cliente). Entregados ya no llegan acá (estado terminal).
@@ -335,7 +348,7 @@ export function armarEnvio(
       enviarDesde = manianaALas10(cfg.ahora)
       break
     default: // INTENTO_FALLIDO, NO_ENTREGADO_RESCATABLE
-      variables = [nombre, producto]
+      variables = reprogramar ? [nombre, complementoReprogramar(opc.motivo)] : [nombre, producto]
   }
   return {
     cliente_id: pedido.cliente_id,
@@ -409,6 +422,8 @@ export async function procesarFilas(
   }
   const noReconocidos = new Set<string>()
   const fuente = `courier_${courier}`
+  // 22-10: una lectura por corrida; si falla, el aviso de reintento de siempre.
+  const reprogramarLucero = courier === 'lucero' && !!repo.reprogramarLucero && await repo.reprogramarLucero().catch(() => false)
 
   for (const filaCruda of filasIn) {
     const fila = sanearFila(filaCruda)
@@ -507,7 +522,7 @@ export async function procesarFilas(
               fechaIntento = fila.fecha ?? null
             }
           }
-          const envio = armarEnvio(est, pedido, courier, cfg, fechaIntento)
+          const envio = armarEnvio(est, pedido, courier, cfg, fechaIntento, { reprogramarLucero: reprogramarLucero, motivo: limpiarNota(fila.extra?.motivo) })
           if (!envio) {
             await repo.enviarARevision(courier, ref, { ...fila, estado: est, shopify_order_id: pedido.shopify_order_id },
               'pedido_sin_cliente')

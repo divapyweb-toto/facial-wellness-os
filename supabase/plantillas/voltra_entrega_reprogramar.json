@@ -5,14 +5,16 @@
   "components": [
     {
       "type": "BODY",
-      "text": "Hola {{1}}, no pudimos entregar tu pedido de Voltra.\nPara coordinar una nueva entrega, respondé a este mensaje con el horario en que estás disponible y tu ubicación (podés mandar el pin de WhatsApp).",
-      "example": { "body_text": [["Ana"]] }
+      "text": "Hola {{1}}, no pudimos entregarte tu pedido de Voltra. Lucero lo vuelve a intentar el próximo día hábil.\n{{2}}\nGracias 🙌",
+      "example": { "body_text": [["Ana", "Respondé a este mensaje con el horario en que vas a estar disponible."]] }
     },
     { "type": "BUTTONS", "buttons": [{ "type": "QUICK_REPLY", "text": "Necesito ayuda" }] }
   ],
   "_notas": {
-    "variables": ["nombre"],
+    "variables": ["nombre", "complemento"],
     "botones_payload": ["ayuda"],
-    "origen": "21-10: entrega fallida de Lucero → pedir horario y ubicación para reprogramar. Sale solo con config reprogramar_lucero {\"plantilla_aprobada\": true} (Enrique la prende al aprobarla Meta). No dice 'hoy': el reporte de Lucero puede llegar días después."
+    "origen": "22-10 (Enrique): UN solo mensaje por falla de Lucero, que REEMPLAZA a voltra_reintento_entrega_v2 (lo manda importar-courier con la misma clave courier:<id>:INTENTO_FALLIDO:<fecha>). {{2}} = pedir el horario; si el motivo de Lucero es la ubicación, además pide el pin. Sale solo con config reprogramar_lucero {\"plantilla_aprobada\": true}, que pedidos-trabados prende solo cuando Meta la aprueba.",
+    "complemento_general": "Respondé a este mensaje con el horario en que vas a estar disponible.",
+    "complemento_ubicacion": "Respondé con el horario en que vas a estar disponible y mandanos el pin de tu ubicación de WhatsApp."
   }
 }

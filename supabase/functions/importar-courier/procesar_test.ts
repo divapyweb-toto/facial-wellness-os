@@ -4,7 +4,7 @@ import type { EstadoEnvio } from '../_shared/tipos.ts'
 import { normalizarTelefonoPY } from '../_shared/telefono.ts'
 import {
   type ConfigImport, type EnvioNuevo, type PedidoImport, type Repo,
-  armarEnvio, fechaISO, manianaALas10, montoSano, noEscribirReintento, numeroDesdeReferencia, procesarFilas, sanearFila,
+  COMPLEMENTO_REPROGRAMAR, COMPLEMENTO_REPROGRAMAR_UBICACION, armarEnvio, esMotivoUbicacion, fechaISO, manianaALas10, montoSano, noEscribirReintento, numeroDesdeReferencia, procesarFilas, sanearFila,
 } from './procesar.ts'
 
 const AHORA = new Date('2026-10-06T15:00:00Z') // 12:00 en Asunción
@@ -279,4 +279,22 @@ Deno.test('12-10: reintento automático (voltra_reintento_entrega_v2) no va a re
     assert(noEscribirReintento(p))
     assertEquals(armarEnvio('INTENTO_FALLIDO', p, 'lucero', cfg), null)
   }
+})
+
+Deno.test('22-10: falla de Lucero con la plantilla de reprogramación activa → UN solo mensaje (reemplaza al reintento), misma clave', () => {
+  const cfg2 = { prefijos: { lucero: ['FW-'], pap: [] }, plazos: { lucero: '', pap: '' }, ahora: new Date('2026-10-22T14:00:00Z'), normalizarTelefono: (x: string) => x }
+  const p = pedido({ shopify_order_id: 9, nombre: '#9', cliente_id: 'c1', total: 112000 })
+  // inactiva: el aviso de reintento de siempre
+  assertEquals(armarEnvio('INTENTO_FALLIDO', p, 'lucero', cfg2, '2026-10-21', { reprogramarLucero: false })!.plantilla, 'voltra_reintento_entrega_v2')
+  // activa y motivo común: pide el horario
+  const a = armarEnvio('INTENTO_FALLIDO', p, 'lucero', cfg2, '2026-10-21', { reprogramarLucero: true, motivo: 'No contesta' })!
+  assertEquals(a.plantilla, 'voltra_entrega_reprogramar')
+  assertEquals(a.variables, ['Ana', COMPLEMENTO_REPROGRAMAR])
+  assertEquals(a.clave_unica, 'courier:9:INTENTO_FALLIDO:2026-10-21') // misma clave: no se duplica con el reintento
+  // motivo de ubicación: además pide el pin
+  assertEquals(armarEnvio('INTENTO_FALLIDO', p, 'lucero', cfg2, '2026-10-21', { reprogramarLucero: true, motivo: 'No paso la ubicación' })!.variables[1], COMPLEMENTO_REPROGRAMAR_UBICACION)
+  assert(esMotivoUbicacion('No paso la ubicación') && esMotivoUbicacion('dirección incorrecta') && !esMotivoUbicacion('No contesta'))
+  // PaP y el rescatable no cambian
+  assertEquals(armarEnvio('INTENTO_FALLIDO', p, 'pap', cfg2, '2026-10-21', { reprogramarLucero: true })!.plantilla, 'voltra_reintento_entrega_v2')
+  assertEquals(armarEnvio('NO_ENTREGADO_RESCATABLE', p, 'lucero', cfg2, '2026-10-21', { reprogramarLucero: true })!.plantilla, 'voltra_reintento_entrega_v2')
 })

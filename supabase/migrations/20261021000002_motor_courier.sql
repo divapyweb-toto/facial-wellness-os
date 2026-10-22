@@ -16,7 +16,9 @@ insert into public.config (clave, valor) values
   ('valor_dia_caja', '0.002'),                  -- 0,2 % del cobro por día que el courier retiene la plata
   ('margen_desempate', '3000'),                 -- Gs: si la ganancia esperada difiere menos que esto, gana el que rinde más rápido
   ('motor_courier', '{"activo": false, "desde": null}'),
-  ('motor_ajuste_producto', 'si')            -- 'si' | 'no': ajuste de p por producto (≥ 30 resueltos del producto con ese courier)   -- false = solo sugiere (como hoy); true = asigna solo al cargar
+  ('motor_ajuste_producto', 'no'),           -- 'si' | 'no': ajuste de p por producto. 22-10 (Enrique): apagado; JawFlex ya lo cubre la regla dura
+  ('motor_ganancia_minima_pap', '10000'),    -- Gs: PaP solo desplaza a Lucero si gana por esta diferencia o más (cubre el plazo, que la fórmula no mide)
+  ('motor_resueltos_minimos', '20')           -- p de LOS DOS couriers (ciudad o zona) con al menos estos resueltos para pasar de Lucero a PaP   -- false = solo sugiere (como hoy); true = asigna solo al cargar
 on conflict (clave) do nothing;
 
 -- Familia de producto (misma lógica que familia() del resumen y familiaProducto del front).
@@ -152,7 +154,7 @@ declare
   costo numeric := p_costo_prod;
   ops jsonb := '[]'::jsonb;
   c text; t jsonb; ciu text := public.ciudad_norm(p_ciudad);
-  zon text; pr record; pp numeric; niv text; adj numeric; flete numeric; dr numeric; ganancia numeric;
+  zon text; pr record; pp numeric; nn integer; niv text; sugerencia jsonb; extra numeric; datos_ok boolean; min_pap numeric; min_n integer; adj numeric; flete numeric; dr numeric; ganancia numeric;
   mejor jsonb; otro jsonb; ganador text; regla text; motivo text; sincob boolean;
 begin
   if costo is null then
@@ -166,12 +168,12 @@ begin
     continue when p_cod and not coalesce((t ->> 'cobranza')::boolean, false);
     continue when p_cod and coalesce((t ->> 'estimado')::boolean, false);
     zon := coalesce(t ->> 'zona', t ->> 'tiempo');
-    niv := 'general'; pp := null;
-    select cp.p into pp from public.courier_prob cp where cp.nivel = 'ciudad' and cp.courier = c and cp.clave = ciu;
+    niv := 'general'; pp := null; nn := 0;
+    select cp.p, cp.resueltos into pp, nn from public.courier_prob cp where cp.nivel = 'ciudad' and cp.courier = c and cp.clave = ciu;
     if found then niv := 'ciudad'; else
-      select cp.p into pp from public.courier_prob cp where cp.nivel = 'zona' and cp.courier = c and cp.clave = zon;
+      select cp.p, cp.resueltos into pp, nn from public.courier_prob cp where cp.nivel = 'zona' and cp.courier = c and cp.clave = zon;
       if found then niv := 'zona'; else
-        select cp.p into pp from public.courier_prob cp where cp.nivel = 'general' and cp.courier = c and cp.clave = 'general';
+        select cp.p, cp.resueltos into pp, nn from public.courier_prob cp where cp.nivel = 'general' and cp.courier = c and cp.clave = 'general';
         niv := 'general';
       end if;
     end if;
@@ -188,7 +190,7 @@ begin
     ganancia := pp * (p_cobro - costo) - flete
                 - (1 - pp) * flete * coalesce((select cm.devuelto_cobro_extra_pct from public.courier_metricas cm where cm.courier = c), 0)
                 - p_cobro * dr * caja;
-    ops := ops || jsonb_build_object('courier', c, 'flete', flete, 'p', round(pp, 4), 'nivel_p', niv, 'pocos_datos', niv = 'general',
+    ops := ops || jsonb_build_object('courier', c, 'flete', flete, 'p', round(pp, 4), 'nivel_p', niv, 'n_resueltos', coalesce(nn, 0), 'pocos_datos', niv = 'general',
       'ajuste_producto', round(coalesce(adj, 1), 3), 'dias_rendicion', dr, 'costo_caja', round(p_cobro * dr * caja),
       'ganancia_esperada', round(ganancia), 'estimado', coalesce((t ->> 'estimado')::boolean, false),
       'dias_min', t -> 'dias_min', 'dias_max', t -> 'dias_max',
@@ -204,8 +206,27 @@ begin
   -- ganador por ganancia esperada; desempate por rendición más rápida
   select o into mejor from jsonb_array_elements(ops) o order by (o ->> 'ganancia_esperada')::numeric desc limit 1;
   select o into otro from jsonb_array_elements(ops) o where o ->> 'courier' <> mejor ->> 'courier' limit 1;
-  ganador := mejor ->> 'courier'; regla := 'ganancia';
-  if otro is not null and abs((mejor ->> 'ganancia_esperada')::numeric - (otro ->> 'ganancia_esperada')::numeric) < margen
+  ganador := mejor ->> 'courier'; regla := 'ganancia'; sugerencia := null;
+  min_pap := coalesce((select valor::numeric from public.config where clave = 'motor_ganancia_minima_pap'), 10000);
+  min_n := coalesce((select valor::integer from public.config where clave = 'motor_resueltos_minimos'), 20);
+  if not p_cod and otro is not null then
+    -- Pagado por adelantado: no hay riesgo de rechazo → el de menor flete; si la diferencia es menor al margen, Lucero (más rápido).
+    ganador := case when abs((mejor ->> 'flete')::numeric - (otro ->> 'flete')::numeric) < margen
+                    then case when (mejor ->> 'courier') = 'lucero' or (otro ->> 'courier') = 'lucero' then 'lucero' else mejor ->> 'courier' end
+                    else (select o ->> 'courier' from jsonb_array_elements(ops) o order by (o ->> 'flete')::numeric limit 1) end;
+    regla := 'pagado_adelantado';
+  elsif otro is not null and mejor ->> 'courier' = 'pap' then
+    -- Pasar de Lucero a PaP exige: PaP gana por ≥ motor_ganancia_minima_pap (cubre el plazo que la fórmula no mide) Y la p de
+    -- LOS DOS couriers sale de ciudad o zona con ≥ motor_resueltos_minimos resueltos. Si no, queda Lucero y se muestra la sugerencia.
+    extra := (mejor ->> 'ganancia_esperada')::numeric - (otro ->> 'ganancia_esperada')::numeric;
+    datos_ok := (mejor ->> 'nivel_p') in ('ciudad', 'zona') and (otro ->> 'nivel_p') in ('ciudad', 'zona')
+                and (mejor ->> 'n_resueltos')::int >= min_n and (otro ->> 'n_resueltos')::int >= min_n;
+    if extra < min_pap or not datos_ok then
+      ganador := 'lucero'; regla := 'guarda_lucero';
+      sugerencia := jsonb_build_object('courier', 'pap', 'extra', round(extra),
+        'motivo', case when not datos_ok then 'pocos datos' else 'margen menor al mínimo' end);
+    end if;
+  elsif otro is not null and abs((mejor ->> 'ganancia_esperada')::numeric - (otro ->> 'ganancia_esperada')::numeric) < margen
      and (otro ->> 'dias_rendicion')::numeric < (mejor ->> 'dias_rendicion')::numeric then
     ganador := otro ->> 'courier'; regla := 'desempate_rendicion';
   end if;
@@ -218,7 +239,6 @@ begin
       ganador := 'pap'; regla := 'producto_fallback_pap';
     end if;
   end if;
-  if not p_cod and regla = 'ganancia' then regla := 'pagado_adelantado'; end if;
 
   select o into mejor from jsonb_array_elements(ops) o where o ->> 'courier' = ganador;
   select o into otro from jsonb_array_elements(ops) o where o ->> 'courier' <> ganador limit 1;
@@ -228,10 +248,11 @@ begin
     || case regla when 'desempate_rendicion' then ' (desempate: rinde más rápido)'
                   when 'producto_solo_lucero' then ' (regla de producto: JawFlex solo Lucero)'
                   when 'producto_fallback_pap' then ' (JawFlex por PaP: Lucero no llega)'
-                  when 'pagado_adelantado' then ' (ya pagado: cualquier courier que llegue)' else '' end
+                  when 'pagado_adelantado' then ' (ya pagado: menor flete; empate → Lucero, más rápido)'
+                  when 'guarda_lucero' then ' · sugerencia: PaP (+₲' || round((sugerencia ->> 'extra')::numeric / 1000) || 'k, ' || (sugerencia ->> 'motivo') || ')' else '' end
     || case when (mejor ->> 'pocos_datos')::boolean then ' · pocos datos' else '' end;
   return jsonb_build_object('ganador', ganador, 'regla', regla, 'sin_cobertura', false, 'opciones', ops, 'motivo', motivo,
-    'pocos_datos', (mejor ->> 'pocos_datos')::boolean, 'fallback_producto', regla = 'producto_fallback_pap');
+    'pocos_datos', (mejor ->> 'pocos_datos')::boolean, 'fallback_producto', regla = 'producto_fallback_pap', 'sugerencia', sugerencia);
 end $$;
 
 grant execute on function public.motor_courier(text, text, numeric, numeric, boolean), public.familia_producto(text) to authenticated, service_role;

@@ -65,6 +65,14 @@ export function repoCourier(): Repo {
       if (error) throw new Error(`pedido_estados: ${error.message}`)
       return Array.isArray(data) && data.length > 0
     },
+    async reprogramarLucero() {
+      // 22-10: config `reprogramar_lucero` {"plantilla_aprobada": true}: la prende pedidos-trabados solo cuando Meta aprueba la plantilla.
+      const { data } = await s.from('config').select('valor').eq('clave', 'reprogramar_lucero').maybeSingle()
+      try {
+        const j = (typeof data?.valor === 'string' ? JSON.parse(data.valor) : data?.valor) as { plantilla_aprobada?: boolean } | null
+        return j?.plantilla_aprobada === true
+      } catch { return false }
+    },
     async avisoPendiente(orderId, estado) {
       // Estado guardado pero cuyo aviso no salió (falla anterior): se reintenta en vez de contarlo como repetido.
       const { data, error } = await s.from('pedido_estados').select('notificado')

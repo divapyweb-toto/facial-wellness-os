@@ -60,40 +60,29 @@ Deno.test("decidirReprogramar: solo Lucero fallido, con plantilla aprobada y eve
   assertEquals(decidirReprogramar(PAP_A, APROBADA, AHORA), "no_corresponde");
 });
 
-Deno.test("Lucero fallido con la plantilla sin aprobar: solo Telegram (con número y motivo), una sola vez en dos corridas", async () => {
+Deno.test("Lucero fallido: solo Telegram (con número y motivo), una sola vez en dos corridas; NUNCA escribe al cliente desde acá", async () => {
   const { d, telegram, cola } = deps();
   const r1 = await procesarEntregasActuar([LUCERO], AHORA, CFG_REPROGRAMAR_APAGADA, d);
   assertEquals(r1[0].resultado, "avisado");
   assertEquals(telegram.length, 1);
   assertStringIncludes(telegram[0], "VT-9002");
   assertStringIncludes(telegram[0], "entrega fallida (No paso la ubicación)");
-  assertStringIncludes(telegram[0], "todavía no está aprobada");
+  assertStringIncludes(telegram[0], "aviso de reintento habitual");
   assertEquals(cola, []);
   const r2 = await procesarEntregasActuar([LUCERO], new Date(AHORA.getTime() + 600_000), CFG_REPROGRAMAR_APAGADA, d);
   assertEquals(r2[0].resultado, "ya_avisado");
   assertEquals(telegram.length, 1);
 });
 
-Deno.test("Lucero fallido con la plantilla aprobada: se encola el mensaje al cliente y el Telegram lo cuenta; un evento nuevo avisa de nuevo", async () => {
+Deno.test("Lucero fallido con la plantilla aprobada: el Telegram dice que el cliente recibe UN solo mensaje (lo manda la importación); un evento nuevo avisa de nuevo", async () => {
   const { d, telegram, cola } = deps();
   const r = await procesarEntregasActuar([LUCERO], AHORA, APROBADA, d);
-  assertEquals(r[0].cliente, "encolado");
-  assertEquals(cola, ["courier:9002:FALLIDO:2026-10-17"]);
-  assertStringIncludes(telegram[0], "Le escribí al cliente");
-  // segundo intento de reprogramar (otro fallo, otra fecha de ingreso) = otro evento
+  assertEquals(r[0].cliente, "importacion_nuevo");
+  assertStringIncludes(telegram[0], "UN solo mensaje");
+  assertEquals(cola, []); // acá no se encola nada: así nunca hay dos mensajes por falla
   await procesarEntregasActuar([{ ...LUCERO, fechaIngreso: "2026-10-20" }], AHORA, APROBADA, d);
   assertEquals(telegram.length, 2);
-  assertEquals(cola[1], "courier:9002:FALLIDO:2026-10-20");
-  // sin teléfono: igual avisa a Enrique y lo dice
-  const sinTel = deps({ cliente: "sin_telefono" });
-  await procesarEntregasActuar([LUCERO], AHORA, APROBADA, sinTel.d);
-  assertStringIncludes(sinTel.telegram[0], "no tiene teléfono");
-  assertEquals(sinTel.cola, []);
-  // evento viejo: no se escribe al cliente aunque la plantilla esté aprobada
-  const viejo = deps();
-  await procesarEntregasActuar([{ ...LUCERO, fechaIngreso: "2026-10-05" }], AHORA, APROBADA, viejo.d);
-  assertEquals(viejo.cola, []);
-  assertStringIncludes(viejo.telegram[0], "de hace varios días");
+  assertEquals(cola, []);
 });
 
 Deno.test("PaP: línea base silenciosa de los viejos en la primera corrida; después, todo evento nuevo avisa el mismo día, una vez", async () => {
