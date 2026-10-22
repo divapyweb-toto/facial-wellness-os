@@ -51,6 +51,12 @@ export const depsReales: Deps = {
 
   guardarEventoCrudo: (id, payload) => guardarEventoCrudo(FUENTE, id, payload),
 
+  async eventoCrudoExiste(id) {
+    const { data, error } = await db().from("eventos_crudos").select("id").eq("id_externo", id).limit(1);
+    falla(`eventos_crudos ${id}`, error);
+    return (data ?? []).length > 0;
+  },
+
   async marcarEventoProcesado(id, error) {
     await db().from("eventos_crudos").update({ procesado_en: new Date().toISOString(), error })
       .eq("fuente", FUENTE).eq("id_externo", id);

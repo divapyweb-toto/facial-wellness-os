@@ -1,6 +1,7 @@
 // Lógica del webhook de WhatsApp (sin I/O directo: todo entra por `Deps`).
 // Dueño: subagente B (ola 1). El I/O real está en index.ts.
 
+import { atenderReactivacion } from "./reactivacion.ts";
 import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
 import { esAceptacion as esAceptacionVendedor } from "../_shared/vendedor/herramientas.ts";
 import { diaEntrega, leerEntregaProgramada, plazoParaEnDesdeHoy, textoEntregaProgramada } from "../_shared/plazo_zona.ts";
@@ -186,6 +187,8 @@ export interface Deps {
    * confirmación del pedido o a otra pregunta. Sin esto (o si falla), el "sí" se toma como antes.
    */
   ultimoSalienteCliente?(clienteId: string): Promise<Saliente | null>;
+  /** 21-10: ¿ya existe esta fila en eventos_crudos (cualquier fuente)? Para la reactivación sin pedido nuevo. */
+  eventoCrudoExiste?(idExterno: string): Promise<boolean>;
   /** Escribe (o borra con null) una clave del perfil de la conversación sin tocar el resto. 09-10. */
   marcarPerfil?(conversacionId: string, clave: string, valor: string | null): Promise<void>;
   /** 12-10: manda un `interactive` armado con _shared/wa_interactivos.ts (permiso para ofertas). Sin esto, enviarBotones. */
@@ -809,6 +812,23 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
     return;
   }
 
+  // 21-10 (Enrique): pedido cancelado que le ofrecimos reactivar → un "sí" reactiva ESE pedido (nunca uno nuevo).
+  let marcaReactivacion: string | undefined;
+  try {
+    const textoR = textoParaVendedor(m);
+    const bc = leerBotonConfirmacion(m);
+    if (textoR || bc) {
+      const rr = await atenderReactivacion(deps, {
+        clienteId: cliente.id, conversacionId: conv.id, destino: ctx.destino, texto: textoR ?? "",
+        botonConfirmacion: bc ? { accion: bc.accion, orderId: String(bc.orderId) } : null,
+      });
+      if (rr.manejado) return;
+      marcaReactivacion = rr.marca;
+    }
+  } catch (e) {
+    console.error("reactivación:", e instanceof Error ? e.message : e);
+  }
+
   const boton = leerBotonConfirmacion(m);
   if (boton) {
     // 13-10: "Cancelar pedido" ya no cancela al toque: primero la oferta de rescate (pedirCancelacion).
@@ -974,6 +994,7 @@ export async function procesarMensaje(m: MensajeMeta, contacto: Contacto | null,
     texto = await conMarcaDeAnuncio(ctx, texto);
     texto = await conContextoRecompraFw(deps, telefono, texto);
     texto = await conPedidoAbierto(deps, cliente.id, telefono, texto);
+    if (marcaReactivacion) texto = `${marcaReactivacion}\n${texto}`;
     if (m.type !== "text") await deps.completarContenidoMensaje(m.id, { texto_vendedor: texto });
     await deps.pasarAlVendedor({ conversacion_id: conv.id, cliente_id: cliente.id, wa_message_id: m.id, texto, ...(imagen ? { imagen } : {}) });
   }

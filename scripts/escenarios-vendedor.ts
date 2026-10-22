@@ -498,4 +498,17 @@ export const ESCENARIOS: Escenario[] = [
       { tipo: "derivado", negar: true },
     ],
   },
+  {
+    nombre: "reactivar_pregunta_no_crea_pedido",
+    descripcion: "Pedido cancelado que le ofrecimos reactivar (el webhook pone la marca): el cliente pregunta '¿y cuándo me llega?' → el bot responde y pregunta si lo reactivamos; NO arma un pedido nuevo.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000507" },
+    pasos: [
+      "marca:[plantilla voltra_confirmacion_pedido_v4] #9001 | Ana | 1 Tiras Nasales: más aire por la nariz | 112.000 | Calle Inventada 13 | Luque | en 2 a 5 días hábiles\n[pedido #9001 CANCELADO por el cliente que le ofrecimos reactivar tal cual (112.000). NO armes un pedido nuevo ni llames crear_pedido_cod: respondé su duda corto y cerrá con \"¿Lo reactivamos? Respondeme sí 🙌\". El sistema lo reactiva cuando dice que sí.]|¿Y cuándo me llegaría?",
+    ],
+    checks: [
+      { paso: 0, tipo: "herramienta", nombre: "crear_pedido_cod", negar: true, con_errores: true, desc: "no arma un pedido nuevo" },
+      { paso: 0, tipo: "texto", regex: /reactiv/i, desc: "pregunta si lo reactivamos" },
+      { tipo: "derivado", negar: true },
+    ],
+  },
 ];

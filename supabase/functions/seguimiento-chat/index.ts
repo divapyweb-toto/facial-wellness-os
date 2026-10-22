@@ -14,12 +14,17 @@
 // Además (19-10, v35): derivaciones con plazo (derivaciones_plazo.ts): recordatorio a Enrique a las 2 y 8 h, a las 4 h
 // hábiles el bot retoma (venta) o mensaje fijo (salud/reclamo), y nunca 24 h sin un mensaje al cliente. Un "Ok"/👌
 // suelto al precio ya no frena los recontactos, y el aviso por una fecha prometida fuera de la ventana sale desde las 8.
+// Además (21-10): cierre de las reactivaciones de pedidos cancelados (reactivaciones.ts): dijo que no o venció → Telegram
+// (paquete en el courier) o se cancela de verdad en Shopify (pedido abierto).
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { depsReales } from "./io.ts";
 import { correrSeguimientos } from "./logica.ts";
 import { pedirDatosFaltantes } from "./datos_faltantes.ts";
+import { correrReactivaciones } from "./reactivaciones.ts";
+import { db } from "../_shared/db.ts";
+import { cancelarPedido } from "../_shared/shopify.ts";
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
 
@@ -32,6 +37,27 @@ Deno.serve(conServiceRole(async () => {
       await avisar(`<b>Pedir datos faltantes: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`).catch(() => {});
     });
   if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(datos);
+  const reactivaciones = correrReactivaciones({
+    config: async () => (await db().from("config_wa").select("valor").eq("clave", "reactivaciones").maybeSingle()).data?.valor ?? null,
+    eventos: async (ids) => (await db().from("eventos_crudos").select("id_externo,payload").in("id_externo", ids)).data ?? [],
+    tomar: async (id, payload) => {
+      const { error } = await db().from("eventos_crudos").insert({ fuente: "shopify", id_externo: id, payload, procesado_en: new Date().toISOString() });
+      if (!error) return true;
+      if (error.code === "23505") return false;
+      throw new Error(`eventos_crudos: ${error.message}`);
+    },
+    cancelarEnShopify: async (orderId) => {
+      const r = await cancelarPedido(String(orderId), "CUSTOMER");
+      return r.ok ? null : (r.error ?? "no se pudo cancelar");
+    },
+    avisar: (t) => avisar(escaparHtml(t)),
+  }, new Date(), false)
+    .then((r) => r.hechos.length && console.log("seguimiento-chat reactivaciones", JSON.stringify(r)))
+    .catch(async (e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      await avisar(`<b>Reactivaciones: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`).catch(() => {});
+    });
+  if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(reactivaciones);
   const tarea = correrSeguimientos(depsReales)
     .then((r) => console.log("seguimiento-chat", JSON.stringify(r)))
     .catch(async (e) => {
