@@ -38,15 +38,16 @@ export async function atenderReactivacion(
     resp = d.botonConfirmacion.accion === "conf_si" ? "si" : d.botonConfirmacion.accion === "conf_cancelar" ? "no" : null;
     if (!resp) return { manejado: false };
   }
+  // El texto (motivo, duda) queda en wa_mensajes; la decisión guarda lo que dijo al decidir (mejora del 28-10).
   if (!resp) return { manejado: false, marca: marcaVendedorReactivacion(r) };
   // Una sola decisión por pedido (insert único): si dos mensajes llegan juntos, gana el primero.
-  if (!(await deps.guardarEventoCrudo(idDecisionReactivacion(r.shopify_order_id), { resultado: resp, cliente_id: r.cliente_id, en: deps.ahora().toISOString() }))) {
+  if (!(await deps.guardarEventoCrudo(idDecisionReactivacion(r.shopify_order_id), { resultado: resp, cliente_id: r.cliente_id, en: deps.ahora().toISOString(), texto: d.texto.slice(0, 300) }))) {
     return { manejado: false };
   }
   const opts = { clienteId: d.clienteId, conversacionId: d.conversacionId };
   if (resp === "no") {
     await deps.enviarTexto(d.destino, textoClienteNo(r), opts);
-    return { manejado: true }; // el cierre (Telegram o cancelar en Shopify) lo hace pedidos-trabados
+    return { manejado: true }; // el cierre (Telegram o cancelar en Shopify) lo hace seguimiento-chat
   }
   await reactivar(deps, r);
   await deps.enviarTexto(d.destino, textoClienteSi(r), opts);
