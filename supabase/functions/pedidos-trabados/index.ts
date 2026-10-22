@@ -8,6 +8,7 @@ import { marcarPreparado } from "../_shared/shopify_preparar.ts";
 import { cancelarEnShopify, candadosTomados, coberturaCiudades, ejecutar, estadoSinCobertura, etiqueta, idCandadoAuto, pedidosAbiertos, registrarError, tomarCandado } from "./io.ts";
 import { accionesPara, necesitaCobertura } from "./logica.ts";
 import { avisoRutaPap } from "./aviso_ruta_pap.ts";
+import { sincronizarCancelaciones } from "./cancelaciones_ventas.ts";
 
 type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean; preparar?: boolean };
 
@@ -36,7 +37,9 @@ async function automatico(simular: boolean) {
   }
   // 19-10: aviso "en recorrido de reparto" para PaP (aviso_ruta_pap.ts). Un error acá no frena lo demás.
   const ruta = await avisoRutaPap(ahora, simular).catch((e) => ({ activo: true, error: e instanceof Error ? e.message : String(e), hechos: [] }));
-  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta };
+  // 21-10: pedido cancelado en Shopify → la venta de Voltra OS se entera (cancelaciones_ventas.ts). Un error acá no frena lo demás.
+  const cancelaciones = await sincronizarCancelaciones(simular).catch((e) => [{ pedido: "-", clase: "error", resultado: e instanceof Error ? e.message : String(e) }]);
+  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, cancelaciones };
 }
 
 async function manual(acciones: AccionManual[]) {

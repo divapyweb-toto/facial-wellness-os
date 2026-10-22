@@ -9,6 +9,8 @@
 // pueden dar resultados distintos porque son literalmente la misma lógica.
 // ═══════════════════════════════════════════════════════════
 
+import { refVoltra } from './referencias'
+
 const s = (v) => (v == null ? '' : String(v))
 
 // 'Facturar a: 1540443-9 Miguel Soa' etc. viaja en note_attributes → 'Note
@@ -109,3 +111,22 @@ export function esRetiroConfirmado(tags, cancelledAt) {
 // depósito" (o ya terminó). EN_PREPARACION y CANCELADO no cuentan.
 export const ENVIO_YA_SALIO = ['DESPACHADO', 'INTENTO_FALLIDO', 'ENTREGADO', 'NO_ENTREGADO_RESCATABLE', 'NO_ENTREGADO', 'RENDIDO']
 export const envioEntregado = (fila) => ['ENTREGADO', 'RENDIDO'].includes(fila?.estado_envio) || !!fila?.entregado_en
+
+// 21-10: pedido nuevo que REEMPLAZA a otro (etiqueta REEMPLAZA_A_#n). Map ref nueva → ref vieja, con refs en forma VT-n.
+export function mapaReemplazos(filas) {
+  const m = new Map()
+  for (const f of filas || []) {
+    const tags = Array.isArray(f?.raw?.tags) ? f.raw.tags : String(f?.raw?.tags || '').split(',')
+    const t = tags.map(x => String(x).trim()).find(x => /^REEMPLAZA_A_#?\d+$/i.test(x))
+    if (t) m.set(refVoltra(f.raw?.name || f.nombre), refVoltra(t.replace(/^REEMPLAZA_A_/i, '')))
+  }
+  return m
+}
+
+// Refs NUEVAS que no se cargan como envío aparte: la vieja existe en Ventas y su paquete ya está en el courier.
+// ventasVivas / enCourier: Sets de refs VT-n.
+export function reemplazosVinculados(mapa, ventasVivas, enCourier) {
+  const out = new Set()
+  for (const [nuevo, viejo] of mapa) if (ventasVivas.has(viejo) && enCourier.has(viejo)) out.add(nuevo)
+  return out
+}

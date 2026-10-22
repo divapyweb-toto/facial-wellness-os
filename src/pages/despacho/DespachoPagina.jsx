@@ -1,7 +1,7 @@
 // src/pages/despacho/DespachoPagina.jsx
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { limpiarTel, refVoltra, normalizarRef } from '../../lib/referencias'
-import { esPedidoImportable, filasCsvDesdePedidoShopify, esPagoAnticipado, esRetiroConfirmado, METODO_ENVIO_RETIRO, ENVIO_YA_SALIO, envioEntregado } from '../../lib/pedidosVoltra'
+import { esPedidoImportable, filasCsvDesdePedidoShopify, esPagoAnticipado, esRetiroConfirmado, METODO_ENVIO_RETIRO, ENVIO_YA_SALIO, envioEntregado, mapaReemplazos, reemplazosVinculados } from '../../lib/pedidosVoltra'
 import { getTienda } from '../../lib/tienda'
 import * as XLSX from 'xlsx'
 import { Document, Packer, Paragraph, TextRun, AlignmentType, PageBreak, ImageRun, BorderStyle, Table, TableRow, TableCell, WidthType, convertMillimetersToTwip } from 'docx'
@@ -1193,6 +1193,8 @@ export default function DespachoPagina() {
   const trayendoVoltraRef = useRef(false)   // candado: el estado tarda un render, el ref no
   // 12-10: pedidos de Voltra confirmados sin transportadora que cubra: no se pasan a Ventas.
   const [voltraSinCobertura, setVoltraSinCobertura] = useState([])
+  // 21-10: ventas de pedidos cancelados en Shopify que YA están en el courier (no se cancelan solas).
+  const [canceladosEnCourier, setCanceladosEnCourier] = useState([])
   const [busqVentas, setBusqVentas] = useState('')
 
   // ── Memos CSV ──────────────────────────────────────────
@@ -1816,6 +1818,10 @@ export default function DespachoPagina() {
       }).map(v => ({ ...v, entregaProgramada: programadas.get(normalizarRef(v.n_referencia)) || null })))
       setSelVentas(new Set())
       setBusqVentas('')
+      // 21-10: pedidos cancelados en Shopify cuyo paquete ya está en el courier (la vista los calcula; no bloquea nada).
+      supabase.from('ventas_cancelacion_shopify').select('nombre, courier_real, transportadora, estado_courier').eq('clase', 'cancelado_en_courier')
+        .then(({ data: cc }) => setCanceladosEnCourier((cc || []).map(c => ({ nombre: c.nombre, courier: c.courier_real || c.transportadora, estado: c.estado_courier }))),
+          () => setCanceladosEnCourier([]))
     } catch (e) {
       toast('Error al cargar ventas pendientes: ' + (e.message || ''), 'error')
     }
@@ -1878,9 +1884,34 @@ export default function DespachoPagina() {
       if (pendientesDecidir.size && !silencioso) {
         toast(`${pendientesDecidir.size} pedido(s) de Voltra sin cobertura: decidir a mano (no se pasaron a Ventas)`, 'error')
       }
+      // 21-10: un pedido nuevo que REEMPLAZA a otro (etiqueta REEMPLAZA_A_#n) cuyo paquete ya está en el courier NO se
+      // carga como envío nuevo: se vincula a la venta existente (nota) y no aparece doble en Despacho.
+      const reemplazaA = mapaReemplazos(filas)
+      const vinculados = new Set()
+      if (reemplazaA.size) {
+        const viejas = [...new Set(reemplazaA.values())]
+        const [{ data: vv }, { data: ee }] = await Promise.all([
+          supabase.from('ventas').select('id, n_referencia, despachado_at, notas').in('n_referencia', viejas).is('deleted_at', null),
+          supabase.from('entregas').select('n_referencia, estado_pap').in('n_referencia', viejas),
+        ])
+        const enCourierViejas = new Set([
+          ...(vv || []).filter(v => v.despachado_at).map(v => v.n_referencia),
+          ...(ee || []).filter(e => String(e.estado_pap || '').trim()).map(e => e.n_referencia),
+        ])
+        const ligados = reemplazosVinculados(reemplazaA, new Set((vv || []).map(v => v.n_referencia)), enCourierViejas)
+        for (const nuevo of ligados) {
+          vinculados.add(nuevo)
+          const viejo = reemplazaA.get(nuevo)
+          const fila = (vv || []).find(v => v.n_referencia === viejo)
+          if (fila && !String(fila.notas || '').includes(`Reemplazado por ${nuevo}`)) {
+            await supabase.from('ventas').update({ notas: [fila.notas, `Reemplazado por ${nuevo} (mismo paquete, ya en el courier)`].filter(Boolean).join('\n') }).eq('id', fila.id)
+          }
+        }
+        if (vinculados.size && !silencioso) toast(`${vinculados.size} pedido(s) reemplazan a uno que ya está en el courier: no se cargaron como envío nuevo`, 'info')
+      }
       const vistas = new Map()
       const nuevas = []
-      for (const p of listos) {
+      for (const p of listos.filter(x => !vinculados.has(x.n_referencia))) {
         const r = String(p.n_referencia)
         const v = vistas.get(r) || 0
         if (v >= (cuenta.get(r) || 0)) nuevas.push(p)
@@ -2071,6 +2102,18 @@ export default function DespachoPagina() {
                 No se pasaron a Ventas ni se les puso PaP por defecto:{' '}
                 {voltraSinCobertura.map(x => `${x.ref} (${x.ciudad || 'sin ciudad'}) · ${x.dias} día${x.dias === 1 ? '' : 's'} esperando`).join(' · ')}.{' '}
                 Corregí la ciudad en Shopify, o subí el CSV de pedidos, elegí la transportadora y tocá "Sin cobranza · forzar".
+              </span>
+            </div>
+          )}
+
+          {/* 21-10: cancelado por el cliente pero con el paquete ya en el courier: no se cancela solo */}
+          {canceladosEnCourier.length > 0 && (
+            <div className="alert" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+              <AlertTriangle size={14} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                <strong>Cancelado con paquete en courier:</strong>{' '}
+                {canceladosEnCourier.map(c => `${c.nombre} (${labelTransportadora(c.courier)}${c.estado ? ` · ${c.estado}` : ''})`).join(' · ')}.{' '}
+                El cliente canceló pero el paquete ya salió: pedí al courier que lo retenga o lo devuelva.
               </span>
             </div>
           )}
