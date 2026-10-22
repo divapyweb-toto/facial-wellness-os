@@ -4,14 +4,18 @@
 # El archivo se escribe FUERA del repo (es público): por defecto ~/Negocios/datos-meta/. Regenerar cada semana.
 #   ./scripts/exportar-publico-excluir.sh [carpeta_destino]
 # 22-10: reintenta si la conexión a la base falla (pasa de vez en cuando) y solo reemplaza el archivo si salió bien.
+#   ./scripts/exportar-publico-excluir.sh --entregados [carpeta]  → público de REPOSICIÓN (vista publico_clientes_entregados):
+#     compradores con algún pedido entregado en 2026 que nunca rechazaron ni devolvieron. Mismo formato.
 set -uo pipefail
+VISTA="publico_excluir_rechazos"; PREFIJO="excluir-rechazos"
+if [ "${1:-}" = "--entregados" ]; then VISTA="publico_clientes_entregados"; PREFIJO="clientes-entregados"; shift; fi
 DEST="${1:-$HOME/Negocios/datos-meta}"
 mkdir -p "$DEST"
-ARCH="$DEST/excluir-rechazos-$(date +%Y-%m-%d).csv"
+ARCH="$DEST/$PREFIJO-$(date +%Y-%m-%d).csv"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP" "$TMP.err"' EXIT
 cd "$(dirname "$0")/.."
-SQL="select phone_sha256, coalesce(email_sha256, '') as email_sha256 from public.publico_excluir_rechazos order by 1"
+SQL="select phone_sha256, coalesce(email_sha256, '') as email_sha256 from public.$VISTA order by 1"
 
 for intento in 1 2 3; do
   # -o csv: mismo formato en cualquier terminal (sin esto, la terminal interactiva muestra una tabla).
