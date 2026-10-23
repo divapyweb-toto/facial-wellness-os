@@ -1,0 +1,1 @@
+@media (min-width: 1900px){.cfg-reglas{display:block!important;max-width:none!important;column-count:2;column-gap:20px}.cfg-reglas>.card{break-inside:avoid;margin-bottom:20px}.cfg-reglas>:not(.card){column-span:all;margin-bottom:20px}.cfg-reglas>.card .form-textarea{max-width:760px}.cfg-tabla-corta{max-width:1200px}}@media (min-width: 2600px){.cfg-reglas{column-count:3}}
