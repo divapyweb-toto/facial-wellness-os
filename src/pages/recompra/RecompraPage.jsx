@@ -9,6 +9,7 @@ import { RefreshCw, Download, Repeat, MessageCircle, Loader2 } from 'lucide-reac
 import { segmentarRecompra, familiaProducto } from '../../lib/recompra'
 import { getVentanasRecompra, getDatosPago } from '../../lib/config'
 import { generarExcelRecompra } from '../../lib/recompraExcel'
+import './recompra.css'
 
 
 export default function RecompraPage() {
@@ -266,7 +267,7 @@ Pasame el comprobante y lo despacho hoy mismo ✅`
           <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Cuando algún cliente pase el umbral de recompra, va a aparecer acá.</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="rcp-lista" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {listaUnificada.map((r) => (
             <div key={r.telefono + r.tipo} className="card" style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', borderLeft: `3px solid ${r.color}` }}>
               <div style={{ flex: 1, minWidth: 200 }}>

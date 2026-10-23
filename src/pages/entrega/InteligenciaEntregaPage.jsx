@@ -116,8 +116,14 @@ export default function InteligenciaEntregaPage() {
             )}
           </div>
 
+          {/* Ultrawide (≥1900 px): ciudad a la izquierda; producto/mensajero y
+              motivos a la derecha. Por debajo, los envoltorios no existen. */}
+          <div className="ultra-split ultra-split-mitad ultra-contents">
+          <div className="ultra-main ultra-contents">
           {/* Por ciudad */}
           <SeccionGrupo titulo="Por ciudad" Icon={MapPin} grupos={a.porCiudad} hist={hist} maxItems={15} />
+          </div>
+          <div className="ultra-rail ultra-rail-libre ultra-contents">
 
           {/* Por producto y mensajero, lado a lado */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 }}>
@@ -144,6 +150,8 @@ export default function InteligenciaEntregaPage() {
               </div>
             </div>
           )}
+          </div>
+          </div>
         </>
       )}
     </div>

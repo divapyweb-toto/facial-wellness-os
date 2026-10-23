@@ -1,0 +1,5 @@
+/* src/pages/ventas/ventas.css — solo modo ultrawide (≥1900 px). */
+@media (min-width: 1900px) {
+  /* El buscador no se estira 1700 px: los filtros quedan a su lado. */
+  .ven-buscar { flex: 0 1 640px !important; }
+}

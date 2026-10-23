@@ -298,6 +298,7 @@ export default function PedidoMayoristaPage() {
       </form>
 
       {/* ─── Lista de pedidos mayoristas ─── */}
+      <div className="may-lista">
       <div className="may-lista-head">
         <h2 className="may-h2"><ShoppingBag size={16} /> Pedidos mayoristas</h2>
         <button className="btn btn-ghost btn-sm" onClick={traerLista} disabled={cargandoLista}><RefreshCw size={13} className={cargandoLista ? 'spinning' : ''} /> Actualizar</button>
@@ -337,6 +338,7 @@ export default function PedidoMayoristaPage() {
             </tbody>
           </table>
         )}
+      </div>
       </div>
 
       {/* ─── Resumen antes de confirmar ─── */}

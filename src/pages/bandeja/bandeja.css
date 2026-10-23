@@ -243,3 +243,13 @@ a.wa-btn:hover, button.wa-btn:hover { background: rgba(255,255,255,.1); }
 .bandeja-chat .bandeja-vacio { background: var(--wa-fondo); }
 .bandeja-chat .bandeja-vacio .empty-state-title { color: var(--wa-texto); }
 .bandeja-chat .bandeja-vacio .empty-state-desc { color: var(--wa-sec); }
+
+/* ═══ Modo ultrawide (≥1900 px): lista un poco más ancha y la conversación
+   centrada en una columna legible (el fondo sigue ocupando todo el panel). ═══ */
+@media (min-width: 1900px) {
+  .bandeja { grid-template-columns: minmax(380px, 460px) 1fr; }
+  .bandeja-mensajes { padding-left: max(6%, calc((100% - 1040px) / 2)); padding-right: max(6%, calc((100% - 1040px) / 2)); }
+  .bandeja-chat .bandeja-composer { padding-left: max(10px, calc((100% - 1040px) / 2)); padding-right: max(10px, calc((100% - 1040px) / 2)); }
+  .bandeja-aviso { padding-left: max(14px, calc((100% - 1040px) / 2)); padding-right: max(14px, calc((100% - 1040px) / 2)); }
+  .wa-bajar { right: max(16px, calc((100% - 1040px) / 2)); }
+}

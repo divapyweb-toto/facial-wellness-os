@@ -1,0 +1,20 @@
+/* src/pages/reclamos/reclamos.css — solo modo ultrawide (≥1900 px). Debajo no hace nada. */
+@media (min-width: 1900px) {
+  .rec-buscar { max-width: 960px; }
+  /* Resultados: tarjetas en columnas en vez de una lista de 2400 px. */
+  .rec-resultados { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12px; align-items: start; }
+  /* Ficha: cabecera y guía a todo el ancho; Envío / Cliente / Pedido / Reclamar en 2 columnas. */
+  .rec-ficha { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; align-items: start; }
+  .rec-ficha > * { grid-column: 1 / -1; }
+  .rec-ficha > .btn { justify-self: start; }
+  .rec-ficha > .rec-seccion { grid-column: auto; }
+}
+@media (min-width: 2600px) {
+  .rec-resultados { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .rec-ficha { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+/* Reclamos y Vínculos envuelven su contenido en un segundo .page-content: en
+   ultrawide el relleno doble (48 + 48 px por lado) desperdicia ancho. */
+@media (min-width: 1900px) {
+  .page-content > .page-content { padding: 0; }
+}

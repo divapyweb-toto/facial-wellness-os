@@ -24,3 +24,8 @@
   .kpi-wa-tabla .num-col { text-align: left; }
   .kpi-wa-semanas .chip-choice { min-height: 46px; }
 }
+
+/* Ultrawide (≥1900 px): la nota larga no se estira de punta a punta */
+@media (min-width: 1900px) {
+  .kpi-wa-nota { max-width: 1200px; }
+}

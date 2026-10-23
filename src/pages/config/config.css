@@ -1,0 +1,14 @@
+/* src/pages/config/config.css — solo modo ultrawide (≥1900 px). Debajo no hace nada. */
+@media (min-width: 1900px) {
+  /* Reglas del negocio: las tarjetas fluyen en columnas (estilo mosaico), en el
+     mismo orden de lectura. El aviso de arriba y el botón Guardar ocupan todo el ancho. */
+  .cfg-reglas { display: block !important; max-width: none !important; column-count: 2; column-gap: 20px; }
+  .cfg-reglas > .card { break-inside: avoid; margin-bottom: 20px; }
+  .cfg-reglas > :not(.card) { column-span: all; margin-bottom: 20px; }
+  .cfg-reglas > .card .form-textarea { max-width: 760px; }
+  /* Tablas de 3-5 columnas (pago, envío, usuarios): no estirarlas a 2400 px. */
+  .cfg-tabla-corta { max-width: 1200px; }
+}
+@media (min-width: 2600px) {
+  .cfg-reglas { column-count: 3; }
+}

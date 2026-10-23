@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase, formatGs } from '../../lib/supabase'
 import { useToast } from '../../lib/toast'
 import { Trash2, RotateCcw, AlertCircle, ClipboardList, Shield, CheckCircle, X } from 'lucide-react'
+import './sistema.css'
 
 const fmtFecha = (ts) => {
   if (!ts) return '—'
@@ -127,7 +128,7 @@ function Papelera({ toast }) {
           <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>No hay {cfg.label.toLowerCase()} borrados</p>
         </div>
       ) : (
-        <div className="m-card-list">
+        <div className="m-card-list sis-lista">
           {items.map(it => (
             <div key={it.id} className="m-card" style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
@@ -195,7 +196,7 @@ function Errores({ toast }) {
           <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>El sistema viene funcionando bien</p>
         </div>
       ) : (
-        <div className="m-card-list">
+        <div className="m-card-list sis-lista">
           {errores.map(e => (
             <div key={e.id} className="m-card" style={{ padding: '12px 14px', borderLeft: '3px solid var(--red)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>

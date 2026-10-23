@@ -979,6 +979,10 @@ export default function EntregasPage() {
 
         return (
           <>
+            {/* Ultrawide (≥1900 px): resultado y pirámide a la izquierda; tránsito y
+                palancas en el riel derecho. Por debajo, los envoltorios no existen. */}
+            <div className="ultra-split ultra-contents">
+            <div className="ultra-main ultra-contents">
             {/* NÚMERO ESTRELLA: CONTRIBUCIÓN POR ENVÍO (salud de la operación) */}
             <div className="card" style={{
               padding: '22px 24px',
@@ -1160,6 +1164,8 @@ export default function EntregasPage() {
               )}
             </div>
 
+            </div>
+            <div className="ultra-rail ultra-contents">
             {/* BLOQUE EN TRÁNSITO — lo que todavía está volando (proyección) */}
             {p.enCamino > 0 && (
               <div className="card" style={{ padding: '16px 20px', border: '1px solid var(--yellow)' }}>
@@ -1221,6 +1227,8 @@ export default function EntregasPage() {
                 <div className="kpi-sub">{p.devueltos} devoluciones · el flete se paga igual</div>
               </div>
             </div>
+            </div>
+            </div>
           </>
         )
       })()}
@@ -1270,6 +1278,8 @@ export default function EntregasPage() {
             ))}
           </div>
 
+          {/* Ultrawide: tabla y mapa lado a lado; por debajo de 1900 px no existe. */}
+          <div className="ultra-grid ultra-contents">
           {/* Tabla por ciudad */}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1354,6 +1364,7 @@ export default function EntregasPage() {
 
           {/* Mapa geográfico de las mismas ciudades */}
           <MapaCiudades ciudades={porCiudad} />
+          </div>
         </>
       )}
 
@@ -1452,6 +1463,8 @@ export default function EntregasPage() {
         </div>
       )}
 
+      {/* Ultrawide: distribución y mensajeros/motivos en una sola fila. */}
+      <div className="ultra-grid ultra-contents">
       {/* Distribución + Ciudad */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 12 }}>
         <div className="card">
@@ -1508,6 +1521,7 @@ export default function EntregasPage() {
             )
           })}
         </div>
+      </div>
       </div>
 
       {/* Tabla */}

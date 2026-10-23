@@ -18,6 +18,7 @@ import { logAccion, logAccionLote } from '../../lib/audit'
 import { Plus, Search, X, Clock, Trash2, Edit2, Save, AlertTriangle, Receipt } from 'lucide-react'
 import DatosFactura from '../../components/DatosFactura'
 import { hoyLocal } from '../../lib/fechas'
+import './ventas.css'
 
 const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro']
 const ESTADOS = ['todos', 'pendiente', 'entregado', 'devuelto', 'en_tramite']
@@ -921,7 +922,7 @@ export default function VentasPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ position: 'relative', flex: '1', minWidth: 180 }}>
+        <div className="ven-buscar" style={{ position: 'relative', flex: '1', minWidth: 180 }}>
           <Search size={13} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input className="form-input" style={{ paddingLeft: 30 }} placeholder="Buscar producto, ref, ciudad..."
             value={busqueda} onChange={e => setBusqueda(e.target.value)} />

@@ -1,0 +1,7 @@
+/* src/pages/vinculos/vinculos.css — solo modo ultrawide (≥1900 px). */
+@media (min-width: 1900px) {
+  .vin-lista { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12px; align-items: start; }
+}
+@media (min-width: 2600px) {
+  .vin-lista.vin-lista-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

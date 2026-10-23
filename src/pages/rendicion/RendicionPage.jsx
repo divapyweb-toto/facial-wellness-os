@@ -499,7 +499,7 @@ export default function RendicionPage() {
   // ── DASHBOARD ──────────────────────────────────────────
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 'clamp(16px, 4vw, 24px)' }}>
-      <div>
+      <div className="ultra-o1">
         <h1 className="page-title">Rendición · Cobranza</h1>
         <p className="page-subtitle">
           Cada transportadora cobra al cliente y te deposita después, con su propio ritmo — por eso van separadas.
@@ -510,7 +510,7 @@ export default function RendicionPage() {
       {/* Selector de transportadora: cada una tiene un ciclo de cobro distinto,
           mezclarlas en un solo número no describe a ninguna de las dos. */}
       {hayLucero && (
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div className="ultra-o2" style={{ display: 'flex', gap: 6 }}>
           {[
             ['todas', 'Todas'],
             ['pap', 'PAP'],
@@ -532,8 +532,227 @@ export default function RendicionPage() {
         </div>
       )}
 
+      {/* Ultrawide (≥1900 px): números, gráfico y lista a la izquierda; importar
+          y alertas en el riel derecho. Por debajo de 1900 px los envoltorios no
+          existen y el orden lo mantienen las clases ultra-oN. */}
+      <div className="ultra-split ultra-contents ultra-o3">
+      <div className="ultra-main ultra-contents">
+      {/* KPIs principales */}
+      <div className="ultra-o5" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+        <div className="card" style={{ borderLeft: '3px solid var(--yellow)' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <Clock size={13} /> TE DEBE ({NOMBRE_TRANSP[vista].toUpperCase()})
+          </div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--yellow)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.porCobrar)}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+            {stats.nSinRendir} entregas sin rendir
+            {stats.porCobrarBruto !== stats.porCobrar ? ` · cliente pagó ${formatGs(stats.porCobrarBruto)}` : ''}
+          </div>
+        </div>
+        <div className="card" style={{ borderLeft: '3px solid var(--green)' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <CheckCircle size={13} /> YA TE DEPOSITARON
+          </div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--green)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.yaRendido)}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+            {stats.nRendidos} rendidas · {stats.tasaCobrado}% del total
+            {stats.yaRendidoBruto !== stats.yaRendido ? ` · cliente pagó ${formatGs(stats.yaRendidoBruto)} (neto, ya sin flete)` : ''}
+          </div>
+        </div>
+        <div className="card">
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <Truck size={13} /> EN TRÁNSITO
+          </div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{formatGs(stats.enTransito)}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nProceso} en camino, sin resolver</div>
+        </div>
+        {vista === 'lucero' && (
+          <div className="card">
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+              <Truck size={13} /> FLETE PAGADO A LUCERO
+            </div>
+            <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--red)' }}>−{formatGs(stats.fleteTotal)}</div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>Tarifa real por ciudad, no estimada · {stats.nEntregados} entregados</div>
+          </div>
+        )}
+        <div className="card">
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <CalendarClock size={13} /> TIEMPO DE COBRO
+          </div>
+          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{stats.diasMediana != null ? `${stats.diasMediana.toFixed(1)} días` : '—'}</div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+            Típico (mediana), de la entrega al depósito
+            {stats.diasProm != null ? ` · prom. ${stats.diasProm.toFixed(1)}d` : ''}
+            {stats.trancados > 0 ? ` · ${stats.trancados} trancada${stats.trancados > 1 ? 's' : ''} +14d` : ''}
+          </div>
+        </div>
+      </div>
+
+      {/* Proyección de cobro */}
+      {stats.porCobrar > 0 && stats.cobroEstimadoHasta && stats.diasMediana != null && (
+        <div className="card ultra-o6" style={{ background: 'var(--green-dim)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <TrendingUp size={20} color="var(--green)" />
+          <div style={{ fontSize: 13 }}>
+            Al ritmo típico de <b>{stats.diasMediana.toFixed(1)} días</b>, deberías terminar de cobrar
+            los <b style={{ color: 'var(--green)' }}>{formatGs(stats.porCobrar)}</b> pendientes
+            alrededor del <b>{stats.cobroEstimadoHasta.toLocaleDateString('es-PY', { day: '2-digit', month: 'long' })}</b>.
+          </div>
+        </div>
+      )}
+
+      {/* Histórico de rendiciones */}
+      {stats.datosGrafico.length > 0 && (
+        <div className="card ultra-o7">
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Histórico de depósitos · {NOMBRE_TRANSP[vista]}</div>
+          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>Cuánto te depositó {NOMBRE_TRANSP[vista]} en cada fecha (neto, lo que cayó al banco).</p>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={stats.datosGrafico} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
+              <YAxis tickFormatter={v => `${(v / 1000000).toFixed(1)}M`} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={36} />
+              <Tooltip
+                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
+                formatter={(v) => [formatGs(v), 'Depositado']}
+                labelFormatter={l => `Fecha: ${l}`}
+              />
+              <Bar dataKey="monto" radius={[4, 4, 0, 0]}>
+                {stats.datosGrafico.map((e, i) => <Cell key={i} fill="var(--green)" />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* ─── Lista "PaP te debe" con selección manual ─────── */}
+      {stats.listaSinRendir.length > 0 && (
+        <div className="card ultra-o8" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--yellow)' }}>
+                  Lo que {NOMBRE_TRANSP[vista]} te debe rendir · {formatGs(stats.porCobrar)}
+                </div>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  Ordenado por antigüedad. Rojo = más de {Math.round(stats.umbralDemora)} días. Usá el checkbox para marcar manualmente lo que ya te depositaron.
+                </p>
+              </div>
+
+              {/* Botón marcar manual */}
+              {seleccionados.size > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    <b style={{ color: 'var(--text-primary)' }}>{seleccionados.size}</b> seleccionada{seleccionados.size !== 1 ? 's' : ''} · <b style={{ color: 'var(--green)' }}>{formatGs(montoSeleccionado)}</b>
+                  </span>
+<label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                    Fecha del depósito
+                    <input
+                      type="date"
+                      className="form-input"
+                      value={fechaDeposito}
+                      max={hoyLocal()}
+                      onChange={e => setFechaDeposito(e.target.value)}
+                      style={{ width: 'auto', minHeight: 34, padding: '5px 8px', fontSize: 12 }}
+                    />
+                  </label>
+                  <button
+                    onClick={marcarRendidoManual}
+                    disabled={marcando}
+                    style={{
+                      padding: '7px 14px', fontSize: 12, fontWeight: 700, borderRadius: 8, cursor: 'pointer', border: 'none',
+                      background: 'var(--green)', color: '#fff',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      opacity: marcando ? 0.6 : 1,
+                    }}
+                  >
+                    <CheckCircle size={13} />
+                    {marcando ? 'Guardando…' : 'Marcar como rendido'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ overflowX: 'auto', maxHeight: 480, overflowY: 'auto' }}>
+            <table className="tabla-responsive" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 580 }}>
+              <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-card)', zIndex: 1 }}>
+                <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
+                  <th style={{ padding: '8px 8px 8px 16px', width: 36 }}>
+                    <input
+                      type="checkbox"
+                      checked={todosSeleccionados}
+                      onChange={toggleTodos}
+                      title={todosSeleccionados ? 'Deseleccionar todas' : 'Seleccionar todas'}
+                      style={{ cursor: 'pointer', accentColor: 'var(--green)', width: 14, height: 14 }}
+                    />
+                  </th>
+                  <th style={{ padding: '8px 6px' }}>Ref</th>
+                  {vista === 'todas' && <th style={{ padding: '8px 6px' }}>Transp.</th>}
+                  <th style={{ padding: '8px 6px' }}>Guía</th>
+                  <th style={{ padding: '8px 6px' }}>Ciudad</th>
+                  <th style={{ padding: '8px 6px' }}>Entregado</th>
+                  <th style={{ padding: '8px 6px', textAlign: 'center' }}>Días</th>
+                  <th style={{ padding: '8px 16px', textAlign: 'right' }}>Importe</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.listaSinRendir.map((m, i) => {
+                  const demorada = m.diasSinRendir != null && m.diasSinRendir > stats.umbralDemora
+                  const esSel = seleccionados.has(m.nro_guia_pap)
+                  return (
+                    <tr
+                      key={i}
+                      onClick={() => toggleSel(m.nro_guia_pap)}
+                      style={{
+                        borderTop: '1px solid var(--border)',
+                        background: esSel
+                          ? 'var(--green-dim)'
+                          : demorada ? 'rgba(239,68,68,0.06)' : 'transparent',
+                        cursor: 'pointer',
+                        transition: 'background 0.1s',
+                      }}
+                    >
+                      <td style={{ padding: '8px 8px 8px 16px' }}>
+                        <input
+                          type="checkbox"
+                          checked={esSel}
+                          onChange={() => toggleSel(m.nro_guia_pap)}
+                          onClick={e => e.stopPropagation()}
+                          style={{ cursor: 'pointer', accentColor: 'var(--green)', width: 14, height: 14 }}
+                        />
+                      </td>
+                      <td data-label="Ref" style={{ padding: '8px 6px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
+                      {vista === 'todas' && (
+                        <td data-label="Transp." style={{ padding: '8px 6px' }}>
+                          <span style={{
+                            fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                            background: m.transportadora === 'lucero' ? 'var(--accent-dim, rgba(46,139,212,0.15))' : 'var(--border)',
+                            color: m.transportadora === 'lucero' ? 'var(--accent)' : 'var(--text-secondary)',
+                          }}>
+                            {m.transportadora === 'lucero' ? 'Lucero' : 'PAP'}
+                          </span>
+                        </td>
+                      )}
+                      <td data-label="Guía PaP" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
+                      <td data-label="Ciudad" style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
+                      <td data-label="Entregado" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{fechaCorta(m.fecha_entrega)}</td>
+                      <td data-label="Días" style={{ padding: '8px 6px', textAlign: 'center' }}>
+                        {m.diasSinRendir != null
+                          ? <span style={{ color: demorada ? 'var(--red)' : m.diasSinRendir > 8 ? 'var(--yellow)' : 'var(--text-muted)', fontWeight: demorada ? 700 : 400 }}>{m.diasSinRendir}d</span>
+                          : '—'}
+                      </td>
+                      <td data-label="Importe" style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{formatGs(m.importe)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      </div>
+      <div className="ultra-rail ultra-rail-libre ultra-contents">
       {/* Importar reporte de rendición del martes */}
-      <div className="card" style={{ padding: '16px 20px' }}>
+      <div className="card ultra-o3" style={{ padding: '16px 20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div>
             <h3 style={{ margin: '0 0 2px', fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -694,7 +913,7 @@ export default function RendicionPage() {
 
       {/* Alerta de demoras */}
       {stats.demoradas.length > 0 && (
-        <div className="alert alert-warning">
+        <div className="alert alert-warning ultra-o4">
           <AlertTriangle size={15} />
           <div>
             <div style={{ fontWeight: 600 }}>
@@ -704,219 +923,8 @@ export default function RendicionPage() {
           </div>
         </div>
       )}
-
-      {/* KPIs principales */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
-        <div className="card" style={{ borderLeft: '3px solid var(--yellow)' }}>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-            <Clock size={13} /> TE DEBE ({NOMBRE_TRANSP[vista].toUpperCase()})
-          </div>
-          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--yellow)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.porCobrar)}</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-            {stats.nSinRendir} entregas sin rendir
-            {stats.porCobrarBruto !== stats.porCobrar ? ` · cliente pagó ${formatGs(stats.porCobrarBruto)}` : ''}
-          </div>
-        </div>
-        <div className="card" style={{ borderLeft: '3px solid var(--green)' }}>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-            <CheckCircle size={13} /> YA TE DEPOSITARON
-          </div>
-          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, color: 'var(--green)', fontFamily: 'var(--font-display)' }}>{formatGs(stats.yaRendido)}</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-            {stats.nRendidos} rendidas · {stats.tasaCobrado}% del total
-            {stats.yaRendidoBruto !== stats.yaRendido ? ` · cliente pagó ${formatGs(stats.yaRendidoBruto)} (neto, ya sin flete)` : ''}
-          </div>
-        </div>
-        <div className="card">
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-            <Truck size={13} /> EN TRÁNSITO
-          </div>
-          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{formatGs(stats.enTransito)}</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{stats.nProceso} en camino, sin resolver</div>
-        </div>
-        {vista === 'lucero' && (
-          <div className="card">
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-              <Truck size={13} /> FLETE PAGADO A LUCERO
-            </div>
-            <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)', color: 'var(--red)' }}>−{formatGs(stats.fleteTotal)}</div>
-            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>Tarifa real por ciudad, no estimada · {stats.nEntregados} entregados</div>
-          </div>
-        )}
-        <div className="card">
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-            <CalendarClock size={13} /> TIEMPO DE COBRO
-          </div>
-          <div style={{ fontSize: 'clamp(20px, 5vw, 26px)', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{stats.diasMediana != null ? `${stats.diasMediana.toFixed(1)} días` : '—'}</div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-            Típico (mediana), de la entrega al depósito
-            {stats.diasProm != null ? ` · prom. ${stats.diasProm.toFixed(1)}d` : ''}
-            {stats.trancados > 0 ? ` · ${stats.trancados} trancada${stats.trancados > 1 ? 's' : ''} +14d` : ''}
-          </div>
-        </div>
       </div>
-
-      {/* Proyección de cobro */}
-      {stats.porCobrar > 0 && stats.cobroEstimadoHasta && stats.diasMediana != null && (
-        <div className="card" style={{ background: 'var(--green-dim)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <TrendingUp size={20} color="var(--green)" />
-          <div style={{ fontSize: 13 }}>
-            Al ritmo típico de <b>{stats.diasMediana.toFixed(1)} días</b>, deberías terminar de cobrar
-            los <b style={{ color: 'var(--green)' }}>{formatGs(stats.porCobrar)}</b> pendientes
-            alrededor del <b>{stats.cobroEstimadoHasta.toLocaleDateString('es-PY', { day: '2-digit', month: 'long' })}</b>.
-          </div>
-        </div>
-      )}
-
-      {/* Histórico de rendiciones */}
-      {stats.datosGrafico.length > 0 && (
-        <div className="card">
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Histórico de depósitos · {NOMBRE_TRANSP[vista]}</div>
-          <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 14 }}>Cuánto te depositó {NOMBRE_TRANSP[vista]} en cada fecha (neto, lo que cayó al banco).</p>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={stats.datosGrafico} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} />
-              <YAxis tickFormatter={v => `${(v / 1000000).toFixed(1)}M`} tick={{ fontSize: 11, fill: 'var(--text-muted)' }} axisLine={false} tickLine={false} width={36} />
-              <Tooltip
-                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
-                formatter={(v) => [formatGs(v), 'Depositado']}
-                labelFormatter={l => `Fecha: ${l}`}
-              />
-              <Bar dataKey="monto" radius={[4, 4, 0, 0]}>
-                {stats.datosGrafico.map((e, i) => <Cell key={i} fill="var(--green)" />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* ─── Lista "PaP te debe" con selección manual ─────── */}
-      {stats.listaSinRendir.length > 0 && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--yellow)' }}>
-                  Lo que {NOMBRE_TRANSP[vista]} te debe rendir · {formatGs(stats.porCobrar)}
-                </div>
-                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                  Ordenado por antigüedad. Rojo = más de {Math.round(stats.umbralDemora)} días. Usá el checkbox para marcar manualmente lo que ya te depositaron.
-                </p>
-              </div>
-
-              {/* Botón marcar manual */}
-              {seleccionados.size > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    <b style={{ color: 'var(--text-primary)' }}>{seleccionados.size}</b> seleccionada{seleccionados.size !== 1 ? 's' : ''} · <b style={{ color: 'var(--green)' }}>{formatGs(montoSeleccionado)}</b>
-                  </span>
-<label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
-                    Fecha del depósito
-                    <input
-                      type="date"
-                      className="form-input"
-                      value={fechaDeposito}
-                      max={hoyLocal()}
-                      onChange={e => setFechaDeposito(e.target.value)}
-                      style={{ width: 'auto', minHeight: 34, padding: '5px 8px', fontSize: 12 }}
-                    />
-                  </label>
-                  <button
-                    onClick={marcarRendidoManual}
-                    disabled={marcando}
-                    style={{
-                      padding: '7px 14px', fontSize: 12, fontWeight: 700, borderRadius: 8, cursor: 'pointer', border: 'none',
-                      background: 'var(--green)', color: '#fff',
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      opacity: marcando ? 0.6 : 1,
-                    }}
-                  >
-                    <CheckCircle size={13} />
-                    {marcando ? 'Guardando…' : 'Marcar como rendido'}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ overflowX: 'auto', maxHeight: 480, overflowY: 'auto' }}>
-            <table className="tabla-responsive" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 580 }}>
-              <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-card)', zIndex: 1 }}>
-                <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
-                  <th style={{ padding: '8px 8px 8px 16px', width: 36 }}>
-                    <input
-                      type="checkbox"
-                      checked={todosSeleccionados}
-                      onChange={toggleTodos}
-                      title={todosSeleccionados ? 'Deseleccionar todas' : 'Seleccionar todas'}
-                      style={{ cursor: 'pointer', accentColor: 'var(--green)', width: 14, height: 14 }}
-                    />
-                  </th>
-                  <th style={{ padding: '8px 6px' }}>Ref</th>
-                  {vista === 'todas' && <th style={{ padding: '8px 6px' }}>Transp.</th>}
-                  <th style={{ padding: '8px 6px' }}>Guía</th>
-                  <th style={{ padding: '8px 6px' }}>Ciudad</th>
-                  <th style={{ padding: '8px 6px' }}>Entregado</th>
-                  <th style={{ padding: '8px 6px', textAlign: 'center' }}>Días</th>
-                  <th style={{ padding: '8px 16px', textAlign: 'right' }}>Importe</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stats.listaSinRendir.map((m, i) => {
-                  const demorada = m.diasSinRendir != null && m.diasSinRendir > stats.umbralDemora
-                  const esSel = seleccionados.has(m.nro_guia_pap)
-                  return (
-                    <tr
-                      key={i}
-                      onClick={() => toggleSel(m.nro_guia_pap)}
-                      style={{
-                        borderTop: '1px solid var(--border)',
-                        background: esSel
-                          ? 'var(--green-dim)'
-                          : demorada ? 'rgba(239,68,68,0.06)' : 'transparent',
-                        cursor: 'pointer',
-                        transition: 'background 0.1s',
-                      }}
-                    >
-                      <td style={{ padding: '8px 8px 8px 16px' }}>
-                        <input
-                          type="checkbox"
-                          checked={esSel}
-                          onChange={() => toggleSel(m.nro_guia_pap)}
-                          onClick={e => e.stopPropagation()}
-                          style={{ cursor: 'pointer', accentColor: 'var(--green)', width: 14, height: 14 }}
-                        />
-                      </td>
-                      <td data-label="Ref" style={{ padding: '8px 6px', fontWeight: 600 }}>{m.n_referencia ? '#' + m.n_referencia : '—'}</td>
-                      {vista === 'todas' && (
-                        <td data-label="Transp." style={{ padding: '8px 6px' }}>
-                          <span style={{
-                            fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
-                            background: m.transportadora === 'lucero' ? 'var(--accent-dim, rgba(46,139,212,0.15))' : 'var(--border)',
-                            color: m.transportadora === 'lucero' ? 'var(--accent)' : 'var(--text-secondary)',
-                          }}>
-                            {m.transportadora === 'lucero' ? 'Lucero' : 'PAP'}
-                          </span>
-                        </td>
-                      )}
-                      <td data-label="Guía PaP" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{m.nro_guia_pap}</td>
-                      <td data-label="Ciudad" style={{ padding: '8px 6px' }}>{m.ciudad || '—'}</td>
-                      <td data-label="Entregado" style={{ padding: '8px 6px', color: 'var(--text-muted)' }}>{fechaCorta(m.fecha_entrega)}</td>
-                      <td data-label="Días" style={{ padding: '8px 6px', textAlign: 'center' }}>
-                        {m.diasSinRendir != null
-                          ? <span style={{ color: demorada ? 'var(--red)' : m.diasSinRendir > 8 ? 'var(--yellow)' : 'var(--text-muted)', fontWeight: demorada ? 700 : 400 }}>{m.diasSinRendir}d</span>
-                          : '—'}
-                      </td>
-                      <td data-label="Importe" style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{formatGs(m.importe)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   )
 }

@@ -998,6 +998,9 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               Dólares convertidos con el cambio de cada día: ₲{Math.round(datos.auto.rangoTasa.min).toLocaleString('es-PY')} a ₲{Math.round(datos.auto.rangoTasa.max).toLocaleString('es-PY')} por US$ (promedio ₲{datos.auto.rangoTasa.prom.toLocaleString('es-PY')}). Cotización de referencia; se puede corregir por día en la tabla tipo_cambio.
             </div>
           )}
+          {/* Ultrawide (≥1900 px): utilidad a la izquierda, comparativa + transportadoras a la derecha. Abajo de 1900 estos envoltorios no existen. */}
+          <div className="ultra-contents ultra-split ultra-split-mitad">
+          <div className="ultra-contents">
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
               Cómo se arma tu utilidad firme
@@ -1031,7 +1034,9 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               </div>
             </div>
           </div>
+          </div>
 
+          <div className="ultra-contents">
           {/* Comparativa con mes anterior */}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
@@ -1099,6 +1104,8 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               </div>
             </div>
           )}
+          </div>
+          </div>
 
           {/* Margen por producto — la tabla de decisión */}
           {(datos.porProducto || []).length > 0 && (
@@ -1266,7 +1273,8 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
             </div>
           </div>
 
-          {/* Tabla por producto */}
+          {/* Tabla por producto + entrega por ciudad: lado a lado en ultrawide */}
+          <div className="ultra-contents ultra-split ultra-split-mitad">
           <div className="card" style={{ padding: 0 }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
               <span style={{ fontWeight: 600, fontSize: 14 }}>Detalle por producto</span>
@@ -1321,6 +1329,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               </tbody>
             </table>
           </div>
+          </div>
 
           {/* Patrones: día de la semana + motivos de devolución */}
           <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 16 }}>
@@ -1356,6 +1365,9 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
             <CostoPorAnuncio inicio={datos.periodo.inicio} fin={datos.periodo.fin} />
           )}
 
+          {/* Ultrawide: campañas + recompras a la izquierda, puntos de atención a la derecha */}
+          <div className="ultra-contents ultra-split ultra-split-mitad">
+          <div className="ultra-contents">
           {/* Campañas ads */}
           {datos.campanas.length > 0 && (
             <div className="card" style={{ padding: 0 }}>
@@ -1404,7 +1416,9 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               <div className="kpi-sub">Fidelización</div>
             </div>
           </div>
+          </div>
 
+          <div className="ultra-contents">
           {/* Alertas / acciones sugeridas */}
           {datos.alertas.length > 0 && (
             <div className="card" style={{ padding: 0, border: '1px solid var(--yellow)' }}>
@@ -1422,6 +1436,8 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
               </div>
             </div>
           )}
+          </div>
+          </div>
 
           {/* Footer del reporte */}
           <div className="reporte-pie" style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '12px 0' }}>

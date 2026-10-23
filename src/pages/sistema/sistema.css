@@ -1,0 +1,8 @@
+/* src/pages/sistema/sistema.css — solo modo ultrawide (≥1900 px). */
+@media (min-width: 1900px) {
+  /* Papelera y errores: tarjetas en columnas. */
+  .m-card-list.sis-lista { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+}
+@media (min-width: 2600px) {
+  .m-card-list.sis-lista { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

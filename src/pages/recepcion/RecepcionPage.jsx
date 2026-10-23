@@ -187,6 +187,10 @@ export default function RecepcionPage() {
         </button>
       </div>
 
+      {/* Ultrawide: a la izquierda escanear y confirmar; a la derecha las listas. Abajo de 1900 px
+          los envoltorios no existen (rowGap 0 = las tarjetas siguen pegadas como antes). */}
+      <div className="ultra-split ultra-split-mitad" style={{ rowGap: 0 }}>
+      <div className="ultra-main ultra-contents">
       {/* Explicación breve */}
       <div className="card" style={{ padding: '12px 16px' }}>
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
@@ -251,6 +255,9 @@ export default function RecepcionPage() {
         </div>
       )}
 
+      </div>
+
+      <div className="ultra-rail ultra-rail-libre ultra-contents">
       {/* LISTA DE LA TANDA */}
       {tanda.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -337,6 +344,9 @@ export default function RecepcionPage() {
           )}
         </div>
       )}
+
+      </div>
+      </div>
 
       {!loading && esperados.length === 0 && tanda.length === 0 && (
         <div className="empty-state">

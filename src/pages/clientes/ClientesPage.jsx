@@ -4,6 +4,7 @@ import { normalizarTel } from '../../lib/referencias'
 import { supabaseTienda as supabase, formatGs } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { Users, Search, TrendingUp, Star, ShoppingBag, X, Phone, MapPin } from 'lucide-react'
+import './clientes.css'
 
 
 const fmtFecha = (f) => f ? new Date(f + 'T00:00:00').toLocaleDateString('es-PY', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'
@@ -139,7 +140,7 @@ export default function ClientesPage() {
         <div className="kpi-card"><div className="kpi-label"><ShoppingBag size={11} /> Con compras</div><div className="kpi-value">{conCompras.length}</div><div className="kpi-sub">Al menos 1 entregado</div></div>
       </div>
 
-      <div style={{ position: 'relative' }}>
+      <div className="cli-buscar" style={{ position: 'relative' }}>
         <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
         <input className="form-input" style={{ paddingLeft: 34 }} placeholder="Buscar por nombre, teléfono o ciudad..." value={busqueda} onChange={e => setBusqueda(e.target.value)} />
       </div>

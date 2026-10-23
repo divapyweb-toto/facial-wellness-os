@@ -720,7 +720,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
    .desktop-only  → visible en ≥769px, oculto en móvil
    .mobile-only   → visible en ≤768px, oculto en desktop/tablet
 ════════════════════════════════════════════════════════ */
-.mobile-only { display: none; }
+.mobile-only { display: none !important; } /* !important: un style={{display}} en línea no debe mostrarlo en escritorio */
 .desktop-only { display: block; }
 
 /* Tarjeta de dato para vista móvil (reemplaza filas de tabla) */
@@ -1345,3 +1345,62 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .nav-item:hover .nav-kbd, .nav-item.active .nav-kbd { opacity: 1; }
 @media (max-width: 1024px) { .nav-kbd { display: none; } }
+
+/* ═══════════════════════════════════════════════════════
+   MODO ULTRAWIDE (monitor Xiaomi G34WQi 3440×1440 y similares)
+   Se activa SOLO con ventanas de ≥1900 px de ancho: ningún
+   celular, iPad ni MacBook llega ahí, así que en esos aparatos
+   todo queda exactamente igual. Por debajo de 1900 px estas
+   clases no hacen nada (los contenedores se comportan como un
+   bloque normal / columna).
+
+   Contrato para las páginas:
+   · .ultra-grid        → 2 columnas de tarjetas independientes
+     (+ .ultra-grid-3   → 3 columnas desde 2600 px)
+   · .ultra-span        → hijo de una grilla que ocupa todo el ancho
+   · .ultra-split       → columna principal + riel lateral
+       > .ultra-main / > .ultra-rail (el riel queda fijo al scrollear;
+         .ultra-rail-libre lo deja correr con la página)
+   · .ultra-contents    → envoltorio que en pantallas normales "no
+     existe" (display: contents): sirve para agrupar en ultrawide
+     sin cambiar el orden del celular. Sus hijos usan order con
+     .ultra-o1 … .ultra-o20 para conservar el orden original.
+════════════════════════════════════════════════════════ */
+.ultra-split, .ultra-grid { display: flex; flex-direction: column; gap: 16px; }
+.ultra-split > .ultra-main, .ultra-split > .ultra-rail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ultra-contents, .ultra-split > .ultra-contents { display: contents; }
+.ultra-o1{order:1}.ultra-o2{order:2}.ultra-o3{order:3}.ultra-o4{order:4}.ultra-o5{order:5}
+.ultra-o6{order:6}.ultra-o7{order:7}.ultra-o8{order:8}.ultra-o9{order:9}.ultra-o10{order:10}
+.ultra-o11{order:11}.ultra-o12{order:12}.ultra-o13{order:13}.ultra-o14{order:14}.ultra-o15{order:15}
+.ultra-o16{order:16}.ultra-o17{order:17}.ultra-o18{order:18}.ultra-o19{order:19}.ultra-o20{order:20}
+
+@media (min-width: 1900px) {
+  :root { --sidebar-width: 256px; }
+  .page-content { max-width: 3200px; padding: 32px 48px 56px; }
+  .sidebar-nav { padding: 14px 12px; }
+
+  .ultra-contents, .ultra-split > .ultra-contents { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .ultra-contents > * { order: 0; }
+
+  .ultra-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(420px, 30%, 640px);
+    gap: 20px; align-items: start;
+  }
+  .ultra-split > .ultra-rail { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; scrollbar-width: thin; }
+  .ultra-split > .ultra-rail.ultra-rail-libre { position: static; max-height: none; overflow: visible; }
+  .ultra-split.ultra-split-mitad { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+  .ultra-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+  .ultra-grid > .ultra-span { grid-column: 1 / -1; }
+  .ultra-grid.ultra-estirar { align-items: stretch; }
+
+  .kpi-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .modal-lg { max-width: 760px; }
+  .modal-xl { max-width: 1120px; }
+  .empty-state-desc { max-width: 380px; }
+}
+@media (min-width: 2600px) {
+  .page-content { padding: 36px 64px 64px; }
+  .ultra-grid.ultra-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

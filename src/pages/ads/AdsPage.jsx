@@ -328,8 +328,10 @@ export default function AdsPage() {
 
           {/* Lista de productos con gasto + métricas */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {/* Ultrawide (≥1900 px): tarjetas de producto en 2-3 columnas. Abajo de 1900 este envoltorio no existe. */}
+            <div className="ultra-contents ultra-grid ultra-grid-3 ultra-estirar">
             {modo === 'total' && (
-              <div className="card" style={{ padding: '14px 18px' }}>
+              <div className="card ultra-span" style={{ padding: '14px 18px' }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Gasto total del mes en Meta{usaMeta ? ' (de Meta sincronizado)' : ''}</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
                   <span style={{ color: 'var(--text-muted)' }}>Gs.</span>
@@ -393,12 +395,13 @@ export default function AdsPage() {
             })}
 
             {filas.length === 0 && (
-              <div className="empty-state" style={{ padding: 40 }}>
+              <div className="empty-state ultra-span" style={{ padding: 40 }}>
                 <div className="empty-state-icon"><Megaphone size={26} /></div>
                 <p style={{ fontWeight: 600 }}>Sin ventas ni gasto este mes</p>
                 <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Elegí un mes con ventas o cargá el gasto de un producto.</p>
               </div>
             )}
+            </div>
           </div>
         </>
       )}

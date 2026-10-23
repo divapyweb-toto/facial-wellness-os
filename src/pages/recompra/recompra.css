@@ -1,0 +1,8 @@
+/* src/pages/recompra/recompra.css — solo modo ultrawide (≥1900 px). */
+@media (min-width: 1900px) {
+  /* Tarjetas de cliente en 2 columnas (3 desde 2600) en vez de filas de 2400 px. */
+  .rcp-lista { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px !important; align-items: stretch; }
+}
+@media (min-width: 2600px) {
+  .rcp-lista { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

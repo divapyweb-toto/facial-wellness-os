@@ -26,6 +26,7 @@ import { calcularVinculos, METODOS } from '../../lib/vinculacion'
 import {
   Link2, AlertTriangle, CheckCircle, Search, RefreshCw, X, Ban, Package, Truck,
 } from 'lucide-react'
+import './vinculos.css'
 
 const COLS_ENT = 'nro_guia_pap, n_referencia, transportadora, estado_pap, categoria, motivo, importe, ciudad, producto, fecha_ingreso, fecha_entrega, venta_id, vinculo_metodo, vinculo_at, telefono_courier, nombre_courier, direccion_courier'
 const COLS_VTA = 'id, n_referencia, fecha, cliente_nombre, cliente_telefono, ciudad, producto_nombre, cantidad, total, estado'
@@ -333,10 +334,14 @@ export default function VinculosPage() {
             <div className="empty-state-title">No hay nada pendiente</div>
             <div className="empty-state-desc">Todas las guías están pegadas a su venta o marcadas como sin venta.</div>
           </div>
-        ) : pendientes.map(item => (
-          <FilaPendiente key={item.nro_guia_pap} item={item} ventas={ventas}
-            onConfirmar={confirmar} onSinVenta={marcarSinVenta} guardando={guardando} />
-        ))
+        ) : (
+          <div className="vin-lista">
+            {pendientes.map(item => (
+              <FilaPendiente key={item.nro_guia_pap} item={item} ventas={ventas}
+                onConfirmar={confirmar} onSinVenta={marcarSinVenta} guardando={guardando} />
+            ))}
+          </div>
+        )
       )}
 
       {!cargando && !error && tab === 'nombre' && (
@@ -357,6 +362,7 @@ export default function VinculosPage() {
                 Están bien salvo prueba en contrario — revisalas si algún número no cierra.
               </span>
             </div>
+            <div className="vin-lista vin-lista-3">
             {porNombre.map(e => {
               const v = ventaPorId.get(e.venta_id)
               return (
@@ -388,6 +394,7 @@ export default function VinculosPage() {
                 </div>
               )
             })}
+            </div>
           </>
         )
       )}

@@ -33,6 +33,7 @@ import {
   Search, X, ArrowLeft, Copy, CheckCircle, AlertTriangle, Clock,
   RefreshCw, MapPin, Package, Phone, Truck, Wallet, MessageCircle, Hash,
 } from 'lucide-react'
+import './reclamos.css'
 
 // Caché de sesión. Reclamos se abre con el cliente esperando del otro lado, y
 // cada entrada volvía a bajar ~1.400 filas de `ventas` + `entregas`. En el
@@ -61,7 +62,7 @@ function Dato({ icono: Icono, label, children, color }) {
 
 function Seccion({ titulo, children }) {
   return (
-    <div className="card" style={{ padding: 14, marginBottom: 12 }}>
+    <div className="card rec-seccion" style={{ padding: 14, marginBottom: 12 }}>
       <div className="section-label" style={{ marginBottom: 6 }}>{titulo}</div>
       {children}
     </div>
@@ -94,7 +95,7 @@ function Ficha({ pedido, onVolver }) {
   const motivosVisibles = MOTIVOS.filter(m => !m.soloSiEntregado || est.label === 'Entregado')
 
   return (
-    <div className="fade-in">
+    <div className="fade-in rec-ficha">
       <button className="btn btn-ghost btn-sm" onClick={onVolver} style={{ marginBottom: 12 }}>
         <ArrowLeft size={15} /> Volver a la búsqueda
       </button>
@@ -395,7 +396,7 @@ export default function ReclamosPage() {
 
       {/* ── Buscador ── */}
       <div style={{ position: 'sticky', top: 0, zIndex: 5, background: 'var(--bg-base)', paddingBottom: 10 }}>
-        <div className="search-field">
+        <div className="search-field rec-buscar">
           <Search size={19} />
           <input
             ref={inputRef}
@@ -454,9 +455,11 @@ export default function ReclamosPage() {
                 {resultados.length} {resultados.length === 1 ? 'coincidencia' : 'coincidencias'}
                 {resultados[0]?._motivo ? ` · mejor coincidencia por ${resultados[0]._motivo}` : ''}
               </div>
-              {resultados.map(p => (
-                <FilaResultado key={p.clave} pedido={p} onClick={() => setElegido(p)} />
-              ))}
+              <div className="rec-resultados">
+                {resultados.map(p => (
+                  <FilaResultado key={p.clave} pedido={p} onClick={() => setElegido(p)} />
+                ))}
+              </div>
             </>
           )}
         </>

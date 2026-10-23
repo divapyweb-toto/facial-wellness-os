@@ -77,6 +77,8 @@ export default function CalculadoraPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
         {/* Panel izquierdo: inputs */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Ultrawide (≥1900 px): Producto y Publicidad lado a lado. Abajo de 1900 este envoltorio no existe. */}
+          <div className="ultra-contents ultra-grid ultra-estirar">
           <div className="card">
             <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Package size={15} color="var(--accent)" /> Producto
@@ -119,6 +121,7 @@ export default function CalculadoraPage() {
                 <input className="form-input" type="number" {...f('ventas_estimadas')} placeholder="10" />
               </div>
             </div>
+          </div>
           </div>
         </div>
 

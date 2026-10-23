@@ -58,3 +58,12 @@
   .may-resumen > div:not(.alert) { flex-direction: column; gap: 2px; }
   .may-resumen > div:not(.alert) > span { width: auto; }
 }
+
+/* ── Modo ultrawide (≥1900 px): formulario a la izquierda, lista de pedidos a la derecha ── */
+@media (min-width: 1900px) {
+  .may-pagina { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); column-gap: 24px; align-items: start; }
+  .may-pagina > * { grid-column: 1 / -1; }
+  .may-pagina > .may-form { grid-column: 1; }
+  .may-pagina > .may-lista { grid-column: 2; }
+  .may-lista > .may-lista-head { margin-top: 0; }
+}

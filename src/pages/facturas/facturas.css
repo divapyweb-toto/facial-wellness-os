@@ -63,3 +63,11 @@
 .fac-ret-head .fac-ret-ayuda { margin: 0; }
 .fac-tab-n-alerta { color: var(--yellow); font-weight: 700; }
 .fac-ret-btn-movil { width: 100%; min-height: 44px; justify-content: center; margin-top: 4px; }
+
+/* ── Modo ultrawide (≥1900 px): KPIs y total del mes lado a lado ── */
+@media (min-width: 1900px) {
+  .fac-pagina { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 16px; align-items: stretch; }
+  .fac-pagina > * { grid-column: 1 / -1; }
+  .fac-pagina > .fac-kpis { grid-column: 1; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 16px; }
+  .fac-pagina > .fac-total { grid-column: 2; }
+}

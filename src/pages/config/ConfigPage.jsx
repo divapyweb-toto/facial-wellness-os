@@ -8,6 +8,7 @@ import { Plus, Edit2, X, Save, Package, CreditCard, Truck, Users, Shield, Trash2
 import { getConfig, guardarConfigLote, cargarConfig, getEnvioCliente, getFlete, DEFAULTS, getEstadoConfig, validarReglas } from '../../lib/config'
 import { TARIFAS_LUCERO_INFO, VELOCIDADES_LUCERO, claveCiudadLucero } from '../../lib/transportadoras'
 import { CLAVE_CONFIRMACION, CONFIRMACION_DEFAULTS, leerConfirmacion, validarConfirmacion, armarConfirmacionGuardar, textoAyudaConfirmacion } from '../../lib/confirmacion'
+import './config.css'
 
 // ─── Modal producto ───────────────────────────────────────
 function ProductoModal({ producto, onClose, onSaved }) {
@@ -367,7 +368,7 @@ function ReglasNegocio() {
   const pc = { form, set, setNum, restaurar } // props de <Campo>
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 640 }}>
+    <div className="cfg-reglas" style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 640 }}>
       {/* De dónde vienen los valores que estás viendo. El fallo de lectura era
           invisible: corrías con los de fábrica creyendo que regía lo guardado. */}
       {estadoCfg.error ? (
@@ -823,7 +824,7 @@ export default function ConfigPage() {
 
       {/* MÉTODOS DE PAGO */}
       {activeTab === 'pago' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className="cfg-tabla-corta" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn btn-primary" onClick={() => setModal({ tipo: 'metodo', subtipo: 'pago', item: null })}>
               <Plus size={14} /> Agregar método
@@ -859,7 +860,7 @@ export default function ConfigPage() {
 
       {/* MÉTODOS DE ENVÍO */}
       {activeTab === 'envio' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className="cfg-tabla-corta" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn btn-primary" onClick={() => setModal({ tipo: 'metodo', subtipo: 'envio', item: null })}>
               <Plus size={14} /> Agregar transportadora
@@ -897,7 +898,7 @@ export default function ConfigPage() {
 
       {/* USUARIOS */}
       {activeTab === 'usuarios' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div className="cfg-tabla-corta" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn btn-primary" onClick={() => setModal({ tipo: 'usuario' })}>
               <Plus size={14} /> Agregar usuario

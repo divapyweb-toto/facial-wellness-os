@@ -356,6 +356,8 @@ export default function SeguimientoPage() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* Ultrawide: tarjetas en 2 columnas; por debajo de 1900 px este envoltorio no existe. */}
+          <div className="ultra-grid ultra-estirar ultra-contents">
           {visibles.map(v => {
             const plantilla = plantillaPorVenta[v.id] || v.plantillaSugerida
             const ocupado = guardando === v.id
@@ -470,6 +472,7 @@ export default function SeguimientoPage() {
               </div>
             )
           })}
+          </div>
         </div>
       )}
     </div>

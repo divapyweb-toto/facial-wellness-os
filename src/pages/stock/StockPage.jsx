@@ -390,6 +390,8 @@ export default function StockPage() {
         </div>
       </div>
 
+      {/* Ultrawide: reposición sugerida a la izquierda y los números al lado. Abajo de 1900 px se ve igual. */}
+      <div className="ultra-split" style={{ gap: 16 }}>
       {necesitanReposicion.length > 0 && (
         <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--border)' }}>
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-hover)' }}>
@@ -426,6 +428,7 @@ export default function StockPage() {
         </div>
       )}
 
+      <div className="ultra-rail ultra-rail-libre" style={{ gridColumn: necesitanReposicion.length > 0 ? 2 : '1 / -1' }}>
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-label"><Package size={11} />Valor inventario</div>
@@ -442,6 +445,8 @@ export default function StockPage() {
           <div className="kpi-value">{productos.reduce((s, p) => s + (p.es_combo ? 0 : p.stock_actual), 0)}</div>
           <div className="kpi-sub">En todos los productos</div>
         </div>
+      </div>
+      </div>
       </div>
 
       <div className="tabs" style={{ alignSelf: 'flex-start' }}>
@@ -521,11 +526,12 @@ export default function StockPage() {
           </div>
 
           {/* Cards layout (visible always, table hidden via CSS on mobile) */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {/* Ultrawide: tarjetas en 2-3 columnas (abajo de 1900 px, la misma columna con gap 8) */}
+          <div className="ultra-grid ultra-grid-3 ultra-estirar" style={{ gap: 8 }}>
             {loading ? (
               [...Array(4)].map((_, i) => <div key={i} className="skeleton" style={{ height: 80, borderRadius: 10 }} />)
             ) : productos.length === 0 ? (
-              <div className="empty-state">
+              <div className="empty-state ultra-span">
                 <div className="empty-state-icon"><Package size={22} /></div>
                 <p className="empty-state-title">Sin productos</p>
                 <button className="btn btn-primary btn-sm" onClick={() => setModalProducto('nuevo')}>
@@ -611,15 +617,17 @@ export default function StockPage() {
       )}
 
       {activeTab === 'conteo' && (
-        <>
-          <div className="card" style={{ padding: '14px 18px' }}>
+        <div className="ultra-split" style={{ gap: 16 }}>
+          {/* Ultrawide: tabla de conteo a la izquierda; explicación, resumen y botón Aplicar en el riel */}
+          <div className="ultra-rail ultra-contents" style={{ gridColumn: 2, gridRow: 1 }}>
+          <div className="card ultra-o1" style={{ padding: '14px 18px' }}>
             <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
               Contá la mercadería con la mano y cargá el número real. El sistema calcula la diferencia y deja un <strong>ajuste auditable</strong> en el historial — nunca sobrescribe en silencio. Los productos que dejes vacíos no se tocan. Los combos no aparecen: se arman de sus componentes.
             </p>
           </div>
 
           {resumenConteo.contados > 0 && (
-            <div className="kpi-grid">
+            <div className="kpi-grid ultra-o2">
               <div className="kpi-card">
                 <div className="kpi-label">Contados</div>
                 <div className="kpi-value">{resumenConteo.contados}<span style={{ fontSize: 14, color: 'var(--text-muted)' }}>/{resumenConteo.productos}</span></div>
@@ -645,7 +653,21 @@ export default function StockPage() {
             </div>
           )}
 
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="ultra-o4" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button className="btn btn-primary" onClick={() => setConfirmConteo(true)} disabled={!resumenConteo.hayCambios || aplicandoConteo}>
+              <CheckCircle size={15} /> Aplicar conteo
+            </button>
+            {Object.keys(conteos).length > 0 && (
+              <button className="btn btn-ghost" onClick={() => setConteos({})} disabled={aplicandoConteo}>Limpiar</button>
+            )}
+            {!resumenConteo.hayCambios && resumenConteo.contados > 0 && (
+              <span style={{ fontSize: 12, color: 'var(--green)' }}>Todo coincide con el sistema. Nada que ajustar.</span>
+            )}
+          </div>
+          </div>
+
+          <div className="ultra-main ultra-contents" style={{ gridColumn: 1, gridRow: 1 }}>
+          <div className="card ultra-o3" style={{ padding: 0, overflow: 'hidden' }}>
             <div className="table-wrapper">
               <table className="tabla-responsive">
                 <thead>
@@ -690,18 +712,8 @@ export default function StockPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button className="btn btn-primary" onClick={() => setConfirmConteo(true)} disabled={!resumenConteo.hayCambios || aplicandoConteo}>
-              <CheckCircle size={15} /> Aplicar conteo
-            </button>
-            {Object.keys(conteos).length > 0 && (
-              <button className="btn btn-ghost" onClick={() => setConteos({})} disabled={aplicandoConteo}>Limpiar</button>
-            )}
-            {!resumenConteo.hayCambios && resumenConteo.contados > 0 && (
-              <span style={{ fontSize: 12, color: 'var(--green)' }}>Todo coincide con el sistema. Nada que ajustar.</span>
-            )}
           </div>
-        </>
+        </div>
       )}
 
       {activeTab === 'historial' && (

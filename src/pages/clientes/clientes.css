@@ -1,0 +1,4 @@
+/* src/pages/clientes/clientes.css — solo modo ultrawide (≥1900 px). */
+@media (min-width: 1900px) {
+  .cli-buscar { max-width: 720px; }
+}

@@ -2216,10 +2216,12 @@ export default function DespachoPagina() {
           MODO: DESDE VENTAS
       ═══════════════════════════════════════════════════ */}
       {modo === 'ventas' && (
-        <>
+        <div className="ultra-split" style={{ gap: 20 }}>
+          {/* Ultrawide: tabla a la izquierda, avisos + barra de acción en el riel. Abajo de 1900 px los envoltorios no existen y se ve igual. */}
+          <div className="ultra-rail ultra-contents" style={{ gridColumn: 2, gridRow: 1 }}>
           {/* 12-10: pedidos de Voltra sin cobertura — no se cargan con PaP por defecto */}
           {voltraSinCobertura.length > 0 && (
-            <div className="alert" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+            <div className="alert ultra-o1" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
               <AlertTriangle size={14} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
               <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
                 <strong>{voltraSinCobertura.length} pedido{voltraSinCobertura.length === 1 ? '' : 's'} de Voltra sin cobertura: decidir a mano.</strong>{' '}
@@ -2234,7 +2236,7 @@ export default function DespachoPagina() {
           {pedidosParados.length > 0 && (() => {
             const r = resumenPedidosParados(pedidosParados)
             return (
-              <div className="alert" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+              <div className="alert ultra-o2" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
                 <AlertTriangle size={14} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
                 <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
                   <strong>{r.n} pedido{r.n === 1 ? '' : 's'} sin despachar hace +24 h:</strong>{' '}{r.texto}.
@@ -2245,7 +2247,7 @@ export default function DespachoPagina() {
 
           {/* 21-10: cancelado por el cliente pero con el paquete ya en el courier: no se cancela solo */}
           {canceladosEnCourier.length > 0 && (
-            <div className="alert" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+            <div className="alert ultra-o3" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
               <AlertTriangle size={14} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
               <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
                 <strong>Cancelado con paquete en courier:</strong>{' '}
@@ -2260,7 +2262,7 @@ export default function DespachoPagina() {
             const sinDir = pedidosSeleccionados.filter(p => !p.direccion).length
             if (selVentas.size === 0 || sinDir === 0) return null
             return (
-              <div className="alert" style={{ background: 'var(--yellow-dim)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
+              <div className="alert ultra-o4" style={{ background: 'var(--yellow-dim)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
                 <AlertTriangle size={14} color="var(--yellow)" style={{ flexShrink: 0, marginTop: 1 }} />
                 <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
                   {sinDir} de las {selVentas.size} ventas seleccionadas no tienen dirección guardada (ventas viejas cargadas antes de esta función). En la Cabecera y las Guías ese campo saldrá vacío — completalo a mano en Excel, o editá la venta para cargarle la dirección.
@@ -2270,7 +2272,7 @@ export default function DespachoPagina() {
           })()}
 
           {/* Barra de acción */}
-          <div className="card card-sm" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px' }}>
+          <div className="card card-sm ultra-o5" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px' }}>
             <span style={{ fontSize: 13 }}>
               {selVentas.size > 0
                 ? <><b style={{ color: 'var(--text-primary)' }}>{selVentas.size}</b><span style={{ color: 'var(--text-muted)' }}> seleccionadas</span> · <b style={{ color: 'var(--green)' }}>{formatGs(valorSeleccionado)}</b></>
@@ -2315,8 +2317,11 @@ export default function DespachoPagina() {
             </div>
           </div>
 
+          </div>
+
           {/* Tabla de ventas pendientes */}
-          <div className="card" style={{ padding: 0 }}>
+          <div className="ultra-main ultra-contents" style={{ gridColumn: 1, gridRow: 1 }}>
+          <div className="card ultra-o6" style={{ padding: 0 }}>
             <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <Search size={13} color="var(--text-muted)" />
               <input
@@ -2413,7 +2418,8 @@ export default function DespachoPagina() {
               </div>
             )}
           </div>
-        </>
+          </div>
+        </div>
       )}
 
       {/* ═══════════════════════════════════════════════════
@@ -2421,6 +2427,8 @@ export default function DespachoPagina() {
       ═══════════════════════════════════════════════════ */}
       {modo === 'csv' && step === 'upload' && (
         <>
+          {/* Ultrawide: instrucciones y zona del CSV lado a lado */}
+          <div className="ultra-split ultra-split-mitad" style={{ gap: 20, alignItems: 'stretch' }}>
           <div className="card">
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>¿Cómo exportar desde Shopify?</div>
             {['Shopify → Pedidos','Seleccioná los pedidos a despachar','Exportar → "Archivo CSV sin formato"','Subí ese archivo acá'].map((p,i) => (
@@ -2442,6 +2450,7 @@ export default function DespachoPagina() {
             <Upload size={40} color="var(--text-muted)" style={{ margin: '0 auto 12px' }} />
             <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Arrastrá el CSV de Shopify acá</div>
             <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>o hacé clic para seleccionar</div>
+          </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             {[
@@ -2516,8 +2525,11 @@ export default function DespachoPagina() {
             </div>
           )}
 
+          {/* Ultrawide: tabla de pedidos a la izquierda; números, bultos y las 3 acciones en el riel */}
+          <div className="ultra-split" style={{ gap: 20 }}>
+          <div className="ultra-rail ultra-rail-libre ultra-contents" style={{ gridColumn: 2, gridRow: 1 }}>
           {/* KPIs */}
-          <div className="kpi-grid">
+          <div className="kpi-grid ultra-o1">
             <div className="kpi-card">
               <div className="kpi-label">📦 Para despachar</div>
               <div className="kpi-value accent">{paraDespacho.length}</div>
@@ -2542,7 +2554,7 @@ export default function DespachoPagina() {
 
           {/* Barra de estados */}
           {stats.total > 0 && (
-            <div className="card card-sm">
+            <div className="card card-sm ultra-o2">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>Distribución de estados</span>
               </div>
@@ -2593,7 +2605,7 @@ export default function DespachoPagina() {
             </div>
           )}
           {paraDespacho.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div className="ultra-o3" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div className="card card-sm">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, marginBottom: 12 }}>
                   <Package size={15} color="var(--accent)" /> Bultos a preparar
@@ -2620,7 +2632,7 @@ export default function DespachoPagina() {
           )}
 
           {/* 3 acciones */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div className="ultra-o4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <div className="card" style={{ textAlign: 'center', padding: '20px 16px' }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--purple-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px' }}>
                 <ShoppingBag size={22} color="var(--purple)" />
@@ -2677,8 +2689,11 @@ export default function DespachoPagina() {
             </div>
           </div>
 
+          </div>
+
           {/* Tabla con búsqueda */}
-          <div className="card" style={{ padding: 0 }}>
+          <div className="ultra-main ultra-contents" style={{ gridColumn: 1, gridRow: 1 }}>
+          <div className="card ultra-o5" style={{ padding: 0 }}>
             <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <Eye size={14} color="var(--text-muted)" />
               <span style={{ fontSize: 13, fontWeight: 600 }}>Todos los pedidos</span>
@@ -2912,6 +2927,8 @@ export default function DespachoPagina() {
                 </tbody>
               </table>
             </div>
+          </div>
+          </div>
           </div>
         </>
       )}
