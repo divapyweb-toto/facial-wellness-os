@@ -162,6 +162,11 @@ export interface Deps {
   contextoRecompraFw?(telefono: string | null): Promise<{ producto: string; dias: number; entrega?: { nombre: string; ciudad: string; direccion: string } } | null>;
   /** pago-qr-webhook/io.ts ofrecerCobroQR (solo se llama con config_wa['ola4.qr'].activo). */
   ofrecerCobroQR?(orderId: number): Promise<{ ok: true; texto: string } | { ok: false; motivo: string }>;
+  /**
+   * 23-10 (Enrique): un mensaje del pedido (confirmación, recordatorio) rebotó con 131026 (el número no tiene WhatsApp o
+   * está mal) → aviso inmediato a Enrique para llamarlo, con los posibles WhatsApp reales (candidatosWhatsapp). Una vez por pedido.
+   */
+  avisarSinWhatsapp?(waMessageId: string): Promise<void>;
   /** cliente_id del mensaje saliente (para el 131050 que llega en el estado 'failed'). */
   clienteDeMensaje?(waMessageId: string): Promise<string | null>;
   /**
@@ -712,7 +717,44 @@ export async function procesarEstado(s: EstadoMeta, deps: Deps): Promise<void> {
       if (!r.ok) throw new Error(`registrarBaja (131050): ${r.error}`);
     }
   }
+  if (s.status === "failed" && tieneCodigo(s.errors, 131026) && deps.avisarSinWhatsapp) {
+    await deps.avisarSinWhatsapp(s.id).catch((e) => console.error("aviso sin WhatsApp:", e instanceof Error ? e.message : e));
+  }
 }
+
+/**
+ * 23-10: posibles WhatsApp reales de un cliente cuyo número rebotó: otro cliente con el número a un solo dígito de
+ * distancia (error de tipeo) o con el mismo primer nombre que escribió en los últimos 7 días. Puro. Teléfonos E.164.
+ */
+export function candidatosWhatsapp(
+  telefono: string,
+  nombre: string,
+  clientes: Array<{ telefono: string | null; nombre: string | null; ultima_vez: string | null }>,
+  ahora: Date,
+): Array<{ telefono: string; motivo: "un_digito" | "mismo_nombre"; ultima_vez: string | null }> {
+  const nueve = (t: string) => t.replace(/\D/g, "").slice(-9);
+  const base = nueve(telefono);
+  const primer = (n: string | null) => (n ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim().split(/\s+/)[0] ?? "";
+  const quien = primer(nombre);
+  const out: Array<{ telefono: string; motivo: "un_digito" | "mismo_nombre"; ultima_vez: string | null }> = [];
+  for (const c of clientes) {
+    if (!c.telefono) continue;
+    const n = nueve(c.telefono);
+    if (n.length !== 9 || n === base) continue;
+    let dif = 0;
+    for (let i = 0; i < 9; i++) if (n[i] !== base[i]) dif++;
+    const reciente = !!c.ultima_vez && ahora.getTime() - Date.parse(c.ultima_vez) < 7 * 86_400_000;
+    if (dif === 1) out.push({ telefono: c.telefono, motivo: "un_digito", ultima_vez: c.ultima_vez });
+    else if (quien.length >= 3 && primer(c.nombre) === quien && reciente) out.push({ telefono: c.telefono, motivo: "mismo_nombre", ultima_vez: c.ultima_vez });
+  }
+  return out.sort((a, b) => (a.motivo === b.motivo ? 0 : a.motivo === "un_digito" ? -1 : 1)).slice(0, 3);
+}
+
+/** "+595981123456" → "0981 123 456". */
+export const telefonoLocal = (t: string) => {
+  const n = t.replace(/\D/g, "").slice(-9);
+  return n.length === 9 ? `0${n.slice(0, 3)} ${n.slice(3, 6)} ${n.slice(6)}` : t;
+};
 
 function tieneCodigo(errores: unknown[] | undefined, codigo: number): boolean {
   return Array.isArray(errores) && errores.some((e) => Number((e as { code?: unknown })?.code) === codigo);

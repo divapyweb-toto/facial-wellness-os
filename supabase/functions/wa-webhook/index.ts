@@ -16,7 +16,7 @@ import { resolverLinkMapas } from "../_shared/link_mapas.ts";
 import { registrarBaja } from "../recompra/baja.ts";
 import { ofrecerCobroQR } from "../pago-qr-webhook/io.ts";
 import { cargarTarifasCourier } from "../_shared/plazo_zona.ts";
-import { type Deps, manejarRequest, type MensajeMeta, type Pedido } from "./procesar.ts";
+import { candidatosWhatsapp, type Deps, manejarRequest, type MensajeMeta, type Pedido, telefonoLocal } from "./procesar.ts";
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
 
@@ -461,6 +461,36 @@ export const depsReales: Deps = {
       .upsert({ hito }, { onConflict: "hito", ignoreDuplicates: true }).select("hito");
     falla("hito de testimonios", error);
     return (data?.length ?? 0) > 0;
+  },
+
+  // 23-10 (Enrique): número sin WhatsApp en un mensaje del pedido → Telegram para llamar (una vez por pedido).
+  async avisarSinWhatsapp(waMessageId) {
+    const sb = db();
+    const { data: msg } = await sb.from("wa_mensajes").select("cliente_id,plantilla:contenido->template->>name").eq("wa_message_id", waMessageId).maybeSingle();
+    const plantilla = String(msg?.plantilla ?? "");
+    if (!msg?.cliente_id || !/^voltra_(confirmacion_pedido|recordatorio_confirmacion|ultimo_aviso_confirmacion)/.test(plantilla)) return;
+    const { data: ped } = await sb.from("shopify_pedidos").select("shopify_order_id,nombre,telefono,total,creado_en,raw")
+      .eq("cliente_id", msg.cliente_id).eq("es_borrador", false).order("creado_en", { ascending: false }).limit(1).maybeSingle();
+    if (!ped?.telefono) return;
+    if (!(await guardarEventoCrudo(FUENTE, `sin_whatsapp:${ped.shopify_order_id}`, { wamid: waMessageId }))) return; // ya avisado
+    const raw = (ped.raw ?? {}) as { shipping_address?: { first_name?: string; city?: string }; line_items?: Array<{ title?: string; quantity?: number }> };
+    const nombre = raw.shipping_address?.first_name ?? "";
+    const desde = new Date(Date.now() - 7 * 86_400_000).toISOString();
+    const [todos, convs] = await Promise.all([
+      sb.from("wa_clientes").select("id,telefono,nombre").not("telefono", "is", null).limit(20000),
+      sb.from("wa_conversaciones").select("cliente_id,ultima_entrada_en").gte("ultima_entrada_en", desde).limit(5000),
+    ]);
+    const ultima = new Map<string, string>();
+    for (const c of convs.data ?? []) if (c.ultima_entrada_en && (!ultima.has(c.cliente_id) || c.ultima_entrada_en > ultima.get(c.cliente_id)!)) ultima.set(c.cliente_id, c.ultima_entrada_en);
+    const cands = candidatosWhatsapp(ped.telefono, nombre, (todos.data ?? []).map((c) => ({ telefono: c.telefono, nombre: c.nombre, ultima_vez: ultima.get(c.id) ?? null })), new Date());
+    const productos = (raw.line_items ?? []).map((l) => `${l.quantity ?? 1} ${(l.title ?? "").split(":")[0]}`).join(" + ");
+    const hora = new Date(ped.creado_en).toLocaleTimeString("es-PY", { timeZone: "America/Asuncion", hour: "2-digit", minute: "2-digit" });
+    const lineasCand = cands.map((c) => `• ${telefonoLocal(c.telefono)} — ${c.motivo === "un_digito" ? "número a 1 dígito del que cargó" : "mismo nombre, escribió esta semana"}`);
+    await avisar(escaparHtml(
+      `📵 ${ped.nombre} sin WhatsApp — ${nombre}, ${raw.shipping_address?.city ?? ""}, ${productos}, ${Number(ped.total).toLocaleString("es-PY")} (${hora}).\n` +
+      `WhatsApp no entrega al número que cargó: ${telefonoLocal(ped.telefono)}\n👉 Llamalo o mandale SMS para confirmar.` +
+      (lineasCand.length ? `\nPosible WhatsApp real:\n${lineasCand.join("\n")}\nSi es él, pasame el OK y le mando la confirmación ahí.` : ""),
+    ));
   },
 
   async clienteDeMensaje(waMessageId) {
