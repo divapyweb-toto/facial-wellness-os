@@ -2,7 +2,7 @@
 // Única puerta a la Telegram Bot API. Secretos (los carga Enrique):
 // TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET.
 // Verificado contra core.telegram.org/bots/api (Bot API 10.3, 24-08-2026).
-import { type BotonTelegram, LIMITE_LEYENDA_TELEGRAM, recortar } from "./telegram_formato.ts";
+import { type BotonTelegram, htmlATextoPlano, LIMITE_LEYENDA_TELEGRAM, recortar } from "./telegram_formato.ts";
 
 export type { BotonTelegram } from "./telegram_formato.ts";
 
@@ -59,13 +59,12 @@ export async function llamarTelegram(
 export async function avisar(texto: string, botones?: BotonTelegram[][]): Promise<ResultadoTelegram> {
   const chatId = env("TELEGRAM_CHAT_ID");
   if (!chatId) return { ok: false, error: "Falta el secreto TELEGRAM_CHAT_ID" };
-  const r = await llamarTelegram("sendMessage", {
-    chat_id: chatId,
-    text: recortar(texto),
-    parse_mode: "HTML",
-    link_preview_options: { is_disabled: true },
-    reply_markup: aInlineKeyboard(botones),
-  });
+  const base = { chat_id: chatId, link_preview_options: { is_disabled: true }, reply_markup: aInlineKeyboard(botones) };
+  let r = await llamarTelegram("sendMessage", { ...base, text: recortar(texto), parse_mode: "HTML" });
+  // 23-10: si Telegram no entiende el HTML, el aviso sale igual en texto plano (antes se perdía entero).
+  if (!r.ok && /can't parse entities/i.test(r.error ?? "")) {
+    r = await llamarTelegram("sendMessage", { ...base, text: recortar(htmlATextoPlano(texto)) });
+  }
   if (!r.ok) return { ok: false, error: r.error };
   return { ok: true, message_id: (r.result as { message_id?: number })?.message_id };
 }

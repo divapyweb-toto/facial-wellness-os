@@ -16,6 +16,7 @@ import {
   rangoDiaAnterior,
 } from "./logica.ts";
 import { _configurarClaude, llamarClaudeLote } from "../_shared/claude.ts";
+import { etiquetasAbiertas, partirAviso } from "../_shared/telegram_formato.ts";
 
 const AHORA = new Date("2026-10-07T10:30:00Z"); // 7:30 en Asunción (UTC-3)
 
@@ -287,4 +288,25 @@ Deno.test("integración con llamarClaudeLote de G1 en modo simulado (sin red)", 
   } finally {
     _configurarClaude();
   }
+});
+
+// 23-10: el aviso del 22-10 pasó los 4096 caracteres; recortar() dejaba un <i> abierto y Telegram lo rechazaba.
+Deno.test("aviso de un día movido: se parte en mensajes válidos y no pierde ningún caso", () => {
+  const raras = Array.from({ length: 15 }, (_, i) => ({
+    conv: { id: `conv-${i}`, estado: "abierta", cliente_id: `cli-${i}`, nombre: `Ana Prueba ${i}`, telefono: "+595981000111", wa_username: null },
+    senales: ["venta_perdida" as const],
+    detalles: Array.from({ length: 4 }, () => "Venta perdida: quiso comprar y no hubo pedido & no derivó ".repeat(4)),
+    resumen: "Quiso 2 parches & preguntó por el envío ".repeat(6),
+  }));
+  // deno-lint-ignore no-explicit-any
+  const texto = armarAviso("2026-10-22", 60, raras as any, { ...CFG_POR_DEFECTO, url_bandeja: "https://voltra.test/bandeja?x=1" }, ["Lote simulado"]);
+  assert(texto.length > 4096);
+  const partes = partirAviso(texto);
+  assert(partes.length >= 2);
+  for (const p of partes) {
+    assert(p.length <= 4096);
+    assertEquals(etiquetasAbiertas(p), []);
+  }
+  for (let i = 0; i < 15; i++) assertEquals(partes.filter((p) => p.includes(`<b>Ana Prueba ${i}</b>`)).length, 1);
+  assertStringIncludes(partes.at(-1)!, "Lote simulado");
 });

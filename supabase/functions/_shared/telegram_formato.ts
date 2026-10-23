@@ -35,11 +35,102 @@ export function escaparAtributo(s: unknown): string {
   return escaparHtml(s).replace(/"/g, "&quot;");
 }
 
-/** Recorta sin pasarse del límite de Telegram, avisando que se cortó. */
+/** Etiquetas que acepta el modo HTML de la Bot API (las que hay que cerrar si el corte las deja abiertas). */
+const ETIQUETAS_TELEGRAM = new Set([
+  "b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "a", "code", "pre", "span", "tg-spoiler", "tg-emoji", "blockquote",
+]);
+
+/** Etiquetas que quedan abiertas al final de `html`, en orden de apertura. */
+export function etiquetasAbiertas(html: string): string[] {
+  const pila: string[] = [];
+  for (const m of html.matchAll(/<(\/?)([a-zA-Z][\w-]*)[^<>]*>/g)) {
+    const nombre = m[2].toLowerCase();
+    if (!ETIQUETAS_TELEGRAM.has(nombre)) continue;
+    if (!m[1]) pila.push(nombre);
+    else {
+      const i = pila.lastIndexOf(nombre);
+      if (i >= 0) pila.splice(i, 1);
+    }
+  }
+  return pila;
+}
+
+/**
+ * Corta `texto` en `n` caracteres sin dejar basura: prefiere el último salto de línea (si no pierde
+ * más de la mitad), y saca una etiqueta a medio escribir ("<a href=..."), una entidad partida ("&am")
+ * y medio emoji (par sustituto).
+ */
+function cortarSeguro(texto: string, n: number): string {
+  let s = texto.slice(0, Math.max(0, n));
+  const salto = s.lastIndexOf("\n");
+  if (salto >= n / 2) s = s.slice(0, salto);
+  const menor = s.lastIndexOf("<");
+  if (menor > s.lastIndexOf(">") && /^<\/?([a-zA-Z][^<>]*)?$/.test(s.slice(menor))) s = s.slice(0, menor);
+  s = s.replace(/&[#a-zA-Z0-9]{0,10}$/, "");
+  if (/[\uD800-\uDBFF]$/.test(s)) s = s.slice(0, -1);
+  return s;
+}
+
+/**
+ * Recorta sin pasarse del límite de Telegram, avisando que se cortó.
+ * 23-10: a prueba de HTML. Antes cortaba a ciegas y dejaba un <i> sin cerrar: Telegram rechazaba el
+ * aviso entero ("can't parse entities") y la auditoría del 22-10 nunca llegó.
+ */
 export function recortar(texto: string, limite = LIMITE_TEXTO_TELEGRAM): string {
   if (texto.length <= limite) return texto;
   const cola = "\n…(recortado)";
-  return texto.slice(0, limite - cola.length) + cola;
+  let n = limite - cola.length;
+  while (n > 0) {
+    const cuerpo = cortarSeguro(texto, n);
+    const cierres = etiquetasAbiertas(cuerpo).reverse().map((t) => `</${t}>`).join("");
+    const salida = cuerpo + cierres + cola;
+    if (salida.length <= limite) return salida;
+    n -= salida.length - limite;
+  }
+  return cola.slice(1, limite + 1);
+}
+
+/** HTML de Telegram → texto plano (para reintentar un aviso sin parse_mode). */
+export function htmlATextoPlano(html: string): string {
+  return html
+    .replace(/<a\s[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, txt) => `${txt} (${href})`)
+    .replace(/<\/?[a-zA-Z][\w-]*[^<>]*>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Parte un aviso largo en varios mensajes que entran en el límite, cortando solo entre líneas y, si
+ * se puede, antes de una línea que empieza con "• " (un caso no queda partido en dos mensajes).
+ * Cada línea del aviso tiene que traer sus etiquetas cerradas. Una línea más larga que el límite se recorta.
+ */
+export function partirAviso(texto: string, limite = LIMITE_TEXTO_TELEGRAM): string[] {
+  if (texto.length <= limite) return [texto];
+  const reserva = 20; // para el "(sigue 2/3)" de arriba
+  const max = limite - reserva;
+  const bloques: string[] = [];
+  for (const linea of texto.split("\n")) {
+    if (bloques.length && !linea.startsWith("• ")) bloques[bloques.length - 1] += "\n" + linea;
+    else bloques.push(linea);
+  }
+  const partes: string[] = [];
+  let actual = "";
+  const meter = (b: string) => {
+    if (!actual) actual = b;
+    else if (actual.length + 1 + b.length <= max) actual += "\n" + b;
+    else {
+      partes.push(actual);
+      actual = b;
+    }
+  };
+  for (const b of bloques) {
+    if (b.length <= max) meter(b);
+    else for (const l of b.split("\n")) meter(recortar(l, max));
+  }
+  if (actual) partes.push(actual);
+  return partes.length === 1 ? partes : partes.map((p, i) => (i === 0 ? p : `<i>(sigue ${i + 1}/${partes.length})</i>\n${p}`));
 }
 
 /**

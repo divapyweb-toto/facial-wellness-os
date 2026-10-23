@@ -26,6 +26,7 @@ import {
   type TurnoVend,
   type VeredictoHaiku,
 } from "./logica.ts";
+import { partirAviso } from "../_shared/telegram_formato.ts";
 
 export interface EstadoLoteAud {
   id: string;
@@ -182,9 +183,12 @@ export async function ejecutarAuditoria(deps: DepsAuditoria, op: OpcionesAuditor
     costo_usd: costo,
   };
   if (raras.length) {
-    const r = await deps.avisar(armarAviso(rango.fecha, finales.length, raras, cfg as CfgAuditoria, notas));
-    // Sin aviso no se marca como informado: el próximo cron lo reintenta.
-    if (!r.ok) throw new Error(`Telegram: ${r.error ?? "falló"}`);
+    // 23-10: un día movido pasa los 4096 caracteres de Telegram → se parte en varios mensajes, sin perder casos.
+    for (const parte of partirAviso(armarAviso(rango.fecha, finales.length, raras, cfg as CfgAuditoria, notas))) {
+      const r = await deps.avisar(parte);
+      // Sin aviso no se marca como informado: el próximo cron lo reintenta.
+      if (!r.ok) throw new Error(`Telegram: ${r.error ?? "falló"}`);
+    }
   }
   await deps.guardarConfig(CLAVE_ESTADO, {
     fecha: rango.fecha,
