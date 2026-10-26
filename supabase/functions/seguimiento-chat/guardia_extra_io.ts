@@ -1,12 +1,13 @@
 // seguimiento-chat/guardia_extra_io.ts · 26-10 (Enrique): guardia de las ofertas extra post-compra.
-// Una vez por día (desde las 8 de Asunción) mide cada oferta activa con fecha `desde` y, si empeoró (guardia_extra.ts),
+// Freno temprano en cada corrida (3+ cancelados entre las primeras 10 ofertas → se apaga ya). Además, una vez por día
+// (desde las 8 de Asunción) mide cada oferta activa con fecha `desde` y, si empeoró (guardia_extra.ts),
 // la apaga sola (config_wa.vendedor.ofertas_extra.<clave>.activo = false) y avisa por Telegram. La línea base son los
 // 30 días antes de `desde`. Los pedidos de los últimos 2 días no cuentan todavía (la cancelación tarda en verse).
 import { db } from "../_shared/db.ts";
 import { partesAsuncion } from "../_shared/horario.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
-import { type DatosGuardia, evaluarGuardia, guardiaDe, type ResultadoGuardia, type Tasa } from "../_shared/vendedor/guardia_extra.ts";
+import { type DatosGuardia, evaluarGuardia, frenoTemprano, guardiaDe, type ResultadoGuardia, type Tasa } from "../_shared/vendedor/guardia_extra.ts";
 
 const DIA = 86_400_000;
 type Fila = Record<string, unknown>;
@@ -82,6 +83,26 @@ export async function datosGuardia(o: { si_lleva: string; tag: string }, desdeOf
   };
 }
 
+/**
+ * 26-10 (Enrique): freno temprano. Las primeras `n` ofertas de esta clave (en orden de envío) → ¿su pedido final terminó
+ * cancelado? (el reemplazado cuenta por el pedido nuevo). Sin esperar 2 días: apenas se cancela, cuenta.
+ */
+export async function canceladosPrimeras(clave: string, desdeOferta: Date, n: number): Promise<boolean[]> {
+  const { data, error } = await db().from("wa_modificaciones_pedido").select("shopify_order_id,nuevo_order_id,estado,datos,creado_en")
+    .gte("creado_en", desdeOferta.toISOString()).order("creado_en", { ascending: true }).limit(500);
+  if (error) throw new Error(`wa_modificaciones_pedido: ${error.message}`);
+  const ofertas = ((data ?? []) as Fila[]).filter((m) => (m.datos as { oferta_extra?: string } | null)?.oferta_extra === clave).slice(0, n);
+  if (!ofertas.length) return [];
+  const ids = ofertas.map((m) => Number(m.estado === "hecho" && m.nuevo_order_id ? m.nuevo_order_id : m.shopify_order_id));
+  const { data: peds, error: e2 } = await db().from("shopify_pedidos").select("shopify_order_id,estado_confirmacion,tags,cancelado_en:raw->>cancelled_at").in("shopify_order_id", ids);
+  if (e2) throw new Error(`shopify_pedidos: ${e2.message}`);
+  const porId = new Map(((peds ?? []) as Fila[]).map((p) => [Number(p.shopify_order_id), p]));
+  return ids.map((id) => {
+    const p = porId.get(id);
+    return !!p && cancelado(p) && !reemplazado(p);
+  });
+}
+
 /** Apaga la oferta en config_wa.vendedor (relee la fila para no pisar otros cambios). */
 async function apagarOferta(clave: string): Promise<void> {
   const { data, error } = await db().from("config_wa").select("valor").eq("clave", "vendedor").single();
@@ -97,19 +118,37 @@ async function apagarOferta(clave: string): Promise<void> {
 /** Una vez por día: mide cada oferta activa con `desde`; si empeoró, la apaga y avisa. */
 export async function correrGuardiaExtra(ahora = new Date()): Promise<Record<string, ResultadoGuardia | string>> {
   const p = partesAsuncion(ahora);
-  if (p.hora < 8) return {};
   const fecha = `${p.anio}-${String(p.mes).padStart(2, "0")}-${String(p.dia).padStart(2, "0")}`;
   const { data } = await db().from("config_wa").select("valor").eq("clave", "vendedor").maybeSingle();
   const v = (data?.valor ?? {}) as Record<string, unknown>;
   const ofertas = (v.ofertas_extra ?? {}) as Record<string, { activo?: boolean; desde?: string; si_lleva?: string; tag?: string }>;
   const activas = Object.entries(ofertas).filter(([, o]) => o?.activo === true && o.desde && o.si_lleva && o.tag);
   if (!activas.length) return {};
-  // Candado diario (eventos_crudos con id único): una sola corrida por día aunque el cron corra cada 10 min.
-  const { error: ya } = await db().from("eventos_crudos").insert({ fuente: "shopify", id_externo: `guardia_extra:${fecha}`, payload: { fecha }, procesado_en: new Date().toISOString() });
-  if (ya) return ya.code === "23505" ? {} : { error: ya.message };
   const cfg = guardiaDe(v.guardia_extra);
   const out: Record<string, ResultadoGuardia | string> = {};
+  // 26-10 (Enrique): freno temprano en CADA corrida (cada 10 min): 3+ cancelados entre las primeras 10 ofertas → se apaga ya.
+  const quedan: typeof activas = [];
   for (const [clave, o] of activas) {
+    try {
+      const desde = new Date(`${o.desde}T03:00:00Z`);
+      const f = frenoTemprano(await canceladosPrimeras(clave, desde, cfg.freno_primeras), cfg);
+      if (!f.apagar) {
+        quedan.push([clave, o]);
+        continue;
+      }
+      await apagarOferta(clave);
+      out[clave] = { apagar: true, motivos: [f.motivo!], detalle: [] };
+      await avisar(`⚠️ <b>Oferta extra "${escaparHtml(clave)}" APAGADA sola</b>\n• ${escaparHtml(f.motivo!)}\n\nPara prenderla de nuevo: config_wa.vendedor.ofertas_extra.${escaparHtml(clave)}.activo = true.`);
+    } catch (e) {
+      quedan.push([clave, o]);
+      console.warn(`guardia_extra: freno temprano de ${clave} falló:`, e instanceof Error ? e.message : e);
+    }
+  }
+  if (p.hora < 8 || !quedan.length) return out;
+  // Candado diario (eventos_crudos con id único): una sola corrida por día aunque el cron corra cada 10 min.
+  const { error: ya } = await db().from("eventos_crudos").insert({ fuente: "shopify", id_externo: `guardia_extra:${fecha}`, payload: { fecha }, procesado_en: new Date().toISOString() });
+  if (ya) return ya.code === "23505" ? out : { ...out, error: ya.message };
+  for (const [clave, o] of quedan) {
     try {
       const desde = new Date(`${o.desde}T03:00:00Z`); // 00:00 de Asunción
       if (!Number.isFinite(desde.getTime())) throw new Error(`desde inválido: ${o.desde}`);

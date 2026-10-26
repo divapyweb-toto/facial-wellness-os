@@ -1,6 +1,6 @@
 // 26-10: guardia de la oferta extra (datos inventados).
 import { assert, assertAlmostEquals, assertEquals } from "jsr:@std/assert@1";
-import { colaInferior, colaSuperior, evaluarGuardia, GUARDIA_DEFAULT, guardiaDe } from "./guardia_extra.ts";
+import { colaInferior, colaSuperior, evaluarGuardia, frenoTemprano, GUARDIA_DEFAULT, guardiaDe } from "./guardia_extra.ts";
 
 const ok = { base: { si: 47, n: 516 }, ahora: { si: 22, n: 240 } }; // 9,1% → 9,2%
 const entregaOk = { base: { si: 32, n: 34 }, ahora: { si: 19, n: 20 } };
@@ -44,11 +44,21 @@ Deno.test("guardia: (a) conversión y (c) entrega que BAJAN 5+ puntos apagan", (
 
 Deno.test("guardiaDe: defaults y valores fuera de rango", () => {
   assertEquals(guardiaDe(undefined), GUARDIA_DEFAULT);
-  assertEquals(guardiaDe({ puntos: 3, alfa: 2, min_b: 0, min_a: 50 }), { ...GUARDIA_DEFAULT, puntos: 3, min_a: 50 });
+  assertEquals(guardiaDe({ puntos: 3, alfa: 2, min_b: 0, min_a: 50, freno_cancelados: 2 }), { ...GUARDIA_DEFAULT, puntos: 3, min_a: 50, freno_cancelados: 2 });
 });
 
 Deno.test("guardia: base con 0 cancelados no apaga por 2 cancelaciones (suavizado); 7 de 30 sí", () => {
   const b0 = { base: { si: 0, n: 24 }, ahora: { si: 2, n: 30 } }; // 0% → 6,7%
   assertEquals(evaluarGuardia({ a: ok, b: b0, c: entregaOk }).apagar, false);
   assertEquals(evaluarGuardia({ a: ok, b: { base: { si: 0, n: 24 }, ahora: { si: 7, n: 30 } }, c: entregaOk }).apagar, true);
+});
+
+Deno.test("26-10 freno temprano: 3 cancelados entre las primeras 10 apaga en el momento; 2 no; después de las 10 no cuenta", () => {
+  const f = (xs: number[]) => xs.map((x) => x === 1);
+  assertEquals(frenoTemprano(f([1, 0, 1, 1])).apagar, true); // ya con 4 ofertas: no espera a las 10
+  assertEquals(frenoTemprano(f([1, 0, 0, 0, 1, 0, 0, 0, 0, 0])).apagar, false);
+  assertEquals(frenoTemprano(f([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1])).apagar, false); // las canceladas 11 y 12 no son de las primeras 10
+  assert(frenoTemprano(f([1, 1, 1])).motivo!.includes("3 de las primeras 3"));
+  // Lo que dijo Enrique: con base 4,2%, 3+ de 10 por azar pasa ~0,7% de las veces.
+  assertAlmostEquals(colaSuperior(10, 0.042, 3), 0.0075, 0.001);
 });

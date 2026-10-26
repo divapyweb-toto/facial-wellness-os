@@ -8,8 +8,14 @@
 // Por eso, además de los 5 puntos, cada número exige una muestra mínima y que la diferencia no sea azar
 // (probabilidad < alfa con la binomial). Todo en config_wa.vendedor.guardia_extra; { alfa: 1, min_*: 1 } = regla literal.
 export type Tasa = { si: number; n: number };
-export type CfgGuardia = { puntos: number; alfa: number; min_a: number; min_b: number; min_c: number };
-export const GUARDIA_DEFAULT: CfgGuardia = { puntos: 5, alfa: 0.05, min_a: 200, min_b: 30, min_c: 20 };
+export type CfgGuardia = {
+  puntos: number; alfa: number; min_a: number; min_b: number; min_c: number;
+  /** 26-10 (Enrique): freno temprano: de las primeras `freno_primeras` ofertas, `freno_cancelados` o más cancelados → se apaga ya. */
+  freno_primeras: number; freno_cancelados: number;
+};
+// 26-10 (Enrique): versión estadística + freno temprano 3 de 10 (con base 4,2% pasa por azar el 0,7% de las veces).
+// La regla literal de 5 puntos sin muestra queda desactivada.
+export const GUARDIA_DEFAULT: CfgGuardia = { puntos: 5, alfa: 0.05, min_a: 200, min_b: 30, min_c: 20, freno_primeras: 10, freno_cancelados: 3 };
 
 export type DatosGuardia = {
   /** Conversaciones con pedido vigente (si) sobre conversaciones nuevas (n): antes de prender y desde que se prendió. */
@@ -28,7 +34,10 @@ export function guardiaDe(v: unknown): CfgGuardia {
     const n = Number(x[k]);
     return Number.isFinite(n) && n >= min && n <= max ? n : GUARDIA_DEFAULT[k];
   };
-  return { puntos: num("puntos", 0.1, 100), alfa: num("alfa", 0.000001, 1), min_a: num("min_a", 1, 1e6), min_b: num("min_b", 1, 1e6), min_c: num("min_c", 1, 1e6) };
+  return {
+    puntos: num("puntos", 0.1, 100), alfa: num("alfa", 0.000001, 1), min_a: num("min_a", 1, 1e6), min_b: num("min_b", 1, 1e6), min_c: num("min_c", 1, 1e6),
+    freno_primeras: num("freno_primeras", 1, 1000), freno_cancelados: num("freno_cancelados", 1, 1000),
+  };
 }
 
 /** log del coeficiente binomial (sin desbordar con n grandes). */
@@ -78,4 +87,17 @@ export function evaluarGuardia(d: DatosGuardia, cfg: CfgGuardia = GUARDIA_DEFAUL
   revisar("(b) cancelados tras la oferta", d.b, true, cfg.min_b);
   revisar("(c) entrega con extra", d.c, false, cfg.min_c);
   return { apagar: motivos.length > 0, motivos, detalle };
+}
+
+/**
+ * 26-10 (Enrique): freno temprano. `cancelados` = una entrada por oferta, en orden de envío (true = el pedido terminó
+ * cancelado). Mira solo las primeras `freno_primeras`: con `freno_cancelados` o más canceladas, apaga en el momento
+ * (no espera a juntarlas todas ni a la revisión del día).
+ */
+export function frenoTemprano(cancelados: boolean[], cfg: CfgGuardia = GUARDIA_DEFAULT): { apagar: boolean; motivo: string | null } {
+  const primeras = cancelados.slice(0, cfg.freno_primeras);
+  const n = primeras.filter(Boolean).length;
+  return n >= cfg.freno_cancelados
+    ? { apagar: true, motivo: `freno temprano: ${n} de las primeras ${primeras.length} ofertas terminaron en pedido cancelado (límite ${cfg.freno_cancelados} de ${cfg.freno_primeras})` }
+    : { apagar: false, motivo: null };
 }
