@@ -16,6 +16,20 @@ import { fechaISO, numeroDesdeReferencia } from '../importar-courier/procesar.ts
 import { dentroDePlazo, type OrigenAnuncio, type ResultadoCapi } from '../_shared/meta_capi.ts'
 
 export const TAG_CAPI = 'META_ENTREGA_ENVIADA'
+/**
+ * 26-10 (Enrique, #1027 de San Juan Nepomuceno): pago anticipado parcial. Pedido con SALDO_PENDIENTE (y SALDO_<monto>):
+ * nunca se marca pagado en Shopify (falta cobrar), y al entregarse se le avisa a Enrique UNA vez por Telegram para que
+ * cobre el saldo por transferencia (SALDO_AVISADO). Cuando cobra, Enrique saca SALDO_PENDIENTE o lo marca pagado.
+ */
+export const TAG_SALDO = 'SALDO_PENDIENTE'
+export const TAG_SALDO_AVISADO = 'SALDO_AVISADO'
+export const montoSaldo = (tags: string[] | null): number | null => {
+  for (const t of tags ?? []) {
+    const m = /^SALDO_(\d+)$/.exec(t)
+    if (m) return Number(m[1])
+  }
+  return null
+}
 
 export interface PedidoPendiente {
   shopify_order_id: number
@@ -196,8 +210,25 @@ export async function procesarPostEntrega(repo: Repo, cfg: ConfigPostEntrega): P
       }
     }
 
+    // 1b. 26-10: saldo pendiente (pago anticipado parcial) → aviso a Enrique al entregarse, una vez.
+    const conSaldo = (p.tags ?? []).includes(TAG_SALDO)
+    if (conSaldo && !(p.tags ?? []).includes(TAG_SALDO_AVISADO)) {
+      const monto = montoSaldo(p.tags)
+      const a = await repo.avisar(
+        `💰 Se entregó ${escapar(etiqueta)} y tiene saldo pendiente` +
+          (monto ? ` de ₲${monto.toLocaleString('es-PY')}` : '') +
+          `: cobrale el resto por transferencia (pagó una parte por adelantado). No está marcado como pagado.`,
+      ).catch((e) => ({ ok: false, error: msj(e) }))
+      if (a.ok) {
+        r.avisos++
+        const t = await repo.agregarTags(p.shopify_order_id, [TAG_SALDO_AVISADO]).catch((e) => ({ ok: false, error: msj(e) }))
+        if (!t.ok) fallas.push(`saldo: ${t.error ?? 'no se pudo marcar el aviso'}`)
+      } else fallas.push(`saldo: ${a.error ?? 'aviso falló'}`)
+    }
+
     // 2. Pagado en Shopify (una vez), SOLO cuando el courier rindió: entregado no es cobrado.
-    if (!p.pagado_marcado && p.rendido && !cfg.simuladoShopify) {
+    // 26-10: con saldo pendiente, nunca (falta cobrar el resto).
+    if (!p.pagado_marcado && p.rendido && !conSaldo && !cfg.simuladoShopify) {
       try {
         const pago = await repo.marcarPagado(p.shopify_order_id)
         if (pago.ok) {

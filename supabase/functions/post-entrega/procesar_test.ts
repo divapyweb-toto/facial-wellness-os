@@ -4,7 +4,7 @@ import { normalizarTelefonoPY } from '../_shared/telefono.ts'
 import type { OrigenAnuncio, ResultadoCapi } from '../_shared/meta_capi.ts'
 import {
   type CambiosPedido, type ConfigPostEntrega, entregadoEnDesdeFecha, type FilaLote, fechaRealDesdeFilas,
-  type PedidoPendiente, procesarPostEntrega, type Repo, TAG_CAPI,
+  type PedidoPendiente, procesarPostEntrega, type Repo, TAG_CAPI, TAG_SALDO, TAG_SALDO_AVISADO,
 } from './procesar.ts'
 
 const AHORA = new Date('2026-10-06T15:00:00Z')
@@ -253,4 +253,28 @@ Deno.test('factura (10-10): viaja la fecha de entrega recién calculada (corte f
   m.repo.facturar = () => Promise.resolve({ accion: 'sin_corte', error: 'falta facturar_desde' })
   r = await procesarPostEntrega(m.repo, cfg({ facturaActiva: true }))
   assert(r.detalle_errores.some((d) => d.includes('sin_corte')))
+})
+
+Deno.test("26-10 saldo pendiente: no se marca pagado y avisa UNA vez con el monto al entregarse", async () => {
+  const { repo, log } = repoMemoria([pedido({ tags: [TAG_SALDO, "SALDO_52000"], rendido: true })])
+  await procesarPostEntrega(repo, cfg())
+  assertEquals(log.pagos, 0)
+  assertEquals(log.avisos.length, 1)
+  assert(log.avisos[0].includes("#1001") && log.avisos[0].includes("52.000"), log.avisos[0])
+  assert(log.tags.includes(TAG_SALDO_AVISADO))
+  await procesarPostEntrega(repo, cfg()) // sigue pendiente de pago: no repite el aviso ni lo marca pagado
+  assertEquals([log.pagos, log.avisos.length], [0, 1])
+})
+
+Deno.test("26-10 saldo pendiente: si el Telegram falla, reintenta en la próxima corrida", async () => {
+  const { repo, log } = repoMemoria([pedido({ tags: [TAG_SALDO] })])
+  let falla = true
+  const avisar = repo.avisar
+  repo.avisar = (t) => falla ? Promise.resolve({ ok: false, error: "sin red" }) : avisar(t)
+  await procesarPostEntrega(repo, cfg())
+  assertEquals(log.avisos.length, 0)
+  falla = false
+  await procesarPostEntrega(repo, cfg())
+  assertEquals(log.avisos.length, 1)
+  assert(!log.avisos[0].includes("₲"), "sin SALDO_<monto> no inventa un monto")
 })
