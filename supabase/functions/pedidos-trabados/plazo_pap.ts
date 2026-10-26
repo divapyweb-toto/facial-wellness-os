@@ -1,5 +1,5 @@
 // pedidos-trabados · alerta de plazo PaP (Enrique 26-10-2026). Lógica pura; la lectura está en plazo_pap_io.ts.
-// Pedido PaP en "En Oficina", "Asignado a ruta" o "Borrador" con MÁS de 5 días hábiles (lun–vie, Paraguay; sin feriados)
+// Pedido PaP en "En Oficina" o "Asignado a ruta" con MÁS de 5 días hábiles (o "Borrador" con más de 2) (lun–vie, Paraguay; sin feriados)
 // desde la fecha de la VENTA → un Telegram por pedido, una sola vez en la vida (candado auto_plazo_pap:<ref> en
 // eventos_crudos, mismo avisarUnaVez de entregas_actuar.ts). El texto va listo para reenviar a PaP: sin nombre ni teléfono.
 import { escaparHtml } from "../_shared/telegram_formato.ts";
@@ -9,12 +9,18 @@ export interface FilaPlazoPap { ref: string; ciudad: string | null; estado: stri
 export interface HechoPlazoPap { ref: string; estado: string; dias: number; resultado: string }
 
 export const UMBRAL_DIAS_HABILES_PAP = 5;
+// 26-10 (administrador): "Borrador" = guía creada pero el paquete no se escaneó → avisa con MÁS de 2 días hábiles.
+export const UMBRAL_DIAS_HABILES_BORRADOR = 2;
 const ESTADOS = ["en oficina", "asignado a ruta", "borrador"];
 const sinTildes = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "");
 
 /** ¿El estado de PaP es uno de los que cuentan plazo? (sin importar mayúsculas, tildes ni espacios). */
 export const estadoPlazoPap = (estado: string | null | undefined) =>
   ESTADOS.includes(sinTildes(String(estado ?? "")).toLowerCase().replace(/\s+/g, " ").trim());
+
+/** Umbral del estado: Borrador > 2 días hábiles; En Oficina y Asignado a ruta > 5. */
+export const umbralPlazoPap = (estado: string | null | undefined) =>
+  sinTildes(String(estado ?? "")).toLowerCase().trim() === "borrador" ? UMBRAL_DIAS_HABILES_BORRADOR : UMBRAL_DIAS_HABILES_PAP;
 
 /** Días hábiles (lun–vie) DESPUÉS de la fecha de venta y hasta hoy en Paraguay, inclusive. Venta hoy = 0. */
 export function diasHabilesDesde(fecha: string | null, ahora: Date): number | null {
@@ -47,7 +53,7 @@ export async function procesarPlazoPap(filas: FilaPlazoPap[], ahora: Date, d: De
   for (const f of filas) {
     if (!estadoPlazoPap(f.estado)) continue;
     const dias = diasHabilesDesde(f.fechaVenta, ahora);
-    if (dias == null || dias <= UMBRAL_DIAS_HABILES_PAP) continue;
+    if (dias == null || dias <= umbralPlazoPap(f.estado)) continue;
     const r = await avisarUnaVez(d, claveCandadoPlazoPap(f.ref), { ref: f.ref, estado: f.estado, dias }, textoPlazoPap(f, dias), simular);
     hechos.push({ ref: f.ref, estado: f.estado, dias, resultado: r });
   }

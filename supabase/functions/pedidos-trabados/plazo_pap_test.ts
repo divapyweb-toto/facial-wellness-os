@@ -77,3 +77,16 @@ Deno.test("candado: una sola vez por pedido aunque cambie de estado; si Telegram
   assertEquals(f.candados.size, 0); // soltado: el cron reintenta
   assertEquals((await procesarPlazoPap([F()], AHORA, f.d))[0].resultado, "avisado");
 });
+
+Deno.test("26-10: Borrador avisa con más de 2 días hábiles; los otros estados siguen en 5", async () => {
+  assertEquals(diasHabilesDesde("2026-10-22", AHORA), 2); // jueves → 23 + 26
+  assertEquals(diasHabilesDesde("2026-10-21", AHORA), 3);
+  const { d, telegram } = deps();
+  const h = await procesarPlazoPap([
+    F({ ref: "VT-9201", estado: "Borrador", fechaVenta: "2026-10-22" }), // 2 → no
+    F({ ref: "VT-9202", estado: " Bórrador ", fechaVenta: "2026-10-21" }), // 3 → sí
+    F({ ref: "VT-9203", estado: "Asignado a ruta", fechaVenta: "2026-10-21" }), // 3 → no (umbral 5)
+  ], AHORA, d);
+  assertEquals(h.map((x) => [x.ref, x.dias]), [["VT-9202", 3]]);
+  assertEquals(telegram.length, 1);
+});
