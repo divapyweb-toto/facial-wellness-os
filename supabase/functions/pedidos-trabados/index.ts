@@ -11,6 +11,7 @@ import { avisoRutaPap } from "./aviso_ruta_pap.ts";
 import { sincronizarCancelaciones } from "./cancelaciones_ventas.ts";
 import { activarPlantillaReprogramar, depsReales as depsPlantilla } from "./plantilla_reprogramar.ts";
 import { entregasParaActuar } from "./entregas_actuar_io.ts";
+import { alertaPlazoPap } from "./plazo_pap_io.ts";
 
 type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean; preparar?: boolean };
 
@@ -45,7 +46,9 @@ async function automatico(simular: boolean) {
   const actuar = await entregasParaActuar(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
   // 22-10: activa sola la plantilla de reprogramación de Lucero cuando Meta la aprueba (un error acá no frena lo demás).
   const plantilla = await activarPlantillaReprogramar(depsPlantilla, simular).catch((e) => ({ resultado: `error: ${e instanceof Error ? e.message : String(e)}` }));
-  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, plantilla_reprogramar: plantilla, cancelaciones, que_nada_quede_parado: actuar };
+  // 26-10: PaP con más de 5 días hábiles en oficina / ruta / borrador → Telegram una vez por pedido (plazo_pap.ts).
+  const plazoPap = await alertaPlazoPap(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, plantilla_reprogramar: plantilla, cancelaciones, que_nada_quede_parado: actuar, plazo_pap: plazoPap };
 }
 
 async function manual(acciones: AccionManual[]) {

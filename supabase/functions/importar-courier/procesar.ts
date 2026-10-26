@@ -136,6 +136,8 @@ const CON_EVENTO_SHOPIFY: EstadoEnvio[] = [
 // Un estado final no se pisa con uno intermedio que llega tarde (archivo
 // viejo reimportado): se registra, pero no se avisa ni cambia estado_envio.
 const TERMINALES = new Set<string>(['ENTREGADO', 'NO_ENTREGADO', 'CANCELADO', 'RENDIDO'])
+// Estados que dicen que el paquete NO llegó al cliente (un RENDIDO junto a ellos no es entrega).
+const NO_ENTREGA = new Set<string>(['NO_ENTREGADO', 'CANCELADO'])
 
 export const NOMBRE_COURIER: Record<Courier, string> = {
   lucero: 'Lucero del Este',
@@ -433,7 +435,9 @@ export async function procesarFilas(
       const estado = traducirEstado(courier, fila.estado_crudo, { rendido })
       const estados: EstadoEnvio[] = []
       if (estado) estados.push(estado)
-      if (rendido && estado !== 'RENDIDO') estados.push('RENDIDO')
+      // 26-10: Lucero también rinde los devueltos/cancelados (cobrado 0). Eso NO es una entrega:
+      // con NO_ENTREGADO/CANCELADO no se registra RENDIDO (antes los contaba como entregados).
+      if (rendido && estado !== 'RENDIDO' && !NO_ENTREGA.has(estado ?? '')) estados.push('RENDIDO')
       if (!estado) {
         r.estado_no_reconocido++
         if (fila.estado_crudo) noReconocidos.add(fila.estado_crudo)

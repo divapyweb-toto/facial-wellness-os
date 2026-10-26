@@ -231,3 +231,25 @@ test('21-10: producto "solo Lucero" (JawFlex): Lucero si llega; PaP con nota si 
   assert.deepEqual([tiras.transportadora, !!tiras.fallbackProducto], ['pap', false])
   fijarTarifasCourier(null)
 })
+
+test('26-10: regla preferir Lucero (config.courier_preferir_lucero) — Lucero donde es válido, si no el de siempre', () => {
+  const ciudades = ['Cuidad del Este', 'Asunción, barrio Sajonia', 'San Juan Nepomuceno', 'Itaguá', 'Fram', 'Villarrica', 'Pueblo Inventado']
+  for (const cod of [true, false]) {
+    fijarTarifasCourier(FIXTURE)
+    const antes = Object.fromEntries(ciudades.map((c) => [c, sugerirCourier(c, { cod })]))
+    fijarTarifasCourier({ ...FIXTURE, preferirLucero: true })
+    for (const c of ciudades) {
+      const s = sugerirCourier(c, { cod })
+      const luceroValido = s.opciones.some((o) => o.courier === 'lucero' && o.valido)
+      assert.equal(s.sugerido, luceroValido ? 'lucero' : antes[c].sugerido, `${c} cod=${cod}`)
+      assert.equal(s.regla, luceroValido ? 'preferir_lucero' : 'costo')
+      assert.equal(s.sugerido_costo, antes[c].sugerido)
+      // Cobertura, opciones y ciudad reconocida no cambian con la regla.
+      assert.deepEqual([s.sin_cobertura, s.ciudad_reconocida, s.opciones], [antes[c].sin_cobertura, antes[c].ciudad_reconocida, antes[c].opciones])
+    }
+  }
+  fijarTarifasCourier({ ...FIXTURE, preferirLucero: true })
+  assert.equal(sugerirCourier('San Juan Nepomuceno').sugerido, null) // nadie cobra: sin cobertura como siempre
+  assert.match(textoSugerenciaCosto(sugerirCourier('Cuidad del Este')).texto, /^Sugerido: Lucero, llega con cobranza · /)
+  fijarTarifasCourier(FIXTURE)
+})

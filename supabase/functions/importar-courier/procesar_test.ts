@@ -36,6 +36,7 @@ function repoMemoria(pedidos: PedidoImport[]) {
     tags: [] as string[],
     estadoEnvio: [] as string[],
     notificados: [] as string[],
+    insertados: [] as string[],
   }
   const repo: Repo = {
     buscarPedidoPorNumero: (n) =>
@@ -45,6 +46,7 @@ function repoMemoria(pedidos: PedidoImport[]) {
       const k = `${id}:${e}`
       if (estados.has(k)) return Promise.resolve(false)
       estados.add(k)
+      log.insertados.push(k)
       return Promise.resolve(true)
     },
     marcarNotificado: (id, e) => { log.notificados.push(`${id}:${e}`); return Promise.resolve() },
@@ -111,8 +113,19 @@ Deno.test('ENTREGADO → seguimiento mañana 10:00 Asunción; rendido suma RENDI
   assertEquals(log.envios[0].enviar_desde, '2026-10-07T13:00:00.000Z')
   assertEquals(log.envios[0].variables, ['Ana', '1 Tiras nasales'])
   // RENDIDO no cambia estado_envio ni genera evento.
+  assertEquals(log.insertados, ['9001:ENTREGADO', '9001:RENDIDO'])
   assertEquals(log.estadoEnvio, ['9001:ENTREGADO'])
   assertEquals(log.eventos, ['9001:ENTREGADO'])
+})
+
+Deno.test('26-10: Lucero devuelto o cancelado en la rendición NO registra RENDIDO (no es entrega)', async () => {
+  const { repo, log } = repoMemoria([pedido(), pedido({ shopify_order_id: 9002, nombre: '#1002', telefono: '0981000002' })])
+  await procesarFilas('lucero', [
+    { referencia: 'VT-1001', estado_crudo: 'Devuelto', telefono: '0981000000', extra: { rendido: true } },
+    { referencia: 'VT-1002', estado_crudo: 'Cancelado', telefono: '0981000002', extra: { rendido: true } },
+  ], repo, cfg)
+  assertEquals(log.insertados.filter((k) => k.endsWith(':RENDIDO')), [])
+  assertEquals(log.insertados.includes('9001:NO_ENTREGADO'), true)
 })
 
 Deno.test('fallido, devuelto, cancelado, preparación', async () => {

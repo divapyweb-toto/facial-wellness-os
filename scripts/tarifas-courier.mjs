@@ -26,9 +26,10 @@ export const norm = (t) => String(t ?? '').toLowerCase()
 // Misma ciudad escrita distinto en las dos listas → una sola clave.
 const UNIR = { itagua: 'itaugua' }
 // Grafías que escriben los clientes (normalizadas). Nada genérico que pueda pisar otra ciudad ("san pedro", "santa rosa").
+// 26-10: + grafías reales de ventas sin tarifa (Cd. Del Este, CiudadDe este, Asucioñ, Frenando, santo del guaira).
 const ALIAS = {
-  'ciudad del este': ['cuidad del este', 'cde', 'ciudad del este cde'],
-  'salto del guaira': ['salto del guara', 'saltos del guaira'],
+  'ciudad del este': ['cuidad del este', 'cde', 'ciudad del este cde', 'cd del este', 'ciudadde este'],
+  'salto del guaira': ['salto del guara', 'saltos del guaira', 'santo del guaira'],
   'yby yau': ['ybyyau'],
   'itaugua': ['itagua'],
   'j augusto saldivar': ['julian augusto saldivar', 'augusto saldivar'],
@@ -41,7 +42,8 @@ const ALIAS = {
   'san ignacio misiones': ['san ignacio'],
   'colonia independencia': ['independencia'],
   'juan leon mallorquin': ['mallorquin'],
-  'fernando de la mora': ['fdo de la mora'],
+  'fernando de la mora': ['fdo de la mora', 'frenando de la mora'],
+  'asuncion': ['asucion'],
   'mauricio jose troche': ['troche'],
 }
 // Días hábiles desde el despacho. PaP cuenta sus horas desde Asunción: +1 día al máximo por el tramo CDE → Asunción.

@@ -86,26 +86,34 @@ export function fijarTarifasCourier(crudo) {
   if (!crudo) { datos = null; return false }
   const tarifas = (crudo.tarifas || []).map(limpiarFila).filter(Boolean)
   if (!tarifas.length) { datos = null; return false }
-  datos = { tarifas, tasas: limpiarTasas(crudo.tasas), zonasPaP: limpiarZonas(crudo.zonasPaP) }
+  // 26-10: preferirLucero = config.courier_preferir_lucero.activo (regla del MANDATO v2: Lucero donde llega).
+  datos = { tarifas, tasas: limpiarTasas(crudo.tasas), zonasPaP: limpiarZonas(crudo.zonasPaP), preferirLucero: crudo.preferirLucero === true }
   return true
 }
 
-// Trae las tres fuentes de la base. Nunca tira: si falla, la caché queda como estaba y se anota el error.
+// config.valor es texto JSON ({"activo": true}); cualquier cosa rara = apagado.
+function leerActivo(valor) {
+  try { return (typeof valor === 'string' ? JSON.parse(valor) : valor)?.activo === true } catch { return false }
+}
+
+// Trae las fuentes de la base. Nunca tira: si falla, la caché queda como estaba y se anota el error.
 export async function cargarTarifasCourier() {
   if (enCurso) return enCurso
   enCurso = (async () => {
     try {
-      const [rt, rs, rz] = await Promise.all([
+      const [rt, rs, rz, rp] = await Promise.all([
         supabase.from('tarifas_courier_vigente')
           .select('courier, ciudad, ciudad_nombre, alias, zona, precio, tiempo, dias_min, dias_max, aplica_cobranza, tiene_agencia'),
         supabase.from('tasa_entrega_courier').select('courier, entregados, resueltos, tasa_medida, pocos_datos, tasa_usada'),
         supabase.from('config').select('valor').eq('clave', 'tarifas_zona_pap').maybeSingle(),
+        supabase.from('config').select('valor').eq('clave', 'courier_preferir_lucero').maybeSingle(),
       ])
       if (rt.error) throw rt.error
       const ok = fijarTarifasCourier({
         tarifas: rt.data || [],
         tasas: rs.error ? [] : (rs.data || []),
         zonasPaP: rz.error ? null : rz.data?.valor,
+        preferirLucero: leerActivo(rp.error ? null : rp.data?.valor),
       })
       estado = {
         hecho: true,
@@ -164,7 +172,7 @@ export function tarifaCourier(courier, ciudad, d = datos) {
   return null
 }
 
-// Courier sugerido por costo (no asigna nada) = public.sugerir_courier.
+// Courier sugerido (no asigna nada) = public.sugerir_courier. 26-10: con preferirLucero, Lucero donde es válido.
 // Entre los que COBRAN contra entrega en esa ciudad (tarifas no estimadas), el de menor precio ÷ (tasa/100).
 // Con cod=false (pago anticipado) cuenta también donde el courier llega sin cobranza.
 export function sugerirCourier(ciudad, { cod = true } = {}, d = datos) {
@@ -180,9 +188,13 @@ export function sugerirCourier(ciudad, { cod = true } = {}, d = datos) {
   // Orden de la SQL: costo ascendente, nulos al final, empate por nombre de courier.
   const porCosto = (a, b) => (a.costo == null) - (b.costo == null) || (a.costo ?? 0) - (b.costo ?? 0) || a.courier.localeCompare(b.courier)
   const validos = op.filter((o) => o.valido).sort(porCosto)
+  // 26-10: con la regla activa, si Lucero es válido (cobra acá, o llega con pago anticipado) → Lucero.
+  const regla = d.preferirLucero && validos.some((o) => o.courier === 'lucero') ? 'preferir_lucero' : 'costo'
   return {
     ciudad,
-    sugerido: validos[0]?.courier ?? null,
+    sugerido: regla === 'preferir_lucero' ? 'lucero' : (validos[0]?.courier ?? null),
+    regla,
+    sugerido_costo: validos[0]?.courier ?? null,
     sin_cobertura: validos.length === 0,
     // false = ningún courier tiene la ciudad en su tabla (typo o pueblo chico): no avisar "sin cobertura" por esto solo.
     ciudad_reconocida: op.some((o) => o.t != null && !o.t.estimado),
@@ -213,6 +225,10 @@ export function textoSugerenciaCosto(s, { cod = true } = {}) {
   })
   if (s.sin_cobertura) {
     return { texto: [cod ? 'Sin cobertura contra entrega' : 'Sin cobertura', ...partes].join(' · '), nivel: 'sin_cobertura' }
+  }
+  if (s.regla === 'preferir_lucero') {
+    const nota = s.sugerido_costo && s.sugerido_costo !== 'lucero' ? ` (por costo sería ${NOMBRE[s.sugerido_costo] || s.sugerido_costo})` : ''
+    return { texto: [`Sugerido: Lucero, llega ${cod ? 'con cobranza' : 'a esta ciudad'}${nota}`, ...partes].join(' · '), nivel: 'ok' }
   }
   return { texto: [`Sugerido por costo: ${NOMBRE[s.sugerido] || s.sugerido}`, ...partes].join(' · '), nivel: 'ok' }
 }
