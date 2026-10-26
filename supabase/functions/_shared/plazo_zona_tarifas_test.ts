@@ -15,6 +15,7 @@ import {
   hayTarifasCourier,
   limpiarCourierCiudad,
   limpiarTarifasCourier,
+  fijarPlazoPap,
   lineaPlazoCiudades,
   lineaPlazosHoy,
   ciudadesMencionadas,
@@ -159,7 +160,8 @@ Deno.test("lineaPlazosHoy: 'Otras de Central' no sale de la tabla; 26-10: interi
     const tramo = (l: string, k: string) => l.split(". ").find((x) => x.startsWith(k));
     assertEquals(tramo(sin, "Resto del país"), "Resto del país: en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10).");
     // 26-10: sin lista de ciudades; los dos plazos del interior y la referencia a PLAZO PARA SU CIUDAD
-    assertEquals(con.includes("Resto del país: depende del courier de la ciudad (si va por Lucero del Este, en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10); si va por Punto a Punto, en 3 a 7 días hábiles (entre el jueves 22/10 y el miércoles 28/10)): el de la ciudad del cliente está en PLAZO PARA SU CIUDAD."), true, con);
+    assertEquals(con.includes("Resto del país: depende del courier y de la ciudad; el de la ciudad del cliente está en PLAZO PARA SU CIUDAD."), true, con);
+    assertEquals(/Resto del país[^.]*\d/.test(con), false, "sin números del interior sin ciudad");
     assertEquals(con.includes("coronel oviedo"), false);
     assertEquals(tramo(con, "Otras ciudades de Central"), tramo(sin, "Otras ciudades de Central"));
   } finally {
@@ -192,12 +194,12 @@ Deno.test("cargarTarifasCourier: carga, no repite antes de 10 min, refresca desp
   try {
     const { sb, llamadas } = clienteFalso(() => ({ filas: FILAS, tasas: TASAS }));
     const [a, b] = await Promise.all([cargarTarifasCourier(sb, 1_000_000), cargarTarifasCourier(sb, 1_000_000)]);
-    assertEquals([a, b, llamadas.length], [true, true, 2]); // una sola carga (2 vistas)
+    assertEquals([a, b, llamadas.length], [true, true, 3]); // una sola carga (2 vistas + config_wa del interruptor)
     assertEquals(courierSugerido("Villarrica")?.sugerido, "pap");
     assertEquals(await cargarTarifasCourier(sb, 1_000_000 + REFRESCO_TARIFAS_MS - 1), true);
-    assertEquals(llamadas.length, 2);
+    assertEquals(llamadas.length, 3);
     assertEquals(await cargarTarifasCourier(sb, 1_000_000 + REFRESCO_TARIFAS_MS), true);
-    assertEquals(llamadas.length, 4);
+    assertEquals(llamadas.length, 6);
   } finally {
     limpiarTarifasCourier();
   }
@@ -313,6 +315,58 @@ Deno.test("26-10 ciudadesMencionadas: palabras que también son ciudad solo desp
 
 Deno.test("26-10 lineaPlazoCiudades: plazo de cada ciudad con su courier; sin ciudad, preguntarla", conTabla(() => {
   assertEquals(lineaPlazoCiudades(["villarrica", "coronel oviedo"], LUNES_10),
-    "PLAZO PARA SU CIUDAD (ya calculado con su courier; decí exactamente esto): villarrica: en 3 a 7 días hábiles (entre el jueves 22/10 y el miércoles 28/10) (Punto a Punto). coronel oviedo: en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10) (Lucero del Este).");
+    "PLAZO PARA SU CIUDAD (ya calculado con su courier; decí exactamente esto): villarrica: en 3 a 7 días hábiles (entre el jueves 22/10 y el miércoles 28/10) (Punto a Punto). coronel oviedo: en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10) (Lucero del Este). Si dijo una ciudad del interior que no figura acá: 3 a 7 días hábiles.");
   assertEquals(lineaPlazoCiudades([], LUNES_10).startsWith("PLAZO PARA SU CIUDAD: todavía no dijo una ciudad"), true);
 }));
+
+Deno.test("26-10 interruptor plazo_courier.pap_3a7 = false: todo vuelve a 2 a 5 (vuelta atrás sin desplegar)", conTabla(() => {
+  try {
+    fijarPlazoPap(false);
+    assertEquals(rangoEntrega("Villarrica").rango, [2, 5]);
+    assertEquals(plazoParaEnDesdeHoy("Villarrica", LUNES_10), "2 a 5 días hábiles");
+    assertEquals(lineaPlazosHoy(LUNES_10).includes("Resto del país: en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10)."), true);
+    assertEquals(lineaPlazoCiudades([], LUNES_10).endsWith("no figura acá: 2 a 5 días hábiles."), true);
+  } finally {
+    fijarPlazoPap(true);
+  }
+  assertEquals(rangoEntrega("Villarrica").rango, [3, 7]);
+}));
+
+Deno.test("26-10 cargarTarifasCourier lee el interruptor de config_wa", async () => {
+  limpiarTarifasCourier();
+  const sb: ClienteTarifas = {
+    from(tabla: string) {
+      return {
+        select(_c: string) {
+          const data = tabla === "tarifas_courier_vigente" ? FILAS : tabla === "tasa_entrega_courier" ? TASAS
+            : [{ clave: "plazo_courier", valor: { pap_3a7: false } }];
+          return Promise.resolve({ data, error: null });
+        },
+      };
+    },
+  };
+  try {
+    await cargarTarifasCourier(sb, 5_000_000);
+    assertEquals(rangoEntrega("Villarrica").rango, [2, 5]);
+  } finally {
+    fijarPlazoPap(true);
+    limpiarTarifasCourier();
+  }
+});
+
+Deno.test("26-10 plazo de la tabla más largo que la regla: Lucero 3 a 9 (sale 1 vez por semana); nunca acorta", () => {
+  fijarTarifasCourier([...FILAS, f("lucero", "itacurubi de la cordillera", [3, 9], 2500, true, ["itacurubi"]), f("pap", "pueblo lejano", [4, 10], 3000)], TASAS);
+  try {
+    const i = rangoEntrega("Itacurubí de la Cordillera");
+    assertEquals([i.rango, i.courier, i.habiles], [[3, 9], "lucero", true]);
+    assertEquals(plazoParaEnDesdeHoy("Itacurubí", LUNES_10), "3 a 9 días hábiles");
+    assertEquals(rangoEntrega("Pueblo Lejano").rango, [4, 10]); // PaP con máximo 10 > 7
+    assertEquals(rangoEntrega("Coronel Oviedo").rango, [2, 5]); // tabla 2-5: la regla
+    assertEquals(rangoEntrega("Villarrica").rango, [3, 7]); // tabla PaP 2-4: la regla 3-7, nunca más corto
+    fijarPlazoPap(false);
+    assertEquals(rangoEntrega("Itacurubí de la Cordillera").rango, [2, 5]); // interruptor apagado: todo como antes
+  } finally {
+    fijarPlazoPap(true);
+    limpiarTarifasCourier();
+  }
+});

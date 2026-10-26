@@ -175,11 +175,27 @@ export function rangoEntrega(ciudad: unknown, courier?: string | null): RangoEnt
  * (consultarCourierCiudad), nunca una lista propia.
  */
 export const RANGO_INTERIOR_PAP: [number, number] = [3, 7];
+/** 26-10: interruptor config_wa.plazo_courier.pap_3a7 (lo lee cargarTarifasCourier; sin dato = prendido). false = "2 a 5" como antes. */
+let plazoPap3a7 = true;
+export const plazoPapActivo = (): boolean => plazoPap3a7;
+/** Tests y cargarTarifasCourier. */
+export function fijarPlazoPap(activo: boolean): void {
+  plazoPap3a7 = activo;
+}
 function rangoInterior(r: RangoEntrega, ciudad: unknown, courier?: string | null): RangoEntrega {
+  if (!plazoPap3a7) return r;
   const dado = idCourier(courier);
   const c = dado === "lucero" || dado === "pap" ? dado : courierDeLaCiudad(ciudad);
-  if (c !== "pap") return c ? { ...r, courier: c } : r;
-  return { ...r, rango: RANGO_INTERIOR_PAP, courier: "pap", fuente: `${r.fuente} · pap 3 a 7`, habiles: true };
+  const regla: RangoEntrega = c === "pap"
+    ? { ...r, rango: RANGO_INTERIOR_PAP, courier: "pap", fuente: `${r.fuente} · pap 3 a 7`, habiles: true }
+    : c ? { ...r, courier: c } : r;
+  // 26-10 (Enrique): si la tabla de ese courier dice un máximo MÁS largo que la regla (Lucero con salida 1 vez por
+  // semana: "3 a 9"), se promete el de la tabla. Nunca se acorta: un máximo igual o menor deja la regla.
+  if (!c) return regla;
+  const f = filaTarifa(c, ciudadNorm(ciudad));
+  const a = numero(f?.dias_min), b = numero(f?.dias_max);
+  if (a === null || b === null || a < 0 || b < a || b <= regla.rango[1]) return regla;
+  return { ...regla, rango: [a, b], fuente: `tabla ${c} ${f!.ciudad} (más largo que la regla)`, habiles: true };
 }
 
 /** El rango de siempre (ruteo oficial + velocidad), sin la tabla de tarifas. */
@@ -306,13 +322,16 @@ export function cargarTarifasCourier(sb: ClienteTarifas, ahoraMs = Date.now()): 
       const vence = new Promise<never>((_, no) => {
         reloj = setTimeout(() => no(new Error(`más de ${TIMEOUT_TARIFAS_MS / 1000} s`)), TIMEOUT_TARIFAS_MS);
       });
-      const [f, t] = await Promise.race([
+      const [f, t, c] = await Promise.race([
         Promise.all([
           sb.from("tarifas_courier_vigente").select("courier,ciudad,ciudad_nombre,alias,zona,precio,tiempo,dias_min,dias_max,aplica_cobranza,tiene_agencia"),
           sb.from("tasa_entrega_courier").select("courier,tasa_usada,pocos_datos,resueltos"),
+          sb.from("config_wa").select("clave,valor"), // 26-10: interruptor plazo_courier.pap_3a7
         ]),
         vence,
       ]);
+      const pc = ((c.data ?? []) as { clave?: string; valor?: { pap_3a7?: unknown } }[]).find((x) => x.clave === "plazo_courier")?.valor;
+      if (!c.error) fijarPlazoPap(pc?.pap_3a7 !== false);
       if (f.error) throw new Error(`tarifas_courier_vigente: ${f.error.message}`);
       if (t.error) throw new Error(`tasa_entrega_courier: ${t.error.message}`);
       fijarTarifasCourier((f.data ?? []) as FilaTarifaCourier[], (t.data ?? []) as FilaTasaCourier[], ahoraMs);
@@ -621,9 +640,9 @@ export function lineaPlazosHoy(ahora: Date): string {
 function restoDelPais(ahora: Date): string {
   const base = rangoBase("Encarnación");
   const lucero = diaEntregaDe(base, ahora).texto;
-  if (!tarifas) return `Resto del país: ${lucero}`;
-  const pap = diaEntregaDe({ ...base, rango: RANGO_INTERIOR_PAP, courier: "pap" }, ahora).texto;
-  return `Resto del país: depende del courier de la ciudad (si va por Lucero del Este, ${lucero}; si va por Punto a Punto, ${pap}): el de la ciudad del cliente está en PLAZO PARA SU CIUDAD`;
+  if (!tarifas || !plazoPap3a7) return `Resto del país: ${lucero}`;
+  // 26-10: sin números: si no sabe la ciudad, el bot los copiaba ("2 a 5 según tu ciudad"). El plazo va por ciudad.
+  return "Resto del país: depende del courier y de la ciudad; el de la ciudad del cliente está en PLAZO PARA SU CIUDAD";
 }
 
 /** Palabras que también son ciudades: solo cuentan como ciudad después de "a", "en", "de", "desde" o "para". */
@@ -667,15 +686,16 @@ export function ciudadesMencionadas(textos: string[], max = 3): string[] {
  * preguntarla.
  */
 export function lineaPlazoCiudades(ciudades: string[], ahora: Date): string {
+  const otra = `Si dijo una ciudad del interior que no figura acá: ${plazoPap3a7 ? "3 a 7" : "2 a 5"} días hábiles.`;
   if (!ciudades.length) {
-    return "PLAZO PARA SU CIUDAD: todavía no dijo una ciudad que conozcamos. Si pregunta cuándo llega, preguntale de qué ciudad es antes de darle un plazo (en el interior no prometas días sin esta línea; si dijo una ciudad que no figura acá, decí 3 a 7 días hábiles).";
+    return `PLAZO PARA SU CIUDAD: todavía no dijo una ciudad que conozcamos. Si pregunta cuándo llega, preguntale de qué ciudad es antes de darle un plazo. ${otra}`;
   }
   const partes = ciudades.map((c) => {
     const d = diaEntrega(c, ahora);
     const quien = d.courier === "lucero" ? " (Lucero del Este)" : d.courier === "pap" ? " (Punto a Punto)" : "";
     return `${c}: ${d.texto}${quien}`;
   });
-  return `PLAZO PARA SU CIUDAD (ya calculado con su courier; decí exactamente esto): ${partes.join(". ")}.`;
+  return `PLAZO PARA SU CIUDAD (ya calculado con su courier; decí exactamente esto): ${partes.join(". ")}. ${otra}`;
 }
 
 /**
