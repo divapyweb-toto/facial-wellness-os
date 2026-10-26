@@ -16,6 +16,8 @@
 // suelto al precio ya no frena los recontactos, y el aviso por una fecha prometida fuera de la ventana sale desde las 8.
 // Además (21-10): cierre de las reactivaciones de pedidos cancelados (reactivaciones.ts): dijo que no o venció → Telegram
 // (paquete en el courier) o se cancela de verdad en Shopify (pedido abierto).
+// Además (26-10): guardia de las ofertas extra post-compra (guardia_extra_io.ts): una vez por día; si (a) conversión,
+// (b) cancelaciones tras la oferta o (c) entrega empeoran 5+ puntos (con muestra y sin azar), la apaga y avisa.
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
@@ -25,6 +27,7 @@ import { pedirDatosFaltantes } from "./datos_faltantes.ts";
 import { correrReactivaciones } from "./reactivaciones.ts";
 import { db } from "../_shared/db.ts";
 import { cancelarPedido } from "../_shared/shopify.ts";
+import { correrGuardiaExtra } from "./guardia_extra_io.ts";
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
 
@@ -62,6 +65,14 @@ Deno.serve(conServiceRole(async () => {
       await avisar(`<b>Reactivaciones: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`).catch(() => {});
     });
   if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(reactivaciones);
+  // 26-10: guardia de las ofertas extra post-compra (una vez por día; apaga sola la que empeora).
+  const guardia = correrGuardiaExtra()
+    .then((r) => Object.keys(r).length && console.log("seguimiento-chat guardia_extra", JSON.stringify(r)))
+    .catch(async (e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      await avisar(`<b>Guardia de ofertas extra: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`).catch(() => {});
+    });
+  if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(guardia);
   const tarea = correrSeguimientos(depsReales)
     .then((r) => console.log("seguimiento-chat", JSON.stringify(r)))
     .catch(async (e) => {

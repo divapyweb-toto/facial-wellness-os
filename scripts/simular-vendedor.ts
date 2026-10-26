@@ -367,7 +367,30 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
     crearOrdenShopify: (input) => {
       const numero = ++siguienteNuevo;
       anotar("shopify", "crearOrdenShopify (orderCreate)", input);
-      return Promise.resolve({ ok: true, shopify_order_id: 9_000_000_000 + numero, gid: `gid://shopify/Order/${9_000_000_000 + numero}`, nombre: `#${numero}`, total: null, nodo: { id: `gid://shopify/Order/${9_000_000_000 + numero}`, name: `#${numero}` } });
+      // 26-10: el pedido creado queda legible (pedidoCompleto), como en Shopify: lo necesita la oferta extra post-compra.
+      const o = (input as { order?: Record<string, unknown> }).order ?? {};
+      const items = (o.lineItems ?? []) as Array<{ variantId: string; quantity: number; priceSet: { shopMoney: { amount: string } } }>;
+      const envio = Number(((o.shippingLines ?? []) as Array<{ priceSet: { shopMoney: { amount: string } } }>)[0]?.priceSet.shopMoney.amount ?? 0);
+      const dir = (o.shippingAddress ?? null) as Record<string, string | null> | null;
+      const id = 9_000_000_000 + numero;
+      const lineasNuevas = items.map((l, i) => {
+        const prod = prods.find((x) => x.variantes.some((v) => v.id === l.variantId));
+        return {
+          line_item_id: `gid://shopify/LineItem/${numero}${i}`, variante_id: l.variantId, handle: prod?.handle ?? "",
+          titulo: prod?.title ?? "", cantidad: l.quantity, total: Number(l.priceSet.shopMoney.amount) * l.quantity,
+        };
+      });
+      pedidos.set(id, {
+        shopify_order_id: id, gid: `gid://shopify/Order/${id}`, nombre: `#${numero}`, creado_en: ahora().toISOString(),
+        telefono: (o.phone as string) ?? telCliente, email: null, cliente_id: CLIENTE, customer_gid: null,
+        nombre_cliente: dir ? `${dir.firstName ?? ""} ${dir.lastName ?? ""}`.trim() : null,
+        total: lineasNuevas.reduce((x, l) => x + l.total, 0) + envio, envio, cancelado: false, despachado: false,
+        estado_confirmacion: "confirmado", app: "Voltra OS", merchant_editable: true, tags: (o.tags as string[]) ?? [],
+        atributos: (o.customAttributes as Array<{ key: string; value: string }>) ?? [], nota: (o.note as string) ?? null,
+        direccion: dir ? { firstName: dir.firstName ?? null, lastName: dir.lastName ?? null, address1: dir.address1 ?? null, address2: dir.address2 ?? null, city: dir.city ?? null, countryCode: dir.countryCode ?? "PY", phone: dir.phone ?? null } : null,
+        lineas: lineasNuevas,
+      } as never);
+      return Promise.resolve({ ok: true, shopify_order_id: id, gid: `gid://shopify/Order/${id}`, nombre: `#${numero}`, total: null, nodo: { id: `gid://shopify/Order/${id}`, name: `#${numero}` } });
     },
     registrarComoReleasit: (nodo) => (anotar("db", "registrarComoReleasit (shopify_pedidos + confirmación)", { pedido: nodo.name ?? nodo.id }), Promise.resolve()),
     pasarAHumano: (id) => {

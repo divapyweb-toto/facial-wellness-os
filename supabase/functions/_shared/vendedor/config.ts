@@ -54,7 +54,73 @@ export type CfgVendedorExtra = {
   oferta_2_distintos: boolean;
   /** 21-10 (v38): "quiero", "me interesa", "mandame"… escrito = tocar "Quiero 1" (intencion.ts). Apagar: false. */
   intencion_escrita: boolean;
+  /**
+   * 26-10: primer mensaje por producto (handle → ajuste). sin_oferta_2: sin botón ni frase de "2 con envío gratis"
+   * (el 2 se vende solo si lo pide); texto: el gancho fijo en vez del que escribe el modelo; media: "foto" | "video" | "uso"
+   * de vendedor_media, entre el texto y el precio. Vacío = como siempre. Interruptor: sacar el producto de la lista.
+   */
+  primer_turno_producto: Record<string, PrimerTurnoProducto>;
+  /** 26-10: ofertas extra después de la compra (oferta_extra.ts). Cada una con su `activo`; vacío = ninguna. */
+  ofertas_extra: Record<string, OfertaExtraCfg>;
 };
+
+export type PrimerTurnoProducto = { sin_oferta_2?: boolean; texto?: string; media?: "foto" | "video" | "uso" };
+
+/** 26-10: una oferta extra post-compra. Los montos y textos viven en config_wa.vendedor.ofertas_extra (nunca la IA). */
+export type OfertaExtraCfg = {
+  activo: boolean;
+  /** Regex (sin mayúsculas) sobre el handle de las líneas del pedido: se ofrece si alguna coincide. */
+  si_lleva: string;
+  /** Regex: NO se ofrece si alguna línea coincide (ya lleva el extra o un pack). */
+  no_si_lleva: string;
+  /** Handle del producto extra. */
+  extra: string;
+  precio: number;
+  /** Se ofrece solo con MÁS de este stock del extra en Shopify. */
+  stock_min: number;
+  /** Etiqueta del pedido que suma el extra. */
+  tag: string;
+  /** Texto de la oferta; {precio} se reemplaza por el precio de config. */
+  texto: string;
+};
+
+function primerTurnoDe(v: unknown): Record<string, PrimerTurnoProducto> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, PrimerTurnoProducto> = {};
+  for (const [h, x] of Object.entries(v as Record<string, unknown>)) {
+    if (!x || typeof x !== "object") continue;
+    const o = x as Record<string, unknown>;
+    out[h] = {
+      ...(o.sin_oferta_2 === true ? { sin_oferta_2: true } : {}),
+      ...(typeof o.texto === "string" && o.texto.trim() ? { texto: o.texto.trim() } : {}),
+      ...(o.media === "foto" || o.media === "video" || o.media === "uso" ? { media: o.media } : {}),
+    };
+  }
+  return out;
+}
+
+function ofertasExtraDe(v: unknown): Record<string, OfertaExtraCfg> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, OfertaExtraCfg> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (!x || typeof x !== "object") continue;
+    const o = x as Record<string, unknown>;
+    const precio = Number(o.precio), stock = Number(o.stock_min);
+    const str = (c: string) => (typeof o[c] === "string" ? (o[c] as string).trim() : "");
+    if (!str("si_lleva") || !str("extra") || !str("tag") || !str("texto") || !(precio > 0)) continue; // incompleta: no se usa
+    try {
+      new RegExp(str("si_lleva"));
+      if (str("no_si_lleva")) new RegExp(str("no_si_lleva"));
+    } catch {
+      continue;
+    }
+    out[k] = {
+      activo: o.activo === true, si_lleva: str("si_lleva"), no_si_lleva: str("no_si_lleva"), extra: str("extra"),
+      precio: Math.round(precio), stock_min: Number.isFinite(stock) && stock >= 0 ? stock : 10, tag: str("tag"), texto: str("texto"),
+    };
+  }
+  return out;
+}
 
 export const MODELO_TOPE_DEFAULT = "claude-haiku-4-5-20251001";
 
@@ -73,6 +139,8 @@ export function extrasVendedor(v: CfgVendedor): CfgVendedorExtra {
     espera_agrupar_datos_s: num("espera_agrupar_datos_s") ?? 18,
     oferta_2_distintos: x.oferta_2_distintos === true,
     intencion_escrita: x.intencion_escrita !== false,
+    primer_turno_producto: primerTurnoDe(x.primer_turno_producto),
+    ofertas_extra: ofertasExtraDe(x.ofertas_extra),
   };
 }
 

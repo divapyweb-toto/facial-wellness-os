@@ -103,6 +103,35 @@ export const RUC_PRUEBA = rucValido("1234567");
 
 const SIN_ACCION_INVENTADA = /(qued[oó]|ya (est[aá]|te lo)|listo|hecho|actualic|cambi[eé]|modifiqu[eé]).{0,40}(cambiad|modificad|actualizad|2 unidades|dos unidades|x ?2|158)/i;
 
+/** 26-10: config de las ofertas extra para los escenarios (la real arranca apagada). */
+const OFERTAS_EXTRA_PRUEBA = {
+  parches_raspador: {
+    activo: true, si_lleva: "raspador", no_si_lleva: "parche|pack", extra: "parches-bucales-gudair-30-unidades", precio: 49000,
+    stock_min: 10, tag: "OFERTA_EXTRA_PARCHES",
+    texto: "¿Querés sumar parches bucales por {precio} en el mismo envío? De noche, respirar por la boca la seca; el parche ayuda a dormir con la boca cerrada. Precio normal 79.000.",
+  },
+};
+const OFERTA_BOTELLA_PRUEBA = {
+  botella_jawflex: {
+    activo: true, si_lleva: "ejercitador|mandibula|jaw", no_si_lleva: "botella", extra: "botella-flexible-gudair-500-ml", precio: 49000,
+    stock_min: 10, tag: "OFERTA_EXTRA_BOTELLA",
+    texto: "¿Querés sumar la botella deportiva que se enrolla por {precio} en el mismo envío? Para el agua del gym, correr o viajar; vacía se enrolla y entra en el bolsillo. Precio normal 79.000.",
+  },
+};
+const PRIMER_TURNO_PRUEBA = {
+  "ejercitador-de-mandibula-3-niveles": {
+    sin_oferta_2: true, media: "foto",
+    texto: "Es un ejercitador de mandíbula de silicona con 3 niveles de dureza. Lo mordés unos minutos por día para entrenar los músculos de la mandíbula.",
+  },
+  "botella-flexible-gudair-500-ml": { sin_oferta_2: true },
+};
+const FICHA_BOTELLA_PRUEBA = {
+  "botella-flexible-gudair-500-ml": {
+    ficha: "Botella deportiva de 500 ml que se enrolla cuando está vacía (decí 'deportiva que se enrolla', nunca 'plegable')",
+    beneficios: ["Vacía se enrolla y entra en cualquier bolsillo", "Liviana para correr, ir al gym o viajar", "Libre de BPA y PVC, con boquilla que no gotea"],
+  },
+};
+
 export const ESCENARIOS: Escenario[] = [
   {
     nombre: "ok_al_precio",
@@ -560,6 +589,100 @@ export const ESCENARIOS: Escenario[] = [
       { paso: 0, tipo: "texto", regex: /ciudad|d[oó]nde (sos|viv|est)/i, desc: "pregunta la ciudad" },
       { paso: 0, tipo: "texto", regex: /2 a 5 d[ií]as h[aá]biles/i, negar: true, desc: "no promete 2 a 5 sin ciudad" },
       { tipo: "montos_catalogo" },
+    ],
+  },
+  // 26-10: oferta extra post-compra (oferta_extra.ts) y primer mensaje por producto. Config pisada en el escenario
+  // (en producción arranca apagada). Datos inventados.
+  {
+    nombre: "extra_parches_raspador_si",
+    descripcion: "26-10: compra 1 Raspador y confirma; recién DESPUÉS, en mensaje aparte, la oferta de parches a 49.000; toca 'Sí, quiero' → el pedido se reemplaza con los parches y la etiqueta OFERTA_EXTRA_PARCHES.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000151" },
+    anuncio: RASPADOR,
+    consentimiento: "si",
+    config: { vendedor: { ofertas_extra: OFERTAS_EXTRA_PRUEBA } },
+    pasos: ["Hola, quiero el raspador", "boton:Quiero 1", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo", "boton:Sí, quiero"],
+    checks: [
+      { paso: 2, tipo: "texto", regex: /parches/i, negar: true, desc: "nada de la oferta antes de confirmar" },
+      { paso: 3, tipo: "herramienta", nombre: "crear_pedido_cod" },
+      { paso: 3, tipo: "herramienta", nombre: "oferta_extra(sistema)" },
+      { paso: 3, tipo: "texto", regex: /parches bucales por ₲49\.000/, desc: "oferta con el precio de config" },
+      { paso: 3, tipo: "boton", regex: /vend_extra_no:/, desc: "botón No, gracias" },
+      { paso: 4, tipo: "herramienta", nombre: "oferta_extra_si(sistema)" },
+      { paso: 4, tipo: "escritura", regex: /OFERTA_EXTRA_PARCHES/, desc: "el pedido nuevo lleva la etiqueta" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "extra_parches_raspador_no",
+    descripcion: "26-10: la oferta de parches después de confirmar; toca 'No, gracias' → el pedido queda igual, no se reemplaza y no se insiste.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000152" },
+    anuncio: RASPADOR,
+    consentimiento: "si",
+    config: { vendedor: { ofertas_extra: OFERTAS_EXTRA_PRUEBA } },
+    pasos: ["Hola, quiero el raspador", "boton:Quiero 1", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo", "boton:No, gracias"],
+    checks: [
+      { paso: 3, tipo: "herramienta", nombre: "oferta_extra(sistema)" },
+      { paso: 4, tipo: "herramienta", nombre: "oferta_extra_no(sistema)" },
+      { paso: 4, tipo: "texto", regex: /queda como estaba/ },
+      { paso: 4, tipo: "escritura", regex: /OFERTA_EXTRA_PARCHES|REEMPLAZA_A_/, negar: true, desc: "no se toca el pedido" },
+      { paso: 4, tipo: "texto", regex: /parches/i, negar: true, desc: "no vuelve a ofrecer" },
+    ],
+  },
+  {
+    nombre: "extra_no_si_lleva_pack",
+    descripcion: "26-10: compra el pack (ya lleva parches): no se ofrecen parches extra.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000153" },
+    anuncio: "pack-gudair-tiras-nasales-parches-bucales",
+    consentimiento: "si",
+    config: { vendedor: { ofertas_extra: OFERTAS_EXTRA_PRUEBA } },
+    pasos: ["Hola, quiero el pack", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo"],
+    checks: [
+      { paso: 2, tipo: "herramienta", nombre: "crear_pedido_cod" },
+      { paso: 2, tipo: "herramienta", nombre: "oferta_extra(sistema)", negar: true },
+    ],
+  },
+  {
+    nombre: "jawflex_primer_mensaje",
+    descripcion: "26-10: anuncio de JawFlex: qué es y para qué sirve (texto fijo), foto en uso y precio de 1; sin el botón de 2.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000154" },
+    anuncio: "ejercitador-de-mandibula-3-niveles",
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA } },
+    pasos: ["¡Hola! Quiero más información"],
+    checks: [
+      { paso: 0, tipo: "texto", regex: /Es un ejercitador de mandíbula/, desc: "texto fijo de qué es" },
+      { paso: 0, tipo: "boton", regex: /vend_p1:q1:/, desc: "Quiero 1" },
+      { paso: 0, tipo: "boton", regex: /vend_p1:q2:/, negar: true, desc: "sin botón de 2" },
+      { paso: 0, tipo: "texto", regex: /Llevando 2|158\.000/, negar: true, desc: "sin precio de 2" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "botella_sin_2_deportiva",
+    descripcion: "26-10: anuncio de la botella: sin '2 por 158.000' y nunca 'plegable'.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000155" },
+    anuncio: "botella-flexible-gudair-500-ml",
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA }, vendedor_fichas: FICHA_BOTELLA_PRUEBA },
+    pasos: ["Hola, quiero más información", "¿y para qué sirve?"],
+    checks: [
+      { paso: 0, tipo: "boton", regex: /vend_p1:q2:/, negar: true, desc: "sin botón de 2" },
+      { tipo: "texto", regex: /Llevando 2|158\.000|2 por/, negar: true, desc: "nunca ofrece 2" },
+      { tipo: "texto", regex: /plegable/i, negar: true, desc: "nunca 'plegable'" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "extra_botella_jawflex_si",
+    descripcion: "26-10 (apagada en producción hasta el 06-11): compra JawFlex y confirma; después, la botella deportiva a 49.000; 'Sí, quiero' → pedido con OFERTA_EXTRA_BOTELLA.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000156" },
+    anuncio: "ejercitador-de-mandibula-3-niveles",
+    consentimiento: "si",
+    config: { vendedor: { ofertas_extra: OFERTA_BOTELLA_PRUEBA, primer_turno_producto: PRIMER_TURNO_PRUEBA } },
+    pasos: ["Hola, quiero más información", "boton:Quiero 1", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo", "boton:Sí, quiero"],
+    checks: [
+      { paso: 3, tipo: "herramienta", nombre: "oferta_extra(sistema)" },
+      { paso: 3, tipo: "texto", regex: /botella deportiva que se enrolla por ₲49\.000/ },
+      { paso: 4, tipo: "escritura", regex: /OFERTA_EXTRA_BOTELLA/ },
+      { tipo: "texto", regex: /plegable/i, negar: true },
     ],
   },
 ];

@@ -123,6 +123,8 @@ export type ProductoShopify = {
   status?: string;
   imagen: string | null;
   variantes: { id: string; title: string; price: number; disponible: boolean }[];
+  /** 26-10: unidades en Shopify (totalInventory, sincronizado con Voltra OS). Sin dato = null (no se ofrece de extra). */
+  stock?: number | null;
 };
 
 export type PedidoCliente = {

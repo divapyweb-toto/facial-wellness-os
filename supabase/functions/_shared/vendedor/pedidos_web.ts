@@ -107,6 +107,9 @@ export type DatosModificacion = {
   lineas: LineaPedido[];
   envio: number;
   total: number;
+  /** 26-10: la modificación es una oferta extra post-compra (oferta_extra.ts): su clave en config y la etiqueta del pedido. */
+  oferta_extra?: string;
+  tags_extra?: string[];
 };
 
 export type ModificacionPedido = {
@@ -437,14 +440,16 @@ export function inputBorradorReemplazo(p: PedidoWeb, d: DatosModificacion, modif
     quantity: l.quantity,
     priceOverride: money(Number(((l.priceSet as { shopMoney: { amount: string } }).shopMoney).amount)),
   }));
-  const tags = [...new Set([...p.tags.filter((t) => !tagNoSeCopia(t)), "CONFIRMADO", tagReemplaza(p.nombre)])];
+  const tags = [...new Set([...p.tags.filter((t) => !tagNoSeCopia(t)), "CONFIRMADO", tagReemplaza(p.nombre), ...(d.tags_extra ?? [])])];
   const atributos = mezclarAtributos(
     p.atributos.filter((a) => !ATRIBUTOS_NO_COPIAR.has(a.key.trim().toLowerCase())),
     [{ key: "reemplaza_a", value: nombreConNumeral(p.nombre) }, { key: "modificacion_id", value: modificacionId }],
   );
   const nota = [
     p.nota?.trim() || null,
-    `Reemplaza al pedido ${nombreConNumeral(p.nombre)}: el cliente cambió el pedido por WhatsApp (${titulosLineas(d.lineas)}). Ya confirmado.`,
+    d.oferta_extra
+      ? `Reemplaza al pedido ${nombreConNumeral(p.nombre)}: el cliente sumó la oferta extra por WhatsApp (${titulosLineas(d.lineas)}). Ya confirmado.`
+      : `Reemplaza al pedido ${nombreConNumeral(p.nombre)}: el cliente cambió el pedido por WhatsApp (${titulosLineas(d.lineas)}). Ya confirmado.`,
   ].filter(Boolean).join("\n");
   const input: Record<string, unknown> = {
     lineItems,

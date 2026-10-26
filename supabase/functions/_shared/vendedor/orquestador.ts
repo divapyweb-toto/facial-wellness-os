@@ -77,6 +77,10 @@ import {
   yaReenvioBotones,
 } from "./w1_vendedor.ts";
 import { calcularDemoraMs, partirEnBurbujas, pausaBurbujaMs } from "./ritmo.ts";
+import {
+  botonOfertaExtra, datosModificacionExtra, elegirOfertaExtra, esModificacionExtra, interactivoOfertaExtra, TEXTO_NO_EXTRA,
+  textoOfertaExtra, textoTrasSi,
+} from "./oferta_extra.ts";
 import type { ConfigTurno, CtxTurno, DepsHerramientas } from "./tipos.ts";
 
 export type FilaHistorial = {
@@ -457,6 +461,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   /** 12-10: en este turno se creó un pedido → después de la respuesta, el permiso para ofertas (si nunca lo respondió). */
   let pedidoCreadoEnTurno = false;
   let pedidoCreadoId: number | null = null;
+  let pedidoCreadoNombre: string | null = null;
   /**
    * 12-10: orden pedido por Enrique: confirmación → oferta de pago con prioridad (la manda shopify-webhook/procesar-envios
    * segundos después, clave prio:<id>) → permiso. Espera hasta 20 s a que la oferta salga; si en 8 s ni apareció, no hay oferta.
@@ -479,6 +484,32 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     await esperarEscribiendo(pausaBurbujaMs(TEXTO_PERMISO_OFERTAS, cfg.ritmo, azar()));
     const r = await deps.herramientas.enviarInteractivo(ctx.destino, botonesPermisoOfertas(cli.id), { clienteId: cli.id, conversacionId: conv.id });
     fila.herramientas.push({ nombre: "permiso_ofertas(sistema)", input: {}, resultado: { ok: r.ok, error: r.error ?? null }, error: !r.ok });
+  };
+
+  /**
+   * 26-10 (Enrique): oferta extra DESPUÉS de la compra (oferta_extra.ts): el pedido ya quedó creado y confirmado, va
+   * última y en un mensaje aparte (después de la confirmación, la oferta de prioridad y el permiso), una sola vez.
+   */
+  const ofrecerExtraTrasPedido = async () => {
+    const pw = deps.herramientas.pedidosWeb;
+    if (!pw || pedidoCreadoId == null || !pedidoCreadoNombre) return;
+    const ofertas = extra.ofertas_extra;
+    if (!Object.values(ofertas).some((o) => o.activo)) return;
+    const pc = await deps.herramientas.ultimoPedidoChat(conv.id).catch(() => null);
+    if (!pc || pc.estado !== "creado" || pc.shopify_order_id !== pedidoCreadoId || pc.datos.retiro) return;
+    const elegida = elegirOfertaExtra(pc.datos.lineas, ofertas, await catalogo(deps.herramientas, ctx).catch(() => []));
+    if (!elegida) return;
+    const mod = await pw.guardarModificacion({
+      conversacion_id: conv.id, cliente_id: cli.id, shopify_order_id: pedidoCreadoId, estado: "resumen",
+      datos: datosModificacionExtra(pc, pedidoCreadoNombre, elegida), nuevo_order_id: null, nuevo_nombre: null, error: null,
+    });
+    await esperarEscribiendo(pausaBurbujaMs(textoOfertaExtra(elegida.cfg), cfg.ritmo, azar()));
+    const r = await deps.herramientas.enviarInteractivo(ctx.destino, interactivoOfertaExtra(elegida.cfg, mod.id), { clienteId: cli.id, conversacionId: conv.id });
+    // El precio queda en el turno: el filtro de los turnos siguientes lo permite (lo puso el sistema, no la IA).
+    fila.herramientas.push({
+      nombre: "oferta_extra(sistema)", input: { clave: elegida.clave, pedido: pedidoCreadoNombre },
+      resultado: { ok: r.ok, error: r.error ?? null, precio: elegida.cfg.precio, modificacion_id: mod.id }, error: !r.ok,
+    });
   };
 
   /** Espera con "escribiendo…" visible (WhatsApp lo apaga a los ~25 s: se renueva). */
@@ -525,7 +556,10 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         return await cerrar({ accion: "error_envio", motivo: envio.error, respuesta: texto }, op);
       }
     }
-    if (pedidoCreadoEnTurno) await pedirPermisoTrasPedido().catch((e) => console.error("vendedor: permiso de ofertas:", e));
+    if (pedidoCreadoEnTurno) {
+      await pedirPermisoTrasPedido().catch((e) => console.error("vendedor: permiso de ofertas:", e));
+      await ofrecerExtraTrasPedido().catch((e) => console.error("vendedor: oferta extra:", e));
+    }
     return await cerrar({ accion: accionOk, motivo: motivoOk, respuesta: texto }, op);
   };
 
@@ -558,6 +592,27 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
   };
   /** El acuse al precio no se pudo resolver sin modelo: se le avisa al modelo que no es un cierre. */
   let notaAcuseOferta = false;
+
+  // 26-10: respuesta a la oferta extra (sin modelo): "Sí, quiero" ejecuta el reemplazo ya armado; "No, gracias" lo descarta.
+  const botonExtra = esSeguimiento ? null : botonOfertaExtra(entrada.texto);
+  if (botonExtra && deps.herramientas.pedidosWeb) {
+    const pw = deps.herramientas.pedidosWeb;
+    const mod = await pw.modificacion(botonExtra.id).catch(() => null);
+    if (esModificacionExtra(mod)) {
+      let texto: string;
+      if (botonExtra.tipo === "no") {
+        if (mod.estado === "resumen") await pw.guardarModificacion({ ...mod, estado: "corregido", error: "no_quiso_extra" }).catch(() => {});
+        texto = TEXTO_NO_EXTRA;
+        fila.herramientas.push({ nombre: "oferta_extra_no(sistema)", input: { id: mod.id }, resultado: { ok: true }, error: false });
+      } else {
+        const res = await ejecutarHerramienta("modificar_pedido", { confirmar: true }, ctx, deps.herramientas);
+        fila.herramientas.push({ nombre: "oferta_extra_si(sistema)", input: { id: mod.id }, resultado: resumirResultado(res.resultado), error: !!res.esError });
+        texto = textoTrasSi(res);
+      }
+      fila.modelo = "fija";
+      return await responder(texto, "respondido", `fija:oferta_extra_${botonExtra.tipo}`, { contarTurno: false });
+    }
+  }
 
   // Respuestas fijas (sin modelo): sticker al empezar, "gracias" suelto, "ok" después del pedido, "ok" al precio.
   // 19-10 (#1049): el bloque se cuenta sin lo que no va al vendedor (botón del permiso de ofertas, reacciones): un "ok"
@@ -685,12 +740,13 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     // Sin stock: lo resuelve el modelo con su regla (ofrece otro de la línea).
     if (prod && !prod.disponible) intencion = null;
     else {
-      if (prod) permitidos.push(...montosDeResultado(lineaPrecioIntencion(prod, intencion.cantidad)));
+      const sin2 = prod ? extra.primer_turno_producto[prod.handle]?.sin_oferta_2 === true : false; // 26-10
+      if (prod) permitidos.push(...montosDeResultado(lineaPrecioIntencion(prod, intencion.cantidad, sin2)));
       if (intencion.cantidad && !perfil.cantidad) perfil = { ...perfil, cantidad: intencion.cantidad };
       fila.herramientas.push({ nombre: "intencion_escrita(sistema)", input: { frase: intencion.frase, cantidad: intencion.cantidad }, resultado: { ok: true, handle: prod?.handle ?? null }, error: false });
       const ultimo = mensajes[mensajes.length - 1];
       if (ultimo.role === "user" && typeof ultimo.content === "string") {
-        mensajes[mensajes.length - 1] = { ...ultimo, content: `${ultimo.content}\n${notaIntencion(intencion, prod)}` };
+        mensajes[mensajes.length - 1] = { ...ultimo, content: `${ultimo.content}\n${notaIntencion(intencion, prod, sin2)}` };
       }
     }
   }
@@ -803,6 +859,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
         if (res.pedidoCreado) {
           pedidoCreadoEnTurno = true;
           pedidoCreadoId = res.pedidoCreado.shopify_order_id;
+          pedidoCreadoNombre = res.pedidoCreado.nombre;
         }
       }
       if (terminal) {

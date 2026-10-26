@@ -1263,20 +1263,25 @@ export const VARIANTE_PRIMER_TURNO = "botones_v2";
 export const esPack = (handle: string) => /(^|-)pack(-|$)/.test(handle);
 
 /** Botones según el producto: pack → Quiero el pack / Tengo una duda; con oferta ×2 → Quiero 1 / Quiero 2 · sin envío / Tengo una duda. */
-export function botonesPrimerTurno(prod: ItemCatalogo): { id: string; titulo: string }[] {
+/** 26-10: ajuste del primer mensaje de ese producto (config_wa.vendedor.primer_turno_producto). */
+export const primerTurnoDe = (ctx: CtxTurno, handle: string) => extrasVendedor(ctx.cfg.vendedor).primer_turno_producto[handle] ?? {};
+
+export function botonesPrimerTurno(prod: ItemCatalogo, sinOferta2 = false): { id: string; titulo: string }[] {
   const b = (clave: string, titulo: string) => ({ id: `vend_p1:${clave}:${prod.handle}`, titulo });
   if (esPack(prod.handle)) return [b("pack", "Quiero el pack"), b("duda", "Tengo una duda")];
+  // 26-10: JawFlex (el 2 solo si lo pide) y Botella ("¿para qué quiero 2?"): sin el botón de 2.
+  if (sinOferta2) return [b("q1", "Quiero 1"), b("duda", "Tengo una duda")];
   const x2 = prod.ofertas.find((o) => o.cantidad === 2);
   // 13-10 (Enrique): "envío gratis" vende más que "sin envío", y la mejor opción va primero.
   return x2 && x2.total <= 2 * prod.precio ? [b("q2", "2 con envío gratis"), b("q1", "Quiero 1"), b("duda", "Tengo una duda")] : [b("q1", "Quiero 1"), b("duda", "Tengo una duda")];
 }
 
 /** Segunda burbuja: todos los totales con envío incluido (13-10, Enrique). Los montos salen del catálogo, nunca del modelo. */
-export function cuerpoPrimerTurno(prod: ItemCatalogo): string {
+export function cuerpoPrimerTurno(prod: ItemCatalogo, sinOferta2 = false): string {
   // 14-10 (Enrique): el precio igual al anuncio. 4 de 5 clientes del 13-10 preguntaron "¿no es 79 mil?" y se fueron.
   // Nunca "1 por 112.000" ni "todo con envío incluido"; el 3 solo si pregunta por más cantidad.
   const base = `Sale ${frasePrecio(prod.precio, ctxEnvio(prod))}, pagás al recibir.`;
-  if (esPack(prod.handle)) return base;
+  if (esPack(prod.handle) || sinOferta2) return base;
   const x2 = prod.ofertas.find((o) => o.cantidad === 2);
   if (!x2 || x2.total > 2 * prod.precio) return base;
   return `${base} Llevando 2 el envío te sale gratis: ${gs(x2.total)} por los 2.`;
@@ -1286,10 +1291,12 @@ export function cuerpoPrimerTurno(prod: ItemCatalogo): string {
 const ctxEnvio = (prod: ItemCatalogo) => prod.total - prod.precio;
 
 /** Frases que el vendedor usa después del toque (montos permitidos por el filtro porque quedan en el resultado). */
-export function frasesCantidad(prod: ItemCatalogo): Record<string, string> {
+export function frasesCantidad(prod: ItemCatalogo, sinOferta2 = false): Record<string, string> {
   const x2 = prod.ofertas.find((o) => o.cantidad === 2);
   const x3 = prod.ofertas.find((o) => o.cantidad === 3);
   const f: Record<string, string> = {};
+  // 26-10: el 2 solo si lo pide (los precios por cantidad siguen en `ofertas` para cuando pregunte).
+  if (sinOferta2) return f;
   if (x2 && x2.total <= 2 * prod.precio) f.pasar_a_2 = `Ojo: llevando 2 el envío te sale GRATIS (${gs(x2.total)} los 2)`;
   const menos3 = x3 ? 3 * prod.precio - x3.total : 0;
   if (x2 && x3 && x3.total > x2.total) {
@@ -1311,17 +1318,24 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
   }
   const prod = items.find((x) => x.handle === input.handle);
   if (!prod) return error(`producto_desconocido:${input.handle}. Usá consultar_catalogo y el handle exacto.`);
-  const g = textoRevisado({ texto: input.gancho }, ctx);
+  // 26-10: primer mensaje por producto (JawFlex: qué es + para qué sirve fijo, foto, precio de 1; Botella: sin el 2).
+  const pt = primerTurnoDe(ctx, prod.handle);
+  const g = pt.texto ? { ok: true as const, texto: pt.texto } : textoRevisado({ texto: input.gancho }, ctx);
   if (!g.ok) return g.r;
-  const cuerpo = cuerpoPrimerTurno(prod);
+  const cuerpo = cuerpoPrimerTurno(prod, pt.sin_oferta_2);
   let interactivo: Record<string, unknown>;
   try {
-    interactivo = botonesRespuesta(cuerpo, botonesPrimerTurno(prod));
+    interactivo = botonesRespuesta(cuerpo, botonesPrimerTurno(prod, pt.sin_oferta_2));
   } catch (e) {
     return error(`interactivo_invalido: ${e instanceof Error ? e.message : e}. Respondé con frase_precio en texto.`);
   }
   const r1 = await deps.enviarTexto(ctx.destino, g.texto, opts(ctx));
   if (!r1.ok) return error(`envio_fallido: ${r1.error}. Respondé con el gancho y frase_precio en texto.`);
+  const link = pt.media ? ctx.cfg.media[prod.handle]?.[pt.media] : undefined;
+  if (link) {
+    const m = await deps.enviarMedia(ctx.destino, pt.media === "foto" ? "image" : "video", link, null, opts(ctx));
+    if (!m.ok) console.warn(`primer_turno: no salió la ${pt.media} de ${prod.handle}: ${m.error}`); // el precio sale igual
+  }
   // Pausa de "escribiendo…" proporcional a la segunda burbuja, como entre burbujas de texto (fase 4).
   if (ctx.pausa && ctx.cfg.ritmo) await ctx.pausa(pausaBurbujaMs(cuerpo, ctx.cfg.ritmo, Math.random()));
   const r2 = await deps.enviarInteractivo(ctx.destino, interactivo, opts(ctx));
@@ -1336,7 +1350,8 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
       // Quedan en vendedor_turnos: el filtro de los turnos siguientes permite estos montos (×2 / ×3 al pedir los datos).
       frase_precio: prod.frase_precio,
       ofertas: prod.ofertas.map((o) => o.frase_precio),
-      ...frasesCantidad(prod),
+      ...frasesCantidad(prod, pt.sin_oferta_2),
+      ...(pt.sin_oferta_2 ? { nota_cantidad: "De este producto ofrecé 1. El precio de 2 decilo solo si el cliente pide más de uno." } : {}),
       nota: "Ya se le mandaron el gancho y los precios con botones. No escribas nada más.",
     },
     terminal: true,
@@ -1353,9 +1368,10 @@ async function cierreBotones(input: Record<string, unknown>, ctx: CtxTurno, deps
   }
   const prod = items.find((x) => x.handle === input.handle);
   if (!prod) return error(`producto_desconocido:${input.handle}. Usá consultar_catalogo y el handle exacto.`);
+  const sin2 = primerTurnoDe(ctx, prod.handle).sin_oferta_2;
   return await enviarInteractivoRevisado(input, ctx, deps, (t) =>
-    botonesRespuesta(t, botonesPrimerTurno(prod)),
-    { ofertas: prod.ofertas.map((o) => o.frase_precio), ...frasesCantidad(prod) });
+    botonesRespuesta(t, botonesPrimerTurno(prod, sin2)),
+    { ofertas: prod.ofertas.map((o) => o.frase_precio), ...frasesCantidad(prod, sin2) });
 }
 
 /** 12-10: permiso para ofertas (opt-in de Meta) al final, cuando el cliente posterga. Una vez por cliente. */

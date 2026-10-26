@@ -31,7 +31,7 @@ function falla(contexto: string, error: { message: string } | null): void {
 const QUERY_CATALOGO = `query($q: String) {
   products(first: 50, query: $q, sortKey: TITLE) {
     nodes {
-      id handle title status
+      id handle title status totalInventory
       featuredMedia { preview { image { url } } }
       variants(first: 10) { nodes { id title price availableForSale } }
     }
@@ -43,6 +43,7 @@ type NodoProducto = {
   handle: string;
   title: string;
   status: string;
+  totalInventory?: number | null;
   featuredMedia: { preview?: { image?: { url?: string } | null } | null } | null;
   variants: { nodes: Array<{ id: string; title: string; price: string; availableForSale: boolean }> };
 };
@@ -79,6 +80,7 @@ export const depsHerramientasReales: DepsHerramientas = {
       title: n.title,
       status: n.status,
       imagen: n.featuredMedia?.preview?.image?.url ?? null,
+      stock: typeof n.totalInventory === "number" ? n.totalInventory : null,
       variantes: n.variants.nodes.map((v) => ({ id: v.id, title: v.title, price: Number(v.price), disponible: v.availableForSale }))
         .filter((v) => Number.isFinite(v.price)),
     }));
