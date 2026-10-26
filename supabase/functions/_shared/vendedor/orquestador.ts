@@ -20,7 +20,7 @@
 // duro; avisa por Telegram al 70% / 90% / 100% / duro una vez por mes. El filtro bloquea confirmar acciones que ninguna
 // herramienta hizo en el turno. Un "ok" al precio antes del pedido reenvía los botones (no es un cierre). La espera para
 // agrupar sube a espera_agrupar_datos_s mientras el cliente manda datos. Un seguimiento no puede usar derivar_a_enrique.
-import { lineaPlazosHoy } from "../plazo_zona.ts";
+import { ciudadesMencionadas, lineaPlazoCiudades, lineaPlazosHoy } from "../plazo_zona.ts";
 import { botonesPermisoOfertas, TEXTO_PERMISO_OFERTAS } from "../wa_interactivos.ts";
 import {
   type Bloque,
@@ -269,13 +269,20 @@ export function bloquePendiente(filas: FilaHistorial[], entrada: EntradaTurno): 
 const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 
 /** Bloque variable del system (después del breakpoint de caché): fecha, hora y datos del cliente. */
-export function contextoDinamico(ahora: Date, cli: { nombre: string | null; telefono: string | null }, perfil?: PerfilCliente): string {
+export function contextoDinamico(
+  ahora: Date,
+  cli: { nombre: string | null; telefono: string | null },
+  perfil?: PerfilCliente,
+  /** 26-10: ciudades que nombró el cliente (ciudadesMencionadas); undefined = sin la línea PLAZO PARA SU CIUDAD. */
+  ciudades?: string[],
+): string {
   const p = partesAsuncion(ahora);
   const dia = DIAS[new Date(Date.UTC(p.anio, p.mes - 1, p.dia)).getUTCDay()];
   const hh = String(p.hora).padStart(2, "0"), mm = String(p.minuto).padStart(2, "0");
   return [
     `AHORA: ${dia} ${p.dia}/${p.mes}/${p.anio}, ${hh}:${mm} (hora de Asunción).`,
     lineaPlazosHoy(ahora),
+    ...(ciudades ? [lineaPlazoCiudades(ciudades, ahora)] : []),
     `CLIENTE: ${cli.nombre ? `se llama ${cli.nombre} en WhatsApp` : "sin nombre en WhatsApp"}; ${cli.telefono ? "el chat tiene su teléfono" : "el chat NO tiene su teléfono (pedilo con pedir_telefono antes de cerrar)"}.`,
     ...(perfil ? [textoPerfil(perfil)] : []),
   ].join("\n");
@@ -634,9 +641,17 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     aceptaciones: cfg.aceptaciones,
     retiro: cfg.retiro ?? null,
   }, cfg.plantillaPrompt ?? undefined);
+  // 26-10: plazo exacto de las ciudades que nombró el cliente (solo lo que escribió él, no lo nuestro), con el courier de
+  // sugerir_courier; reemplaza la lista de ciudades con Lucero que iba en cada turno.
+  const textosCliente = [...filasHistorial.filter((f) => f.direccion === "in").map((f) => textoEntranteGuardado(f) ?? ""), entrada.texto];
+  const ciudadesCliente = ciudadesMencionadas(textosCliente);
+  await Promise.all(ciudadesCliente.map((c) => deps.herramientas.consultarCourier?.(c).catch(() => {})));
   const system: BloqueTexto[] = [
     { type: "text", text: promptBase },
-    { type: "text", text: contextoDinamico(ctx.ahora, cli, perfil.producto && !perfil0.producto ? { ...perfil0, producto: perfil.producto } : perfil0) },
+    {
+      type: "text",
+      text: contextoDinamico(ctx.ahora, cli, perfil.producto && !perfil0.producto ? { ...perfil0, producto: perfil.producto } : perfil0, ciudadesCliente),
+    },
   ];
   const mensajes: Mensaje[] = armarHistorial(filasHistorial, entrada);
   if (notaAcuseOferta) {

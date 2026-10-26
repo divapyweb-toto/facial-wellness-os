@@ -15,7 +15,9 @@ import {
   hayTarifasCourier,
   limpiarCourierCiudad,
   limpiarTarifasCourier,
+  lineaPlazoCiudades,
   lineaPlazosHoy,
+  ciudadesMencionadas,
   plazoDesdeHoy,
   plazoParaEnDesdeHoy,
   rangoEntrega,
@@ -156,11 +158,9 @@ Deno.test("lineaPlazosHoy: 'Otras de Central' no sale de la tabla; 26-10: interi
     const con = lineaPlazosHoy(LUNES_10);
     const tramo = (l: string, k: string) => l.split(". ").find((x) => x.startsWith(k));
     assertEquals(tramo(sin, "Resto del país"), "Resto del país: en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10).");
-    assertEquals(tramo(con, "Resto del país"), undefined);
-    // Villarrica sale por PaP (sugerido) → no está en la lista de Lucero
-    assertEquals(tramo(con, "Interior con Lucero"), "Interior con Lucero del Este (coronel oviedo, sin dias): en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10)");
-    assertEquals(tramo(con, "Cualquier otra ciudad del interior"),
-      "Cualquier otra ciudad del interior (va por Punto a Punto): en 3 a 7 días hábiles (entre el jueves 22/10 y el miércoles 28/10).");
+    // 26-10: sin lista de ciudades; los dos plazos del interior y la referencia a PLAZO PARA SU CIUDAD
+    assertEquals(con.includes("Resto del país: depende del courier de la ciudad (si va por Lucero del Este, en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10); si va por Punto a Punto, en 3 a 7 días hábiles (entre el jueves 22/10 y el miércoles 28/10)): el de la ciudad del cliente está en PLAZO PARA SU CIUDAD."), true, con);
+    assertEquals(con.includes("coronel oviedo"), false);
     assertEquals(tramo(con, "Otras ciudades de Central"), tramo(sin, "Otras ciudades de Central"));
   } finally {
     limpiarTarifasCourier();
@@ -290,4 +290,29 @@ Deno.test("26-10: CDE, Asunción y Central no cambian aunque vayan por PaP", con
   assertEquals(rangoEntrega("Asunción", "pap").rango, [1, 2]);
   assertEquals(rangoEntrega("Ciudad del Este", "pap").rango, [1, 3]);
   assertEquals(rangoEntrega("San Lorenzo", "pap").rango, [1, 3]);
+}));
+
+Deno.test("26-10 ciudadesMencionadas: la más reciente primero, gana la más larga, alias y palabras comunes", conTabla(() => {
+  assertEquals(ciudadesMencionadas(["Hola, soy de Villarrica", "¿y a Coronel Oviedo cuánto tarda?"]), ["coronel oviedo", "villarrica"]);
+  assertEquals(ciudadesMencionadas(["vivo en Fdo de la Mora"]), ["fernando de la mora"]); // alias, y no "la mora"
+  assertEquals(ciudadesMencionadas(["Cnel. Oviedo, calle 1"]), ["coronel oviedo"]);
+  assertEquals(ciudadesMencionadas(["quiero el raspador"]), []);
+  assertEquals(ciudadesMencionadas(["a", "b", "c", "villarrica", "asuncion", "cde", "encarnacion"]), ["encarnacion", "ciudad del este", "asuncion"]); // máximo 3
+  assertEquals(ciudadesMencionadas([]), []);
+}));
+
+Deno.test("26-10 ciudadesMencionadas: palabras que también son ciudad solo después de a/en/de", () => {
+  fijarTarifasCourier([...FILAS, { ...FILAS[0], courier: "lucero", ciudad: "limpio", ciudad_nombre: "Limpio", alias: [] }], TASAS);
+  try {
+    assertEquals(ciudadesMencionadas(["me deja la lengua limpio"]), []);
+    assertEquals(ciudadesMencionadas(["soy de Limpio"]), ["Limpio"]);
+  } finally {
+    limpiarTarifasCourier();
+  }
+});
+
+Deno.test("26-10 lineaPlazoCiudades: plazo de cada ciudad con su courier; sin ciudad, preguntarla", conTabla(() => {
+  assertEquals(lineaPlazoCiudades(["villarrica", "coronel oviedo"], LUNES_10),
+    "PLAZO PARA SU CIUDAD (ya calculado con su courier; decí exactamente esto): villarrica: en 3 a 7 días hábiles (entre el jueves 22/10 y el miércoles 28/10) (Punto a Punto). coronel oviedo: en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10) (Lucero del Este).");
+  assertEquals(lineaPlazoCiudades([], LUNES_10).startsWith("PLAZO PARA SU CIUDAD: todavía no dijo una ciudad"), true);
 }));

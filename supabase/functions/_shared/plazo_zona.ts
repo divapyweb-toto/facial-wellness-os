@@ -613,29 +613,69 @@ export function lineaPlazosHoy(ahora: Date): string {
   return `PLAZOS DESDE HOY (ya calculados con el día y la hora de ahora y el courier de cada ciudad; decí exactamente esto, sin agregar horas): ${partes.join(". ")}.`;
 }
 
-/** Ciudades del interior a las que sale por Lucero (con la tabla cargada), en orden alfabético. */
-export function ciudadesInteriorLucero(): string[] {
-  if (!tarifas) return [];
-  const nombres = new Set<string>();
-  for (const f of tarifas.filas) {
-    if (f.courier !== "lucero" || f.aplica_cobranza !== true) continue;
-    const nombre = f.ciudad_nombre || f.ciudad;
-    if (zonaDeCiudad(nombre) === "interior" && courierDeLaCiudad(nombre) === "lucero") nombres.add(nombre);
-  }
-  return [...nombres].sort((a, b) => a.localeCompare(b, "es"));
-}
-
 /**
- * "Resto del país" de lineaPlazosHoy. 26-10: con la tabla, separa las ciudades del interior con Lucero ("2 a 5 días
- * hábiles") del resto, que va por Punto a Punto ("3 a 7"). Sin tabla, como siempre ("2 a 5").
+ * "Resto del país" de lineaPlazosHoy. 26-10: sin lista de ciudades (no entra en cada turno): con la tabla dice los dos
+ * plazos del interior (Lucero 2 a 5, Punto a Punto 3 a 7); el de la ciudad del cliente va aparte (lineaPlazoCiudades).
+ * Sin tabla, como siempre ("2 a 5").
  */
 function restoDelPais(ahora: Date): string {
   const base = rangoBase("Encarnación");
   const lucero = diaEntregaDe(base, ahora).texto;
-  const lista = ciudadesInteriorLucero();
-  if (!lista.length) return `Resto del país: ${lucero}`;
+  if (!tarifas) return `Resto del país: ${lucero}`;
   const pap = diaEntregaDe({ ...base, rango: RANGO_INTERIOR_PAP, courier: "pap" }, ahora).texto;
-  return `Interior con Lucero del Este (${lista.join(", ")}): ${lucero}. Cualquier otra ciudad del interior (va por Punto a Punto): ${pap}`;
+  return `Resto del país: depende del courier de la ciudad (si va por Lucero del Este, ${lucero}; si va por Punto a Punto, ${pap}): el de la ciudad del cliente está en PLAZO PARA SU CIUDAD`;
+}
+
+/** Palabras que también son ciudades: solo cuentan como ciudad después de "a", "en", "de", "desde" o "para". */
+const CIUDADES_AMBIGUAS = new Set(["limpio", "altos", "central", "la paz", "naranjal", "barrero", "pastoreo"]);
+
+/**
+ * 26-10: ciudades de la tabla que nombró el cliente (de la más reciente a la más vieja, sin repetir, máximo `max`).
+ * Busca la ciudad o un alias como palabra entera; si dos se pisan ("la mora" dentro de "fernando de la mora"), gana la
+ * más larga. Devuelve el nombre de la tabla. Sin tabla, [].
+ */
+export function ciudadesMencionadas(textos: string[], max = 3): string[] {
+  if (!tarifas) return [];
+  const claves: { clave: string; nombre: string }[] = [];
+  for (const f of tarifas.filas) {
+    const nombre = f.ciudad_nombre || f.ciudad;
+    for (const c of [f.ciudad, ...(f.alias ?? [])]) if (typeof c === "string" && c.length >= 3) claves.push({ clave: c, nombre });
+  }
+  claves.sort((a, b) => b.clave.length - a.clave.length);
+  const out: string[] = [];
+  for (const t of [...textos].reverse()) {
+    let k = ` ${ciudadNorm(t)} `;
+    const enEste: { pos: number; nombre: string }[] = [];
+    for (const { clave, nombre } of claves) {
+      const pos = k.indexOf(` ${clave} `);
+      if (pos < 0) continue;
+      if (CIUDADES_AMBIGUAS.has(clave) && !/ (a|en|de|desde|para) $/.test(k.slice(0, pos + 1))) continue;
+      enEste.push({ pos, nombre });
+      k = k.slice(0, pos + 1) + "#".repeat(clave.length) + k.slice(pos + 1 + clave.length); // la más corta no vuelve a contar
+    }
+    for (const { nombre } of enEste.sort((a, b) => b.pos - a.pos)) {
+      if (!out.includes(nombre)) out.push(nombre);
+      if (out.length >= max) return out;
+    }
+  }
+  return out;
+}
+
+/**
+ * 26-10: línea "PLAZO PARA SU CIUDAD" del contexto del vendedor, con el mismo cálculo del resumen (diaEntrega con el
+ * courier de sugerir_courier: quien llama consulta antes con consultarCourierCiudad). Sin ciudades → la instrucción de
+ * preguntarla.
+ */
+export function lineaPlazoCiudades(ciudades: string[], ahora: Date): string {
+  if (!ciudades.length) {
+    return "PLAZO PARA SU CIUDAD: todavía no dijo una ciudad que conozcamos. Si pregunta cuándo llega, preguntale de qué ciudad es antes de darle un plazo (en el interior no prometas días sin esta línea; si dijo una ciudad que no figura acá, decí 3 a 7 días hábiles).";
+  }
+  const partes = ciudades.map((c) => {
+    const d = diaEntrega(c, ahora);
+    const quien = d.courier === "lucero" ? " (Lucero del Este)" : d.courier === "pap" ? " (Punto a Punto)" : "";
+    return `${c}: ${d.texto}${quien}`;
+  });
+  return `PLAZO PARA SU CIUDAD (ya calculado con su courier; decí exactamente esto): ${partes.join(". ")}.`;
 }
 
 /**

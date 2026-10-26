@@ -550,4 +550,16 @@ export const ESCENARIOS: Escenario[] = [
       { tipo: "montos_catalogo" },
     ],
   },
+  {
+    nombre: "plazo_sin_ciudad_pregunta",
+    descripcion: "26-10: pregunta cuánto tarda sin decir la ciudad: tiene que preguntar la ciudad antes de prometer días del interior.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000144" },
+    anuncio: RASPADOR,
+    pasos: ["Hola! ¿En cuántos días llega?"],
+    checks: [
+      { paso: 0, tipo: "texto", regex: /ciudad|d[oó]nde (sos|viv|est)/i, desc: "pregunta la ciudad" },
+      { paso: 0, tipo: "texto", regex: /2 a 5 d[ií]as h[aá]biles/i, negar: true, desc: "no promete 2 a 5 sin ciudad" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
 ];
