@@ -841,3 +841,15 @@ Deno.test("21-10 oferta 2 distintos: no aplica a 2 iguales, a 3 productos, a can
   assertFalse(esOferta2Distintos([{ handle: "pack-gudair-tiras-nasales-parches-bucales", cantidad: 1 }, { handle: "raspador-de-lengua-de-acero-inoxidable", cantidad: 1 }], true));
   assertFalse(esOferta2Distintos([{ handle: "tiras-nasales-gudair-30-unidades", cantidad: 1 }, { handle: "raspador-de-lengua-de-acero-inoxidable", cantidad: 1 }], false));
 });
+
+Deno.test("26-10 crear_pedido_cod (resumen): consulta el courier de la ciudad (sugerir_courier) antes del plazo; retiro no", async () => {
+  _limpiarCacheCatalogo();
+  const { deps } = depsPrueba();
+  const consultadas: string[] = [];
+  deps.consultarCourier = (c) => (consultadas.push(c), Promise.resolve(true));
+  await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS, ciudad: "Yby Yaú" }, ctxPrueba(), deps);
+  assertEquals(consultadas, ["Yby Yaú"]);
+  deps.consultarCourier = () => Promise.reject(new Error("rpc caída"));
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS }, ctxPrueba(), deps);
+  assert(r.terminal, "si la rpc falla, el resumen sale igual");
+});

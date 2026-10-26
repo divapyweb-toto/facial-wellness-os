@@ -870,6 +870,8 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
     }
     const a = armarPedido(input, itemsCatalogo(productos, ctx), ctx);
     if (!a.ok) return error(a.error ?? `faltan_datos: ${a.faltan.join(", ")}. Pedí solo el que falta.`, { faltan: a.faltan });
+    // 26-10: el plazo del resumen sale del courier que da sugerir_courier para esa ciudad (PaP en el interior: 3 a 7).
+    if (!a.datos.retiro && a.datos.ciudad) await deps.consultarCourier?.(a.datos.ciudad).catch(() => {});
     // 13-10: una entrega programada nunca puede ser antes del plazo mínimo de esa ciudad.
     if (a.datos.entregaProgramada) {
       const minima = fechaMinimaPedido(a.datos.ciudad, ctx.ahora);
@@ -1413,6 +1415,7 @@ async function programarEntrega(input: Record<string, unknown>, ctx: CtxTurno, d
   const pc = deps.pedidoParaCourier ? await deps.pedidoParaCourier(orderId).catch(() => null) : null;
   const dir = (pc?.raw?.shipping_address ?? {}) as Record<string, unknown>;
   const ciudad = String(dir.city ?? chat?.datos?.ciudad ?? "");
+  if (ciudad) await deps.consultarCourier?.(ciudad).catch(() => {}); // 26-10: courier de sugerir_courier
   const minima = fechaMinimaPedido(ciudad, ctx.ahora, pc?.courier ?? null);
   if (fecha < minima) {
     return { resultado: { ok: false, antes_de_lo_posible: true, fecha_minima: minima, texto_minima: textoFechaCorta(minima), nota: "Esa fecha es antes de lo posible: ofrecele la fecha mínima, sin prometer antes." } };

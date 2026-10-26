@@ -2,17 +2,22 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
   cargarTarifasCourier,
+  type ClienteRpc,
   type ClienteTarifas,
   ciudadNorm,
+  consultarCourierCiudad,
+  courierDeLaCiudad,
   courierSugerido,
   diaEntrega,
   type FilaTarifaCourier,
   type FilaTasaCourier,
   fijarTarifasCourier,
   hayTarifasCourier,
+  limpiarCourierCiudad,
   limpiarTarifasCourier,
   lineaPlazosHoy,
   plazoDesdeHoy,
+  plazoParaEnDesdeHoy,
   rangoEntrega,
   REFRESCO_TARIFAS_MS,
 } from "./plazo_zona.ts";
@@ -103,44 +108,59 @@ Deno.test("rangoEntrega con tabla: courier dado, sugerido, 'otra' y ciudad desco
   assertEquals(rangoEntrega("San Lorenzo").courier, "lucero"); // 2111 contra 2533
   assertEquals(rangoEntrega("Ciudad del Este", "pap").rango, [1, 3]); // PaP cuenta desde Asunción
   assertEquals(rangoEntrega("Ciudad del Este").rango, [0, 1]);
-  // 20-10 (Enrique): el interior NO usa la tabla, siempre "2 a 5 días hábiles" (no prometer de más)
-  const v = rangoEntrega("Villarrica");
-  assertEquals([v.rango, v.zona, v.habiles, v.fuente], [[2, 5], "interior", true, "interior"]);
-  const e = rangoEntrega("Encarnación");
-  assertEquals([e.rango, e.habiles, e.fuente], [[2, 5], true, "interior"]);
+  // 20-10 (Enrique): el interior NO usa los días de la tabla. 26-10: por Lucero "2 a 5", por PaP "3 a 7" (courier sugerido).
+  const v = rangoEntrega("Villarrica"); // sugerido PaP (2667 contra 3333)
+  assertEquals([v.rango, v.zona, v.habiles, v.fuente, v.courier], [[3, 7], "interior", true, "interior · pap 3 a 7", "pap"]);
+  assertEquals(rangoEntrega("Villarrica", "lucero").rango, [2, 5]); // courier dado manda
+  const e = rangoEntrega("Encarnación"); // en la tabla de ejemplo solo PaP
+  assertEquals([e.rango, e.habiles, e.courier], [[3, 7], true, "pap"]);
+  const co = rangoEntrega("Coronel Oviedo"); // solo Lucero
+  assertEquals([co.rango, co.habiles, co.fuente, co.courier], [[2, 5], true, "interior", "lucero"]);
   // Sin cobertura contra entrega y sin courier dado → no hay sugerido → el de siempre
   limpiarTarifasCourier();
   const sjBase = rangoEntrega("San Juan Nepomuceno"), otraBase = rangoEntrega("Asunción", "Aex"), sdBase = rangoEntrega("Sin Dias", "lucero");
   const pBase = rangoEntrega("Pueblo Inventado", "pap"), lpBase = rangoEntrega("Luque", "pap");
   fijarTarifasCourier(FILAS, TASAS);
-  assertEquals(rangoEntrega("San Juan Nepomuceno"), sjBase);
-  assertEquals(rangoEntrega("San Juan Nepomuceno", "pap").rango, [2, 5]); // interior: el de siempre
+  // Sin cobertura contra entrega: sale con pago anticipado por PaP (sugerido con cod = false) → "3 a 7"
+  assertEquals(sjBase.rango, [2, 5]);
+  assertEquals(rangoEntrega("San Juan Nepomuceno").rango, [3, 7]);
+  assertEquals(rangoEntrega("San Juan Nepomuceno", "pap").rango, [3, 7]);
   assertEquals(rangoEntrega("Asunción", "Aex"), otraBase);
   assertEquals(rangoEntrega("Sin Dias", "lucero"), sdBase); // fila sin días cargados
-  assertEquals(rangoEntrega("Pueblo Inventado", "pap"), pBase);
+  assertEquals(rangoEntrega("Pueblo Inventado", "pap").rango, [3, 7]); // courier dado PaP en el interior
+  assertEquals(pBase.rango, [3, 7]);
+  assertEquals(rangoEntrega("Pueblo Inventado").rango, [2, 5]); // sin courier conocido: el de siempre
   assertEquals(rangoEntrega("Luque", "pap"), lpBase); // la tabla de ejemplo no tiene Luque
 }));
 
-Deno.test("textos con tabla: interior igual que sin tabla (2 a 5 días hábiles); metro con fechas del courier", conTabla(() => {
+Deno.test("textos con tabla: interior por Lucero igual que sin tabla (2 a 5); por PaP 3 a 7; metro con fechas del courier", conTabla(() => {
   limpiarTarifasCourier();
-  const vBase = diaEntrega("Villarrica", LUNES_10), eBase = diaEntrega("Encarnación", LUNES_10);
+  const coBase = diaEntrega("Coronel Oviedo", LUNES_10);
   fijarTarifasCourier(FILAS, TASAS);
+  const co = diaEntrega("Coronel Oviedo", LUNES_10);
+  assertEquals([co.desde, co.hasta, co.texto], [coBase.desde, coBase.hasta, coBase.texto]);
+  assertEquals(co.texto, "en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10)");
   const d = diaEntrega("Villarrica", LUNES_10);
-  assertEquals([d.desde, d.hasta, d.texto], [vBase.desde, vBase.hasta, vBase.texto]);
-  assertEquals(d.texto.startsWith("en 2 a 5 días hábiles"), true);
-  assertEquals(plazoDesdeHoy("Villarrica", LUNES_10), "en 2 a 5 días hábiles");
-  assertEquals(diaEntrega("Encarnación", LUNES_10).texto, eBase.texto);
+  assertEquals([d.desde, d.hasta, d.texto], ["2026-10-22", "2026-10-28", "en 3 a 7 días hábiles (entre el jueves 22/10 y el miércoles 28/10)"]);
+  assertEquals(plazoDesdeHoy("Villarrica", LUNES_10), "en 3 a 7 días hábiles");
+  assertEquals(plazoParaEnDesdeHoy("Villarrica", LUNES_10), "3 a 7 días hábiles");
+  assertEquals(plazoParaEnDesdeHoy("Coronel Oviedo", LUNES_10), "2 a 5 días hábiles");
   assertEquals(diaEntrega("San Lorenzo", LUNES_10, "pap").texto, "entre mañana martes 20/10 y el jueves 22/10");
 }));
 
-Deno.test("lineaPlazosHoy: 'Otras de Central' y 'Resto del país' no salen de la tabla", () => {
+Deno.test("lineaPlazosHoy: 'Otras de Central' no sale de la tabla; 26-10: interior separado en Lucero (2 a 5) y PaP (3 a 7)", () => {
   limpiarTarifasCourier();
   const sin = lineaPlazosHoy(LUNES_10);
   fijarTarifasCourier(FILAS, TASAS);
   try {
     const con = lineaPlazosHoy(LUNES_10);
     const tramo = (l: string, k: string) => l.split(". ").find((x) => x.startsWith(k));
-    assertEquals(tramo(con, "Resto del país"), tramo(sin, "Resto del país"));
+    assertEquals(tramo(sin, "Resto del país"), "Resto del país: en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10).");
+    assertEquals(tramo(con, "Resto del país"), undefined);
+    // Villarrica sale por PaP (sugerido) → no está en la lista de Lucero
+    assertEquals(tramo(con, "Interior con Lucero"), "Interior con Lucero del Este (coronel oviedo, sin dias): en 2 a 5 días hábiles (entre el miércoles 21/10 y el lunes 26/10)");
+    assertEquals(tramo(con, "Cualquier otra ciudad del interior"),
+      "Cualquier otra ciudad del interior (va por Punto a Punto): en 3 a 7 días hábiles (entre el jueves 22/10 y el miércoles 28/10).");
     assertEquals(tramo(con, "Otras ciudades de Central"), tramo(sin, "Otras ciudades de Central"));
   } finally {
     limpiarTarifasCourier();
@@ -212,3 +232,62 @@ Deno.test("cargarTarifasCourier: si falla queda vacía (todo como antes), no lan
     limpiarTarifasCourier();
   }
 });
+
+// ─── 26-10: el courier sale de la rpc sugerir_courier (consultarCourierCiudad), no de una lista propia ───
+/** Cliente falso de la rpc: responde según la ciudad y cuenta las llamadas. */
+function rpcFalsa(resp: (ciudad: string, cod: boolean) => unknown, error?: string) {
+  const llamadas: string[] = [];
+  const sb: ClienteRpc = {
+    rpc(fn: string, args: Record<string, unknown>) {
+      llamadas.push(`${fn}:${args.p_ciudad}:${args.p_cod}`);
+      return Promise.resolve(error ? { data: null, error: { message: error } } : { data: resp(String(args.p_ciudad), args.p_cod === true), error: null });
+    },
+  };
+  return { sb, llamadas };
+}
+
+Deno.test("consultarCourierCiudad: la rpc manda sobre la copia en memoria y queda en caché 10 min", conTabla(async () => {
+  limpiarCourierCiudad();
+  try {
+    assertEquals(rangoEntrega("Villarrica").rango, [3, 7]); // copia en memoria: PaP
+    // Regla nueva de la base (Lucero donde llega con cobranza) → Lucero → 2 a 5
+    const { sb, llamadas } = rpcFalsa(() => ({ sugerido: "lucero", sin_cobertura: false }));
+    assertEquals(await consultarCourierCiudad(sb, "Villarrica", 1_000_000), true);
+    assertEquals(llamadas, ["sugerir_courier:Villarrica:true", "sugerir_courier:Villarrica:false"]);
+    assertEquals([rangoEntrega("Villarrica").rango, courierDeLaCiudad("villarrica")], [[2, 5], "lucero"]);
+    assertEquals(await consultarCourierCiudad(sb, "VILLARRICA", 1_000_000 + REFRESCO_TARIFAS_MS - 1), true);
+    assertEquals(llamadas.length, 2); // misma ciudad normalizada, en caché
+    await consultarCourierCiudad(sb, "Villarrica", 1_000_000 + REFRESCO_TARIFAS_MS);
+    assertEquals(llamadas.length, 4); // vencida: vuelve a consultar
+  } finally {
+    limpiarCourierCiudad();
+  }
+}));
+
+Deno.test("consultarCourierCiudad: PaP → 3 a 7; sin cobertura → el de pago anticipado; falla → copia en memoria; nunca lanza", conTabla(async () => {
+  limpiarCourierCiudad();
+  try {
+    const pap = rpcFalsa(() => ({ sugerido: "pap" }));
+    await consultarCourierCiudad(pap.sb, "Coronel Oviedo", 1);
+    assertEquals(rangoEntrega("Coronel Oviedo").rango, [3, 7]);
+    const sinCob = rpcFalsa((_c, cod) => (cod ? { sugerido: null, sin_cobertura: true } : { sugerido: "pap" }));
+    await consultarCourierCiudad(sinCob.sb, "Ayolas", 1);
+    assertEquals([courierDeLaCiudad("Ayolas"), rangoEntrega("Ayolas").rango], ["pap", [3, 7]]);
+    const nadie = rpcFalsa(() => ({ sugerido: null }));
+    await consultarCourierCiudad(nadie.sb, "Pueblo Inventado", 1);
+    assertEquals(rangoEntrega("Pueblo Inventado").rango, [2, 5]); // nadie llega: el de siempre
+    const rota = rpcFalsa(() => null, "timeout");
+    assertEquals(await consultarCourierCiudad(rota.sb, "Villarrica", 1), false);
+    assertEquals(rangoEntrega("Villarrica").rango, [3, 7]); // sigue con la copia en memoria
+    assertEquals(await consultarCourierCiudad(rota.sb, "", 1), false);
+    assertEquals(rota.llamadas.length, 2); // ciudad vacía: no consulta
+  } finally {
+    limpiarCourierCiudad();
+  }
+}));
+
+Deno.test("26-10: CDE, Asunción y Central no cambian aunque vayan por PaP", conTabla(() => {
+  assertEquals(rangoEntrega("Asunción", "pap").rango, [1, 2]);
+  assertEquals(rangoEntrega("Ciudad del Este", "pap").rango, [1, 3]);
+  assertEquals(rangoEntrega("San Lorenzo", "pap").rango, [1, 3]);
+}));

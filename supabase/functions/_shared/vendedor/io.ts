@@ -5,7 +5,7 @@ import { direccionUtilizable } from "../../pedidos-trabados/logica.ts";
 import { unirReferencia } from "./herramientas.ts";
 import { depsPedidosWebReales } from "./pedidos_web_io.ts";
 import { db } from "../db.ts";
-import { cargarTarifasCourier } from "../plazo_zona.ts";
+import { cargarTarifasCourier, consultarCourierCiudad } from "../plazo_zona.ts";
 import { llamarClaude } from "../claude.ts";
 import { gql } from "../shopify.ts";
 import { avisar } from "../telegram.ts";
@@ -70,6 +70,7 @@ let ultimaGeocodificacion = 0;
 
 export const depsHerramientasReales: DepsHerramientas = {
   pedidosWeb: depsPedidosWebReales,
+  consultarCourier: (ciudad) => consultarCourierCiudad(db(), ciudad),
   async catalogoShopify(estado) {
     const d = await gql<{ products: { nodes: NodoProducto[] } }>(QUERY_CATALOGO, { q: `status:${estado.toLowerCase()}` });
     return d.products.nodes.map((n): ProductoShopify => ({

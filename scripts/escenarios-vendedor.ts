@@ -511,4 +511,43 @@ export const ESCENARIOS: Escenario[] = [
       { tipo: "derivado", negar: true },
     ],
   },
+  // 26-10: plazo por courier en el interior (Lucero 2 a 5 días hábiles; solo PaP o sin cobertura 3 a 7). Datos inventados.
+  {
+    nombre: "plazo_lucero_encarnacion",
+    descripcion: "26-10: ciudad del interior con Lucero (Encarnación): pregunta cuánto tarda y arma el pedido; tiene que decir 2 a 5 días hábiles, nunca 3 a 7.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000141" },
+    anuncio: RASPADOR,
+    pasos: ["Hola! ¿Cuánto tarda en llegar a Encarnación?", "Quiero 1", "Ana Prueba, Encarnación, calle Mcal. Estigarribia 123"],
+    checks: [
+      { paso: 0, tipo: "texto", regex: /2 a 5 d[ií]as h[aá]biles/i, desc: "plazo de Lucero en la respuesta" },
+      { tipo: "texto", regex: /3 a 7/i, negar: true, desc: "nunca 3 a 7 para una ciudad con Lucero" },
+      { paso: -1, tipo: "texto", regex: /Te llega: en 2 a 5 días hábiles/, desc: "resumen con 2 a 5" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "plazo_pap_ybyyau",
+    descripcion: "26-10: ciudad del interior donde Lucero no llega (Yby Yaú, va por PaP): tiene que decir 3 a 7 días hábiles, nunca 2 a 5.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000142" },
+    anuncio: RASPADOR,
+    pasos: ["Hola! ¿Cuánto tarda en llegar a Yby Yaú?", "Quiero 1", "Ana Prueba, Yby Yaú, barrio San Ramón"],
+    checks: [
+      { paso: 0, tipo: "texto", regex: /3 a 7 d[ií]as h[aá]biles/i, desc: "plazo de PaP en la respuesta" },
+      { tipo: "texto", regex: /2 a 5/i, negar: true, desc: "nunca 2 a 5 para una ciudad que va por PaP" },
+      { paso: -1, tipo: "texto", regex: /Te llega: en 3 a 7 días hábiles/, desc: "resumen con 3 a 7" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "plazo_sin_cobertura_ayolas",
+    descripcion: "26-10: ciudad sin cobranza contra entrega (Ayolas: PaP llega sin cobranza, Lucero no llega): si da plazo, 3 a 7 días hábiles, nunca 2 a 5.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000143" },
+    anuncio: RASPADOR,
+    pasos: ["Hola! ¿Cuánto tarda en llegar a Ayolas?"],
+    checks: [
+      { paso: 0, tipo: "responde" },
+      { tipo: "texto", regex: /2 a 5/i, negar: true, desc: "nunca 2 a 5 para una ciudad sin Lucero" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
 ];

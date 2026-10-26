@@ -15,7 +15,7 @@ import { transcribirAudio } from "../_shared/transcripcion.ts";
 import { resolverLinkMapas } from "../_shared/link_mapas.ts";
 import { registrarBaja } from "../recompra/baja.ts";
 import { ofrecerCobroQR } from "../pago-qr-webhook/io.ts";
-import { cargarTarifasCourier } from "../_shared/plazo_zona.ts";
+import { cargarTarifasCourier, consultarCourierCiudad } from "../_shared/plazo_zona.ts";
 import { candidatosWhatsapp, type Deps, manejarRequest, type MensajeMeta, type Pedido, telefonoLocal } from "./procesar.ts";
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
@@ -37,6 +37,7 @@ async function copiarAStorage(mediaId: string, ruta: string): Promise<{ ok: bool
 const configCache = new Map<string, { valor: unknown; hasta: number }>();
 
 export const depsReales: Deps = {
+  consultarCourier: (ciudad) => consultarCourierCiudad(db(), ciudad),
   ahora: () => new Date(),
 
   async config(clave) {

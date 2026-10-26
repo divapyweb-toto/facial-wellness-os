@@ -164,7 +164,22 @@ export type RangoEntrega = {
  * tabla no conoce, courier "otra" o sin días cargados → el cálculo de siempre (rangoBase).
  */
 export function rangoEntrega(ciudad: unknown, courier?: string | null): RangoEntrega {
-  return rangoDeTabla(ciudad, courier) ?? rangoBase(ciudad, courier);
+  const r = rangoDeTabla(ciudad, courier) ?? rangoBase(ciudad, courier);
+  return r.zona === "interior" ? rangoInterior(r, ciudad, courier) : r;
+}
+
+/**
+ * 26-10 (Enrique): en el interior, si va por Punto a Punto (Lucero no llega con cobranza), "3 a 7 días hábiles":
+ * PaP tarda mediana 4,5-6 días desde la venta y 32% llega en 7 o más (26-10: 4 de 5 envíos PaP fuera de "2 a 5").
+ * Con Lucero, o sin dato del courier, sigue "2 a 5". El courier es el dado o el de la rpc sugerir_courier
+ * (consultarCourierCiudad), nunca una lista propia.
+ */
+export const RANGO_INTERIOR_PAP: [number, number] = [3, 7];
+function rangoInterior(r: RangoEntrega, ciudad: unknown, courier?: string | null): RangoEntrega {
+  const dado = idCourier(courier);
+  const c = dado === "lucero" || dado === "pap" ? dado : courierDeLaCiudad(ciudad);
+  if (c !== "pap") return c ? { ...r, courier: c } : r;
+  return { ...r, rango: RANGO_INTERIOR_PAP, courier: "pap", fuente: `${r.fuente} · pap 3 a 7`, habiles: true };
 }
 
 /** El rango de siempre (ruteo oficial + velocidad), sin la tabla de tarifas. */
@@ -376,6 +391,68 @@ export function courierSugerido(ciudad: unknown, cod = true): SugerenciaCourier 
   return { sugerido: validas[0]?.courier ?? null, sin_cobertura: !validas.length, ciudad_reconocida: opciones.length > 0, opciones };
 }
 
+// ---------- 26-10: courier de la rpc sugerir_courier por ciudad (la regla vive en la base, no acá) ----------
+// Quien decide el courier es public.sugerir_courier (la mantiene Voltra OS). Antes de prometer un plazo, los que
+// tienen la ciudad a mano (resumen del vendedor, respuesta a "Confirmar pedido") la consultan con
+// consultarCourierCiudad; queda en caché 10 min por ciudad. Sin consulta (o si falla) → la copia en memoria
+// (courierSugerido); sin tabla tampoco → sin courier (plazo de siempre).
+type SugerenciaRpc = { cod: "pap" | "lucero" | null; prepago: "pap" | "lucero" | null; en: number };
+const sugerenciasRpc = new Map<string, SugerenciaRpc>();
+const TIMEOUT_RPC_MS = 4_000;
+type RespuestaRpc = { data: unknown; error: { message: string } | null };
+/** Lo mínimo del cliente de Supabase para la rpc (db() de _shared/db.ts lo cumple). */
+export type ClienteRpc = { rpc(fn: string, args: Record<string, unknown>): PromiseLike<RespuestaRpc> };
+
+const courierDe = (v: unknown): "pap" | "lucero" | null => {
+  const s = (v as { sugerido?: unknown } | null)?.sugerido;
+  return s === "pap" || s === "lucero" ? s : null;
+};
+
+/** Consulta sugerir_courier (contra entrega y pago anticipado) para la ciudad. Nunca lanza; true = quedó en caché. */
+export async function consultarCourierCiudad(sb: ClienteRpc, ciudad: unknown, ahoraMs = Date.now()): Promise<boolean> {
+  const k = ciudadNorm(ciudad);
+  if (!k) return false;
+  const previo = sugerenciasRpc.get(k);
+  if (previo && ahoraMs - previo.en < REFRESCO_TARIFAS_MS) return true;
+  let reloj: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const vence = new Promise<never>((_, no) => {
+      reloj = setTimeout(() => no(new Error(`más de ${TIMEOUT_RPC_MS / 1000} s`)), TIMEOUT_RPC_MS);
+    });
+    const [cod, prepago] = await Promise.race([
+      Promise.all([
+        sb.rpc("sugerir_courier", { p_ciudad: String(ciudad), p_cod: true }),
+        sb.rpc("sugerir_courier", { p_ciudad: String(ciudad), p_cod: false }),
+      ]),
+      vence,
+    ]);
+    if (cod.error) throw new Error(cod.error.message);
+    if (prepago.error) throw new Error(prepago.error.message);
+    sugerenciasRpc.set(k, { cod: courierDe(cod.data), prepago: courierDe(prepago.data), en: ahoraMs });
+    return true;
+  } catch (e) {
+    console.warn(`plazo_zona: sugerir_courier('${k}') falló, sigo con la tabla en memoria:`, e instanceof Error ? e.message : e);
+    return false;
+  } finally {
+    if (reloj !== undefined) clearTimeout(reloj);
+  }
+}
+
+/** Vacía la caché de la rpc (tests). */
+export function limpiarCourierCiudad(): void {
+  sugerenciasRpc.clear();
+}
+
+/**
+ * Courier con el que sale un pedido a esa ciudad: el de la rpc (contra entrega; si nadie cobra ahí, el de pago
+ * anticipado), si no la copia en memoria de la tabla; null = no se sabe.
+ */
+export function courierDeLaCiudad(ciudad: unknown): "pap" | "lucero" | null {
+  const rpc = sugerenciasRpc.get(ciudadNorm(ciudad));
+  if (rpc) return rpc.cod ?? rpc.prepago;
+  return courierSugerido(ciudad, true)?.sugerido ?? courierSugerido(ciudad, false)?.sugerido ?? null;
+}
+
 /** Rango con los días de la tabla (courier dado o sugerido); null → se usa rangoBase. */
 function rangoDeTabla(ciudad: unknown, courier?: string | null): RangoEntrega | null {
   if (!tarifas || typeof ciudad !== "string" || !ciudad.trim()) return null;
@@ -417,13 +494,14 @@ export function textoDias([a, b]: [number, number]): string {
   return `en ${a} a ${b} días`;
 }
 
-// 10-10: para el interior se dice siempre "2 a 5 días hábiles" (decisión de Enrique: convierte mejor que "4 a 9 días").
-const INTERIOR = "2 a 5 días hábiles";
+// 10-10: para el interior se dice "2 a 5 días hábiles" (decisión de Enrique: convierte mejor que "4 a 9 días").
+// 26-10: por PaP, "3 a 7 días hábiles" (rangoInterior). El texto sale del rango.
+const textoHabiles = ([a, b]: [number, number]) => `${a} a ${b} días hábiles`;
 
 /** 12-10: con el courier de la ciudad (el dado o el del ruteo oficial) y el corte de las 15:00. */
 export function plazoDesdeHoy(ciudad: unknown, ahora: Date, courier?: string | null): string {
   const r = rangoEntrega(ciudad, courier);
-  return r.habiles ? `en ${INTERIOR}` : textoDias(diasDesdeHoy(r.rango, ahora));
+  return r.habiles ? `en ${textoHabiles(r.rango)}` : textoDias(diasDesdeHoy(r.rango, ahora));
 }
 
 /** Para plantillas que dicen "Te llega en {plazo}": "3 a 4 días", "el día o al siguiente", "hasta 3 días". */
@@ -436,7 +514,7 @@ export function plazoParaEn([a, b]: [number, number]): string {
 /** 12-10: con el courier de la ciudad (el dado o el del ruteo oficial) y el corte de las 15:00. */
 export function plazoParaEnDesdeHoy(ciudad: unknown, ahora: Date, courier?: string | null): string {
   const r = rangoEntrega(ciudad, courier);
-  return r.habiles ? INTERIOR : plazoParaEn(diasDesdeHoy(r.rango, ahora));
+  return r.habiles ? textoHabiles(r.rango) : plazoParaEn(diasDesdeHoy(r.rango, ahora));
 }
 
 /**
@@ -506,8 +584,8 @@ function diaEntregaDe(r: RangoEntrega, ahora: Date): DiaEntrega {
     : seguidos
     ? `${etiquetaDia(desde, hoy)} o ${etiquetaDia(hasta, hoy)}`
     : `entre ${etiquetaDia(desde, hoy)} y ${etiquetaDia(hasta, hoy)}`;
-  // Interior (y Lucero programada, mismo rango): siempre "2 a 5 días hábiles" (10-10); las fechas van entre paréntesis.
-  const texto = r.habiles ? `en ${INTERIOR} (${rango})` : rango;
+  // Interior (y Lucero programada, mismo rango): "2 a 5 días hábiles" (10-10), por PaP "3 a 7" (26-10); fechas entre paréntesis.
+  const texto = r.habiles ? `en ${textoHabiles(r.rango)} (${rango})` : rango;
   return { texto, zona: r.zona, courier: r.courier, despacho: aFecha(despacho), desde, hasta };
 }
 
@@ -530,9 +608,34 @@ export function lineaPlazosHoy(ahora: Date): string {
     ...[...grupos].map(([texto, ciudades]) => `${enLista(ciudades)}: ${texto}`),
     // 20-10: los dos genéricos no salen de la tabla de tarifas (una ciudad puntual no representa al resto).
     `Otras ciudades de Central: ${diaEntregaDe(rangoBase("Central"), ahora).texto}`,
-    `Resto del país: ${diaEntregaDe(rangoBase("Encarnación"), ahora).texto}`,
+    restoDelPais(ahora),
   ];
   return `PLAZOS DESDE HOY (ya calculados con el día y la hora de ahora y el courier de cada ciudad; decí exactamente esto, sin agregar horas): ${partes.join(". ")}.`;
+}
+
+/** Ciudades del interior a las que sale por Lucero (con la tabla cargada), en orden alfabético. */
+export function ciudadesInteriorLucero(): string[] {
+  if (!tarifas) return [];
+  const nombres = new Set<string>();
+  for (const f of tarifas.filas) {
+    if (f.courier !== "lucero" || f.aplica_cobranza !== true) continue;
+    const nombre = f.ciudad_nombre || f.ciudad;
+    if (zonaDeCiudad(nombre) === "interior" && courierDeLaCiudad(nombre) === "lucero") nombres.add(nombre);
+  }
+  return [...nombres].sort((a, b) => a.localeCompare(b, "es"));
+}
+
+/**
+ * "Resto del país" de lineaPlazosHoy. 26-10: con la tabla, separa las ciudades del interior con Lucero ("2 a 5 días
+ * hábiles") del resto, que va por Punto a Punto ("3 a 7"). Sin tabla, como siempre ("2 a 5").
+ */
+function restoDelPais(ahora: Date): string {
+  const base = rangoBase("Encarnación");
+  const lucero = diaEntregaDe(base, ahora).texto;
+  const lista = ciudadesInteriorLucero();
+  if (!lista.length) return `Resto del país: ${lucero}`;
+  const pap = diaEntregaDe({ ...base, rango: RANGO_INTERIOR_PAP, courier: "pap" }, ahora).texto;
+  return `Interior con Lucero del Este (${lista.join(", ")}): ${lucero}. Cualquier otra ciudad del interior (va por Punto a Punto): ${pap}`;
 }
 
 /**

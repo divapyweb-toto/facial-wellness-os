@@ -196,6 +196,8 @@ export type ResultadoOrden = {
 };
 
 export type DepsHerramientas = {
+  /** 26-10: consulta el courier de la ciudad en la rpc sugerir_courier antes de prometer un plazo (plazo_zona). */
+  consultarCourier?(ciudad: string): Promise<unknown>;
   /** 19-10 (paquete 1): buscar, modificar pedidos y guardar factura (pedidos_web.ts). */
   pedidosWeb?: import("./pedidos_web.ts").DepsPedidosWeb;
   catalogoShopify(estado: string): Promise<ProductoShopify[]>;

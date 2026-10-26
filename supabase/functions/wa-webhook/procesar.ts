@@ -107,6 +107,8 @@ export type BotonAviso = { texto: string; callback?: string; url?: string };
 
 export interface Deps {
   ahora(): Date;
+  /** 26-10: consulta el courier de la ciudad en la rpc sugerir_courier antes de decir el plazo (plazo_zona). */
+  consultarCourier?(ciudad: string): Promise<unknown>;
   config(clave: string): Promise<unknown | null>;
   // eventos crudos
   guardarEventoCrudo(idExterno: string, payload: unknown): Promise<boolean>;
@@ -1464,6 +1466,7 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
   const ciudad = (pedido.raw?.shipping_address as Record<string, unknown> | undefined)?.city;
   // 09-10: pedidos del sábado y domingo salen el lunes.
   const retira = (pedido.tags ?? []).some((t) => String(t).toUpperCase() === "RETIRO_EN_CASA");
+  if (!retira && typeof ciudad === "string" && ciudad) await deps.consultarCourier?.(ciudad).catch(() => {});
   const plazo = retira
     ? "la oficina de Ciudad del Este cuando lo retires (coordinamos día y hora por acá)"
     // 10-10: días reales desde hoy (el courier no trabaja sábado ni domingo); sin "sale el lunes".

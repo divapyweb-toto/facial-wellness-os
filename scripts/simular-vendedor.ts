@@ -324,6 +324,8 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
   const herramientas: DepsHerramientas = {
     ...base,
     pedidosWeb: pw,
+    // 26-10: courier de la ciudad desde la rpc sugerir_courier real (solo lectura), igual que producción.
+    consultarCourier: depsHerramientasReales.consultarCourier,
     catalogoShopify: (estado) => catalogo(estado),
     ahoraMs: () => Date.now(),
     pedidosDeCliente: () => Promise.resolve([...pedidos.values()]
@@ -437,6 +439,8 @@ async function correrEscenario(esc: Escenario, baseCfg: ConfigTurno, modelo: str
     aleatorio: () => 0,
     marcarLeidoYEscribiendo: () => Promise.resolve(),
     llamarModelo: (p) => depsOrquestadorReales.llamarModelo(p),
+    // 26-10: plazos con la tabla de tarifas real (solo lectura), igual que producción.
+    cargarTarifasCourier: depsOrquestadorReales.cargarTarifasCourier,
     dormir: (ms) => ((reloj += ms), Promise.resolve()),
     ahora,
     herramientas,

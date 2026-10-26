@@ -3,7 +3,7 @@
 // Flujo: firma → guardar crudo (dedup por X-Shopify-Webhook-Id) → 200 → procesar en segundo plano.
 // Pedido nuevo de un cliente que vino de un anuncio de WhatsApp → LeadSubmitted a Meta (lead_meta.ts, 08-10).
 import { db, guardarEventoCrudo } from "../_shared/db.ts";
-import { cargarTarifasCourier } from "../_shared/plazo_zona.ts";
+import { cargarTarifasCourier, consultarCourierCiudad } from "../_shared/plazo_zona.ts";
 import { manejarWebhook, normalizarDesdeWebhook, procesarPedido } from "./procesar.ts";
 import { depsReales, marcarEvento } from "./io.ts";
 
@@ -17,7 +17,10 @@ Deno.serve((req) =>
     async procesar(topic, payload, idExterno) {
       try {
         await cargarTarifasCourier(db()); // 20-10: plazos con la tabla de tarifas (nunca lanza; si falla, los de siempre)
-        const r = await procesarPedido(normalizarDesdeWebhook(topic, payload), depsReales({ leadMeta: true }));
+        const ped = normalizarDesdeWebhook(topic, payload);
+        // 26-10: el plazo de la confirmación sale del courier de sugerir_courier (PaP en el interior: 3 a 7). Nunca lanza.
+        if (ped.ciudad) await consultarCourierCiudad(db(), ped.ciudad);
+        const r = await procesarPedido(ped, depsReales({ leadMeta: true }));
         console.log("shopify-webhook", topic, r.shopifyOrderId, r.accion, r.enviosProgramados);
         await marcarEvento(idExterno, null);
       } catch (e) {
