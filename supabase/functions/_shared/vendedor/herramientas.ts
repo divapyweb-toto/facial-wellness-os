@@ -761,7 +761,7 @@ export function linkMapa(ubicacion: string | null | undefined): string | null {
 export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<string, unknown> {
   const [nombre, ...resto] = d.nombre.split(/\s+/);
   const notas = [`Pedido creado por el vendedor con IA (WhatsApp).`];
-  // 26-10 (JawFlex): por cantidad, nota para Despacho (3 = "KIT 3 NIVELES: 1 suave, 1 medio y 1 duro").
+  // 26-10 (JawFlex): por cantidad, nota para Despacho (27-10: 3 = "1 par suave, 1 par medio y 1 par duro").
   const ptTodos = extrasVendedor(ctx.cfg.vendedor).primer_turno_producto;
   for (const l of d.lineas) {
     const n = ptTodos[l.handle]?.notas_cantidad?.[String(l.cantidad)];
@@ -1287,14 +1287,32 @@ export function lineaPrecioProducto(prod: ItemCatalogo, plantilla: string | unde
   return falta ? "" : t;
 }
 
-export function botonesPrimerTurno(prod: ItemCatalogo, sinOferta2 = false): { id: string; titulo: string }[] {
+/**
+ * 27-10 (Enrique, JawFlex = 1 PAR): el precio entero del primer mensaje desde config (primer_turno_producto.cuerpo_precio).
+ * {precio}, {envio}, {total_1}, {total_2}, {total_3} = montos del catálogo. "" si no hay plantilla o falta una oferta.
+ */
+export function cuerpoPrecioProducto(prod: ItemCatalogo, plantilla: string | undefined): string {
+  if (!plantilla) return "";
+  let falta = false;
+  const t = plantilla
+    .replace(/\{precio\}/g, gs(prod.precio)).replace(/\{envio\}/g, gs(ctxEnvio(prod))).replace(/\{total_1\}/g, gs(prod.total))
+    .replace(/\{total_(\d)\}/g, (_, c) => {
+      const o = prod.ofertas.find((x) => x.cantidad === Number(c));
+      if (!o) falta = true;
+      return o ? gs(o.total) : "";
+    });
+  return falta ? "" : t;
+}
+
+export function botonesPrimerTurno(prod: ItemCatalogo, sinOferta2 = false, titulos: { q1?: string; q2?: string } = {}): { id: string; titulo: string }[] {
   const b = (clave: string, titulo: string) => ({ id: `vend_p1:${clave}:${prod.handle}`, titulo });
+  const q1 = titulos.q1 ?? "Quiero 1", q2 = titulos.q2 ?? "2 con envío gratis";
   if (esPack(prod.handle)) return [b("pack", "Quiero el pack"), b("duda", "Tengo una duda")];
   // 26-10: JawFlex (el 2 solo si lo pide) y Botella ("¿para qué quiero 2?"): sin el botón de 2.
-  if (sinOferta2) return [b("q1", "Quiero 1"), b("duda", "Tengo una duda")];
+  if (sinOferta2) return [b("q1", q1), b("duda", "Tengo una duda")];
   const x2 = prod.ofertas.find((o) => o.cantidad === 2);
   // 13-10 (Enrique): "envío gratis" vende más que "sin envío", y la mejor opción va primero.
-  return x2 && x2.total <= 2 * prod.precio ? [b("q2", "2 con envío gratis"), b("q1", "Quiero 1"), b("duda", "Tengo una duda")] : [b("q1", "Quiero 1"), b("duda", "Tengo una duda")];
+  return x2 && x2.total <= 2 * prod.precio ? [b("q2", q2), b("q1", q1), b("duda", "Tengo una duda")] : [b("q1", q1), b("duda", "Tengo una duda")];
 }
 
 /** Segunda burbuja: todos los totales con envío incluido (13-10, Enrique). Los montos salen del catálogo, nunca del modelo. */
@@ -1344,10 +1362,11 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
   const g = pt.texto ? { ok: true as const, texto: pt.texto } : textoRevisado({ texto: input.gancho }, ctx);
   if (!g.ok) return g.r;
   const linea = lineaPrecioProducto(prod, pt.linea_precio);
-  const cuerpo = cuerpoPrimerTurno(prod, pt.sin_oferta_2) + (linea ? `\n${linea}` : "");
+  // 27-10 (JawFlex = 1 PAR): con cuerpo_precio, el precio entero sale de config (montos del catálogo).
+  const cuerpo = cuerpoPrecioProducto(prod, pt.cuerpo_precio) || (cuerpoPrimerTurno(prod, pt.sin_oferta_2) + (linea ? `\n${linea}` : ""));
   let interactivo: Record<string, unknown>;
   try {
-    interactivo = botonesRespuesta(cuerpo, botonesPrimerTurno(prod, pt.sin_oferta_2));
+    interactivo = botonesRespuesta(cuerpo, botonesPrimerTurno(prod, pt.sin_oferta_2, pt.botones));
   } catch (e) {
     return error(`interactivo_invalido: ${e instanceof Error ? e.message : e}. Respondé con frase_precio en texto.`);
   }
@@ -1391,9 +1410,10 @@ async function cierreBotones(input: Record<string, unknown>, ctx: CtxTurno, deps
   }
   const prod = items.find((x) => x.handle === input.handle);
   if (!prod) return error(`producto_desconocido:${input.handle}. Usá consultar_catalogo y el handle exacto.`);
-  const sin2 = primerTurnoDe(ctx, prod.handle).sin_oferta_2;
+  const pt = primerTurnoDe(ctx, prod.handle);
+  const sin2 = pt.sin_oferta_2;
   return await enviarInteractivoRevisado(input, ctx, deps, (t) =>
-    botonesRespuesta(t, botonesPrimerTurno(prod, sin2)),
+    botonesRespuesta(t, botonesPrimerTurno(prod, sin2, pt.botones)),
     { ofertas: prod.ofertas.map((o) => o.frase_precio), ...frasesCantidad(prod, sin2) });
 }
 

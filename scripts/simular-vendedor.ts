@@ -132,7 +132,11 @@ async function plantillaElegida(): Promise<{ plantilla: string | null; etiqueta:
 
 function aplicarOverrides(base: ConfigTurno, over: Record<string, unknown> | undefined, modelo: string | null): ConfigTurno {
   const cfg = structuredClone(base) as ConfigTurno & Record<string, unknown>;
-  for (const [k, v] of Object.entries(over ?? {})) {
+  // 27-10: los escenarios usan el nombre de config_wa (vendedor_fichas…); la config del turno los llama distinto. Antes
+  // "vendedor_fichas" caía en una clave sin uso y se probaba la ficha VIVA (los escenarios de fichas no probaban nada).
+  const ALIAS: Record<string, string> = { vendedor_fichas: "fichas", vendedor_media: "media", vendedor_ofertas: "ofertas", vendedor_envio: "envio", vendedor_glosario: "glosario", vendedor_retiro: "retiro" };
+  for (const [k0, v] of Object.entries(over ?? {})) {
+    const k = ALIAS[k0] ?? k0;
     const actual = cfg[k];
     cfg[k] = v && typeof v === "object" && !Array.isArray(v) && actual && typeof actual === "object" && !Array.isArray(actual)
       ? { ...(actual as Record<string, unknown>), ...(v as Record<string, unknown>) }

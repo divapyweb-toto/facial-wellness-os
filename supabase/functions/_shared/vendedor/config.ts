@@ -78,6 +78,13 @@ export type PrimerTurnoProducto = {
   linea_precio?: string;
   /** 26-10: nota para Despacho según la cantidad del producto en el pedido ({"3": "KIT 3 NIVELES…"}). */
   notas_cantidad?: Record<string, string>;
+  /**
+   * 27-10 (Enrique, JawFlex = 1 PAR): el precio entero del primer mensaje, en vez de "Sale X + envío…". {precio},
+   * {envio}, {total_1}, {total_2}, {total_3} salen del catálogo; si falta una oferta, vuelve el texto de siempre.
+   */
+  cuerpo_precio?: string;
+  /** 27-10: títulos de los botones del primer turno ("Quiero 1 par", "2 pares envío gratis"; máx. 20 caracteres). */
+  botones?: { q1?: string; q2?: string };
 };
 
 /** 26-10: una oferta extra post-compra. Los montos y textos viven en config_wa.vendedor.ofertas_extra (nunca la IA). */
@@ -109,6 +116,10 @@ function primerTurnoDe(v: unknown): Record<string, PrimerTurnoProducto> {
       ...(typeof o.texto === "string" && o.texto.trim() ? { texto: o.texto.trim() } : {}),
       ...(typeof o.media === "string" && /^[a-z0-9_]{1,30}$/.test(o.media) ? { media: o.media } : {}),
       ...(typeof o.linea_precio === "string" && o.linea_precio.trim() ? { linea_precio: o.linea_precio.trim() } : {}),
+      ...(typeof o.cuerpo_precio === "string" && o.cuerpo_precio.trim() ? { cuerpo_precio: o.cuerpo_precio.trim() } : {}),
+      ...(o.botones && typeof o.botones === "object" && !Array.isArray(o.botones)
+        ? { botones: Object.fromEntries(["q1", "q2"].flatMap((k) => { const t = (o.botones as Record<string, unknown>)[k]; return typeof t === "string" && t.trim() && t.trim().length <= 20 ? [[k, t.trim()]] : []; })) }
+        : {}),
       ...(o.notas_cantidad && typeof o.notas_cantidad === "object" && !Array.isArray(o.notas_cantidad)
         ? { notas_cantidad: Object.fromEntries(Object.entries(o.notas_cantidad as Record<string, unknown>).filter(([k, t]) => /^\d+$/.test(k) && typeof t === "string" && t.trim()).map(([k, t]) => [k, (t as string).trim()])) }
         : {}),

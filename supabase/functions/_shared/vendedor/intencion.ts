@@ -73,17 +73,18 @@ export function yaPidioDatos(textoNuestro: string | null | undefined): boolean {
 }
 
 /** Línea de precio según la cantidad (montos del catálogo, nunca del modelo). */
-export function lineaPrecioIntencion(prod: ItemCatalogo, cantidad: number | null, sinOferta2 = false, lineaExtra = ""): string {
+export function lineaPrecioIntencion(prod: ItemCatalogo, cantidad: number | null, sinOferta2 = false, lineaExtra = "", cuerpoFijo = ""): string {
   const oferta = cantidad && cantidad > 1 ? prod.ofertas.find((o) => o.cantidad === cantidad) : undefined;
   if (oferta) {
     const gratis = oferta.total <= cantidad! * prod.precio;
     return `Los ${cantidad} te salen ${gs(oferta.total)}${gratis ? " con envío gratis" : " en total"}, pagás al recibir.`;
   }
-  return cuerpoPrimerTurno(prod, sinOferta2) + (lineaExtra ? ` ${lineaExtra}` : "");
+  // 27-10 (JawFlex = 1 PAR): el precio entero de config, si lo hay.
+  return cuerpoFijo || (cuerpoPrimerTurno(prod, sinOferta2) + (lineaExtra ? ` ${lineaExtra}` : ""));
 }
 
 /** Nota interna para el modelo (no la ve el cliente). */
-export function notaIntencion(i: IntencionEscrita, prod: ItemCatalogo | null, sinOferta2 = false, lineaExtra = ""): string {
+export function notaIntencion(i: IntencionEscrita, prod: ItemCatalogo | null, sinOferta2 = false, lineaExtra = "", cuerpoFijo = ""): string {
   const cant = i.cantidad ?? 1;
   const base = `[CONTROL INTERNO, no lo ve el cliente] El cliente ESCRIBIÓ que lo quiere ("${i.frase}"): es lo mismo que tocar ` +
     `"Quiero ${cant}". NO llames primer_turno, no mandes video ni foto y no vuelvas a explicar el producto. `;
@@ -93,5 +94,5 @@ export function notaIntencion(i: IntencionEscrita, prod: ItemCatalogo | null, si
   }
   return base + `Anotá producto (${prod.titulo}) y cantidad (${cant}) con registrar_perfil y respondé en UN solo mensaje de texto: ` +
     `"Genial! Pasame tu nombre, tu ciudad y la calle o barrio 🙌 El repartidor te llama antes de ir." y abajo, en UNA línea, el precio tal cual: ` +
-    `"${lineaPrecioIntencion(prod, i.cantidad, sinOferta2, lineaExtra)}" Si además preguntó algo, respondelo corto en el mismo mensaje.`;
+    `"${lineaPrecioIntencion(prod, i.cantidad, sinOferta2, lineaExtra, cuerpoFijo)}" Si además preguntó algo, respondelo corto en el mismo mensaje.`;
 }

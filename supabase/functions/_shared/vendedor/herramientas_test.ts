@@ -20,6 +20,7 @@ import {
   precioPorCantidad,
   textoClienteDerivacion,
   textoResumen,
+  cuerpoPrecioProducto,
 } from "./herramientas.ts";
 import { configPrueba, ctxPrueba, depsPrueba } from "./prueba_utiles.ts";
 
@@ -852,4 +853,20 @@ Deno.test("26-10 crear_pedido_cod (resumen): consulta el courier de la ciudad (s
   deps.consultarCourier = () => Promise.reject(new Error("rpc caída"));
   const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, ...DATOS }, ctxPrueba(), deps);
   assert(r.terminal, "si la rpc falla, el resumen sale igual");
+});
+
+Deno.test("27-10 JawFlex = 1 PAR: cuerpo del precio desde config con montos del catálogo; botones con su título", () => {
+  const prod = {
+    handle: "ejercitador-prueba", titulo: "Ejercitador", variante_id: "v", precio: 79000, precio_texto: "79.000", disponible: true, total: 112000,
+    total_texto: "112.000", imagen: null, frase_precio: "", ofertas: [
+      { cantidad: 2, precio: 125000, precio_texto: "", total: 158000, total_texto: "", ahorro: 0, ahorro_texto: "", frase_precio: "" },
+      { cantidad: 3, precio: 155000, precio_texto: "", total: 188000, total_texto: "", ahorro: 0, ahorro_texto: "", frase_precio: "" },
+    ],
+  };
+  const t = "1 par (una pieza para cada lado) Gs {precio} + envío · 2 pares Gs {total_2} envío gratis · los 3 niveles (1 par suave, 1 medio y 1 duro) Gs {total_3} envío gratis";
+  assertEquals(cuerpoPrecioProducto(prod, t), "1 par (una pieza para cada lado) Gs 79.000 + envío · 2 pares Gs 158.000 envío gratis · los 3 niveles (1 par suave, 1 medio y 1 duro) Gs 188.000 envío gratis");
+  assertEquals(cuerpoPrecioProducto({ ...prod, ofertas: prod.ofertas.slice(0, 1) }, t), ""); // falta el de 3 → texto de siempre
+  assertEquals(cuerpoPrecioProducto(prod, undefined), "");
+  assertEquals(botonesPrimerTurno(prod, false, { q1: "Quiero 1 par", q2: "2 pares envío gratis" }).map((b) => b.titulo), ["2 pares envío gratis", "Quiero 1 par", "Tengo una duda"]);
+  assertEquals(botonesPrimerTurno(prod).map((b) => b.titulo), ["2 con envío gratis", "Quiero 1", "Tengo una duda"]);
 });

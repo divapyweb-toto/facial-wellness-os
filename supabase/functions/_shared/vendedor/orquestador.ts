@@ -41,7 +41,7 @@ import { partesAsuncion } from "../horario.ts";
 import { extrasVendedor } from "./config.ts";
 import { INSTRUCCION_ACCION_INVENTADA, INSTRUCCION_PROMESA_RECONTACTO, montosDeResultado, quitarFrasesConMontos, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
 import { type BloqueImagen, cargarImagen, contenidoConImagenes, type Descarga, type ImagenEntrada, imagenesPendientes, textoImagenNoVista } from "./imagenes.ts";
-import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type ItemCatalogo, itemsCatalogo, lineaPrecioProducto, type MotivoDerivacion } from "./herramientas.ts";
+import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type ItemCatalogo, itemsCatalogo, cuerpoPrecioProducto, lineaPrecioProducto, type MotivoDerivacion } from "./herramientas.ts";
 import { type IntencionEscrita, intencionEnBloque, lineaPrecioIntencion, notaIntencion, yaPidioDatos } from "./intencion.ts";
 import {
   fusionarPerfil,
@@ -745,12 +745,13 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     else {
       const sin2 = prod ? extra.primer_turno_producto[prod.handle]?.sin_oferta_2 === true : false; // 26-10
       const lineaKit = prod ? lineaPrecioProducto(prod, extra.primer_turno_producto[prod.handle]?.linea_precio) : ""; // 26-10 (JawFlex)
-      if (prod) permitidos.push(...montosDeResultado(lineaPrecioIntencion(prod, intencion.cantidad, sin2, lineaKit)));
+      const cuerpoFijo = prod ? cuerpoPrecioProducto(prod, extra.primer_turno_producto[prod.handle]?.cuerpo_precio) : ""; // 27-10 (1 PAR)
+      if (prod) permitidos.push(...montosDeResultado(lineaPrecioIntencion(prod, intencion.cantidad, sin2, lineaKit, cuerpoFijo)));
       if (intencion.cantidad && !perfil.cantidad) perfil = { ...perfil, cantidad: intencion.cantidad };
       fila.herramientas.push({ nombre: "intencion_escrita(sistema)", input: { frase: intencion.frase, cantidad: intencion.cantidad }, resultado: { ok: true, handle: prod?.handle ?? null }, error: false });
       const ultimo = mensajes[mensajes.length - 1];
       if (ultimo.role === "user" && typeof ultimo.content === "string") {
-        mensajes[mensajes.length - 1] = { ...ultimo, content: `${ultimo.content}\n${notaIntencion(intencion, prod, sin2, lineaKit)}` };
+        mensajes[mensajes.length - 1] = { ...ultimo, content: `${ultimo.content}\n${notaIntencion(intencion, prod, sin2, lineaKit, cuerpoFijo)}` };
       }
     }
   }

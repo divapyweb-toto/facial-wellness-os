@@ -118,27 +118,15 @@ const OFERTA_BOTELLA_PRUEBA = {
     texto: "¿Querés sumar la botella deportiva que se enrolla por {precio} en el mismo envío? Para el agua del gym, correr o viajar; vacía se enrolla y entra en el bolsillo. Precio normal 79.000.",
   },
 };
+// 27-10 (Enrique): la unidad de JawFlex es 1 PAR (2 piezas, una para cada lado). Mismo texto que reportes/config-bot-28-10.json.
+// Sin foto ni video hasta que CREATIVOS entregue material del par verificado (la foto muestra 3 piezas y el demo abre con 1).
 const PRIMER_TURNO_PRUEBA = {
-  "ejercitador-de-mandibula-3-niveles": {
-    sin_oferta_2: true, media: "foto",
-    texto: "Es un ejercitador de mandíbula de silicona. Lo mordés unos minutos por día para entrenar los músculos de la mandíbula.",
-    linea_precio: "También tenés los 3 niveles (suave, medio y duro) por {total_3} con envío gratis.",
-    // La nota de armado del kit la pone Despacho (FUNCIONES 410a807b, src/lib/armado.js): acá no se duplica.
-  },
+  "ejercitador-de-mandibula-3-niveles": {"texto": "Es un par de ejercitadores de mandíbula de silicona, uno para cada lado. Los mordés unos minutos por día para entrenar los músculos de la mandíbula.", "cuerpo_precio": "1 par (una pieza para cada lado) Gs {precio} + envío · 2 pares Gs {total_2} envío gratis · los 3 niveles (1 par suave, 1 medio y 1 duro) Gs {total_3} envío gratis", "botones": {"q1": "Quiero 1 par", "q2": "2 pares envío gratis"}},
   "botella-flexible-gudair-500-ml": { sin_oferta_2: true },
 };
-/** 26-10: ficha de JawFlex corregida (1 unidad = 1 nivel, no se elige; el kit de 3 niveles son 3 unidades). */
+/** 27-10: ficha de JawFlex con la unidad = 1 PAR; 2 pares envío gratis; los 3 niveles = 3 pares. */
 const FICHA_JAWFLEX_PRUEBA = {
-  "ejercitador-de-mandibula-3-niveles": {
-    ficha: "Ejercitador de mandíbula de silicona. 1 unidad = 1 ejercitador (el nivel NO se elige). El kit de 3 niveles (suave, medio y duro) son 3 unidades. Nunca digas \"elegís tu nivel\" ni \"3 piezas\" por el precio de 1.",
-    beneficios: ["Silicona flexible, fácil de limpiar", "Lo usás mientras trabajás, manejás o mirás una serie", "Con el kit de 3 niveles empezás por el suave y subís a tu ritmo"],
-    objeciones: [
-      { objecion: "¿Cuántos niveles tiene?", respuesta: "Cada ejercitador es de un nivel. Si querés los 3 (suave, medio y duro), está el kit de 3 niveles" },
-      { objecion: "¿Puedo elegir el nivel?", respuesta: "El de 1 no se elige; si querés empezar por el suave y subir, te conviene el kit de 3 niveles" },
-      { objecion: "¿Cuánto tiempo por día?", respuesta: "15 minutos al día, mientras trabajás, manejás o mirás una serie" },
-      { objecion: "Me duele la mandíbula", respuesta: "Eso te conviene consultarlo con tu médico antes de usarlo" },
-    ],
-  },
+  "ejercitador-de-mandibula-3-niveles": {"ficha": "Ejercitador de mandíbula de silicona. La unidad es 1 PAR: 2 piezas, una para cada lado. 2 pares salen con envío gratis. Los 3 niveles son 3 pares (1 par suave, 1 medio y 1 duro), con envío gratis. El nivel del par suelto no se elige. Nunca digas \"1 ejercitador\" a secas, ni \"elegí tu nivel\" o \"elegís tu nivel\". A \"¿cuántos niveles tiene?\" respondé así: \"Cada par es de un nivel. Si querés los 3 (suave, medio y duro), son 3 pares: 1 par de cada nivel\". Nunca digas \"tiene 3 niveles\".", "beneficios": ["Silicona flexible, fácil de limpiar", "Lo usás mientras trabajás, manejás o mirás una serie", "Con los 3 niveles (3 pares) empezás por el suave y subís a tu ritmo"], "objeciones": [{"objecion": "¿Cuántas piezas vienen?", "respuesta": "Va un par: 2 piezas, una para cada lado"}, {"objecion": "¿Cuántos niveles tiene?", "respuesta": "Cada par es de un nivel. Si querés los 3 (suave, medio y duro), son 3 pares: 1 par de cada nivel (nunca digas \"tiene 3 niveles\")"}, {"objecion": "¿Puedo elegir el nivel?", "respuesta": "El par suelto no se elige; si querés empezar por el suave y subir, te conviene llevar los 3 niveles"}, {"objecion": "¿Cuánto tiempo por día?", "respuesta": "15 minutos al día, mientras trabajás, manejás o mirás una serie"}, {"objecion": "Me duele la mandíbula", "respuesta": "Eso te conviene consultarlo con tu médico antes de usarlo"}], "para_quien": "Quien quiere entrenar la mandíbula a su ritmo, en ratos libres", "como_se_usa": "Ponés una pieza del par en cada lado, entre las muelas, y masticás 15 minutos al día", "consejo_uso": "Empezá con pocos minutos y lavalo con agua y jabón. Si llevás los 3 niveles (3 pares), arrancás por el par suave y subís"},
 };
 const FICHA_BOTELLA_PRUEBA = {
   "botella-flexible-gudair-500-ml": {
@@ -662,18 +650,48 @@ export const ESCENARIOS: Escenario[] = [
   },
   {
     nombre: "jawflex_primer_mensaje",
-    descripcion: "26-10: anuncio de JawFlex: qué es y para qué sirve (texto fijo), foto en uso y precio de 1; sin el botón de 2.",
+    descripcion: "27-10: anuncio de JawFlex: qué es (un par, uno para cada lado), precio exacto de Enrique (1 par / 2 pares / 3 niveles = 3 pares), botones 'Quiero 1 par' y '2 pares envío gratis'; sin foto ni video; nunca '1 ejercitador' ni 'elegí tu nivel'.",
     cliente: { nombre: "Ana Prueba", telefono: "+595981000154" },
     anuncio: "ejercitador-de-mandibula-3-niveles",
     config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA }, vendedor_fichas: FICHA_JAWFLEX_PRUEBA },
     pasos: ["¡Hola! Quiero más información", "¿Cuántos niveles tiene?"],
     checks: [
-      { paso: 0, tipo: "texto", regex: /Es un ejercitador de mandíbula/, desc: "texto fijo de qué es" },
-      { paso: 0, tipo: "texto", regex: /3 niveles \(suave, medio y duro\) por ₲188\.000 con envío gratis/, desc: "línea del kit de 3" },
-      { paso: 0, tipo: "boton", regex: /vend_p1:q1:/, desc: "Quiero 1" },
-      { paso: 0, tipo: "boton", regex: /vend_p1:q2:/, negar: true, desc: "sin botón de 2" },
-      { paso: 0, tipo: "texto", regex: /Llevando 2|158\.000/, negar: true, desc: "sin precio de 2" },
-      { tipo: "texto", regex: /eleg[ií]s (tu|el) nivel|3 piezas/i, negar: true, desc: "nunca 'elegís tu nivel' ni '3 piezas'" },
+      { paso: 0, tipo: "texto", regex: /Es un par de ejercitadores de mandíbula de silicona, uno para cada lado/, desc: "texto fijo: es un par" },
+      { paso: 0, tipo: "texto", regex: /1 par \(una pieza para cada lado\) Gs 79\.000 \+ envío · 2 pares Gs 158\.000 envío gratis · los 3 niveles \(1 par suave, 1 medio y 1 duro\) Gs 188\.000 envío gratis/, desc: "precio exacto de Enrique" },
+      { paso: 0, tipo: "boton", regex: /Quiero 1 par/, desc: "botón 'Quiero 1 par'" },
+      { paso: 0, tipo: "boton", regex: /2 pares envío gratis/, desc: "botón '2 pares envío gratis'" },
+      { paso: 0, tipo: "fn", fn: (r) => !r.pasos[0].salidas.some((x: { tipo: string }) => x.tipo === "media") || "salió una foto o video", desc: "sin foto ni video" },
+      { paso: 1, tipo: "texto", regex: /par/i, desc: "responde hablando de pares" },
+      { paso: 1, tipo: "texto", regex: /tiene (los )?3 niveles|3 niveles de resistencia/i, negar: true, desc: "nunca 'tiene 3 niveles' (cada par es de un nivel)" },
+      { tipo: "texto", regex: /\b(1|un|uno) ejercitador\b(?! de mand)|eleg[ií]s? (tu|el) nivel|3 piezas/i, negar: true, desc: "nunca '1 ejercitador' a secas, 'elegí tu nivel' ni '3 piezas'" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "jawflex_cuantas_piezas",
+    descripcion: "27-10: '¿cuántas piezas vienen?' → un par: 2 piezas, una para cada lado.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000158" },
+    anuncio: "ejercitador-de-mandibula-3-niveles",
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA }, vendedor_fichas: FICHA_JAWFLEX_PRUEBA },
+    pasos: ["¡Hola! Quiero más información", "¿Cuántas piezas vienen por 79 mil?"],
+    checks: [
+      { paso: 1, tipo: "texto", regex: /par|2 piezas|dos piezas|una para cada lado/i, desc: "dice que es un par" },
+      { tipo: "texto", regex: /\b(1|un|uno) ejercitador\b(?! de mand)|eleg[ií]s? (tu|el) nivel/i, negar: true },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "jawflex_quiero_1_par",
+    descripcion: "27-10: toca 'Quiero 1 par' → pide los datos; el resumen sale con 1 unidad (= 1 par) a 79.000 + envío.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000159" },
+    anuncio: "ejercitador-de-mandibula-3-niveles",
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA }, vendedor_fichas: FICHA_JAWFLEX_PRUEBA },
+    pasos: ["¡Hola! Quiero más información", "boton:Quiero 1 par", "Ana Prueba, Asunción, calle Palma 123"],
+    checks: [
+      { paso: 1, tipo: "texto", regex: /nombre|ciudad/i, desc: "pide los datos" },
+      { paso: 2, tipo: "herramienta", nombre: "crear_pedido_cod" },
+      { paso: 2, tipo: "texto", regex: /112\.000/, desc: "79.000 + 33.000 de envío" },
+      { tipo: "texto", regex: /\b(1|un|uno) ejercitador\b(?! de mand)|eleg[ií]s? (tu|el) nivel/i, negar: true },
       { tipo: "montos_catalogo" },
     ],
   },
@@ -698,7 +716,7 @@ export const ESCENARIOS: Escenario[] = [
     anuncio: "ejercitador-de-mandibula-3-niveles",
     consentimiento: "si",
     config: { vendedor: { ofertas_extra: OFERTA_BOTELLA_PRUEBA, primer_turno_producto: PRIMER_TURNO_PRUEBA } },
-    pasos: ["Hola, quiero más información", "boton:Quiero 1", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo", "boton:Sí, quiero"],
+    pasos: ["Hola, quiero más información", "boton:Quiero 1 par", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo", "boton:Sí, quiero"],
     checks: [
       { paso: 3, tipo: "herramienta", nombre: "oferta_extra(sistema)" },
       { paso: 3, tipo: "texto", regex: /botella deportiva que se enrolla por ₲49\.000/ },
@@ -776,7 +794,7 @@ export const ESCENARIOS: Escenario[] = [
   },
   {
     nombre: "jawflex_kit_3_niveles",
-    descripcion: "26-10: pide los 3 niveles → pedido de 3 ejercitadores (188.000 con envío gratis); la nota de armado la pone Despacho.",
+    descripcion: "27-10: pide los 3 niveles → pedido de 3 pares (188.000 con envío gratis); la nota de armado la pone Despacho.",
     cliente: { nombre: "Ana Prueba", telefono: "+595981000171" },
     anuncio: "ejercitador-de-mandibula-3-niveles",
     consentimiento: "si",
@@ -784,7 +802,9 @@ export const ESCENARIOS: Escenario[] = [
     pasos: ["¡Hola! Quiero más información", "Quiero los 3 niveles", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo"],
     checks: [
       { paso: 3, tipo: "herramienta", nombre: "crear_pedido_cod" },
-      { paso: 2, tipo: "texto", regex: /x3/, desc: "resumen con 3 unidades" },
+      { paso: 2, tipo: "texto", regex: /x3/, desc: "resumen con 3 unidades (3 pares)" },
+      { paso: 2, tipo: "texto", regex: /188\.000/, desc: "188.000 con envío gratis" },
+      { tipo: "texto", regex: /3 ejercitadores|eleg[ií]s? (tu|el) nivel/i, negar: true, desc: "nunca '3 ejercitadores' ni 'elegí tu nivel'" },
       { tipo: "montos_catalogo" },
     ],
   },
