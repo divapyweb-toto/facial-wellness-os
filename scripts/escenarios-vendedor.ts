@@ -119,11 +119,13 @@ const OFERTA_BOTELLA_PRUEBA = {
   },
 };
 // 27-10 (Enrique): la unidad de JawFlex es 1 PAR (2 piezas, una para cada lado). Mismo texto que reportes/config-bot-28-10.json.
-// Sin foto ni video hasta que CREATIVOS entregue material del par verificado (la foto muestra 3 piezas y el demo abre con 1).
+// Con el demo nuevo del par (md5 87f907ee…, verificado 27-10); la foto vieja muestra 3 piezas con "3 niveles" y no se usa.
 const PRIMER_TURNO_PRUEBA = {
-  "ejercitador-de-mandibula-3-niveles": {"texto": "Es un par de ejercitadores de mandíbula de silicona, uno para cada lado. Los mordés unos minutos por día para entrenar los músculos de la mandíbula.", "cuerpo_precio": "1 par (una pieza para cada lado) Gs {precio} + envío · 2 pares Gs {total_2} envío gratis · los 3 niveles (1 par suave, 1 medio y 1 duro) Gs {total_3} envío gratis", "botones": {"q1": "Quiero 1 par", "q2": "2 pares envío gratis"}},
+  "ejercitador-de-mandibula-3-niveles": {"media": "demo", "texto": "Es un par de ejercitadores de mandíbula de silicona, uno para cada lado. Los mordés unos minutos por día para entrenar los músculos de la mandíbula.", "cuerpo_precio": "1 par (una pieza para cada lado) Gs {precio} + envío · 2 pares Gs {total_2} envío gratis · los 3 niveles (1 par suave, 1 medio y 1 duro) Gs {total_3} envío gratis", "botones": {"q1": "Quiero 1 par", "q2": "2 pares envío gratis"}},
   "botella-flexible-gudair-500-ml": { sin_oferta_2: true },
 };
+/** 27-10: el demo nuevo del par (en producción lo sube desplegar-28-10.sh). */
+const MEDIA_JAWFLEX_PRUEBA = { "ejercitador-de-mandibula-3-niveles": { demo: "https://xboufewtyouxrsdvhnhy.supabase.co/storage/v1/object/public/voltra-media/productos/ejercitador-demo.mp4" } };
 /** 27-10: ficha de JawFlex con la unidad = 1 PAR; 2 pares envío gratis; los 3 niveles = 3 pares. */
 const FICHA_JAWFLEX_PRUEBA = {
   "ejercitador-de-mandibula-3-niveles": {"ficha": "Ejercitador de mandíbula de silicona. La unidad es 1 PAR: 2 piezas, una para cada lado. 2 pares salen con envío gratis. Los 3 niveles son 3 pares (1 par suave, 1 medio y 1 duro), con envío gratis. El nivel del par suelto no se elige. Nunca digas \"1 ejercitador\" a secas, ni \"elegí tu nivel\" o \"elegís tu nivel\". A \"¿cuántos niveles tiene?\" respondé así: \"Cada par es de un nivel. Si querés los 3 (suave, medio y duro), son 3 pares: 1 par de cada nivel\". Nunca digas \"tiene 3 niveles\".", "beneficios": ["Silicona flexible, fácil de limpiar", "Lo usás mientras trabajás, manejás o mirás una serie", "Con los 3 niveles (3 pares) empezás por el suave y subís a tu ritmo"], "objeciones": [{"objecion": "¿Cuántas piezas vienen?", "respuesta": "Va un par: 2 piezas, una para cada lado"}, {"objecion": "¿Cuántos niveles tiene?", "respuesta": "Cada par es de un nivel. Si querés los 3 (suave, medio y duro), son 3 pares: 1 par de cada nivel (nunca digas \"tiene 3 niveles\")"}, {"objecion": "¿Puedo elegir el nivel?", "respuesta": "El par suelto no se elige; si querés empezar por el suave y subir, te conviene llevar los 3 niveles"}, {"objecion": "¿Cuánto tiempo por día?", "respuesta": "15 minutos al día, mientras trabajás, manejás o mirás una serie"}, {"objecion": "Me duele la mandíbula", "respuesta": "Eso te conviene consultarlo con tu médico antes de usarlo"}], "para_quien": "Quien quiere entrenar la mandíbula a su ritmo, en ratos libres", "como_se_usa": "Ponés una pieza del par en cada lado, entre las muelas, y masticás 15 minutos al día", "consejo_uso": "Empezá con pocos minutos y lavalo con agua y jabón. Si llevás los 3 niveles (3 pares), arrancás por el par suave y subís"},
@@ -653,14 +655,14 @@ export const ESCENARIOS: Escenario[] = [
     descripcion: "27-10: anuncio de JawFlex: qué es (un par, uno para cada lado), precio exacto de Enrique (1 par / 2 pares / 3 niveles = 3 pares), botones 'Quiero 1 par' y '2 pares envío gratis'; sin foto ni video; nunca '1 ejercitador' ni 'elegí tu nivel'.",
     cliente: { nombre: "Ana Prueba", telefono: "+595981000154" },
     anuncio: "ejercitador-de-mandibula-3-niveles",
-    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA }, vendedor_fichas: FICHA_JAWFLEX_PRUEBA },
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA }, vendedor_fichas: FICHA_JAWFLEX_PRUEBA, vendedor_media: MEDIA_JAWFLEX_PRUEBA },
     pasos: ["¡Hola! Quiero más información", "¿Cuántos niveles tiene?"],
     checks: [
       { paso: 0, tipo: "texto", regex: /Es un par de ejercitadores de mandíbula de silicona, uno para cada lado/, desc: "texto fijo: es un par" },
       { paso: 0, tipo: "texto", regex: /1 par \(una pieza para cada lado\) Gs 79\.000 \+ envío · 2 pares Gs 158\.000 envío gratis · los 3 niveles \(1 par suave, 1 medio y 1 duro\) Gs 188\.000 envío gratis/, desc: "precio exacto de Enrique" },
       { paso: 0, tipo: "boton", regex: /Quiero 1 par/, desc: "botón 'Quiero 1 par'" },
       { paso: 0, tipo: "boton", regex: /2 pares envío gratis/, desc: "botón '2 pares envío gratis'" },
-      { paso: 0, tipo: "fn", fn: (r) => !r.pasos[0].salidas.some((x: { tipo: string }) => x.tipo === "media") || "salió una foto o video", desc: "sin foto ni video" },
+      { paso: 0, tipo: "fn", fn: (r) => { const m = r.pasos[0].salidas.filter((x: { tipo: string }) => x.tipo === "media"); return (m.length === 1 && m[0].media === "video" && /ejercitador-demo\.mp4/.test(m[0].link)) || `media: ${JSON.stringify(m)}`; }, desc: "sale el demo nuevo (video), una vez" },
       { paso: 1, tipo: "texto", regex: /par/i, desc: "responde hablando de pares" },
       { paso: 1, tipo: "texto", regex: /tiene (los )?3 niveles|3 niveles de resistencia/i, negar: true, desc: "nunca 'tiene 3 niveles' (cada par es de un nivel)" },
       { tipo: "texto", regex: /\b(1|un|uno) ejercitador\b(?! de mand)|eleg[ií]s? (tu|el) nivel|3 piezas/i, negar: true, desc: "nunca '1 ejercitador' a secas, 'elegí tu nivel' ni '3 piezas'" },
