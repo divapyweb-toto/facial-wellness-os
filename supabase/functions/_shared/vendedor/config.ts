@@ -71,7 +71,9 @@ export type CfgVendedorExtra = {
 };
 
 export type PrimerTurnoProducto = {
-  sin_oferta_2?: boolean; texto?: string; media?: "foto" | "video" | "uso";
+  sin_oferta_2?: boolean; texto?: string;
+  /** Clave de vendedor_media del producto ("foto", "uso", "demo"…): imagen o video según la extensión del archivo. */
+  media?: string;
   /** 26-10: una línea después del precio de 1; {total_2} / {total_3} = totales del catálogo (JawFlex: kit de 3 niveles). */
   linea_precio?: string;
   /** 26-10: nota para Despacho según la cantidad del producto en el pedido ({"3": "KIT 3 NIVELES…"}). */
@@ -105,7 +107,7 @@ function primerTurnoDe(v: unknown): Record<string, PrimerTurnoProducto> {
     out[h] = {
       ...(o.sin_oferta_2 === true ? { sin_oferta_2: true } : {}),
       ...(typeof o.texto === "string" && o.texto.trim() ? { texto: o.texto.trim() } : {}),
-      ...(o.media === "foto" || o.media === "video" || o.media === "uso" ? { media: o.media } : {}),
+      ...(typeof o.media === "string" && /^[a-z0-9_]{1,30}$/.test(o.media) ? { media: o.media } : {}),
       ...(typeof o.linea_precio === "string" && o.linea_precio.trim() ? { linea_precio: o.linea_precio.trim() } : {}),
       ...(o.notas_cantidad && typeof o.notas_cantidad === "object" && !Array.isArray(o.notas_cantidad)
         ? { notas_cantidad: Object.fromEntries(Object.entries(o.notas_cantidad as Record<string, unknown>).filter(([k, t]) => /^\d+$/.test(k) && typeof t === "string" && t.trim()).map(([k, t]) => [k, (t as string).trim()])) }

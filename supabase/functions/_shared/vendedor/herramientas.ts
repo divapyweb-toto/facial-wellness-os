@@ -1355,7 +1355,8 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
   if (!r1.ok) return error(`envio_fallido: ${r1.error}. Respondé con el gancho y frase_precio en texto.`);
   const link = pt.media ? ctx.cfg.media[prod.handle]?.[pt.media] : undefined;
   if (link) {
-    const m = await deps.enviarMedia(ctx.destino, pt.media === "foto" ? "image" : "video", link, null, opts(ctx));
+    const esImagen = /\.(jpe?g|png|webp)(\?|$)/i.test(link); // 26-10: el tipo sale del archivo ("demo" = video)
+    const m = await deps.enviarMedia(ctx.destino, esImagen ? "image" : "video", link, null, opts(ctx));
     if (!m.ok) console.warn(`primer_turno: no salió la ${pt.media} de ${prod.handle}: ${m.error}`); // el precio sale igual
   }
   // Pausa de "escribiendo…" proporcional a la segunda burbuja, como entre burbujas de texto (fase 4).
