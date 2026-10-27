@@ -236,7 +236,10 @@ export async function cargarModulosSifen(
       consultarLote: (p) => c.consultarLote(p),
       async consultarRuc(ruc) {
         const r = await c.consultarRuc(ruc.split("-")[0]);
-        return { ok: r.estado !== "error_red", existe: r.existe === true, razonSocial: r.contribuyente?.razonSocial, estado: r.contribuyente?.estado, mensaje: r.mensaje };
+        // 27-10: ok solo con respuesta definitiva (0502 encontrado / 0500 no existe). Antes un 0160 o un HTTP 400 de SIFEN
+        // (intermitente en TEST) salía ok con existe=false y emitir() pasaba la FE a innominado en silencio (después la
+        // NC daba 2441 porque la FE "no tenía" receptor).
+        return { ok: r.estado === "aprobado" || r.estado === "rechazado", existe: r.existe === true, razonSocial: r.contribuyente?.razonSocial, estado: r.contribuyente?.estado, mensaje: r.mensaje };
       },
     };
   }

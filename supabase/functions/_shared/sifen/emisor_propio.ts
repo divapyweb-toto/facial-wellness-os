@@ -225,7 +225,20 @@ export function crearEmisorPropio(d: DepsEmisorPropio): EmisorPropio {
     async cancelar(cdc, motivo) {
       // Evento de cancelación (MT v150, grupo rGeVeCan: Id = CDC, mOtEve motivo 5-500 caracteres).
       try {
-        const xml = await firmarEvento(d.eventos.cancelacion({ cdc, motivo, fecha: d.fechaSifen(d.ahora()) }));
+        // 27-10: la firma del evento no puede quedar "antes" de la aprobación según el reloj de SIFEN. El de SIFEN TEST va
+        // adelantado y rechazaba las cancelaciones con 4009 (extemporáneo); con 1 s después de su dFecProc (la
+        // aprobación, que devuelve la consulta) se registra. Si la consulta falla o trae una hora anterior, rige la local.
+        let fecha = d.fechaSifen(d.ahora());
+        try {
+          const c = await d.ws.consultarDE(cdc) as RespuestaSifen & { fechaProceso?: string };
+          const fp = String(c.fechaProceso ?? "").slice(0, 19);
+          if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(fp) && fp >= fecha) {
+            // 1 s después de la aprobación (dFecProc), en la misma hora "de pared" que usa SIFEN.
+            const t = new Date(`${fp}Z`).getTime() + 1000;
+            fecha = new Date(t).toISOString().slice(0, 19);
+          }
+        } catch { /* sin consulta: hora local */ }
+        const xml = await firmarEvento(d.eventos.cancelacion({ cdc, motivo, fecha }));
         return await d.ws.enviarEvento(xml);
       } catch (e) {
         return { ok: false, estado: "error", mensaje: `cancelación: ${msj(e)}` };

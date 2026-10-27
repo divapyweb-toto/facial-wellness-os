@@ -145,3 +145,42 @@ Deno.test("sin número: pide siguienteNumero; cancelar e inutilizar firman y man
   assertEquals((await em.inutilizar({ tipo: 1, establecimiento: "001", punto: "001", desde: 3, hasta: 4, motivo: "Saltado por error" })).estado, "aprobado");
   assertEquals(ws.eventos.length, 2);
 });
+
+Deno.test("cancelar: firma con la hora del servidor de SIFEN si va adelantada (TEST, 4009); si no, la hora local", async () => {
+  const CDC = "01801777623001001000183422026102712121514489";
+  for (const [fp, esperado] of [
+    ["2026-10-08T10:02:30-03:00", "2026-10-08T10:02:31"], // reloj de SIFEN adelantado: 1 s después de su aprobación
+    ["2026-10-08T09:00:00", "2026-10-08T10:00:00"], // servidor atrasado: rige la local
+    [undefined, "2026-10-08T10:00:00"], // sin dFecProc
+  ] as const) {
+    const ws = wsSimulado();
+    const fechas: string[] = [];
+    const { d } = deps({ ...ws, consultarDE: () => Promise.resolve({ ok: true, estado: "aprobado", fechaProceso: fp } as RespuestaSifen) });
+    d.eventos = { ...d.eventos, cancelacion: (a) => (fechas.push(a.fecha), { xml: `<rEve Id="1"><Id>${a.cdc}</Id></rEve>`, id: "1" }) };
+    await crearEmisorPropio(d).cancelar(CDC, "Pedido devuelto por el cliente");
+    assertEquals(fechas, [esperado]);
+  }
+  // Si la consulta tira, cancela igual con la hora local.
+  const fechas: string[] = [];
+  const { d } = deps({ ...wsSimulado(), consultarDE: () => Promise.reject(new Error("red")) });
+  d.eventos = { ...d.eventos, cancelacion: (a) => (fechas.push(a.fecha), { xml: `<rEve Id="1"><Id>${a.cdc}</Id></rEve>`, id: "1" }) };
+  assertEquals((await crearEmisorPropio(d).cancelar(CDC, "Pedido devuelto por el cliente")).estado, "aprobado");
+  assertEquals(fechas, ["2026-10-08T10:00:00"]);
+});
+
+Deno.test("FE con RUC: solo un 'no existe' definitivo pasa a innominado; una consulta fallida conserva el RUC (27-10, 2441)", async () => {
+  const receptorRuc = { tipo: "ruc" as const, ruc: "80080610", dv: "7", razonSocial: "CODE 100 S.A.", pais: "PRY" };
+  for (const [rr, esperado] of [
+    [{ ok: true, existe: false, mensaje: "RUC no existe" }, "innominado"],
+    [{ ok: false, existe: false, mensaje: "Respuesta inesperada de SIFEN (HTTP 400)" }, "ruc"],
+    [{ ok: true, existe: true, estado: "ACTIVO" }, "ruc"],
+  ] as const) {
+    const tipos: string[] = [];
+    const ws = { ...wsSimulado(), consultarRuc: () => Promise.resolve(rr) };
+    const { d } = deps(ws as ClienteWsSifen);
+    const armar = d.armarXmlDE;
+    d.armarXmlDE = (x, e, c) => (tipos.push(x.receptor.tipo), armar(x, e, c));
+    await crearEmisorPropio(d).emitir(doc({ receptor: receptorRuc as DocumentoDE["receptor"] }));
+    assertEquals(tipos, [esperado], rr.mensaje ?? rr.estado);
+  }
+});

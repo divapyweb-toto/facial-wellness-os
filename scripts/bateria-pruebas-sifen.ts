@@ -22,7 +22,8 @@
 //
 // Variables opcionales (además de las de ENV_SIFEN):
 //   SIFEN_BATERIA_EMISOR_JSON   DatosEmisor en JSON (por defecto: datos inventados de prueba)
-//   SIFEN_BATERIA_RECEPTOR_RUC  "RUC-DV" de un contribuyente receptor (por defecto: el mismo emisor)
+//   SIFEN_BATERIA_RECEPTOR_RUC  "RUC-DV" de un contribuyente receptor (por defecto: el mismo emisor). Tiene que existir en
+//                              la base de SIFEN TEST (si no, la FE sale innominada y NC/ND/NR dan 1306/2441); 27-10: CODE 100 S.A.
 //   SIFEN_BATERIA_RECEPTOR_RAZON razón social de ese RUC
 //   SIFEN_BATERIA_NUMERO_DESDE  primer número (solo batería nueva; nunca menor que lo ya usado en numeros-test.json)
 //   SIFEN_BATERIA_ESPERA_LOTE_MIN minutos máximos esperando los lotes asíncronos (por defecto 15)
@@ -257,8 +258,10 @@ const items = (): ItemDE[] => [
   { codigo: "ENVIO", descripcion: "Envío a domicilio", cantidad: 1, precioUnitario: 33000, ivaTasa: 10, ivaAfectacion: 1, unidadMedida: 77 },
 ];
 const LUGAR = { direccion: "Depósito Inventado", departamento: 11, ciudad: CIUDAD };
+// Vendedor extranjero con pasaporte: una cédula inventada puede ser de un contribuyente real (SIFEN TEST: 2562
+// "El vendedor no debe ser contribuyente" con la CI 1234567). Probado en TEST el 27-10: aprobada.
 const AUTOFACTURA = {
-  naturalezaVendedor: 1, documentoTipo: 1, documentoNumero: "1234567", nombre: "Vendedor Inventado", direccion: "Ruta Inventada",
+  naturalezaVendedor: 2, documentoTipo: 2, documentoNumero: "AB123456", nombre: "Vendedor Inventado", direccion: "Ruta Inventada",
   numeroCasa: "", departamento: 11, ciudad: LUGAR.ciudad, lugar: LUGAR, constancia: { tipo: 1 },
 };
 const hoy = fechaSifen(new Date()).slice(0, 10);
