@@ -1,7 +1,8 @@
 // lista-despacho/logica.ts · 27-10. Enrique: "Sacá el aviso por cada pedido. Mandame una sola lista por día de lo que
 // hay que despachar, con la nota de armado." Puro, sin red: pedidos de Shopify (shopify_pedidos) → un mensaje.
 // Misma regla que Despacho (DespachoPagina.jsx: clasificarEstado, esPagoAnticipado, separarPedidosVoltra):
-//   confirmado/ayuda, sin comprobante sin verificar, sin FALTAN_DATOS y con courier que cubra → a despachar;
+//   confirmado/ayuda, sin comprobante sin verificar, sin FALTAN_DATOS y con courier que cubra → a despachar
+//   (27-10: pagado → "courier libre" aunque nadie cobre en esa ciudad);
 //   retiro en persona confirmado → sección Retiro; confirmados trabados → "No despachar" con el motivo.
 // Lo que ya pasó por Despacho (EN_PREPARACION, DESPACHADO…, venta con salida o fila en entregas) no se lista.
 import { escaparHtml, notaArmado } from "../_shared/telegram_formato.ts";
@@ -105,9 +106,12 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
     }
     if (!confirmado) { out.sinConfirmar++; continue; }
     if (!p.pagado && tiene(tags, "pago_anticipado_comprobante")) { out.noDespachar.push({ p, motivo: "mandó comprobante: verificá el pago antes de despachar" }); continue; }
-    if (tiene(tags, "faltan_datos")) { out.noDespachar.push({ p, motivo: p.sinPin ? "faltan datos (sin pin de ubicación)" : "faltan datos para el courier" }); continue; }
+    // Enrique 27-10: "si tiene pin o solo tiene calle y ciudad sin pin igual ya se puede despachar". FALTAN_DATOS lo pone
+    // pedidos-trabados con esa misma regla (direccionUtilizable: pin, o calle + ciudad); SIN_PIN solo no frena.
+    if (tiene(tags, "faltan_datos")) { out.noDespachar.push({ p, motivo: "falta la dirección: sin pin y sin calle + ciudad" }); continue; }
     if (!p.pagado && (tiene(tags, "sin_cobertura") || !p.courier)) { out.noDespachar.push({ p, motivo: "sin cobertura contra entrega: espera el pago anticipado" }); continue; }
-    if (!p.courier) { out.noDespachar.push({ p, motivo: "ningún courier cubre la ciudad" }); continue; }
+    // Enrique 27-10: "ya está pagada no necesita cobranza" → pagado sin courier con cobranza: va por el que llegue.
+    if (!p.courier) p.courier = "libre";
     if (!out.porCourier.has(p.courier)) out.porCourier.set(p.courier, []);
     out.porCourier.get(p.courier)!.push(p);
   }
@@ -115,14 +119,14 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
   return out;
 }
 
-const NOMBRE_COURIER: Record<string, string> = { lucero: "Lucero del Este", pap: "Punto a Punto" };
+const NOMBRE_COURIER: Record<string, string> = { lucero: "Lucero del Este", pap: "Punto a Punto", libre: "Courier libre (ya pagado)" };
 const gs = (n: number) => `Gs ${n.toLocaleString("es-PY")}`;
 const producto = (l: Linea) => `${escaparHtml(l.nombre.split(":")[0].trim())} ×${l.cantidad}`;
 const diaCorto = (iso: string) => { const d = new Date(new Date(iso).getTime() - 3 * 3600_000); return `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
 
 function bloque(p: PedidoLista, hoyISO: string): string {
   const l = [`<b>${escaparHtml(p.nombre)}</b> · ${escaparHtml(p.ciudad || "sin ciudad")} · ${p.lineas.map(producto).join(" + ")}`];
-  l.push(p.pagado ? "💳 PAGADO · cobrar 0" : `Cobrar ${gs(p.total)}`);
+  l.push(p.pagado ? "💳 PAGADO · cobrar 0 · courier libre" : `Cobrar ${gs(p.total)}`);
   for (const a of p.armado) l.push(`<b>${escaparHtml(a)}</b>`);
   const extra: string[] = [];
   if (p.prioridad) extra.push("⚡ prioridad");

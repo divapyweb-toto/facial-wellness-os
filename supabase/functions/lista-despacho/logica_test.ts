@@ -63,7 +63,7 @@ Deno.test("pagado = cobrar 0 y va primero; factura, retiro y total distinto sale
   assert(pagado.pagado && pagado.prioridad);
   assertEquals(l.retiros.map((p) => p.nombre), ["#22"]);
   const t = textoLista(l, AHORA)!;
-  assert(t.includes("PAGADO · cobrar 0") && t.includes("Cobrar Gs 158.000"));
+  assert(t.includes("PAGADO · cobrar 0 · courier libre") && t.includes("Cobrar Gs 158.000"));
   assert(t.includes("factura: 80012345-6 Juan") && t.includes("Retiro en persona (1)") && t.includes("total distinto: el cliente dijo 79.000"));
   const grupo = [...l.porCourier.values()].find((g) => g.some((p) => p.nombre === "#21"))!;
   assertEquals(grupo[0].nombre, "#21");
@@ -78,11 +78,25 @@ Deno.test("No despachar con el motivo: faltan datos, comprobante sin verificar, 
   ], [], new Set());
   assertEquals(l.noDespachar.map((x) => x.p.nombre), ["#30", "#31", "#32"]);
   const t = textoLista(l, AHORA)!;
-  assert(t.includes("No despachar (3)") && t.includes("sin pin") && t.includes("verificá el pago") && t.includes("espera el pago anticipado"));
+  assert(t.includes("No despachar (3)") && t.includes("sin pin y sin calle + ciudad") && t.includes("verificá el pago") && t.includes("espera el pago anticipado"));
 });
 
 Deno.test("sin nada para despachar no hay mensaje; prueba marca el texto", () => {
   assertEquals(textoLista(armarLista([ped(40, "releasit_cod_form", [["Raspador", 1]])], [], new Set()), AHORA), null);
   const t = textoLista(armarLista([ped(41, "CONFIRMADO", [["Raspador", 1]])], [], new Set()), AHORA, true)!;
   assert(t.startsWith("🧪 PRUEBA"));
+});
+
+Deno.test("27-10: SIN_PIN con calle + ciudad se despacha; pagado sin cobertura va por courier libre (cobrar 0)", () => {
+  const l = armarLista([
+    ped(60, "CONFIRMADO, SIN_PIN", [["Raspador de Lengua", 1]]),
+    ped(61, "CONFIRMADO, SIN_COBERTURA, PAGADO, PAGO_VERIFICADO", [["Raspador de Lengua", 3]], { financial_status: "paid" }, null, "Colonia Manitoba"),
+    ped(62, "CONFIRMADO, SIN_COBERTURA", [["Raspador de Lengua", 1]], {}, null, "Colonia Manitoba"),
+  ], [], new Set(), AHORA);
+  const todos = [...l.porCourier.values()].flat().map((p) => p.nombre);
+  assert(todos.includes("#60") && todos.includes("#61"));
+  assertEquals(l.porCourier.get("libre")?.map((p) => p.nombre), ["#61"]);
+  assertEquals(l.noDespachar.map((x) => x.p.nombre), ["#62"]);
+  const t = textoLista(l, AHORA)!;
+  assert(t.includes("Courier libre (ya pagado) (1)") && t.includes("📍 sin pin"));
 });

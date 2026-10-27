@@ -276,7 +276,9 @@ function mapearGrupoAPedidos(grupoRows) {
   // 20-10: contra entrega salvo que ya esté pagado (PaP no cobra en todas sus ciudades; ya pagado, sí puede ir).
   const codRuteo = !pagadoShopify
   const sugerencia = sugerirTransportadora(ciudad, productoParaRuteo, { cod: codRuteo })
-  const transportadora = sugerencia.transportadora
+  // 27-10 (Enrique): "ya está pagada no necesita cobranza" → pagado y ningún courier con cobranza en esa ciudad:
+  // sale por "otra" (courier libre, cobro 0) en vez de quedar en "sin cobertura".
+  const transportadora = sugerencia.transportadora ?? (pagadoShopify ? 'otra' : null)
   const cobranzaOk = transportadora != null
   const faltantes = []
   if (cfg.despachar) {
@@ -309,7 +311,7 @@ function mapearGrupoAPedidos(grupoRows) {
     entregaProgramada,               // 13-10: null si no es programado (ver lib/entregaProgramada)
     cfg, cobranzaOk, despachar, faltantes,
     transportadora,                  // 'pap' | 'lucero' | 'otra' — editable después en la UI
-    motivoTransportadora: sugerencia.motivo,
+    motivoTransportadora: !sugerencia.transportadora && transportadora === 'otra' ? 'Ya pagado: courier libre (sin cobranza)' : sugerencia.motivo,
     bloqueadoPorProducto: !!sugerencia.bloqueadoPorProducto,
     fallbackProducto: !!sugerencia.fallbackProducto,
     // Tarifa real de ESA transportadora en ESA ciudad — solo en la primera
@@ -486,7 +488,7 @@ function parsearPedidoManual(bloque, catalogo, nRef) {
     despachar: transportadora != null && faltantes.length === 0,
     faltantes,
     transportadora,
-    motivoTransportadora: sugerencia.motivo,
+    motivoTransportadora: !sugerencia.transportadora && transportadora === 'otra' ? 'Ya pagado: courier libre (sin cobranza)' : sugerencia.motivo,
     bloqueadoPorProducto: !!sugerencia.bloqueadoPorProducto,
     fallbackProducto: !!sugerencia.fallbackProducto,
     costo_envio: sugerencia.tarifa,
