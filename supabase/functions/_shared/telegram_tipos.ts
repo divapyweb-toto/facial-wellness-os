@@ -84,6 +84,7 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   sync_meta_ads_cuenta_frenada: { titulo: "Sync Meta Ads: cuenta frenada", ruta: "admin", inventario: "#78" },
   sync_meta_ads_fallo: { titulo: "Sync Meta Ads falló", ruta: "admin", inventario: "#78" },
   recuperacion_frenada_calidad: { titulo: "Recuperación frenada por calidad", ruta: "admin", inventario: "#77" },
+  pago_verificado_auto: { titulo: "Pago verificado solo (Gmail ueno)", ruta: "admin", inventario: "nuevo 27-10" },
 
   // BORRAR (no sale ni se guarda; vuelven con "todos")
   sin_cobertura_avisado: { titulo: "Sin cobertura: cliente avisado", ruta: "descartar", inventario: "#49-51 BORRAR" },
