@@ -32,7 +32,7 @@ try {
     { id: 'g', nombre: 'tiras nasales + parches bucales Pack Gudair', costo_unit: 32000, precio_1u: 150000, es_combo: true },
     { id: 'kd', nombre: 'Kit Deporte (Botella Flexible + Tiras nasales)', costo_unit: 36230, precio_1u: 158000, es_combo: true },
   ]
-  const KIT = 'Kit Deporte: Botella Flexible + Tiras Nasales'
+  const KIT = 'Kit Deporte: Botella Deportiva + Tiras Nasales' // título real en Shopify (26-10)
 
   ok('familia: el kit es "kit"; la botella "Deportiva" sigue siendo botella; tiras y pack igual que antes', () => {
     assert.equal(familiaProducto(KIT), 'kit')
