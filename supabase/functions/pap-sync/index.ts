@@ -49,7 +49,7 @@ Deno.serve(conServiceRole(async () => {
           .eq('fuente', 'courier').eq('id_externo', id)
         return resumen
       },
-      avisar: (texto) => avisar(escaparHtml(texto)),
+      avisar: (texto, opts) => avisar(escaparHtml(texto), undefined, opts),
       pausa: (ms) => new Promise((ok) => setTimeout(ok, ms + Math.floor(Math.random() * 2000))),
       dias: Number(Deno.env.get('PAP_DIAS')) || undefined,
     })

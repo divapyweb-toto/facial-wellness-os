@@ -3,7 +3,9 @@
 import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
 import {
   armarParametros,
+  avisoReintentoDesdeAca,
   cambioPorError,
+  claveNoEntregado,
   type Config,
   CONFIG_DEFECTO,
   configDesdeFilas,
@@ -318,6 +320,7 @@ function fakes(
     cambios: [] as [string, unknown][],
     enviados: [] as string[],
     avisos: [] as string[],
+    opts: [] as unknown[],
     retenidos: [] as number[],
     cancelados: [] as number[],
   };
@@ -345,8 +348,9 @@ function fakes(
       log.cancelados.push(id);
       return Promise.resolve({ ok: true });
     },
-    avisar: (t) => {
+    avisar: (t, _b, o) => {
       log.avisos.push(t);
+      log.opts.push(o);
       return Promise.resolve({ ok: true });
     },
     escapar: (s) => String(s ?? "").replace(/</g, "&lt;"),
@@ -622,14 +626,43 @@ Deno.test("13-10: reintento de entrega no sale si el pedido ya se entregó, devo
 Deno.test("13-10: después del reintento, a Enrique le llega el texto para reenviar con el nombre del courier", async () => {
   const e = envio({ id: "r1", plantilla: "voltra_reintento_entrega_v2", clave_unica: "courier:1001:INTENTO_FALLIDO:2026-10-06", variables: ["Ana", "1 Tiras nasales"] });
   const c = ctx({}, "confirmado");
-  c.pedido = { ...c.pedido!, estado_envio: "INTENTO_FALLIDO", courier: "lucero" };
+  c.pedido = { ...c.pedido!, estado_envio: "NO_ENTREGADO_RESCATABLE", courier: "pap" };
   const { d, log } = fakes([e], { r1: c }, () => ({ ok: true }));
   const r = await procesarLote(d);
   assertEquals(r.enviados, 1);
   assertEquals(log.enviados, ["voltra_reintento_entrega_v2"]);
   assertEquals(log.avisos.length, 1);
-  assertMatch(log.avisos[0], /Para reenviar a Lucero/);
+  assertMatch(log.avisos[0], /Para reenviar a Punto a Punto/);
   assertMatch(log.avisos[0], /volver a intentar/);
+  // 27-10: tipo, destino y clave comunes con pedidos-trabados (un solo aviso por falla).
+  const nombre = c.pedido.nombre!;
+  assertEquals(log.opts[0], { tipo: "no_entregado_reintentar", destino: "enrique", pedido: nombre, unaVezPorDia: true, clave: claveNoEntregado(nombre) });
+});
+
+Deno.test("27-10 (#37 + #42): Lucero no entregado → el reintento sale al cliente pero NO hay Telegram desde acá (lo manda pedidos-trabados)", async () => {
+  const e = envio({ id: "r2", plantilla: "voltra_reintento_entrega_v2", clave_unica: "courier:1001:INTENTO_FALLIDO:2026-10-06", variables: ["Ana", "1 Tiras nasales"] });
+  const c = ctx({}, "confirmado");
+  c.pedido = { ...c.pedido!, estado_envio: "INTENTO_FALLIDO", courier: "lucero" };
+  const { d, log } = fakes([e], { r2: c }, () => ({ ok: true }));
+  assertEquals((await procesarLote(d)).enviados, 1);
+  assertEquals(log.enviados, ["voltra_reintento_entrega_v2"]);
+  assertEquals(log.avisos.length, 0);
+  assertEquals(avisoReintentoDesdeAca("Lucero"), false);
+  assertEquals(avisoReintentoDesdeAca(null), true);
+  assertEquals(claveNoEntregado("#1135"), "1135");
+  assertEquals(claveNoEntregado("VT-1135"), "1135");
+});
+
+Deno.test("27-10: sin confirmar / retenido / cancelado por no confirmar → tipo propio y destino admin", async () => {
+  const lista = [
+    envio({ id: "b", plantilla: "accion:retener", clave_unica: "ret:1001" }),
+    envio({ id: "x", plantilla: "accion:aviso_enrique", clave_unica: "avi:1001" }),
+  ];
+  const { d, log } = fakes(lista, { b: ctx(), x: ctx() }, () => ({ ok: true }));
+  await procesarLote(d);
+  const tipos = (log.opts as Array<{ tipo: string; destino: string } | undefined>).map((o) => o && [o.tipo, o.destino]);
+  assertEquals(tipos.some((t) => t?.[0] === "pedido_retenido_sin_confirmar" && t[1] === "admin"), true);
+  assertEquals(tipos.some((t) => t?.[0] === "pedido_sin_confirmar" && t[1] === "admin"), true);
 });
 
 Deno.test("20-10 texto libre programado: con ventana abierta sale como texto; ventana cerrada o pedido cancelado → se cancela", () => {

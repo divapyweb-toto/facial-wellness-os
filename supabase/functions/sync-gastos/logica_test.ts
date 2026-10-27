@@ -27,6 +27,7 @@ function depsFalsas(over: Partial<Deps> = {}, env: Record<string, string> = {}) 
   const guardadas: FilaGasto[] = []
   const estados: EstadoProveedor[] = []
   const avisos: string[] = []
+  const opciones: unknown[] = []
   const urls: string[] = []
   const deps: Deps = {
     ahora: () => AHORA,
@@ -46,13 +47,14 @@ function depsFalsas(over: Partial<Deps> = {}, env: Record<string, string> = {}) 
       else estados.push(e)
       return Promise.resolve()
     },
-    avisar: (t) => {
+    avisar: (t, _b, o) => {
       avisos.push(t)
+      opciones.push(o)
       return Promise.resolve()
     },
     ...over,
   }
-  return { deps, guardadas, estados, avisos, urls }
+  return { deps, guardadas, estados, avisos, opciones, urls }
 }
 
 // ─── Claude ──────────────────────────────────────────────────
@@ -226,6 +228,8 @@ Deno.test('aviso por Telegram solo al 2º día seguido de falla, una vez por rac
   await ejecutarSync(f.deps, cae)
   assertEquals(f.avisos.length, 1)
   assert(f.avisos[0].includes('claude'))
+  // 27-10: a administración, 1 por día por proveedor (clave estable, no el texto del error).
+  assertEquals(f.opciones, [{ tipo: 'sync_gastos_fallo', destino: 'admin', unaVezPorDia: true, clave: 'claude' }])
   ahora = new Date('2026-10-10T09:30:00Z')
   await ejecutarSync(f.deps, cae) // 3er día: ya avisado
   assertEquals(f.avisos.length, 1)

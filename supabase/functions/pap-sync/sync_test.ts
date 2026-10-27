@@ -46,6 +46,7 @@ function deps(f: Fetch, inicial: Partial<EstadoSync> = {}) {
     estado: { ...ESTADO_INICIAL, ...inicial } as EstadoSync,
     eventos: [] as { tipo: TipoEvento; detalle: Record<string, unknown> }[],
     avisos: [] as string[],
+    opts: [] as unknown[],
     procesadas: [] as FilaCourier[][],
   }
   const resumen: Resumen = {
@@ -64,7 +65,7 @@ function deps(f: Fetch, inicial: Partial<EstadoSync> = {}) {
       contarEventos: (tipo) => Promise.resolve(mem.eventos.filter((e) => e.tipo === tipo).length),
     },
     procesar: (filas) => { mem.procesadas.push(filas); return Promise.resolve(resumen) },
-    avisar: (t) => { mem.avisos.push(t); return Promise.resolve() },
+    avisar: (t, o) => { mem.avisos.push(t); mem.opts.push(o); return Promise.resolve() },
     pausa: () => Promise.resolve(),
   }
   return { d, mem }
@@ -105,6 +106,8 @@ Deno.test('login rechazado 2 veces → frena, avisa UNA vez y la 3ª corrida no 
   assertEquals(mem.estado.frenado, true)
   assertEquals(mem.avisos.length, 1)
   assert(!mem.avisos[0].includes(CLAVE) && !mem.avisos[0].includes(USUARIO))
+  // 27-10: falla técnica → administración, máximo una vez por día
+  assertEquals(mem.opts[0], { tipo: 'pap_sync_login_frenado', destino: 'admin', unaVezPorDia: true, clave: 'login' })
   const antes = llamadas.length
   assertEquals((await ejecutarSync(d)).motivo, 'frenado_por_login')
   assertEquals(llamadas.length, antes) // no se volvió a intentar
@@ -129,6 +132,7 @@ Deno.test('cambio de columnas: registra el cambio, avisa y sigue si están las r
   assertEquals(mem.eventos.filter((e) => e.tipo === 'cambio_formato').length, 1)
   assertEquals(mem.avisos.length, 1)
   assert(mem.avisos[0].includes('Paquetes'))
+  assertEquals(mem.opts[0], { tipo: 'pap_sync_cambio_formato', destino: 'admin', unaVezPorDia: true, clave: 'paquetes:columnas' })
 })
 
 Deno.test('faltan columnas requeridas: no procesa nada y avisa una sola vez por formato', async () => {

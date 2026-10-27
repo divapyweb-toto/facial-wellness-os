@@ -720,3 +720,22 @@ Deno.test("13-10 programado sin confirmar: se revierte como cualquier otro (la r
   assert(c.avisos[0].includes("todavía no confirmó"));
   assertEquals([...f.envios.keys()].filter((k) => k.startsWith("courier:")).length, 0);
 });
+
+Deno.test("27-10: no despachable y entrega programada → destino enrique con su tipo y el pedido", async () => {
+  const f = dbFalsa();
+  const opts: unknown[] = [];
+  f.deps.revertirPreparado = () => Promise.resolve({ ok: true });
+  f.deps.avisar = (_t, _b, o) => (opts.push(o), Promise.resolve());
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", pedidoRest({ tags: "CONFIRMADO, FALTAN_DATOS", fulfillment_status: "fulfilled" })), f.deps);
+  assertEquals((opts[0] as { tipo: string; destino: string }).tipo, "preparado_no_despachable");
+  assertEquals((opts[0] as { tipo: string; destino: string }).destino, "enrique");
+
+  const g = dbFalsa();
+  const c = conCandado(g);
+  const optsP: unknown[] = [];
+  g.deps.avisar = (t, _b, o) => (c.avisos.push(t), optsP.push(o), Promise.resolve({ ok: true }));
+  await procesarPedido(normalizarDesdeWebhook("orders/updated", programado("Ciudad del Este")), g.deps);
+  assertEquals(optsP.length, 1);
+  assertEquals((optsP[0] as { tipo: string; destino: string }).tipo, "entrega_programada_courier");
+  assertEquals((optsP[0] as { tipo: string; destino: string }).destino, "enrique");
+});

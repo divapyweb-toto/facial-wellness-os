@@ -290,7 +290,7 @@ export async function depsReales(cfg: ConfigSifen): Promise<DepsCola> {
       puedeMandarKude(new Date(), horario)
         ? await enviarKudeWhatsApp(f, ped, cfg.plantilla_factura)
         : { ok: false, error: "fuera de horario de avisos; sale en una corrida posterior" },
-    avisar: (t) => avisar(t),
+    avisar: (t, b, o) => avisar(t, b, o),
     escapar: escaparHtml,
   };
 }

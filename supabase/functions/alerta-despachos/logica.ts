@@ -8,6 +8,7 @@
 // El aviso no se repite el mismo día local (config_wa clave 'alerta_despachos_ultimo').
 
 import { partesAsuncion } from "../_shared/horario.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
 export const DIAS_DEFECTO = 5;
 export const ESTADOS_DESPACHO = ["DESPACHADO", "EN_PREPARACION"];
@@ -38,7 +39,7 @@ export interface DepsAlerta {
   /** 'YYYY-MM-DD' (día local) del último aviso enviado, o null. */
   ultimoAviso(): Promise<string | null>;
   guardarAviso(diaISO: string): Promise<void>;
-  avisar(texto: string): Promise<{ ok: boolean; error?: string }>;
+  avisar(texto: string, botones?: undefined, opts?: OpcionesAviso): Promise<{ ok: boolean; error?: string }>;
 }
 
 export interface ResultadoAlerta {
@@ -96,6 +97,9 @@ export function textoAviso(lista: Atrasado[], dias = DIAS_DEFECTO): string {
   return `${cab}\n${refs}${resto}\nRevisá con el courier o importá su reporte.`;
 }
 
+/** 27-10 (#47): despachados hace +5 días → Enrique (hay que hablar con el courier); la política lo manda al resumen. */
+export const OPCIONES_AVISO: OpcionesAviso = { tipo: "despachados_mas_5_dias", destino: "enrique" };
+
 export async function ejecutarAlerta(deps: DepsAlerta, dias = DIAS_DEFECTO): Promise<ResultadoAlerta> {
   const ahora = deps.ahora();
   const hoy = partesAsuncion(ahora).diaISO;
@@ -104,7 +108,7 @@ export async function ejecutarAlerta(deps: DepsAlerta, dias = DIAS_DEFECTO): Pro
   const lista = atrasados(await deps.pedidos(), ahora, dias);
   if (!lista.length) return { accion: "sin_atrasados", atrasados: 0, referencias: [] };
 
-  const r = await deps.avisar(textoAviso(lista, dias));
+  const r = await deps.avisar(textoAviso(lista, dias), undefined, OPCIONES_AVISO);
   if (!r.ok) throw new Error(`Telegram: ${r.error ?? "sin detalle"}`); // no se guarda → el próximo intento reavisa
   await deps.guardarAviso(hoy);
   return { accion: "avisado", atrasados: lista.length, referencias: lista.map((a) => a.referencia) };

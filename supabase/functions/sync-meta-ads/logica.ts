@@ -2,6 +2,7 @@
 // Lógica pura del sync de gasto de Meta Ads → gasto_ads_diario. Sin red ni base: todo entra por Deps.
 // Reemplaza al LaunchAgent de la Mac (.claude/agents/sync-ads-fw.md + scripts/sync-ads-fw-daily.sh) con
 // las MISMAS reglas de mapeo de producto. SOLO LECTURA sobre Meta: únicamente GET de insights.
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
 export const GRAPH_VERSION = "v25.0"; // verificado en la doc "Insights API" el 09-10-2026
 export const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -392,3 +393,7 @@ export async function sincronizar(
   }
   return { ok: true, cuentas: lotes.map((l) => l.resumen), anuncios };
 }
+
+/** 27-10: avisos del sync de Meta → administración, como máximo 1 por día por tipo (la clave nunca es el texto del error). */
+export const AVISO_META_CUENTA_FRENADA: OpcionesAviso = { tipo: "sync_meta_ads_cuenta_frenada", destino: "admin", unaVezPorDia: true, clave: null };
+export const AVISO_META_SYNC_FALLO: OpcionesAviso = { tipo: "sync_meta_ads_fallo", destino: "admin", unaVezPorDia: true, clave: null };

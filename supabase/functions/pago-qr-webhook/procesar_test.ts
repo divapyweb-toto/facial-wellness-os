@@ -4,7 +4,7 @@ import type { EventoPagoQR } from "../_shared/pago_qr.ts";
 
 function setup(cobro: CobroQR | null, tagOk = true) {
   const c = cobro ? { ...cobro } : null;
-  const log = { tags: [] as string[], avisos: [] as string[] };
+  const log = { tags: [] as string[], avisos: [] as string[], opciones: [] as unknown[] };
   const d: DepsPagoQR = {
     buscarCobro: () => Promise.resolve(c),
     cambiarEstado: (_id, estado, extra) => {
@@ -15,7 +15,7 @@ function setup(cobro: CobroQR | null, tagOk = true) {
     },
     leerPedido: () => Promise.resolve({ nombre: "#1001", courier: "lucero" }),
     agregarTag: (_id, tag) => { log.tags.push(tag); return Promise.resolve(tagOk ? { ok: true } : { ok: false, error: "shopify" }); },
-    avisar: (t) => { log.avisos.push(t); return Promise.resolve(); },
+    avisar: (t, _b, o) => { log.avisos.push(t); log.opciones.push(o); return Promise.resolve(); },
     escapar: (s) => String(s),
     ahora: () => new Date("2026-10-06T15:00:00Z"),
   };
@@ -74,13 +74,13 @@ Deno.test("si falla la tag en Shopify, igual queda pagado y el aviso lo dice", a
 import { atenderEventoQR, type DepsEventoQR } from "./procesar.ts";
 
 function depsEvento(nuevo: boolean, falla: boolean) {
-  const log = { procesado: 0, marcas: [] as (string | null)[], borrado: 0, avisos: [] as string[] };
+  const log = { procesado: 0, marcas: [] as (string | null)[], borrado: 0, avisos: [] as string[], opciones: [] as unknown[] };
   const d: DepsEventoQR = {
     guardarEvento: () => Promise.resolve(nuevo),
     procesar: () => { log.procesado++; return falla ? Promise.reject(new Error("db caída")) : Promise.resolve(); },
     marcarProcesado: (e) => { log.marcas.push(e); return Promise.resolve(); },
     borrarEvento: () => { log.borrado++; return Promise.resolve(); },
-    avisar: (t) => { log.avisos.push(t); return Promise.resolve(); },
+    avisar: (t, _b, o) => { log.avisos.push(t); log.opciones.push(o); return Promise.resolve(); },
     escapar: (s) => String(s),
   };
   return { d, log };
@@ -108,4 +108,20 @@ Deno.test("si procesar falla: borra la marca, avisa y devuelve 500 para que el p
   assertEquals(log.borrado, 1);
   assertEquals(log.avisos.length, 1);
   assertEquals(log.marcas, []);
+});
+
+// ─── 27-10: a quién va cada aviso ───
+Deno.test("27-10: pago recibido y monto distinto → Enrique; QR sin cobro y registro fallido → administración 1 por día", async () => {
+  const a = setup(cobro);
+  await procesarPagoQR("adamspay", ev(), cfg, a.d);
+  assertEquals(a.log.opciones, [{ tipo: "pago_qr_recibido", destino: "enrique", pedido: "#1001" }]);
+  const b = setup(cobro);
+  await procesarPagoQR("adamspay", ev({ monto: 100000 }), cfg, b.d);
+  assertEquals(b.log.opciones, [{ tipo: "pago_qr_monto_distinto", destino: "enrique", pedido: "9001" }]);
+  const c = setup(null);
+  await procesarPagoQR("adamspay", ev(), cfg, c.d);
+  assertEquals(c.log.opciones, [{ tipo: "pago_qr_sin_cobro", destino: "admin", unaVezPorDia: true, clave: "adamspay:voltra-9001" }]);
+  const e = depsEvento(true, true);
+  await atenderEventoQR(e.d, "e1");
+  assertEquals(e.log.opciones, [{ tipo: "pago_qr_registro_fallido", destino: "admin", unaVezPorDia: true, clave: "e1" }]);
 });

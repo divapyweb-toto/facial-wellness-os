@@ -9,6 +9,12 @@ import {
   type TipoReporte, VENTANA_CAMBIOS_DIAS,
 } from './logica.ts'
 import type { Hoja } from './xlsx.ts'
+import type { OpcionesAviso } from '../_shared/telegram_politica.ts'
+
+/** 27-10: todos los avisos de la sincronización son técnicos → administración, máximo 1 por día por tipo (+ reporte). */
+type AvisoSync = { texto: string; opts: OpcionesAviso }
+const avisoAdmin = (texto: string, tipo: string, clave: string): AvisoSync =>
+  ({ texto, opts: { tipo, destino: 'admin', unaVezPorDia: true, clave } })
 
 export type TipoEvento = 'ok' | 'login_fallido' | 'error' | 'cambio_formato' | 'frenado'
 
@@ -24,7 +30,7 @@ export interface DepsSync {
     contarEventos(tipo: TipoEvento, desdeISO: string): Promise<number>
   }
   procesar: (filas: FilaCourier[]) => Promise<Resumen>
-  avisar: (texto: string) => Promise<unknown>
+  avisar: (texto: string, opts?: OpcionesAviso) => Promise<unknown>
   pausa: (ms: number) => Promise<void>
   dias?: number
   pausaMs?: number
@@ -49,15 +55,15 @@ export async function ejecutarSync(d: DepsSync): Promise<ResultadoSync> {
   const { usuario, clave } = d.credenciales()
   if (!usuario || !clave) return { ok: false, motivo: 'faltan_secretos' }
 
-  const avisos: string[] = []
+  const avisos: AvisoSync[] = []
   const guardar = async () => {
     await d.estado.guardar(estado)
-    for (const a of avisos) await d.avisar(a).catch(() => {})
+    for (const a of avisos) await d.avisar(a.texto, a.opts).catch(() => {})
   }
   const fallar = async (motivo: string): Promise<ResultadoSync> => {
     const t = trasError(estado, motivo)
     estado = t.estado
-    if (t.aviso) avisos.push(t.aviso)
+    if (t.aviso) avisos.push(avisoAdmin(t.aviso, 'pap_sync_errores_seguidos', 'errores'))
     await d.estado.registrarEvento('error', { motivo })
     await guardar()
     return { ok: false, motivo }
@@ -67,7 +73,10 @@ export async function ejecutarSync(d: DepsSync): Promise<ResultadoSync> {
   const login = await d.pap.login(usuario, clave)
   const t = trasLogin(estado, login)
   estado = t.estado
-  if (t.aviso) avisos.push(t.aviso)
+  // Login frenado: la Transicion trae el aviso solo al frenar (trasLogin); los errores de red pasan por trasError.
+  if (t.aviso) avisos.push(login.tipo === 'credenciales' || login.tipo === 'bloqueado'
+    ? avisoAdmin(t.aviso, 'pap_sync_login_frenado', 'login')
+    : avisoAdmin(t.aviso, 'pap_sync_errores_seguidos', 'errores'))
   if (login.tipo !== 'ok' || !login.sesion) {
     if (login.tipo === 'credenciales' || login.tipo === 'bloqueado') {
       await d.estado.registrarEvento('login_fallido', { tipo: login.tipo, status: login.status ?? null, detalle: login.detalle })
@@ -121,7 +130,7 @@ export async function ejecutarSync(d: DepsSync): Promise<ResultadoSync> {
     if (faltan.length || (detectado !== tipo && detectado !== 'desconocido')) {
       // Se avisa una vez por formato; si sigue igual en la próxima corrida, solo cuenta como error.
       if (firmaNueva) {
-        avisos.push(`Punto a Punto: al reporte de ${tipo === 'gestion' ? 'Gestión' : 'Paquetes'} le faltan columnas (${faltan.join(', ') || 'tipo distinto'}). No procesé nada.`)
+        avisos.push(avisoAdmin(`Punto a Punto: al reporte de ${tipo === 'gestion' ? 'Gestión' : 'Paquetes'} le faltan columnas (${faltan.join(', ') || 'tipo distinto'}). No procesé nada.`, 'pap_sync_faltan_columnas', tipo))
       }
       return await fallar(`${tipo}: faltan columnas ${faltan.join(', ')}`)
     }
@@ -159,16 +168,18 @@ export async function ejecutarSync(d: DepsSync): Promise<ResultadoSync> {
 }
 
 /** Registra un cambio de formato/endpoint y, si ya van más de 2 en 90 días, recuerda el criterio de abandono. */
-async function registrarCambio(d: DepsSync, avisos: string[], tipo: TipoReporte, clase: string, detalle: string) {
+async function registrarCambio(d: DepsSync, avisos: AvisoSync[], tipo: TipoReporte, clase: string, detalle: string) {
   await d.estado.registrarEvento('cambio_formato', { reporte: tipo, clase, detalle: detalle.slice(0, 500) })
   const desde = new Date(d.ahora().getTime() - VENTANA_CAMBIOS_DIAS * 86_400_000).toISOString()
   const n = await d.estado.contarEventos('cambio_formato', desde).catch(() => 0)
   const nombre = tipo === 'gestion' ? 'Gestión' : 'Paquetes'
-  avisos.push(
+  avisos.push(avisoAdmin(
     `Punto a Punto cambió el reporte de ${nombre} (${clase}): ${detalle.slice(0, 160)}. ` +
       `Cambios en los últimos 90 días: ${n}.` +
       (n > MAX_CAMBIOS_EN_VENTANA
         ? ' Superó tu criterio de abandono (más de 2 cambios en 3 meses): evaluá volver a la importación manual.'
         : ''),
-  )
+    'pap_sync_cambio_formato',
+    `${tipo}:${clase}`,
+  ))
 }

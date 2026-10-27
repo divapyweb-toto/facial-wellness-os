@@ -8,6 +8,8 @@
 // Casos a revisar (no se emite, avisa a Telegram): RUC con dígito verificador incorrecto o sin razón social,
 // o suma de ítems distinta del total cobrado.
 
+import type { BotonTelegram } from "../_shared/telegram_formato.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import {
   type ConfigFactura,
   CONFIG_FACTURA_DEFECTO,
@@ -88,7 +90,8 @@ export interface DepsFactura {
   tomar(id: number, numeroInicial: number): Promise<Toma>;
   guardar(f: FilaFactura): Promise<void>;
   emitir(p: PedidoFactura, d: DatosFiscales, cfg: ConfigFactura): Promise<ResultadoFactura>;
-  avisar(textoHtml: string): Promise<unknown>;
+  /** 27-10: opts = tipo/destino (los de factura van a administración). */
+  avisar(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   escapar(s: unknown): string;
 }
 
@@ -151,7 +154,9 @@ export async function facturarPedido(orderId: number, deps: DepsFactura): Promis
   if (!prep.ok) {
     if (previa?.estado !== "revisar") {
       await deps.guardar({ shopify_order_id: orderId, estado: "revisar", ruc: prep.datos?.ruc ?? null, razon_social: prep.datos?.razonSocial ?? null, error: prep.motivo });
-      await deps.avisar(`<b>Factura a revisar</b> · pedido ${nombre}\n${deps.escapar(prep.motivo)}\nNo se emitió nada.`);
+      await deps.avisar(`<b>Factura a revisar</b> · pedido ${nombre}\n${deps.escapar(prep.motivo)}\nNo se emitió nada.`, undefined, {
+        tipo: "factura_revisar", destino: "admin", pedido: ped.nombre ?? String(orderId), unaVezPorDia: true, clave: String(orderId),
+      });
     }
     return { orderId, accion: "revisar", error: prep.motivo };
   }
@@ -180,7 +185,9 @@ export async function facturarPedido(orderId: number, deps: DepsFactura): Promis
   if (!r.ok) {
     await deps.guardar({ ...base, estado: "error", error: r.error ?? "error" });
     if (toma.intentos >= cfg.maximo_intentos) {
-      await deps.avisar(`<b>Factura falló ${toma.intentos} veces</b> · pedido ${nombre}\n${deps.escapar(r.error ?? "")}`);
+      await deps.avisar(`<b>Factura falló ${toma.intentos} veces</b> · pedido ${nombre}\n${deps.escapar(r.error ?? "")}`, undefined, {
+        tipo: "factura_max_intentos", destino: "admin", pedido: ped.nombre ?? String(orderId), unaVezPorDia: true, clave: String(orderId),
+      });
     }
     return { orderId, accion: "error", error: r.error };
   }

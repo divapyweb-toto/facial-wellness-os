@@ -4,9 +4,18 @@
 //   1. no entró ningún mensaje en las últimas 3 h de horario,
 //   2. hubo 3 o más envíos fallidos en la última hora,
 //   3. llegó un webhook de calidad/estado del número (Meta).
-// El mismo aviso no se repite más de una vez cada 3 h (estado en config_wa.salud_ultimo_aviso).
+// 27-10 (Enrique): como máximo 1 aviso cada 6 h, sea cual sea el motivo (antes: el mismo aviso cada 3 h).
+// Estado en config_wa.salud_ultimo_aviso. Lo que aparece dentro de la ventana no se pierde: sale al vencerla.
 import { partesAsuncion } from "../_shared/horario.ts";
 import { type AvisoArmado, formatoFalla } from "../_shared/telegram_formato.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
+
+/** 27-10: canal sordo / calidad del número frena ventas → Telegram inmediato a Enrique (tope en evaluarSalud). */
+export const AVISO_CANAL_SORDO: OpcionesAviso = { tipo: "whatsapp_canal_sordo", destino: "enrique" };
+/** 27-10: falla del propio chequeo → administración, 1 por día. */
+export const AVISO_SALUD_CHEQUEO_FALLO: OpcionesAviso = { tipo: "salud_canal_chequeo_fallo", destino: "admin", unaVezPorDia: true, clave: null };
+/** Piso de horas entre avisos: config_wa.salud_canal puede subirlo, no bajarlo. */
+export const MINIMO_ENTRE_AVISOS_H = 6;
 
 export interface CfgSalud {
   horas_sin_entrantes: number;
@@ -15,7 +24,7 @@ export interface CfgSalud {
 }
 
 /** Valores del contrato; config_wa.salud_canal puede pisarlos. */
-export const CFG_SALUD_CONTRATO: CfgSalud = { horas_sin_entrantes: 3, fallidos_por_hora: 3, repetir_cada_h: 3 };
+export const CFG_SALUD_CONTRATO: CfgSalud = { horas_sin_entrantes: 3, fallidos_por_hora: 3, repetir_cada_h: MINIMO_ENTRE_AVISOS_H };
 
 export interface HorarioCfg {
   desde: number;
@@ -82,7 +91,7 @@ export function leerCfgSalud(valor: unknown): CfgSalud {
   return {
     horas_sin_entrantes: num(v.horas_sin_entrantes, CFG_SALUD_CONTRATO.horas_sin_entrantes),
     fallidos_por_hora: num(v.fallidos_por_hora, CFG_SALUD_CONTRATO.fallidos_por_hora),
-    repetir_cada_h: num(v.repetir_cada_h, CFG_SALUD_CONTRATO.repetir_cada_h),
+    repetir_cada_h: Math.max(MINIMO_ENTRE_AVISOS_H, num(v.repetir_cada_h, CFG_SALUD_CONTRATO.repetir_cada_h)),
   };
 }
 
@@ -135,6 +144,14 @@ function recienteAviso(iso: string | undefined, ahora: Date, horas: number): boo
 export function evaluarSalud(e: EntradaSalud): ResultadoSalud {
   const nuevoEstado: EstadoAvisos = { ...e.estado };
   if (!enHorario(e.ahora, e.horario)) return { enHorario: false, motivos: [], nuevoEstado };
+
+  // 27-10: tope global, 1 aviso cada `repetir_cada_h` (≥ 6 h) por cualquier motivo. No se avanza el estado
+  // (ni el id de calidad), así lo nuevo sale entero cuando vence la ventana.
+  const ultimo = [e.estado.sin_entrantes, e.estado.fallidos, e.estado.calidad]
+    .map((x) => (x ? Date.parse(x) : NaN)).filter(Number.isFinite).reduce((a, b) => Math.max(a, b), -Infinity);
+  if (Number.isFinite(ultimo) && recienteAviso(new Date(ultimo).toISOString(), e.ahora, e.cfg.repetir_cada_h)) {
+    return { enHorario: true, motivos: [], nuevoEstado };
+  }
 
   const motivos: Motivo[] = [];
   const ahoraIso = e.ahora.toISOString();

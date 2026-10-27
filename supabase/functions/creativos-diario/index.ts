@@ -5,7 +5,7 @@ import { db } from "../_shared/db.ts";
 import { GRAPH_VERSION } from "../_shared/meta_capi.ts";
 import { filaCreativo } from "./logica.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { diasFueraDeRango, type FilaControl } from "./control.ts";
+import { avisoDescuadreCreativos, diasFueraDeRango, type FilaControl } from "./control.ts";
 
 const CUENTA = "1829928881223795";
 const CAMPOS = "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,inline_link_clicks,inline_link_click_ctr,actions,date_start";
@@ -71,7 +71,7 @@ async function controlar(token: string, hoy: Date) {
       const id = `auto_creativos_control:${f.fecha}`;
       const { error } = await db().from("eventos_crudos").insert({ fuente: "shopify", id_externo: id, payload: { fecha: f.fecha }, procesado_en: new Date().toISOString() });
       if (!error) {
-        await avisar(`⚠ El gasto del libro de creativos del ${f.fecha} (Gs ${f.creativos.toLocaleString("es-PY")}) no coincide con el gasto por anuncio (Gs ${(f.anuncio ?? 0).toLocaleString("es-PY")}). La pausa automática lee el libro: revisalo.`).catch(() => null);
+        await avisar(`⚠ El gasto del libro de creativos del ${f.fecha} (Gs ${f.creativos.toLocaleString("es-PY")}) no coincide con el gasto por anuncio (Gs ${(f.anuncio ?? 0).toLocaleString("es-PY")}). La pausa automática lee el libro: revisalo.`, undefined, avisoDescuadreCreativos(f.fecha)).catch(() => null);
       }
     }
     return { fuera_de_rango: fuera.map((f) => f.fecha), recargado: true };

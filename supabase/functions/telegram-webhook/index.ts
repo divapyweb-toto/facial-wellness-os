@@ -218,7 +218,7 @@ function dependencias(chatId: string): Dependencias {
       const r = await editarLeyenda(chat, messageId, html, botones);
       if (!r.ok) console.error("editMessageCaption:", r.error);
     },
-    avisar: (html) => avisar(html),
+    avisar: (html, botones, opts) => avisar(html, botones, opts),
     // 12-10: "Recibido" → la venta (VT-<n>) queda como pago anticipado: Despacho "Desde Ventas" sale con cobro 0 y la
     // rendición no espera ese cobro del courier. Si todavía no está en Ventas, entra pagada (tags PAGO_VERIFICADO/PAGADO).
     marcarVentaPagada: async (pedido) => {

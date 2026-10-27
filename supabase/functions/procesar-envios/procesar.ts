@@ -37,6 +37,7 @@ import {
   textoOfertaPrioridad,
 } from "../_shared/pago_anticipado.ts";
 import { PLANTILLAS_RECOMPRA } from "../recompra/calendario.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
 export type Categoria = "utilidad" | "marketing";
 
@@ -782,7 +783,7 @@ export interface Deps {
   /** cancelarPedido en Shopify + estado_confirmacion 'cancelado_sin_respuesta' + cancela envíos pendientes. */
   cancelarPedidoSinRespuesta(orderId: number): Promise<Resultado>;
   /** Telegram (texto ya escapado para HTML). */
-  avisar(texto: string, botones?: BotonTg[][]): Promise<unknown>;
+  avisar(texto: string, botones?: BotonTg[][], opts?: OpcionesAviso): Promise<unknown>;
   escapar(s: unknown): string;
   /** Error 131050: baja de marketing del cliente (recompra/baja.ts, origen 'meta_131050'). Opcional. */
   registrarBaja?(clienteId: string): Promise<{ ok: boolean; error?: string }>;
@@ -874,6 +875,8 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
       await d.actualizarEnvio(e.id, { estado: "fallido", intentos: (e.intentos ?? 0) + 1, ultimo_error: dec.motivo });
       await d.avisar(
         `Envío fallido ${d.escapar(nombrePlantilla(e.plantilla))} · pedido ${pedidoTxt}: ${d.escapar(dec.motivo)}`,
+        undefined,
+        { tipo: "envio_fallido", destino: "admin", pedido: pedidoNombre(ctx, e), unaVezPorDia: true, clave: e.id },
       );
       return;
     case "retener":
@@ -890,9 +893,11 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
             texto: "Cancelar ya",
             callback: `cancelar:${id}`,
           }]],
+          { tipo: "pedido_retenido_sin_confirmar", destino: "admin", pedido: pedidoNombre(ctx, e) },
         );
       } else {
-        await d.avisar(`Pedido ${pedidoTxt} cancelado: 48 h sin confirmar.`);
+        await d.avisar(`Pedido ${pedidoTxt} cancelado: 48 h sin confirmar.`, undefined,
+          { tipo: "pedido_cancelado_sin_confirmar", destino: "admin", pedido: pedidoNombre(ctx, e) });
         // 10-10: recién ahora (cancelación OK) se programa el "dimos de baja tu pedido" con el botón reactivar.
         // Si falla, la cancelación ya quedó: solo se avisa.
         if (d.programarEnvio && e.cliente_id) {
@@ -909,6 +914,8 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
           } catch (err) {
             await d.avisar(
               `No se programó el aviso de baja al cliente del pedido ${pedidoTxt}: ${d.escapar(err instanceof Error ? err.message : err)}`,
+              undefined,
+              { tipo: "aviso_baja_no_programado", destino: "admin", pedido: pedidoNombre(ctx, e), unaVezPorDia: true, clave: String(id) },
             ).catch(() => {});
           }
         }
@@ -917,7 +924,9 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
     }
     case "aviso_enrique": {
       const a = armarAvisoEnrique(e, ctx, ahora, d.escapar);
-      const t = await d.avisar(a.texto, a.botones) as { ok?: boolean; error?: string } | undefined;
+      const t = await d.avisar(a.texto, a.botones, { tipo: "pedido_sin_confirmar", destino: "admin", pedido: pedidoNombre(ctx, e) }) as
+        | { ok?: boolean; error?: string }
+        | undefined;
       if (t?.ok === false) return aplicarError(e, `telegram: ${t.error ?? "error"}`, d, r, pedidoTxt);
       r.acciones++;
       await d.actualizarEnvio(e.id, { estado: "enviado", intentos: (e.intentos ?? 0) + 1, ultimo_error: null });
@@ -958,21 +967,40 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
             await d.avisar(
               `Salió la oferta de pago con prioridad del pedido ${pedidoTxt} pero no se pudo poner el tag ${TAG_OFERTA_PAGO} ` +
                 `(${d.escapar(t.error ?? "error")}). Si manda el comprobante no lo reconozco solo: agregá el tag en Shopify.`,
+              undefined,
+              { tipo: "oferta_prioridad_sin_tag", destino: "admin", pedido: pedidoNombre(ctx, e), unaVezPorDia: true, clave: String(e.shopify_order_id) },
             ).catch(() => {});
           }
         }
         return;
       }
       // 10-10: reintento de entrega → a Enrique le llega el texto listo para reenviar al courier.
-      if (nombrePlantilla(e.plantilla) === "voltra_reintento_entrega_v2" && ctx.pedido) {
-        const dc = datosCourierDesdeRaw(ctx.pedido.nombre ?? pedidoTxt, (ctx.pedido.raw ?? null) as Record<string, unknown> | null, ctx.cliente?.telefono ?? null);
-        await d.avisar(avisoParaCourier(dc, "No se pudo entregar: volver a intentar el próximo día hábil. Coordinar día, hora y lugar con el cliente.", ctx.pedido.courier ?? null))
-          .catch(() => {});
+      // 27-10 (#37 + #41 + #42): UN solo aviso por falla. Lucero ya lo manda pedidos-trabados (entrega fallida + este mismo
+      // texto para Lucero), así que acá solo PaP / otros. Mismo tipo y clave: si igual coinciden el mismo día, sale uno.
+      if (nombrePlantilla(e.plantilla) === "voltra_reintento_entrega_v2" && ctx.pedido && avisoReintentoDesdeAca(ctx.pedido.courier)) {
+        const nombre = ctx.pedido.nombre ?? pedidoTxt;
+        const dc = datosCourierDesdeRaw(nombre, (ctx.pedido.raw ?? null) as Record<string, unknown> | null, ctx.cliente?.telefono ?? null);
+        await d.avisar(
+          avisoParaCourier(dc, "No se pudo entregar: volver a intentar el próximo día hábil. Coordinar día, hora y lugar con el cliente.", ctx.pedido.courier ?? null),
+          undefined,
+          { tipo: "no_entregado_reintentar", destino: "enrique", pedido: nombre, unaVezPorDia: true, clave: claveNoEntregado(nombre) },
+        ).catch(() => {});
       }
       return marcarEnviado(e, res.wa_message_id, d, pedidoTxt);
     }
   }
 }
+
+/** 27-10: nombre del pedido para el aviso ('#1135'), o null. */
+function pedidoNombre(ctx: Contexto, e: Envio): string | null {
+  return ctx.pedido?.nombre ?? (e.shopify_order_id != null ? `#${e.shopify_order_id}` : null);
+}
+
+/** 27-10: clave común del aviso "no entregado: volver a intentar" ('#1135' / 'VT-1135' → '1135'), igual que pedidos-trabados. */
+export const claveNoEntregado = (pedido: string) => pedido.replace(/^(#|VT-)/i, "");
+
+/** 27-10: Lucero → el aviso único sale de pedidos-trabados (entregas_para_actuar); acá, PaP y el resto. */
+export const avisoReintentoDesdeAca = (courier: string | null | undefined) => String(courier ?? "").toLowerCase() !== "lucero";
 
 /** Esperas antes de cada reintento del update (2 reintentos). */
 export const ESPERAS_MARCAR_MS = [500, 2000];
@@ -999,6 +1027,8 @@ async function marcarEnviado(e: Envio, waId: string | undefined, d: Deps, pedido
   await d.avisar(
     `WhatsApp enviado pero no se pudo marcar en la base: ${d.escapar(nombrePlantilla(e.plantilla))} · pedido ${pedidoTxt} ` +
       `(envío ${d.escapar(e.id)}). Puede repetirse en 10 min.\n${d.escapar(msg)}`,
+    undefined,
+    { tipo: "envio_no_marcado", destino: "admin", unaVezPorDia: true, clave: e.id },
   ).catch(() => {});
 }
 
@@ -1025,6 +1055,8 @@ async function aplicarError(e: Envio, error: string, d: Deps, r: Resumen, pedido
       `Envío fallido tras ${cambio.intentos} intentos: ${
         d.escapar(nombrePlantilla(e.plantilla))
       } · pedido ${pedidoTxt}\n${d.escapar(error)}`,
+      undefined,
+      { tipo: "envio_fallido", destino: "admin", unaVezPorDia: true, clave: e.id },
     );
   } else r.reintentos++;
 }

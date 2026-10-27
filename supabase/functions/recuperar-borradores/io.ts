@@ -5,6 +5,7 @@ import { avisar } from "../_shared/telegram.ts";
 import { nombreDeHandle, productoPorPalabras } from "../_shared/anuncios.ts";
 import { depsHerramientasReales, depsOrquestadorReales } from "../_shared/vendedor/io.ts";
 import {
+  avisoRecuperacionFrenada,
   type Borrador,
   configRecuperacion,
   type ConsentimientoCliente,
@@ -124,6 +125,8 @@ export const depsReales: DepsRecuperar = {
     const r = await avisar(
       `⛔ Recuperación de formularios abandonados FRENADA: ${que}. No se manda ningún mensaje hasta que vuelva a GREEN ` +
         "(se revisa sola cada 5 minutos).",
+      undefined,
+      avisoRecuperacionFrenada(calidad),
     );
     if (!r.ok) { console.error("recuperar-borradores: Telegram falló:", r.error); return; }
     await sb.from("config_wa").upsert({ clave: CLAVE_ALERTA, valor: { en: new Date().toISOString(), calidad } }, { onConflict: "clave" });

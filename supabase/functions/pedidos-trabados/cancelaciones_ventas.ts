@@ -5,7 +5,7 @@
 //   · clase 'cancelado_en_courier' → NO se cancela sola: Telegram una vez por pedido.
 //   · clase 'reemplazo_en_courier' → el pedido nuevo (REEMPLAZA_A_#n) no se carga como envío nuevo; Telegram informativo una vez.
 import { db } from "../_shared/db.ts";
-import { avisar } from "../_shared/telegram.ts";
+import { avisar, type OpcionesAviso } from "../_shared/telegram.ts";
 import { tomarCandado } from "./io.ts";
 
 export type ClaseCancelacion = "cancelar" | "cancelado_en_courier" | "reemplazo_en_courier";
@@ -18,6 +18,16 @@ export function textoAviso(f: FilaCancelacion): string {
   return f.clase === "reemplazo_en_courier"
     ? `ℹ ${f.nombre} fue reemplazado por un pedido nuevo y el paquete ya está en ${c}: el nuevo no se carga como envío aparte. Si cambió el total o el producto, avisale a ${c}.`
     : `⚠ ${f.nombre} cancelado por el cliente pero ya está en ${c}: pedir que lo retengan o devuelvan`;
+}
+
+/**
+ * 27-10: tipo y destino (telegram_politica.ts). Cancelado ya en el courier (#48): misma clave que wa-webhook
+ * (shopify_order_id) y unaVezPorDia, así sale una sola vez aunque lo detecten los dos. Reemplazo (#15): cambia qué se despacha.
+ */
+export function opcionesAviso(f: FilaCancelacion): OpcionesAviso {
+  return f.clase === "reemplazo_en_courier"
+    ? { tipo: "reemplazo_en_courier", destino: "enrique", pedido: f.nombre }
+    : { tipo: "cancelado_en_courier", destino: "enrique", pedido: f.nombre, clave: String(f.shopify_order_id), unaVezPorDia: true };
 }
 
 export async function filasCancelacion(): Promise<FilaCancelacion[]> {
@@ -45,7 +55,7 @@ export async function sincronizarCancelaciones(simular = false) {
     if (!(await tomarCandado(candado, { pedido: f.nombre, clase: f.clase }))) continue; // ya avisado
     let ultimo = "";
     for (let i = 0; i < 3; i++) {
-      const r = await avisar(textoAviso(f));
+      const r = await avisar(textoAviso(f), undefined, opcionesAviso(f));
       if (r.ok) { ultimo = ""; break; }
       ultimo = r.error ?? "Telegram falló";
       await new Promise((z) => setTimeout(z, 1500));

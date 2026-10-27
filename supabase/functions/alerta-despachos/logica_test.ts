@@ -112,3 +112,11 @@ Deno.test("ejecutar: Telegram falla → error y no guarda (reintenta)", async ()
   await assertRejects(() => ejecutarAlerta(d), Error, "Telegram");
   assertEquals(guardados.length, 0);
 });
+
+Deno.test("27-10: despachados +5 días → destino enrique, tipo despachados_mas_5_dias", async () => {
+  const { d } = deps([ped(1001, { fulfilled_en: haceDias(7) })]);
+  const opts: unknown[] = [];
+  d.avisar = (_t, _b, o) => (opts.push(o), Promise.resolve({ ok: true }));
+  await ejecutarAlerta(d);
+  assertEquals(opts, [{ tipo: "despachados_mas_5_dias", destino: "enrique" }]);
+});

@@ -26,7 +26,16 @@ import {
   type TurnoVend,
   type VeredictoHaiku,
 } from "./logica.ts";
-import { partirAviso } from "../_shared/telegram_formato.ts";
+import { type BotonTelegram, partirAviso } from "../_shared/telegram_formato.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
+
+/** 27-10: la auditoría es informativa → administración (avisos_admin), sin Telegram. */
+export function avisoParteAuditoria(fecha: string): OpcionesAviso {
+  // Sin unaVezPorDia: un día movido se parte en varios mensajes y todos tienen que llegar.
+  return { tipo: "auditoria_vendedor_parte", destino: "admin", clave: fecha };
+}
+/** 27-10: la corrida falló → administración, 1 por día. */
+export const AVISO_AUDITORIA_FALLO: OpcionesAviso = { tipo: "auditoria_vendedor_fallo", destino: "admin", unaVezPorDia: true, clave: null };
 
 export interface EstadoLoteAud {
   id: string;
@@ -57,7 +66,7 @@ export interface DepsAuditoria {
   pedidosDeClientes: (clienteIds: string[], desdeISO: string, hastaISO: string) => Promise<PedidoCliente[]>;
   crearLote: (pedidos: PedidoLoteAud[]) => Promise<EstadoLoteAud>;
   consultarLote: (id: string) => Promise<EstadoLoteAud>;
-  avisar: (textoHtml: string) => Promise<{ ok: boolean; error?: string }>;
+  avisar: (textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso) => Promise<{ ok: boolean; error?: string }>;
   log?: (...a: unknown[]) => void;
 }
 
@@ -185,7 +194,7 @@ export async function ejecutarAuditoria(deps: DepsAuditoria, op: OpcionesAuditor
   if (raras.length) {
     // 23-10: un día movido pasa los 4096 caracteres de Telegram → se parte en varios mensajes, sin perder casos.
     for (const parte of partirAviso(armarAviso(rango.fecha, finales.length, raras, cfg as CfgAuditoria, notas))) {
-      const r = await deps.avisar(parte);
+      const r = await deps.avisar(parte, undefined, avisoParteAuditoria(rango.fecha));
       // Sin aviso no se marca como informado: el próximo cron lo reintenta.
       if (!r.ok) throw new Error(`Telegram: ${r.error ?? "falló"}`);
     }

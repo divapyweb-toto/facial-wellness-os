@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { armarResumen, diaParaguay, lineaRendicion, lineaSinCobertura, lineaSinPin, listaParados, type Pedido, type PedidoParado } from "./logica.ts";
+import { decidirRuta } from "../_shared/telegram_politica.ts";
+import { armarResumen, avisoResumenDiario, diaParaguay, lineaRendicion, lineaSinCobertura, lineaSinPin, listaParados, type Pedido, type PedidoParado } from "./logica.ts";
 
 const AHORA = new Date("2026-10-17T00:30:00Z"); // 21:30 del 16-10 en Paraguay
 const p = (o: Partial<Pedido>): Pedido => ({
@@ -186,4 +187,10 @@ Deno.test("26-10: el Kit Deporte no cuenta como Tiras ni como Botella", async ()
   assertEquals(familia("Kit Deporte: Botella Flexible + Tiras Nasales"), "Kit Deporte");
   assertEquals(familia("Tiras Nasales: más aire por la nariz"), "Tiras");
   assertEquals(familia("Botella Deportiva Flexible: se enrolla y no pesa"), "Botella");
+});
+
+Deno.test("27-10: el resumen del día va a administración (1 por día); la prueba también, con su propio tipo", () => {
+  assertEquals(avisoResumenDiario("2026-10-27", false), { tipo: "resumen_diario", destino: "admin", unaVezPorDia: true, clave: "2026-10-27" });
+  assertEquals(avisoResumenDiario("2026-10-27", true), { tipo: "resumen_diario_prueba", destino: "admin", clave: null });
+  assertEquals(decidirRuta(null, avisoResumenDiario("2026-10-27", false)), "admin");
 });

@@ -68,5 +68,5 @@ export const depsReales: DepsAlerta = {
     if (error) throw new Error(`guardar ${CLAVE_ULTIMO}: ${error.message}`);
   },
 
-  avisar: (texto) => avisar(texto),
+  avisar: (texto, botones, opts) => avisar(texto, botones, opts),
 };

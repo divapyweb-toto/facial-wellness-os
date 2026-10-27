@@ -1,11 +1,12 @@
 // resumen-diario · Edge Function (solo service role). 16-10-2026.
-// Cron 21:30 Paraguay (00:30 UTC, migración 20261016000001): 1 mensaje por Telegram a Enrique con cómo fue el día.
+// Cron 21:30 Paraguay (00:30 UTC, migración 20261016000001): 1 mensaje con cómo fue el día.
+// 27-10: va a administración (avisos_admin, lo lee el parte diario), no a Telegram (ver avisoResumenDiario).
 // Solo LEE datos del negocio; no toca pedidos, stock ni Meta. Body {prueba:true}: manda 1 mensaje marcado PRUEBA.
 // Reintenta el envío 2 veces y deja el resultado en eventos_crudos ('telegram', 'resumen_diario:<día>').
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { cansados, chatsAnuncio, equilibrios, pap60d, couriersPorCiudad, chatsBotV33, entregaGrupos, luceroEnGestion, guardarCandado, leerCandado, leerMeta, leerPedidos, leerPedidosParados, leerRendicionAtrasada, stock } from "./io.ts";
-import { armarResumen, diaParaguay } from "./logica.ts";
+import { armarResumen, avisoResumenDiario, diaParaguay } from "./logica.ts";
 
 Deno.serve(conServiceRole(async (req: Request) => {
   try {
@@ -45,10 +46,11 @@ Deno.serve(conServiceRole(async (req: Request) => {
       botV33YaAvisado: (v33?.payload?.dia as string) ?? null, stock: prods, entrega7d: ent7, cansados: cans, luceroGestion: lucGest, prueba, courierPorCiudad, pedidosParados: parados, rendicionAtrasada: rendicion,
       equilibrioCpa: eqs.Varios ?? null, equilibrioJawFlex: eqs.JawFlex ?? null, pap60d: pap, papAvisoYaDado: !!papAvisado,
     });
-    let r = await avisar(texto);
+    const opts = avisoResumenDiario(hoy, prueba);
+    let r = await avisar(texto, undefined, opts);
     for (let i = 0; i < 2 && !r.ok; i++) {
       await new Promise((z) => setTimeout(z, 3000));
-      r = await avisar(texto);
+      r = await avisar(texto, undefined, opts);
     }
     await guardarCandado(idEnvio, { tipo: "resumen_diario", dia: hoy, prueba, meta_ok: meta !== null }, r.ok ? null : (r.error ?? "error"));
     if (r.ok && botV33Listo && !prueba && !v33) await guardarCandado("resumen_v33_listo", { dia: hoy }, null);

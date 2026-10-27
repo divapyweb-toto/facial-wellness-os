@@ -2,6 +2,7 @@
 // Stock REAL = stock_actual de Voltra OS − unidades de pedidos válidos todavía no descontados (no cargados en Despacho).
 // Un Pack sin descontar consume sus componentes. El Pack en Shopify vale lo que alcancen sus componentes.
 // Voltra OS manda: la sincronización reescribe en Shopify este número (nunca menos de 0).
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
 export type Familia = "Kit Deporte" | "Raspador" | "Tiras" | "Parches" | "Pack" | "JawFlex" | "Botella" | "Bebird" | "Otros";
 export function familia(texto: string): Familia {
@@ -54,3 +55,8 @@ export function stockReal(productos: Producto[], pendientes: PedidoPendiente[]):
 }
 
 export const UMBRAL_ALERTA = 10;
+
+/** 27-10: stock bajo → administración (pausa anuncios y arma la reposición), 1 por día y familia. */
+export function avisoStockBajo(familia: string): OpcionesAviso {
+  return { tipo: "stock_bajo", destino: "admin", unaVezPorDia: true, clave: familia };
+}

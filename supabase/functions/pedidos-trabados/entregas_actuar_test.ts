@@ -2,8 +2,9 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import {
   avisarParadosDiario, avisarRendicionAtrasada, CANDADO_BASE_PAP, CFG_REPROGRAMAR_APAGADA, claveCandadoActuar, claveEnvioReprogramar,
   configReprogramar, decidirReprogramar, type DepsActuar, diasDesde, type FilaActuar, type FilaRendicion, normEstado,
-  procesarEntregasActuar, type ResultadoReprogramar, textoLucero, textoPap,
+  procesarEntregasActuar, type ResultadoReprogramar, textoLucero, textoPap, claveNoEntregado,
 } from "./entregas_actuar.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import type { PedidoParado } from "../resumen-diario/logica.ts";
 
 // Datos inventados. 21-10-2026 11:00 en Paraguay = 14:00 UTC.
@@ -187,4 +188,56 @@ Deno.test("rendición atrasada: Telegram con el monto, una vez por entrega", asy
 Deno.test("textos: Lucero y PaP escapan el motivo del courier", () => {
   assertStringIncludes(textoLucero({ ...LUCERO, motivo: "<b>x</b>" }, "encolado"), "&lt;b&gt;x&lt;/b&gt;");
   assertStringIncludes(textoPap({ ...PAP_A, estado: "Custodio", motivo: "" }), "PaP: Custodio. PaP no reintenta");
+});
+
+// ── 27-10: tipo y destino de cada aviso (telegram_politica.ts) + un solo aviso por falla de Lucero ──
+function depsConOpts(textoCourier?: string | null) {
+  const candados = new Set<string>(), llamadas: Array<{ texto: string; opts?: OpcionesAviso }> = [];
+  const d: DepsActuar = {
+    tomarCandado: (id) => Promise.resolve(candados.has(id) ? false : (candados.add(id), true)),
+    soltarCandado: (id) => Promise.resolve(void candados.delete(id)),
+    existeCandado: (id) => Promise.resolve(candados.has(id)),
+    avisar: (texto, _b, opts) => (llamadas.push({ texto, opts }), Promise.resolve({ ok: true })),
+    esperar: () => Promise.resolve(),
+    ...(textoCourier !== undefined ? { textoCourierLucero: () => Promise.resolve(textoCourier) } : {}),
+  };
+  return { d, llamadas };
+}
+
+Deno.test("27-10: Lucero fallido = UN aviso para Enrique con el texto para Lucero; PaP última chance = Enrique", async () => {
+  const { d, llamadas } = depsConOpts("📦 <b>Para reenviar a Lucero</b> (#9002):\n<pre>Hola…</pre>");
+  const papReciente = { ...PAP_B, fechaIngreso: "2026-10-20" }; // reciente: no cae en la línea base
+  await procesarEntregasActuar([LUCERO, papReciente], AHORA, CFG_REPROGRAMAR_APAGADA, d);
+  await procesarEntregasActuar([LUCERO, papReciente], AHORA, CFG_REPROGRAMAR_APAGADA, d); // segunda corrida: nada nuevo
+  const lucero = llamadas.filter((l) => l.opts?.tipo === "no_entregado_reintentar");
+  assertEquals(lucero.length, 1);
+  assertEquals(lucero[0].opts, { tipo: "no_entregado_reintentar", destino: "enrique", pedido: "#9002", unaVezPorDia: true, clave: "9002" });
+  assertStringIncludes(lucero[0].texto, "entrega fallida");
+  assertStringIncludes(lucero[0].texto, "Para reenviar a Lucero");
+  // misma clave que usa procesar-envios con '#9002'
+  assertEquals(claveNoEntregado("#9002"), claveNoEntregado(LUCERO.ref));
+  const pap = llamadas.filter((l) => l.opts?.tipo === "pap_ultima_chance");
+  assertEquals(pap.length, 1);
+  assertEquals(pap[0].opts?.destino, "enrique");
+  assertEquals(pap[0].opts?.pedido, "#9004");
+});
+
+Deno.test("27-10: sin datos del pedido, el aviso de Lucero sale igual (sin el bloque para el courier)", async () => {
+  const { d, llamadas } = depsConOpts(null);
+  await procesarEntregasActuar([LUCERO], AHORA, CFG_REPROGRAMAR_APAGADA, d);
+  assertEquals(llamadas.length, 1);
+  assert(!llamadas[0].texto.includes("Para reenviar"));
+  const sinDep = depsConOpts();
+  await procesarEntregasActuar([LUCERO], AHORA, CFG_REPROGRAMAR_APAGADA, sinDep.d);
+  assertEquals(sinDep.llamadas.length, 1);
+});
+
+Deno.test("27-10: parados y rendición → destino enrique con su tipo (van al resumen por la política)", async () => {
+  const { d, llamadas } = depsConOpts();
+  await avisarParadosDiario([par("#9100", 30, "Luque")], new Date("2026-10-21T12:30:00Z"), {}, d);
+  await avisarRendicionAtrasada([{ ref: "VT-9010", courier: "lucero", dias: 9, montoNeto: 100000, fechaEntrega: "2026-10-12" }], d);
+  assertEquals(llamadas.map((l) => l.opts), [
+    { tipo: "pedidos_sin_despachar_24h", destino: "enrique" },
+    { tipo: "rendicion_atrasada", destino: "enrique", pedido: "#9010" },
+  ]);
 });

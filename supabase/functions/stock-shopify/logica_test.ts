@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
-import { familia, stockReal } from "./logica.ts";
+import { avisoStockBajo, familia, stockReal } from "./logica.ts";
+import { decidirRuta } from "../_shared/telegram_politica.ts";
 
 const P = [
   { id: "r", nombre: "Raspador de Lengua", stock: 92, esCombo: false, componentes: [] },
@@ -44,4 +45,10 @@ Deno.test("Kit Deporte: familia propia (no Tiras ni Botella) y vale lo que alcan
   assertEquals(r.get("Kit Deporte")?.real, 29); // lo que alcancen: min(39, 29)
   assertEquals(r.get("Kit Deporte")?.sinDescontar, 2);
   assertEquals(r.get("Pack")?.real, 29); // el Pack también comparte las tiras
+});
+
+Deno.test("27-10: stock bajo va a administración, 1 por día por familia", () => {
+  const o = avisoStockBajo("Tiras");
+  assertEquals(o, { tipo: "stock_bajo", destino: "admin", unaVezPorDia: true, clave: "Tiras" });
+  assertEquals(decidirRuta(null, o), "admin");
 });

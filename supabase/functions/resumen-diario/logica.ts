@@ -1,6 +1,7 @@
 // resumen-diario · lógica pura (16-10-2026): con los datos ya leídos arma el mensaje de Telegram de las 21:30.
 // Solo números: nada de nombres, teléfonos ni direcciones.
 import { escaparHtml } from "../_shared/telegram_formato.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
 export const EQUILIBRIO_CPA = 41_000;
 // 16-10: meta de Enrique (línea 🎯 arriba de todo).
@@ -316,4 +317,14 @@ export function armarResumen(e: Entrada): { texto: string; botV33Listo: boolean;
     l.push(`⚠️ Se está cansando: ${escaparHtml(c.anuncio)} (${medida} ${c.caidaPct ?? "−50"}% contra sus primeros días)`);
   }
   return { texto: l.join("\n"), botV33Listo, papAviso };
+}
+
+/**
+ * 27-10 (#65 del inventario): el resumen del día va a administración (cola avisos_admin → parte diario), no a Telegram.
+ * La prueba va igual que el real (mismo destino, tipo aparte) para no mandarle a Enrique algo que en producción no recibe.
+ */
+export function avisoResumenDiario(dia: string, prueba: boolean): OpcionesAviso {
+  return prueba
+    ? { tipo: "resumen_diario_prueba", destino: "admin", clave: null }
+    : { tipo: "resumen_diario", destino: "admin", unaVezPorDia: true, clave: dia };
 }

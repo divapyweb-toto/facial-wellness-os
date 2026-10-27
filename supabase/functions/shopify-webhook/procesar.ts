@@ -22,6 +22,7 @@ import {
 } from "../_shared/plazo_zona.ts";
 import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import { verificarHmacShopify } from "../_shared/shopify.ts";
 import { claveOfertaPrioridad, motivoSinOfertaPrioridad, pedidoPagado, PLANTILLA_PAGO_PRIORIDAD } from "../_shared/pago_anticipado.ts";
 import { CONFIG_DEFECTO, envioTerminal, PLANTILLA_ENTREGA_MANANA } from "../procesar-envios/procesar.ts";
@@ -183,7 +184,7 @@ export interface Deps {
   /** Deshace el "preparado" (cancela los fulfillments) de un pedido que no se podía despachar. Opcional (09-10). */
   revertirPreparado?(orderId: number): Promise<{ ok: boolean; error?: string }>;
   /** Aviso a Enrique por Telegram (HTML). Opcional (09-10). */
-  avisar?(textoHtml: string): Promise<unknown>;
+  avisar?(textoHtml: string, botones?: undefined, opts?: OpcionesAviso): Promise<unknown>;
   /** Transportadora que se le asignó en Despacho (ventas.transportadora: 'lucero' | 'pap' | …), o null. Opcional (08-10). */
   courierDePedido?(nombrePedido: string | null): Promise<string | null>;
   /** 12-10: config_wa.plantillas_activas ya parseada. Opcional: sin esto (o si falla) van las plantillas de siempre. */
@@ -686,7 +687,10 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
     const r = await deps.revertirPreparado(ped.shopifyOrderId).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     await deps.avisar?.(r.ok
       ? `↩️ <b>${ped.nombre ?? ped.shopifyOrderId}</b> lo marcaste preparado pero ${motivoNoDespachar}. Lo devolví a "No preparado" y no le avisé al cliente. No lo despaches todavía.`
-      : `⚠️ <b>${ped.nombre ?? ped.shopifyOrderId}</b> lo marcaste preparado pero ${motivoNoDespachar}. No pude devolverlo a "No preparado" (${r.error}): sacalo a mano y no lo despaches.`)?.catch?.(() => {});
+      : `⚠️ <b>${ped.nombre ?? ped.shopifyOrderId}</b> lo marcaste preparado pero ${motivoNoDespachar}. No pude devolverlo a "No preparado" (${r.error}): sacalo a mano y no lo despaches.`,
+      undefined,
+      // 27-10 (#18): cambia qué se despacha → Enrique, inmediato.
+      { tipo: r.ok ? "preparado_no_despachable" : "preparado_no_despachable_sin_revertir", destino: "enrique", pedido: ped.nombre ?? null })?.catch?.(() => {});
   }
   if (!motivoNoDespachar && !ped.cancelado && !esPruebaE2E && !retira && clienteId && estaPreparado(ped.raw) && !envioTerminal(existente?.estado_envio)) {
     const courier = deps.courierDePedido ? await deps.courierDePedido(ped.nombre).catch(() => null) : null;
@@ -703,7 +707,8 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
           console.warn("candado entrega programada:", e instanceof Error ? e.message : e);
           return false;
         });
-        if (nuevo) await deps.avisar(textoAvisoProgramado(ped, prog, courier, telefono))?.catch?.((e: unknown) => console.warn("aviso entrega programada:", e));
+        // 27-10 (#19): texto para el courier → Enrique, inmediato.
+        if (nuevo) await deps.avisar(textoAvisoProgramado(ped, prog, courier, telefono), undefined, { tipo: "entrega_programada_courier", destino: "enrique", pedido: ped.nombre ?? null })?.catch?.((e: unknown) => console.warn("aviso entrega programada:", e));
       }
     }
   }

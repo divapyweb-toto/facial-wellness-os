@@ -62,7 +62,7 @@ export const depsReales: DepsPagoQR = {
     }
     return { ok: r.ok, error: r.error };
   },
-  avisar: (t) => avisar(t),
+  avisar: (t, b, o) => avisar(t, b, o),
   escapar: escaparHtml,
   ahora: () => new Date(),
 };

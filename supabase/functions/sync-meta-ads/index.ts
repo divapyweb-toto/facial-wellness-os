@@ -6,7 +6,7 @@ import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { depsReales, leerConfig } from "./io.ts";
-import { sincronizar } from "./logica.ts";
+import { AVISO_META_CUENTA_FRENADA, AVISO_META_SYNC_FALLO, sincronizar } from "./logica.ts";
 
 Deno.serve(conServiceRole(async () => {
   try {
@@ -16,13 +16,13 @@ Deno.serve(conServiceRole(async () => {
     console.log("sync-meta-ads", JSON.stringify(r));
     const frenadas = r.cuentas.filter((c) => c.error);
     if (frenadas.length) {
-      await avisar(`<b>Sync gasto Meta Ads: cuenta frenada</b>\n${frenadas.map((c) => escaparHtml(c.error)).join("\n")}`).catch(() => {});
+      await avisar(`<b>Sync gasto Meta Ads: cuenta frenada</b>\n${frenadas.map((c) => escaparHtml(c.error)).join("\n")}`, undefined, AVISO_META_CUENTA_FRENADA).catch(() => {});
     }
     return Response.json(r);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("sync-meta-ads:", msg);
-    await avisar(`<b>Sync gasto Meta Ads: falló</b>\n${escaparHtml(msg.slice(0, 500))}`).catch(() => {});
+    await avisar(`<b>Sync gasto Meta Ads: falló</b>\n${escaparHtml(msg.slice(0, 500))}`, undefined, AVISO_META_SYNC_FALLO).catch(() => {});
     return Response.json({ ok: false, error: msg }, { status: 500 });
   }
 }));

@@ -99,8 +99,8 @@ export function depsReales(importar: Pick<ConfigImport, 'prefijos' | 'plazos'>):
         .eq('nro_guia_pap', nroGuia)
       if (error) console.error('marcarConsultada', error.message)
     },
-    async avisar(texto) {
-      const r = await avisar(texto)
+    async avisar(texto, opts) {
+      const r = await avisar(texto, undefined, opts)
       if (!r.ok) console.error('telegram', r.error)
     },
   }

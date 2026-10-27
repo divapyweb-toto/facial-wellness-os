@@ -24,7 +24,8 @@ Deno.serve(conServiceRole(async () => {
     .catch(async (e) => {
       const msg = e instanceof Error ? e.message : String(e)
       console.error('lucero-seguimiento:', msg)
-      await avisar(`<b>Seguimiento Lucero: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`).catch(() => {})
+      await avisar(`<b>Seguimiento Lucero: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`, undefined,
+        { tipo: 'lucero_seguimiento_corrida', destino: 'admin', unaVezPorDia: true, clave: 'corrida' }).catch(() => {})
     })
   if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(tarea)
   else await tarea

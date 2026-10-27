@@ -21,6 +21,7 @@
 // Si más de la mitad de las consultas de una corrida falla → UN aviso por Telegram.
 // ═══════════════════════════════════════════════════════════
 import type { FilaCourier, Resumen } from '../importar-courier/procesar.ts'
+import type { OpcionesAviso } from '../_shared/telegram_politica.ts'
 
 export interface ConfigSeguimiento {
   /** Máximo de guías consultadas por corrida. */
@@ -69,8 +70,11 @@ export interface Deps {
   /** Update condicionado (no terminal y no manual). true si cambió una fila. */
   actualizarEntrega(nroGuia: string, cambios: CambiosEntrega): Promise<boolean>
   marcarConsultada(nroGuia: string, error: string | null): Promise<void>
-  avisar(texto: string): Promise<void>
+  avisar(texto: string, opts?: OpcionesAviso): Promise<void>
 }
+
+/** 27-10: falla técnica → administración, como máximo una vez por día (antes salía en cada corrida). */
+export const OPCIONES_AVISO_CONSULTAS: OpcionesAviso = { tipo: 'lucero_seguimiento_consultas', destino: 'admin', unaVezPorDia: true, clave: 'consultas' }
 
 // ─── Parseo de la página ────────────────────────────────────
 export const ESTADOS_LUCERO = [
@@ -324,6 +328,7 @@ export async function correrSeguimiento(deps: Deps, cfgIn: Partial<ConfigSeguimi
         `Referencia distinta: ${r.referencia_distinta}\n` +
         `Motivos: ${r.motivos.join(', ').replace(/[<>&]/g, '') || '—'}\n` +
         `Si es "sin_parsear", la página de Lucero cambió de formato: revisar lucero-seguimiento/procesar.ts.`,
+      OPCIONES_AVISO_CONSULTAS,
     )
     r.aviso_enviado = true
   }

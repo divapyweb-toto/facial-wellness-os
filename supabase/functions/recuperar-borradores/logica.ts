@@ -19,6 +19,7 @@
 // igual que el "Quiero pedirlo" del toque 3: el vendedor (v33) no cambia.
 
 import { gs } from "../_shared/vendedor/herramientas.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
 export const TAG_BORRADOR_RELEASIT = "abandoned_checkout_releasit_cod_form";
 export const BOTON_RECUPERAR = "Quiero terminar mi pedido";
@@ -386,4 +387,12 @@ export async function recuperarBorradores(deps: DepsRecuperar): Promise<Resultad
     }
   }
   return res;
+}
+
+/**
+ * 27-10: "recuperación frenada por calidad del número" → administración, 1 por día por calidad leída.
+ * La calidad del número en sí le llega a Enrique por salud-canal (#67); este aviso solo informa que la recuperación se frenó.
+ */
+export function avisoRecuperacionFrenada(calidad: string | null): OpcionesAviso {
+  return { tipo: "recuperacion_frenada_calidad", destino: "admin", unaVezPorDia: true, clave: calidad ?? "sin_lectura" };
 }

@@ -4,7 +4,7 @@
 //     falla de Lucero, en lugar del aviso de reintento (UN solo mensaje por falla, misma clave courier:<id>:INTENTO_FALLIDO:<fecha>);
 //   · Telegram "quedó activa" una sola vez (candado). Si Meta la rechaza, Telegram una sola vez y no se activa.
 import { db } from "../_shared/db.ts";
-import { avisar } from "../_shared/telegram.ts";
+import { avisar, type OpcionesAviso } from "../_shared/telegram.ts";
 import { estadoPlantilla } from "../_shared/plantilla_meta.ts";
 import { tomarCandado } from "./io.ts";
 
@@ -16,7 +16,7 @@ export interface DepsActivar {
   estado(nombre: string): Promise<{ estado: string | null; error?: string }>;
   guardarConfig(valor: Record<string, unknown>): Promise<void>;
   candado(id: string): Promise<boolean>;
-  telegram(texto: string): Promise<boolean>;
+  telegram(texto: string, opts?: OpcionesAviso): Promise<boolean>;
   ahora(): Date;
 }
 
@@ -37,13 +37,13 @@ export async function activarPlantillaReprogramar(d: DepsActivar, simular = fals
     if (simular) return { resultado: "se_activaría" };
     await d.guardarConfig({ plantilla_aprobada: true, activada_en: d.ahora().toISOString() });
     if (await d.candado(`auto_plantilla_activa:${PLANTILLA}`)) {
-      await d.telegram(`✅ La plantilla <b>${PLANTILLA}</b> fue aprobada por Meta y quedó ACTIVA: desde ahora, cada entrega fallida de Lucero manda UN solo mensaje al cliente (Lucero reintenta el próximo día hábil y pide confirmar el horario; si el motivo es la ubicación, pide el pin). Reemplaza al aviso de reintento anterior.`);
+      await d.telegram(`✅ La plantilla <b>${PLANTILLA}</b> fue aprobada por Meta y quedó ACTIVA: desde ahora, cada entrega fallida de Lucero manda UN solo mensaje al cliente (Lucero reintenta el próximo día hábil y pide confirmar el horario; si el motivo es la ubicación, pide el pin). Reemplaza al aviso de reintento anterior.`, { tipo: "plantilla_reprogramar_activa", destino: "admin" });
     }
     return { resultado: "activada" };
   }
   if (estado === "REJECTED") {
     if (!simular && await d.candado(`auto_plantilla_rechazada:${PLANTILLA}`)) {
-      await d.telegram(`⚠ Meta RECHAZÓ la plantilla <b>${PLANTILLA}</b>. Sigue el aviso de reintento de siempre. Hay que ajustar el texto y volver a mandarla.`);
+      await d.telegram(`⚠ Meta RECHAZÓ la plantilla <b>${PLANTILLA}</b>. Sigue el aviso de reintento de siempre. Hay que ajustar el texto y volver a mandarla.`, { tipo: "plantilla_reprogramar_rechazada", destino: "admin" });
     }
     return { resultado: "rechazada" };
   }
@@ -58,6 +58,6 @@ export const depsReales: DepsActivar = {
     if (error) throw new Error(`config: ${error.message}`);
   },
   candado: (id) => tomarCandado(id, { plantilla: PLANTILLA }),
-  telegram: async (t) => (await avisar(t)).ok,
+  telegram: async (t, o) => (await avisar(t, undefined, o)).ok,
   ahora: () => new Date(),
 };

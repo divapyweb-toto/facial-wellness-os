@@ -7,7 +7,7 @@ import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { gql } from "../_shared/shopify.ts";
 import { activarControl, alertaTomada, fijarCantidad, inventarioShopify, pendientesSinDescontar, productos } from "./io.ts";
-import { familia, stockReal, UMBRAL_ALERTA } from "./logica.ts";
+import { avisoStockBajo, familia, stockReal, UMBRAL_ALERTA } from "./logica.ts";
 
 Deno.serve(conServiceRole(async (req: Request) => {
   try {
@@ -61,7 +61,7 @@ Deno.serve(conServiceRole(async (req: Request) => {
     if (sincronizar) {
       for (const f of bajos) {
         if (await alertaTomada(`stock_bajo:${f.familia}:${hoy}`)) {
-          await avisar(`⚠️ <b>Stock bajo: ${f.familia}</b> · quedan ${f.real} unidades reales. Pausá sus anuncios hasta reponer.`).catch(() => {});
+          await avisar(`⚠️ <b>Stock bajo: ${f.familia}</b> · quedan ${f.real} unidades reales. Pausá sus anuncios hasta reponer.`, undefined, avisoStockBajo(String(f.familia))).catch(() => {});
         }
       }
     }

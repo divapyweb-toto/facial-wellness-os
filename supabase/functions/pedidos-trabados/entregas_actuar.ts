@@ -7,6 +7,7 @@
 //   · Pedidos parados: un Telegram por día entre las 9:00 y las 12:00 de Paraguay, solo si hay.
 //   · Rendición atrasada: Telegram una vez por entrega al cruzar el umbral.
 import { escaparHtml } from "../_shared/telegram_formato.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import { listaParados, type PedidoParado, type RendicionAtrasada } from "../resumen-diario/logica.ts";
 
 export type TipoActuar = "lucero_fallido" | "pap_ultima_chance";
@@ -30,7 +31,12 @@ export interface DepsActuar {
   tomarCandado(id: string, payload: Record<string, unknown>): Promise<boolean>;
   soltarCandado(id: string): Promise<void>;
   existeCandado(id: string): Promise<boolean>;
-  avisar(texto: string): Promise<{ ok: boolean; error?: string }>;
+  avisar(texto: string, botones?: undefined, opts?: OpcionesAviso): Promise<{ ok: boolean; error?: string }>;
+  /**
+   * 27-10: texto listo para reenviar a Lucero ("volver a intentar"), armado con los datos del pedido. Opcional: sin
+   * esto (o si falla) el aviso sale sin el bloque para el courier. Solo se pide si el aviso realmente va a salir.
+   */
+  textoCourierLucero?(f: FilaActuar): Promise<string | null>;
   /** Encola el mensaje al cliente (idempotente por clave_unica). Solo se llama si la plantilla figura aprobada. */
   encolarReprogramar?(f: FilaActuar): Promise<ResultadoReprogramar>;
   esperar(ms: number): Promise<void>;
@@ -48,6 +54,22 @@ export function diasDesde(fecha: string | null, ahora: Date): number | null {
   if (!fecha || !/^\d{4}-\d{2}-\d{2}/.test(fecha)) return null;
   return Math.floor((Date.parse(`${diaPy(ahora)}T00:00:00Z`) - Date.parse(`${fecha.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
 }
+
+/** 'VT-1135' → '#1135' (nombre del pedido en Shopify). */
+export const pedidoDeRef = (ref: string) => `#${ref.replace(/^VT-/i, "")}`;
+/** 27-10: clave común del aviso "no entregado: volver a intentar" (la usa también procesar-envios, con el mismo tipo). */
+export const claveNoEntregado = (pedido: string) => pedido.replace(/^(#|VT-)/i, "");
+/** Pedido a reenviar a Lucero (el mismo texto que procesar-envios para el reintento). */
+export const PEDIDO_REINTENTO = "No se pudo entregar: volver a intentar el próximo día hábil. Coordinar día, hora y lugar con el cliente.";
+
+/** 27-10: tipo y destino de cada aviso de esta corrida (telegram_politica.ts). */
+export const opcionesActuar = (f: FilaActuar): OpcionesAviso =>
+  f.tipo === "lucero_fallido"
+    // #37 + #42: UN solo aviso por falla (con el texto para Lucero). Mismo tipo y clave que procesar-envios → si los dos
+    // lo detectan el mismo día, sale uno.
+    ? { tipo: "no_entregado_reintentar", destino: "enrique", pedido: pedidoDeRef(f.ref), unaVezPorDia: true, clave: claveNoEntregado(f.ref) }
+    // #43: PaP no reintenta. Hoy el sistema NO le escribe al cliente desde acá → sigue para Enrique.
+    : { tipo: "pap_ultima_chance", destino: "enrique", pedido: pedidoDeRef(f.ref) };
 
 export const claveCandadoActuar = (f: FilaActuar) =>
   f.tipo === "lucero_fallido"
@@ -114,6 +136,13 @@ export function textoParados(ps: PedidoParado[], cpc?: Parameters<typeof listaPa
   return `📦 ${n} pedido${n > 1 ? "s" : ""} sin despachar hace +24 h: ${lista}`;
 }
 
+/** 27-10: aviso de Lucero fallido + bloque para reenviar a Lucero (si se pudo armar). Nunca tira excepción. */
+export async function textoLuceroCompleto(f: FilaActuar, cliente: Parameters<typeof textoLucero>[1], d: DepsActuar): Promise<string> {
+  const base = textoLucero(f, cliente);
+  const extra = d.textoCourierLucero ? await d.textoCourierLucero(f).catch(() => null) : null;
+  return extra ? `${base}\n\n${extra}` : base;
+}
+
 // ── orquestación ──
 export type ResultadoAviso = "avisado" | "ya_avisado" | "simulado" | `error: ${string}`;
 
@@ -122,13 +151,16 @@ export type ResultadoAviso = "avisado" | "ya_avisado" | "simulado" | `error: ${s
  * `simular`: no toca nada (solo dice si saldría).
  */
 export async function avisarUnaVez(
-  d: DepsActuar, id: string, payload: Record<string, unknown>, texto: string, simular: boolean,
+  d: DepsActuar, id: string, payload: Record<string, unknown>, texto: string | (() => Promise<string>), simular: boolean,
+  opts?: OpcionesAviso,
 ): Promise<ResultadoAviso> {
   if (simular) return (await d.existeCandado(id)) ? "ya_avisado" : "simulado";
   if (!(await d.tomarCandado(id, payload))) return "ya_avisado";
+  // 27-10: el texto puede armarse recién acá (consulta a la base solo si el aviso va a salir).
+  const t = typeof texto === "string" ? texto : await texto();
   let ultimo = "";
   for (let i = 0; i < 3; i++) {
-    const r = await d.avisar(texto);
+    const r = await d.avisar(t, undefined, opts);
     if (r.ok) return "avisado";
     ultimo = r.error ?? "Telegram falló";
     if (i < 2) await d.esperar(1500);
@@ -157,7 +189,7 @@ export async function procesarEntregasActuar(
         hechos.push({ ref: f.ref, evento: f.estado, resultado: "línea base (sin aviso)" });
         continue;
       }
-      hechos.push({ ref: f.ref, evento: f.estado, resultado: await avisarUnaVez(d, id, { ref: f.ref, estado: f.estado }, textoPap(f), simular) });
+      hechos.push({ ref: f.ref, evento: f.estado, resultado: await avisarUnaVez(d, id, { ref: f.ref, estado: f.estado }, textoPap(f), simular, opcionesActuar(f)) });
       continue;
     }
     // Lucero: el mensaje al cliente NO se manda desde acá (así nunca hay dos por falla): lo manda la importación del
@@ -165,7 +197,7 @@ export async function procesarEntregasActuar(
     const cliente = cfg.plantillaAprobada ? "importacion_nuevo" as const : "importacion_reintento" as const;
     hechos.push({
       ref: f.ref, evento: f.estado, cliente,
-      resultado: await avisarUnaVez(d, id, { ref: f.ref, estado: f.estado, fecha_ingreso: f.fechaIngreso }, textoLucero(f, cliente), simular),
+      resultado: await avisarUnaVez(d, id, { ref: f.ref, estado: f.estado, fecha_ingreso: f.fechaIngreso }, () => textoLuceroCompleto(f, cliente, d), simular, opcionesActuar(f)),
     });
   }
   if (primeraVez && !simular) await d.tomarCandado(CANDADO_BASE_PAP, { corrida: ahora.toISOString(), registrados: baseConsumida });
@@ -179,7 +211,8 @@ export async function avisarParadosDiario(
   const h = horaPy(ahora);
   if (h < HORA_PARADOS.desde || h >= HORA_PARADOS.hasta) return { resultado: "fuera_de_hora", n: ps.length };
   if (!ps.length) return { resultado: "sin_parados", n: 0 };
-  const r = await avisarUnaVez(d, claveCandadoParados(ahora), { dia: diaPy(ahora), n: ps.length }, textoParados(ps, cpc), simular);
+  const r = await avisarUnaVez(d, claveCandadoParados(ahora), { dia: diaPy(ahora), n: ps.length }, textoParados(ps, cpc), simular,
+    { tipo: "pedidos_sin_despachar_24h", destino: "enrique" });
   return { resultado: r, n: ps.length };
 }
 
@@ -187,7 +220,8 @@ export async function avisarParadosDiario(
 export async function avisarRendicionAtrasada(rs: FilaRendicion[], d: DepsActuar, simular = false): Promise<HechoActuar[]> {
   const hechos: HechoActuar[] = [];
   for (const r of rs) {
-    hechos.push({ ref: r.ref, evento: "rendicion_atrasada", resultado: await avisarUnaVez(d, claveCandadoRendicion(r), { ref: r.ref, dias: r.dias }, textoRendicion(r), simular) });
+    hechos.push({ ref: r.ref, evento: "rendicion_atrasada", resultado: await avisarUnaVez(d, claveCandadoRendicion(r), { ref: r.ref, dias: r.dias }, textoRendicion(r), simular,
+      { tipo: "rendicion_atrasada", destino: "enrique", pedido: pedidoDeRef(r.ref) }) });
   }
   return hechos;
 }

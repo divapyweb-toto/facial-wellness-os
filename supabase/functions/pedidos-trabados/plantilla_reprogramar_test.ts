@@ -44,3 +44,13 @@ Deno.test("22-10: config inválida o sin fila = apagada; sin respuesta de Meta n
   e.d.estado = () => Promise.resolve({ estado: null, error: "timeout" });
   assertEquals((await activarPlantillaReprogramar(e.d)).resultado, "sin_dato: timeout");
 });
+
+Deno.test("27-10: los avisos de la plantilla van a administración (sin Telegram)", async () => {
+  const opts: unknown[] = [];
+  for (const estado of ["APPROVED", "REJECTED"]) {
+    const p = deps(estado);
+    p.d.telegram = (_t, o) => (opts.push(o), Promise.resolve(true));
+    await activarPlantillaReprogramar(p.d);
+  }
+  assertEquals(opts, [{ tipo: "plantilla_reprogramar_activa", destino: "admin" }, { tipo: "plantilla_reprogramar_rechazada", destino: "admin" }]);
+});

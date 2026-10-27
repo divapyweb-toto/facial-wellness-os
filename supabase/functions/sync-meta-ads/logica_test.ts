@@ -16,6 +16,8 @@ import {
   urlInsights,
 } from "./logica.ts";
 import { errorMeta } from "./io.ts";
+import { AVISO_META_CUENTA_FRENADA, AVISO_META_SYNC_FALLO } from "./logica.ts";
+import { decidirRuta } from "../_shared/telegram_politica.ts";
 
 const P: Producto[] = [
   { id: "jaw", nombre: "Ejercitador de mandibula JawFlex Pro" },
@@ -200,4 +202,10 @@ Deno.test("reparto por anuncio: un conjunto mezclado se divide por producto y la
   assertEquals(de900.find((f) => f.producto_id === null)?.gasto, 1000); // 999 + 1 de redondeo
   assertEquals(r.repartidos, [{ fecha: "2026-10-08", adset_id: "900" }]);
   assert(r.filas.some((f) => f.adset_id === "901")); // el que ya tenía producto queda igual
+});
+
+Deno.test("27-10: avisos del sync de Meta → administración, 1 por día por tipo", () => {
+  assertEquals(AVISO_META_CUENTA_FRENADA, { tipo: "sync_meta_ads_cuenta_frenada", destino: "admin", unaVezPorDia: true, clave: null });
+  assertEquals(AVISO_META_SYNC_FALLO, { tipo: "sync_meta_ads_fallo", destino: "admin", unaVezPorDia: true, clave: null });
+  assert([AVISO_META_CUENTA_FRENADA, AVISO_META_SYNC_FALLO].every((o) => decidirRuta(null, o) === "admin"));
 });

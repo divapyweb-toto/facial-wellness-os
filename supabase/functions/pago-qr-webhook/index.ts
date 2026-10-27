@@ -36,7 +36,7 @@ Deno.serve(async (req) => {
       procesar: () => procesarPagoQR(prov, ev, cfg, depsReales),
       marcarProcesado: (err) => marcarEventoProcesado(prov, ev.id_evento, err),
       borrarEvento: () => borrarEventoQR(prov, ev.id_evento),
-      avisar: (t) => avisar(t),
+      avisar: (t, b, o) => avisar(t, b, o),
       escapar: escaparHtml,
     }, ev.id_evento);
     return Response.json(r.cuerpo, { status: r.status });

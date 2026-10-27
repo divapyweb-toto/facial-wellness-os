@@ -3,7 +3,7 @@
 // desde la fecha de la VENTA → un Telegram por pedido, una sola vez en la vida (candado auto_plazo_pap:<ref> en
 // eventos_crudos, mismo avisarUnaVez de entregas_actuar.ts). El texto va listo para reenviar a PaP: sin nombre ni teléfono.
 import { escaparHtml } from "../_shared/telegram_formato.ts";
-import { avisarUnaVez, type DepsActuar, diaPy } from "./entregas_actuar.ts";
+import { avisarUnaVez, type DepsActuar, diaPy, pedidoDeRef } from "./entregas_actuar.ts";
 
 export interface FilaPlazoPap { ref: string; ciudad: string | null; estado: string; fechaVenta: string; guia?: string | null }
 export interface HechoPlazoPap { ref: string; estado: string; dias: number; resultado: string }
@@ -54,7 +54,8 @@ export async function procesarPlazoPap(filas: FilaPlazoPap[], ahora: Date, d: De
     if (!estadoPlazoPap(f.estado)) continue;
     const dias = diasHabilesDesde(f.fechaVenta, ahora);
     if (dias == null || dias <= umbralPlazoPap(f.estado)) continue;
-    const r = await avisarUnaVez(d, claveCandadoPlazoPap(f.ref), { ref: f.ref, estado: f.estado, dias }, textoPlazoPap(f, dias), simular);
+    const r = await avisarUnaVez(d, claveCandadoPlazoPap(f.ref), { ref: f.ref, estado: f.estado, dias }, textoPlazoPap(f, dias), simular,
+      { tipo: "plazo_pap", destino: "enrique", pedido: pedidoDeRef(f.ref) });
     hechos.push({ ref: f.ref, estado: f.estado, dias, resultado: r });
   }
   return hechos;

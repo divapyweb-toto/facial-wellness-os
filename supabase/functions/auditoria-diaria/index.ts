@@ -8,7 +8,7 @@ import { db } from "../_shared/db.ts";
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { consultarLote, llamarClaudeLote } from "../_shared/claude.ts";
-import { type DepsAuditoria, ejecutarAuditoria, type EstadoLoteAud } from "./auditoria.ts";
+import { AVISO_AUDITORIA_FALLO, type DepsAuditoria, ejecutarAuditoria, type EstadoLoteAud } from "./auditoria.ts";
 import type { ConvInfo, MensajeAud, PedidoCliente, TurnoVend } from "./logica.ts";
 
 const LOTE_ESPERA_MS = 90_000; // la función tiene ~150 s; si el lote tarda más, lo levanta el próximo cron
@@ -109,7 +109,7 @@ const deps: DepsAuditoria = {
   },
   crearLote: async (pedidos) => aLote(await llamarClaudeLote(pedidos, { esperar: true, maxEsperaMs: LOTE_ESPERA_MS, cadaMs: 10_000 })),
   consultarLote: async (id) => aLote(await consultarLote(id)),
-  avisar: (texto) => avisar(texto),
+  avisar: (texto, botones, opts) => avisar(texto, botones, opts),
 };
 
 Deno.serve(conServiceRole(async (req) => {
@@ -128,7 +128,7 @@ Deno.serve(conServiceRole(async (req) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("auditoria-diaria:", msg);
-    await avisar(`<b>Atención: la auditoría diaria del vendedor falló</b>\n${msg.replace(/[<>&]/g, " ")}`).catch(() => {});
+    await avisar(`<b>Atención: la auditoría diaria del vendedor falló</b>\n${msg.replace(/[<>&]/g, " ")}`, undefined, AVISO_AUDITORIA_FALLO).catch(() => {});
     return Response.json({ ok: false, error: msg }, { status: 500 });
   }
 }));

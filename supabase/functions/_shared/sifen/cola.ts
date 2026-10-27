@@ -23,6 +23,8 @@
 //   + número asignado en SQL junto con la fila (sifen_asignar_numero: sin saltos ni duplicados).
 
 import type { DocumentoDE, RespuestaSifen, TipoDE } from "./tipos.ts";
+import type { BotonTelegram } from "../telegram_formato.ts";
+import type { OpcionesAviso } from "../telegram_politica.ts";
 import {
   type BaseDocumento,
   CONFIG_DESDE_PEDIDO_DEFECTO,
@@ -202,8 +204,24 @@ export interface DepsCola {
   registrarEvento(e: EventoSifen): Promise<void>;
   subirKude(f: FilaFactura, pdf: Uint8Array): Promise<string>;
   enviarKude(f: FilaFactura, pedido: PedidoSifen | null): Promise<{ ok: boolean; error?: string }>;
-  avisar(html: string): Promise<unknown>;
+  /** 27-10: opts = tipo/destino del aviso (todos los de SIFEN van a administración, ver avisoSifen). */
+  avisar(html: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   escapar(s: unknown): string;
+}
+
+/**
+ * 27-10 (regla de Enrique: Telegram solo para lo que el sistema no puede hacer): todo aviso de SIFEN va a
+ * administración (cola avisos_admin, la lee el parte diario). `unaVezPorDia` + clave estable (id de la factura
+ * o del pedido, nunca el texto del error) para los que se pueden repetir en cada corrida de la cola.
+ */
+export function avisoSifen(tipo: string, o: { pedido?: unknown; clave?: unknown; unaVezPorDia?: boolean } = {}): OpcionesAviso {
+  return {
+    tipo,
+    destino: "admin",
+    pedido: o.pedido == null ? null : String(o.pedido),
+    clave: o.clave == null ? null : String(o.clave),
+    ...(o.unaVezPorDia ? { unaVezPorDia: true } : {}),
+  };
 }
 
 export type AccionCola =
@@ -306,7 +324,7 @@ export async function facturarPedido(pedidoOId: number | PedidoSifen, d: DepsCol
   };
   if (!prueba.ok) {
     const fila = await d.crearFactura({ ...base, estado: "revisar", error: prueba.motivo });
-    if (fila) await d.avisar(`<b>Factura a revisar</b> · pedido ${d.escapar(ped.nombre ?? ped.shopify_order_id)}\n${d.escapar(prueba.motivo)}\nNo se emitió nada.`);
+    if (fila) await d.avisar(`<b>Factura a revisar</b> · pedido ${d.escapar(ped.nombre ?? ped.shopify_order_id)}\n${d.escapar(prueba.motivo)}\nNo se emitió nada.`, undefined, avisoSifen("sifen_revisar_validacion", { pedido: ped.nombre ?? ped.shopify_order_id, clave: ped.shopify_order_id, unaVezPorDia: true }));
     return { ref, accion: "revisar", detalle: prueba.motivo };
   }
   const fila = await d.crearFactura({
@@ -319,7 +337,7 @@ export async function facturarPedido(pedidoOId: number | PedidoSifen, d: DepsCol
   });
   if (!fila) return { ref, accion: "ya_existe" };
   if (prueba.avisos.length) {
-    await d.avisar(`<b>Factura</b> · pedido ${d.escapar(ped.nombre ?? ped.shopify_order_id)}\n${prueba.avisos.map((a) => d.escapar(a)).join("\n")}`);
+    await d.avisar(`<b>Factura</b> · pedido ${d.escapar(ped.nombre ?? ped.shopify_order_id)}\n${prueba.avisos.map((a) => d.escapar(a)).join("\n")}`, undefined, avisoSifen("sifen_observaciones", { pedido: ped.nombre ?? ped.shopify_order_id, clave: ped.shopify_order_id }));
   }
   return await emitirFila(fila, ped, d);
 }
@@ -378,7 +396,7 @@ export async function emitirFila(f: FilaFactura, ped: PedidoSifen | null, d: Dep
     const armado = await documentoDeFila(fila, ped, base, d);
     if (!armado.ok) {
       await d.actualizar(f.id, { estado: "revisar", error: armado.motivo, proximo_intento: null });
-      await d.avisar(`<b>Factura a revisar</b> · ${nombre}\n${d.escapar(armado.motivo)}`);
+      await d.avisar(`<b>Factura a revisar</b> · ${nombre}\n${d.escapar(armado.motivo)}`, undefined, avisoSifen("sifen_revisar_armado", { pedido: ped.nombre ?? f.shopify_order_id, clave: f.id, unaVezPorDia: true }));
       return { ref, accion: "revisar", detalle: armado.motivo };
     }
 
@@ -419,7 +437,7 @@ export async function emitirFila(f: FilaFactura, ped: PedidoSifen | null, d: Dep
     }
     if (r.estado === "rechazada") {
       await d.actualizar(f.id, { ...comunes, estado: "rechazada", motivo_rechazo: `${r.codigo ?? ""} ${r.mensaje ?? ""}`.trim(), proximo_intento: null });
-      await d.avisar(`<b>SIFEN rechazó la factura</b> · ${nombre}\n${d.escapar(r.codigo ?? "")} ${d.escapar(r.mensaje ?? "")}\nCorregir y reintentar, o queda para inutilizar.`);
+      await d.avisar(`<b>SIFEN rechazó la factura</b> · ${nombre}\n${d.escapar(r.codigo ?? "")} ${d.escapar(r.mensaje ?? "")}\nCorregir y reintentar, o queda para inutilizar.`, undefined, avisoSifen("sifen_rechazada", { pedido: ped.nombre ?? f.shopify_order_id, clave: f.id, unaVezPorDia: true }));
       return { ref, accion: "rechazada", detalle: r.mensaje };
     }
     // enviada (resultado desconocido) o error → reintento con espera creciente.
@@ -436,6 +454,8 @@ export async function emitirFila(f: FilaFactura, ped: PedidoSifen | null, d: Dep
       await d.avisar(
         `<b>Factura sin resolver tras ${intentos} intentos</b> · ${nombre}\n${d.escapar(r.mensaje ?? r.estado)}\n` +
           `El DE firmado tiene plazo de transmisión (72 h [VERIFICAR MT]): revisar hoy.`,
+        undefined,
+        avisoSifen("sifen_max_intentos", { pedido: ped.nombre ?? f.shopify_order_id, clave: f.id, unaVezPorDia: true }),
       );
       return { ref, accion: "max_intentos", detalle: r.mensaje };
     }
@@ -491,6 +511,8 @@ async function alertaPendienteViejo(f: FilaFactura, d: DepsCola): Promise<void> 
   await d.avisar(
     `<b>Factura sin confirmar hace ${Math.floor(horas)} h</b> · ${d.escapar(f.numero_completo ?? f.id)}\n` +
       `SIFEN no respondió todavía. Plazo de transmisión: 72 h desde la firma (después sale con observación 1005).`,
+    undefined,
+    avisoSifen("sifen_pendiente_48h", { pedido: f.shopify_order_id, clave: f.id, unaVezPorDia: true }),
   );
   await d.actualizar(f.id, { error: `${f.error ?? ""} ${MARCA_48H}`.trim() });
   f.error = `${f.error ?? ""} ${MARCA_48H}`.trim();
@@ -533,7 +555,7 @@ export async function procesarDevolucion(f: FilaFactura, ped: PedidoSifen, d: De
   // Decisión de Enrique 08-10: si ya se había RENDIDO, nada automático.
   if (ped.rendido) {
     await d.actualizar(f.id, { estado: "revisar", error: "pedido RENDIDO y después devuelto: decidir a mano (cancelación o NC)" });
-    await d.avisar(`<b>Factura a revisar</b> · pedido ${nombre}\nFiguraba RENDIDO y ahora está ${d.escapar(ped.estado_envio)}. No se canceló ni se hizo NC: decidir a mano.`);
+    await d.avisar(`<b>Factura a revisar</b> · pedido ${nombre}\nFiguraba RENDIDO y ahora está ${d.escapar(ped.estado_envio)}. No se canceló ni se hizo NC: decidir a mano.`, undefined, avisoSifen("sifen_revisar_rendido_devuelto", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id, unaVezPorDia: true }));
     return { ref, accion: "revisar", detalle: "rendido y devuelto" };
   }
   const notas = await d.notasDeFactura(f.id);
@@ -542,11 +564,11 @@ export async function procesarDevolucion(f: FilaFactura, ped: PedidoSifen, d: De
   if (dentroPlazoCancelacion(f, d.ahora(), d.cfg)) {
     const c = await cancelarFactura(f, d.cfg.motivo_cancelacion, d);
     if (c.ok) {
-      await d.avisar(`<b>Factura cancelada</b> · pedido ${nombre} (${d.escapar(f.numero_completo)})\nEl pedido volvió dentro de las 48 h.`);
+      await d.avisar(`<b>Factura cancelada</b> · pedido ${nombre} (${d.escapar(f.numero_completo)})\nEl pedido volvió dentro de las 48 h.`, undefined, avisoSifen("sifen_factura_cancelada", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id }));
       return { ref, accion: "cancelada" };
     }
     // Si SIFEN no aceptó la cancelación, se sigue con la NC (camino que siempre vale).
-    await d.avisar(`<b>No se pudo cancelar</b> · ${d.escapar(f.numero_completo)}: ${d.escapar(c.detalle)}\nSe emite nota de crédito.`);
+    await d.avisar(`<b>No se pudo cancelar</b> · ${d.escapar(f.numero_completo)}: ${d.escapar(c.detalle)}\nSe emite nota de crédito.`, undefined, avisoSifen("sifen_cancelacion_fallida", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id, unaVezPorDia: true }));
   }
   // NT-023 (1331): una NC no puede ser innominada, y su receptor debe ser el de la FE (NT-010, 2441).
   if (f.receptor_tipo !== "ruc" && f.receptor_tipo !== "documento") {
@@ -554,6 +576,8 @@ export async function procesarDevolucion(f: FilaFactura, ped: PedidoSifen, d: De
     await d.avisar(
       `<b>Factura a revisar</b> · pedido ${nombre} (${d.escapar(f.numero_completo)})\nEl pedido volvió fuera del plazo de cancelación y la factura es ` +
         `innominada: no se puede hacer NC automática. Nominar la FE con el evento de nominación (NT-014) o consultar a la contadora.`,
+      undefined,
+      avisoSifen("sifen_revisar_innominada", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id, unaVezPorDia: true }),
     );
     return { ref, accion: "revisar", detalle: "innominada fuera de plazo" };
   }
@@ -578,6 +602,8 @@ export async function procesarDevolucion(f: FilaFactura, ped: PedidoSifen, d: De
   const r = await emitirFila(nc, ped, d);
   await d.avisar(
     `<b>Nota de crédito</b> · pedido ${nombre}\nFactura ${d.escapar(f.numero_completo)} fuera del plazo de cancelación → NC por el total: ${d.escapar(r.accion)}`,
+    undefined,
+    avisoSifen("sifen_nota_credito", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id }),
   );
   return { ref, accion: r.accion === "aprobada" ? "nota_credito" : r.accion, detalle: r.detalle };
 }
@@ -601,7 +627,7 @@ export async function procesarCola(d: DepsCola): Promise<ResumenCola & { accion?
   if (!desde) {
     // Corte obligatorio: sin facturar_desde no sale nada nuevo. Reintentos y devoluciones de lo ya emitido siguen.
     res.sin_corte = true;
-    if (ahora.getUTCMinutes() < 10) await d.avisar(`<b>Cola SIFEN</b>: ${d.escapar(MOTIVO_SIN_CORTE)}.`).catch(() => {});
+    if (ahora.getUTCMinutes() < 10) await d.avisar(`<b>Cola SIFEN</b>: ${d.escapar(MOTIVO_SIN_CORTE)}.`, undefined, avisoSifen("sifen_sin_corte", { unaVezPorDia: true })).catch(() => {});
   } else {
     try {
       const pedidos = await d.pedidosSinFactura(desde, d.cfg.lote);
@@ -628,7 +654,7 @@ export async function procesarCola(d: DepsCola): Promise<ResumenCola & { accion?
   } catch (e) {
     res.errores.push(`devoluciones: ${msj(e)}`);
   }
-  if (res.errores.length) await d.avisar(`<b>Cola SIFEN</b>: ${res.errores.length} error(es)\n${res.errores.slice(0, 5).map((x) => d.escapar(x)).join("\n")}`).catch(() => {});
+  if (res.errores.length) await d.avisar(`<b>Cola SIFEN</b>: ${res.errores.length} error(es)\n${res.errores.slice(0, 5).map((x) => d.escapar(x)).join("\n")}`, undefined, avisoSifen("sifen_cola_errores", { unaVezPorDia: true })).catch(() => {});
   return res;
 }
 
@@ -727,7 +753,7 @@ export interface DepsInutilizacion {
   eventosCubiertos(s: SerieNumeracion): Promise<Array<{ desde: number; hasta: number }>>;
   registrarEvento(e: EventoSifen): Promise<void>;
   marcarInutilizadas(s: SerieNumeracion, desde: number, hasta: number): Promise<void>;
-  avisar(html: string): Promise<unknown>;
+  avisar(html: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   escapar(s: unknown): string;
 }
 
@@ -787,6 +813,8 @@ export async function procesarInutilizacion(d: DepsInutilizacion): Promise<{ ran
     await d.avisar(
       `<b>SIFEN: numeración para inutilizar</b> (plazo día ${d.cfg.dia_limite_inutilizacion})\n` +
         pendientesAviso.map((x) => d.escapar(x)).join("\n"),
+      undefined,
+      avisoSifen("sifen_inutilizacion_pendiente", { unaVezPorDia: true }),
     );
   }
   return { rangos: out };

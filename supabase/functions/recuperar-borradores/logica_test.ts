@@ -1,8 +1,10 @@
 // Datos inventados (repo público). Sin red ni base.
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { productoPorPalabras } from "../_shared/anuncios.ts";
+import { decidirRuta } from "../_shared/telegram_politica.ts";
 import {
   armarMensaje,
+  avisoRecuperacionFrenada,
   type Borrador,
   BOTON_RECUPERAR,
   configRecuperacion,
@@ -292,4 +294,10 @@ Deno.test("bandera apagada o fuera de horario: no consulta nada", async () => {
   assertEquals(off.accion, "bandera_apagada");
   const noche = await recuperarBorradores(deps([borrador()], { ahora: new Date("2026-10-07T02:00:00Z") }).d); // 23:00 PY
   assertEquals(noche.accion, "fuera_de_horario");
+});
+
+Deno.test("27-10: recuperación frenada por calidad → administración, 1 por día por calidad leída", () => {
+  assertEquals(avisoRecuperacionFrenada("YELLOW"), { tipo: "recuperacion_frenada_calidad", destino: "admin", unaVezPorDia: true, clave: "YELLOW" });
+  assertEquals(avisoRecuperacionFrenada(null).clave, "sin_lectura");
+  assertEquals(decidirRuta(null, avisoRecuperacionFrenada(null)), "admin");
 });

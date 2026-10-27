@@ -17,7 +17,7 @@ function pedido(over: Partial<PedidoGuardado> = {}): PedidoGuardado {
 }
 function deps(p: PedidoGuardado | null, o: { activo?: boolean; emitir?: ResultadoFactura } = {}) {
   const filas = new Map<number, FilaFactura>();
-  const log = { emitidas: 0, avisos: [] as string[] };
+  const log = { emitidas: 0, avisos: [] as string[], opciones: [] as unknown[] };
   const d: DepsFactura = {
     ahora: () => new Date("2026-10-06T15:00:00Z"),
     config: () => Promise.resolve(configFactura({ activo: o.activo ?? true })),
@@ -35,7 +35,7 @@ function deps(p: PedidoGuardado | null, o: { activo?: boolean; emitir?: Resultad
       log.emitidas++;
       return Promise.resolve(o.emitir ?? { ok: true, simulado: true, cdc: "99" + "1".repeat(42), numero_completo: "001-001-0000001", pdf_url: "https://x.test/f.pdf" });
     },
-    avisar: (t) => { log.avisos.push(t); return Promise.resolve(); },
+    avisar: (t, _b, o) => { log.avisos.push(t); log.opciones.push(o); return Promise.resolve(); },
     escapar: (s) => String(s),
   };
   return { d, log, filas };
@@ -82,6 +82,14 @@ Deno.test("error del proveedor: queda en error y se reintenta con el mismo núme
   assertEquals((await facturarPedido(9001, d)).accion, "max_intentos");
   assertEquals(log.emitidas, 3);
   assertEquals(log.avisos.length, 1);
+  // 27-10: a administración, 1 por día por pedido.
+  assertEquals(log.opciones, [{ tipo: "factura_max_intentos", destino: "admin", pedido: pedido().nombre ?? "9001", unaVezPorDia: true, clave: "9001" }]);
+});
+
+Deno.test("27-10: factura a revisar → administración con tipo y pedido", async () => {
+  const a = deps(pedido({ total: 100000 }));
+  await facturarPedido(9001, a.d);
+  assertEquals(a.log.opciones, [{ tipo: "factura_revisar", destino: "admin", pedido: pedido().nombre ?? "9001", unaVezPorDia: true, clave: "9001" }]);
 });
 
 Deno.test("pagado por QR: pasa la marca al emisor", async () => {

@@ -14,6 +14,7 @@
 // corrida que encuentra el ciclo en un estado final no hace nada.
 import { type BotonTelegram, escaparHtml, horaCortaAsuncion, recortar } from "../_shared/telegram_formato.ts";
 import { partesAsuncion } from "../_shared/horario.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
 // ─── Tipos mínimos (estructurales; los de M1/M2 son compatibles) ──────────────
 export type EstadoCiclo =
@@ -190,7 +191,22 @@ export interface DepsCiclo<Conv = unknown, Version = Record<string, unknown>> {
   /** M2 · probar.ts */
   probar(version: VersionMin & Version, ctx: { restanteUsd: number }): Promise<PruebaResultado>;
   marcarVersion(id: string, estado: EstadoVersion): Promise<void>;
-  avisar(html: string, botones?: BotonTelegram[][]): Promise<ResultadoAviso>;
+  /** 27-10: opts = tipo/destino (ver avisoMejora). */
+  avisar(html: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<ResultadoAviso>;
+}
+
+/**
+ * 27-10 (#80): la mejora mensual la ve administración. EXCEPCIÓN: la propuesta que espera aprobación sigue yendo a
+ * Enrique por Telegram, porque la única forma de aprobarla son los botones mej_* (en avisos_admin se perderían y el
+ * ciclo quedaría trabado en esperando_aprobacion). Sin datos, descartada y errores → administración.
+ */
+export function avisoMejora(
+  caso: "propuesta" | "descartada" | "sin_datos" | "error",
+  mes: string,
+): OpcionesAviso {
+  if (caso === "propuesta") return { tipo: "mejora_mensual_propuesta", destino: "enrique", clave: mes };
+  if (caso === "error") return { tipo: "mejora_mensual_error", destino: "admin", unaVezPorDia: true, clave: mes };
+  return { tipo: caso === "sin_datos" ? "mejora_mensual_sin_datos" : "mejora_mensual_descartada", destino: "admin", clave: mes };
 }
 
 export type ResultadoCiclo =
@@ -415,7 +431,7 @@ export async function ejecutarCiclo<Conv, Version extends Record<string, unknown
             resumen: resumen({ total, muestra: conversaciones.length }),
           });
           if (!listo) return { tipo: "ocupado", mes, estado };
-          const r = await deps.avisar(mensajeSinDatos(ciclo, cfg, total));
+          const r = await deps.avisar(mensajeSinDatos(ciclo, cfg, total), undefined, avisoMejora("sin_datos", mes));
           if (r.ok && r.message_id != null) await guardar({ telegram_message_id: r.message_id });
           continue;
         }
@@ -558,7 +574,7 @@ export async function ejecutarCiclo<Conv, Version extends Record<string, unknown
     const yaAvisado = !!ciclo.resumen?.error_avisado;
     let avisado = false;
     if (!yaAvisado) {
-      const r = await deps.avisar(mensajeError(mes, estado, msg)).catch(() => ({ ok: false }) as ResultadoAviso);
+      const r = await deps.avisar(mensajeError(mes, estado, msg), undefined, avisoMejora("error", mes)).catch(() => ({ ok: false }) as ResultadoAviso);
       avisado = r.ok;
     }
     // Tope de costo → estado final 'error'. El resto queda en el paso donde estaba y lo
@@ -586,7 +602,8 @@ export async function ejecutarCiclo<Conv, Version extends Record<string, unknown
   async function enviarMensaje() {
     if (ciclo!.telegram_message_id != null) return; // ya salió en una corrida anterior
     const m = mensajePropuesta(ciclo!, cfg);
-    const r = await deps.avisar(m.texto, m.botones);
+    const caso = ciclo!.estado === "esperando_aprobacion" ? "propuesta" : "descartada";
+    const r = await deps.avisar(m.texto, m.botones, avisoMejora(caso, mes));
     if (!r.ok) throw new Error(`no salió el mensaje de Telegram (${r.error ?? "error"})`);
     if (r.message_id != null) await guardar({ telegram_message_id: r.message_id });
   }

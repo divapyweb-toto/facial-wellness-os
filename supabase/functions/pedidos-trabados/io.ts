@@ -95,7 +95,8 @@ async function cancelarSinCobertura(orderId: number): Promise<string | null> {
   if (!ped) return "pedido no encontrado";
   const e = await cancelarEnShopify(orderId);
   if (e) {
-    await avisar(`⚠️ <b>${ped.nombre}</b>: no lo pude cancelar en Shopify (sin cobertura, 48 h sin pago): ${e}`).catch(() => null);
+    await avisar(`⚠️ <b>${ped.nombre}</b>: no lo pude cancelar en Shopify (sin cobertura, 48 h sin pago): ${e}`, undefined,
+      { tipo: "sin_cobertura_cancelar_fallo", destino: "admin", pedido: ped.nombre, unaVezPorDia: true, clave: String(orderId) }).catch(() => null);
     return e;
   }
   await etiqueta(orderId, "SIN_COBERTURA_CANCELADO", true);
@@ -114,7 +115,8 @@ async function cancelarSinCobertura(orderId: number): Promise<string | null> {
     if (!r.ok) motivo = `WhatsApp: ${r.error ?? "falló"}`;
   }
   await avisar(`❌ <b>${ped.nombre}</b> cancelado: sin cobertura contra entrega y 48 h sin pago anticipado.\n` +
-    (enviado ? "Le avisé al cliente." : `No le avisé al cliente (${motivo}).`)).catch(() => null);
+    (enviado ? "Le avisé al cliente." : `No le avisé al cliente (${motivo}).`), undefined,
+    { tipo: "sin_cobertura_cancelado", destino: "admin", pedido: ped.nombre }).catch(() => null);
   return null;
 }
 
@@ -124,7 +126,8 @@ async function revisarComprobanteSinCobertura(orderId: number): Promise<string |
   if (!ped) return "pedido no encontrado";
   const tel = String(ped.telefono ?? "").replace(/\D/g, "");
   await avisar(`🧾 <b>${ped.nombre}</b> (sin cobertura): pasaron 48 h y el cliente mandó una foto o un archivo. No lo cancelé: ` +
-    `revisá si es el comprobante y marcalo PAGADO, o cancelalo a mano.${tel ? ` https://wa.me/${tel}` : ""}`);
+    `revisá si es el comprobante y marcalo PAGADO, o cancelalo a mano.${tel ? ` https://wa.me/${tel}` : ""}`, undefined,
+    { tipo: "sin_cobertura_revisar_comprobante", destino: "enrique", pedido: ped.nombre });
   return null;
 }
 
@@ -139,7 +142,7 @@ async function avisarJawflexPap(orderId: number): Promise<string | null> {
   const texto = `⚠ JawFlex ${ped.nombre} → PaP (Lucero no llega a ${ciudad || "esa ciudad"}). Entrega histórica PaP 60%. Si no querés mandarlo, avisá antes del despacho.`;
   let ultimo = "";
   for (let i = 0; i < 3; i++) {
-    const r = await avisar(texto);
+    const r = await avisar(texto, undefined, { tipo: "jawflex_por_pap", destino: "admin", pedido: ped.nombre });
     if (r.ok) return null;
     ultimo = r.error ?? "Telegram falló";
     await new Promise((z) => setTimeout(z, 1500));
@@ -281,6 +284,10 @@ async function avisarSinCobertura(orderId: number): Promise<string | null> {
     `📍 <b>${ped.nombre}</b>: ${ciudad} no tiene cobertura contra entrega (ni PaP ni Lucero).\n` +
       (enviado ? "Ya le ofrecí pagar por adelantado y mandarlo por otra transportadora. Si manda el comprobante, despachalo forzado en Despacho."
         : `No le pude escribir (${motivo}). Escribile vos: https://wa.me/${tel}`),
+    undefined,
+    // 27-10: si el sistema ya le escribió al cliente es informativo (admin); si no pudo, Enrique tiene que escribirle.
+    enviado ? { tipo: "sin_cobertura_avisado", destino: "admin", pedido: ped.nombre }
+      : { tipo: "sin_cobertura_escribile", destino: "enrique", pedido: ped.nombre },
   ).catch(() => null);
   return e ?? (enviado || motivo === "ventana de 24 h cerrada" ? null : motivo);
 }

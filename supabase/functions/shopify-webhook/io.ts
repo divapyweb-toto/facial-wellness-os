@@ -130,7 +130,7 @@ export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
       return { ok: true };
     },
 
-    avisar: (texto) => avisar(texto),
+    avisar: (texto, botones, opts) => avisar(texto, botones, opts),
 
     async reservarAvisoUnaVez(clave) {
       // 13-10: candado en eventos_crudos (mismo patrón que pedidos-trabados): ya procesado, nadie lo reprocesa.

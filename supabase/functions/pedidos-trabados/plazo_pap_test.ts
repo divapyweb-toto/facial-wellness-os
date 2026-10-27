@@ -90,3 +90,11 @@ Deno.test("26-10: Borrador avisa con más de 2 días hábiles; los otros estados
   assertEquals(h.map((x) => [x.ref, x.dias]), [["VT-9202", 3]]);
   assertEquals(telegram.length, 1);
 });
+
+Deno.test("27-10: plazo PaP → tipo plazo_pap, destino enrique (va al resumen por la política), con el pedido", async () => {
+  const opts: unknown[] = [];
+  const { d } = deps();
+  d.avisar = (_t, _b, o) => (opts.push(o), Promise.resolve({ ok: true }));
+  await procesarPlazoPap([F()], AHORA, d);
+  assertEquals(opts, [{ tipo: "plazo_pap", destino: "enrique", pedido: "#9100" }]);
+});

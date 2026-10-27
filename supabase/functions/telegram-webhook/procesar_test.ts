@@ -394,11 +394,12 @@ function fakesRecibido(pedido: PedidoContexto) {
   const f = fakes(pedido);
   const leyendas: { html: string; botones: unknown }[] = [];
   const avisos: string[] = [];
+  const opciones: unknown[] = [];
   const ventas: string[] = [];
   f.deps.editarLeyenda = (_c, _m, html, botones) => (leyendas.push({ html, botones }), Promise.resolve());
-  f.deps.avisar = (html) => (avisos.push(html), Promise.resolve({ ok: true }));
+  f.deps.avisar = (html, _b, o) => (avisos.push(html), opciones.push(o), Promise.resolve({ ok: true }));
   f.deps.marcarVentaPagada = (p) => (ventas.push(p.nombre ?? ""), Promise.resolve(1));
-  return { ...f, leyendas, avisos, ventas };
+  return { ...f, leyendas, avisos, opciones, ventas };
 }
 
 Deno.test("Recibido en el aviso con foto: pagado + tags PRIORIDAD y PAGADO, venta pagada, cliente avisado y se edita la leyenda", async () => {
@@ -432,6 +433,8 @@ Deno.test("Recibido con el pedido ya preparado (fulfilled) o con el courier: tex
     assertStringIncludes(t, "YA PAGADO: no cobrar.");
     assert(!/Cobrar Gs/.test(t), t);
     assertStringIncludes(f.leyendas[0].html, "texto para el courier");
+    // 27-10: el texto para el courier va a Enrique (Telegram), con tipo y pedido.
+    assertEquals(f.opciones, [{ tipo: "pago_courier_no_cobrar", destino: "enrique", pedido: "#1001" }]);
   }
 });
 

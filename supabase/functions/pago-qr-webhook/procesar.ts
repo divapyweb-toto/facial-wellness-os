@@ -5,6 +5,8 @@
 // Si el monto no coincide con el cobro: 'monto_distinto', aviso y nada más (Enrique decide).
 
 import type { EventoPagoQR, ProveedorQR } from "../_shared/pago_qr.ts";
+import type { BotonTelegram } from "../_shared/telegram_formato.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
 export interface ConfigOla4QR {
   activo: boolean;
@@ -51,7 +53,8 @@ export interface DepsPagoQR {
   cambiarEstado(id: string, estado: string, extra: Record<string, unknown>): Promise<boolean>;
   leerPedido(orderId: number): Promise<PedidoMin | null>;
   agregarTag(orderId: number, tag: string): Promise<{ ok: boolean; error?: string }>;
-  avisar(textoHtml: string): Promise<unknown>;
+  /** 27-10: opts = tipo/destino del aviso (ver procesarPagoQR). */
+  avisar(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   escapar(s: unknown): string;
   ahora(): Date;
 }
@@ -81,7 +84,9 @@ export async function procesarPagoQR(
 ): Promise<{ accion: AccionPagoQR; orderId?: number }> {
   const cobro = await deps.buscarCobro(proveedor, ev.id_externo);
   if (!cobro) {
-    await deps.avisar(`<b>Pago QR sin cobro conocido</b> · ${deps.escapar(proveedor)} ${deps.escapar(ev.id_externo)} (${deps.escapar(ev.estado_crudo)})`);
+    await deps.avisar(`<b>Pago QR sin cobro conocido</b> · ${deps.escapar(proveedor)} ${deps.escapar(ev.id_externo)} (${deps.escapar(ev.estado_crudo)})`, undefined, {
+      tipo: "pago_qr_sin_cobro", destino: "admin", unaVezPorDia: true, clave: `${proveedor}:${ev.id_externo}`,
+    });
     return { accion: "cobro_desconocido" };
   }
   const orderId = cobro.shopify_order_id;
@@ -96,6 +101,9 @@ export async function procesarPagoQR(
     if (cambio) {
       await deps.avisar(
         `<b>Pago QR con monto distinto</b> · pedido ${deps.escapar(orderId)}\nCobro Gs ${formatoGs(Number(cobro.monto))}, pagado Gs ${formatoGs(ev.monto)}. No se marcó como pagado.`,
+        undefined,
+        // 27-10: Enrique decide qué hacer con la diferencia (y qué se le cobra en la puerta).
+        { tipo: "pago_qr_monto_distinto", destino: "enrique", pedido: String(orderId) },
       );
     }
     return { accion: "monto_distinto", orderId };
@@ -110,7 +118,8 @@ export async function procesarPagoQR(
   const ped = await deps.leerPedido(orderId);
   let texto = textoAvisoPago(ped, orderId, ev.monto ?? Number(cobro.monto), proveedor, cfg, deps.escapar);
   if (!tag.ok) texto += `\nNo se pudo poner la tag ${deps.escapar(cfg.tag_shopify)} en Shopify: ${deps.escapar(tag.error ?? "")}`;
-  await deps.avisar(texto);
+  // 27-10: texto para el courier (que NO cobre) → Telegram inmediato a Enrique.
+  await deps.avisar(texto, undefined, { tipo: "pago_qr_recibido", destino: "enrique", pedido: ped?.nombre ?? String(orderId) });
   return { accion: "pagado", orderId };
 }
 
@@ -125,7 +134,7 @@ export interface DepsEventoQR {
   marcarProcesado(error: string | null): Promise<void>;
   /** Borra la marca del evento para que el reintento del proveedor no quede como "repetido". */
   borrarEvento(): Promise<void>;
-  avisar(textoHtml: string): Promise<unknown>;
+  avisar(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   escapar(s: unknown): string;
 }
 
@@ -145,7 +154,9 @@ export async function atenderEventoQR(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await d.borrarEvento().catch(() => d.marcarProcesado(msg).catch(() => {}));
-    await Promise.resolve(d.avisar(`<b>Pago QR: falló el registro</b> · evento ${d.escapar(idEvento)}\n${d.escapar(msg)}\nSe pidió reintento al proveedor.`)).catch(() => {});
+    await Promise.resolve(d.avisar(`<b>Pago QR: falló el registro</b> · evento ${d.escapar(idEvento)}\n${d.escapar(msg)}\nSe pidió reintento al proveedor.`, undefined, {
+      tipo: "pago_qr_registro_fallido", destino: "admin", unaVezPorDia: true, clave: idEvento,
+    })).catch(() => {});
     return { status: 500, cuerpo: { ok: false, error: "procesar" } };
   }
   await d.marcarProcesado(null).catch(() => {});

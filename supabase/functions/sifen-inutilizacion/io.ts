@@ -62,7 +62,7 @@ export async function ejecutarInutilizacion() {
         .eq("tipo_documento", s.tipo_documento).gte("numero", desde).lte("numero", hasta).in("estado", ["rechazada", "error"]);
       if (error) throw new Error(`marcar inutilizadas: ${error.message}`);
     },
-    avisar: (t) => avisar(t),
+    avisar: (t, b, o) => avisar(t, b, o),
     escapar: escaparHtml,
   };
   return { simulado: e.simulado, ambiente: e.ambiente, ...(await procesarInutilizacion(deps)) };

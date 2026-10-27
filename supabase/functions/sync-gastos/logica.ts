@@ -18,6 +18,8 @@
 //             No da dólares y la tarifa del plan no se puede leer (la clave no tiene user_read) → monto_usd null.
 //             La doc (changelog 20-04-2026) lo marca deprecado en favor de POST /v1/workspace/analytics/query/
 //             usage-by-product-over-time; hoy sigue respondiendo. [VERIFICAR] si deja de andar.
+import type { BotonTelegram } from '../_shared/telegram_formato.ts'
+import type { OpcionesAviso } from '../_shared/telegram_politica.ts'
 
 export type Proveedor = 'claude' | 'whatsapp' | 'elevenlabs'
 export const PROVEEDORES: Proveedor[] = ['claude', 'whatsapp', 'elevenlabs']
@@ -49,7 +51,8 @@ export interface Deps {
   guardar: (filas: FilaGasto[]) => Promise<void>
   leerEstados: () => Promise<EstadoProveedor[]>
   guardarEstado: (e: EstadoProveedor) => Promise<void>
-  avisar: (texto: string) => Promise<unknown>
+  /** 27-10: opts = tipo/destino (las fallas del sync van a administración). */
+  avisar: (texto: string, botones?: BotonTelegram[][], opts?: OpcionesAviso) => Promise<unknown>
 }
 
 export const DIAS_RESYNC = 7
@@ -361,6 +364,9 @@ export async function ejecutarSync(deps: Deps, traer = TRAER): Promise<{ ok: boo
           try {
             await deps.avisar(
               `Gastos automáticos: ${p} falla hace ${est.dias_fallando} días seguidos. Último error: ${msg}`,
+              undefined,
+              // 27-10: administración, 1 por día por proveedor (además del "una vez por racha" de aviso_enviado).
+              { tipo: 'sync_gastos_fallo', destino: 'admin', unaVezPorDia: true, clave: p },
             )
             est.aviso_enviado = true
             aviso = true

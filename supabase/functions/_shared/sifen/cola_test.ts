@@ -2,6 +2,7 @@
 // Datos ficticios. Equivalente SQL para correr a mano: supabase/tests/sifen_numeracion.sql.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import type { DocumentoDE, TipoDE } from "./tipos.ts";
+import type { OpcionesAviso } from "../telegram_politica.ts";
 import { digitoVerificadorRuc } from "../facturacion.ts";
 import { codigoSeguridadAleatorio, fechaSifen, type PedidoSifen } from "./desde_pedido.ts";
 import { crearEmisorPropio, type OpcionesWsSimulado, wsSimulado } from "./emisor_propio.ts";
@@ -61,6 +62,7 @@ function entorno(op: { ws?: OpcionesWsSimulado; cfg?: Record<string, unknown>; a
   const eventos: EventoSifen[] = [];
   const retenidas = new Map<number, Retencion & { nota: string }>();
   const avisos: string[] = [];
+  const opciones: OpcionesAviso[] = [];
   const whatsapps: string[] = [];
   const kudes: string[] = [];
   const bloqueo = new Bloqueo();
@@ -153,11 +155,11 @@ function entorno(op: { ws?: OpcionesWsSimulado; cfg?: Record<string, unknown>; a
     registrarEvento: (e) => (eventos.push(e), Promise.resolve()),
     subirKude: (f) => (kudes.push(f.id), Promise.resolve(`sifen/test/${f.numero_completo}.pdf`)),
     enviarKude: (f) => (whatsapps.push(f.id), Promise.resolve({ ok: true })),
-    avisar: (t) => (avisos.push(t), Promise.resolve()),
+    avisar: (t, _b, o) => (avisos.push(t), o && opciones.push(o), Promise.resolve()),
     escapar: (s) => String(s),
   };
   const agregar = (...ps: PedidoSifen[]) => ps.forEach((p) => pedidos.set(p.shopify_order_id, p));
-  return { d, ws, filas, pedidos, numeracion, eventos, avisos, whatsapps, kudes, reloj, agregar, retenidas };
+  return { d, ws, filas, pedidos, numeracion, eventos, avisos, opciones, whatsapps, kudes, reloj, agregar, retenidas };
 }
 
 const fe = (e: ReturnType<typeof entorno>, id: number) => [...e.filas.values()].find((f) => f.tipo_documento === 1 && f.shopify_order_id === id)!;
@@ -368,6 +370,7 @@ Deno.test("inutilización: huecos y rechazos definitivos agrupados por mes, sin 
 Deno.test("cron de inutilización: manda solo meses cerrados, marca y avisa desde el día 10 si algo falla", async () => {
   const eventos: EventoSifen[] = [];
   const avisos: string[] = [];
+  const opcionesInu: OpcionesAviso[] = [];
   const marcadas: number[][] = [];
   let rechazar = false;
   const ws = wsSimulado();
@@ -390,7 +393,7 @@ Deno.test("cron de inutilización: manda solo meses cerrados, marca y avisa desd
     eventosCubiertos: () => Promise.resolve(eventos.filter((x) => x.estado !== "rechazado").map((x) => ({ desde: x.rango!.desde, hasta: x.rango!.hasta }))),
     registrarEvento: (x) => (eventos.push(x), Promise.resolve()),
     marcarInutilizadas: (_s, a, b) => (marcadas.push([a, b]), Promise.resolve()),
-    avisar: (t) => (avisos.push(t), Promise.resolve()),
+    avisar: (t, _b, o) => (avisos.push(t), o && opcionesInu.push(o), Promise.resolve()),
     escapar: String,
   });
   // 2 y 3 son huecos; su fecha de referencia es la del 4 (noviembre) → esperan si estamos en noviembre.
@@ -408,6 +411,36 @@ Deno.test("cron de inutilización: manda solo meses cerrados, marca y avisa desd
   rechazar = true;
   await procesarInutilizacion(deps("2026-12-11T12:00:00Z"));
   assertEquals(avisos.length, 1);
+  // 27-10: a administración, como máximo 1 por día.
+  assertEquals(opcionesInu, [{ tipo: "sifen_inutilizacion_pendiente", destino: "admin", pedido: null, clave: null, unaVezPorDia: true }]);
+});
+
+// ─── 27-10: política de avisos (Telegram solo para lo que el sistema no puede hacer) ───
+
+Deno.test("27-10: todo aviso de SIFEN lleva tipo y va a administración; los errores, 1 por día con clave estable", async () => {
+  const e = entorno();
+  e.agregar(pedido(1, {}, { total_price: "999999" }));
+  await procesarCola(e.d);
+  assertEquals(e.opciones.length, e.avisos.length);
+  assertEquals(e.opciones[0], { tipo: "sifen_revisar_validacion", destino: "admin", pedido: e.pedidos.get(1)!.nombre ?? "1", clave: "1", unaVezPorDia: true });
+  // Sin corte: el error de la corrida va con unaVezPorDia y sin el texto como clave.
+  const s = entorno({ cfg: { facturar_desde: null } });
+  await procesarCola(s.d);
+  assertEquals(s.opciones, [{ tipo: "sifen_sin_corte", destino: "admin", pedido: null, clave: null, unaVezPorDia: true }]);
+  // Ningún aviso de SIFEN va a Enrique.
+  assert([...e.opciones, ...s.opciones].every((o) => o.destino === "admin" && /^sifen_[a-z0-9_]+$/.test(o.tipo)));
+});
+
+Deno.test("27-10: devuelto dentro de 48 h → aviso informativo a administración con el pedido", async () => {
+  const e = entorno();
+  e.agregar(pedido(1));
+  await procesarCola(e.d);
+  e.pedidos.get(1)!.estado_envio = "NO_ENTREGADO";
+  horas(e, 2);
+  await procesarCola(e.d);
+  const o = e.opciones.find((x) => x.tipo === "sifen_factura_cancelada");
+  assert(o, JSON.stringify(e.opciones));
+  assertEquals([o.destino, o.clave, o.unaVezPorDia], ["admin", fe(e, 1).id, undefined]);
 });
 
 // ─── Blindaje 10-10: corte facturar_desde, retenciones y medio de pago ───

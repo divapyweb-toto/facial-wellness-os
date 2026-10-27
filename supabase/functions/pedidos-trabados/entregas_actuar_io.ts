@@ -2,10 +2,11 @@
 // envios_programados. Un error en una sección no frena a las demás (cada una se atrapa por separado).
 import { db } from "../_shared/db.ts";
 import { avisar } from "../_shared/telegram.ts";
+import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
 import { couriersPorCiudad, leerPedidosParados } from "../resumen-diario/io.ts";
 import { tomarCandado } from "./io.ts";
 import {
-  avisarParadosDiario, avisarRendicionAtrasada, CFG_REPROGRAMAR_APAGADA, claveEnvioReprogramar, configReprogramar, type DepsActuar,
+  avisarParadosDiario, avisarRendicionAtrasada, PEDIDO_REINTENTO, pedidoDeRef, CFG_REPROGRAMAR_APAGADA, claveEnvioReprogramar, configReprogramar, type DepsActuar,
   type FilaActuar, type FilaRendicion, HORA_PARADOS, horaPy, PLANTILLA_REPROGRAMAR, procesarEntregasActuar, type ResultadoReprogramar,
   type TipoActuar,
 } from "./entregas_actuar.ts";
@@ -42,6 +43,17 @@ export async function encolarReprogramar(f: FilaActuar): Promise<ResultadoReprog
   return "encolado";
 }
 
+/** 27-10: texto para reenviar a Lucero (#37 + #42 en un solo aviso). null si no está el pedido. */
+export async function textoCourierLucero(f: FilaActuar): Promise<string | null> {
+  const nombre = pedidoDeRef(f.ref);
+  const { data, error } = await db().from("shopify_pedidos").select("nombre,raw,telefono")
+    .eq("nombre", nombre).eq("es_borrador", false).maybeSingle();
+  if (error || !data) return null;
+  const p = data as Obj;
+  const tel = p.telefono == null ? null : String(p.telefono);
+  return avisoParaCourier(datosCourierDesdeRaw(nombre, (p.raw ?? null) as Obj | null, tel), PEDIDO_REINTENTO, "lucero");
+}
+
 export const depsReales: DepsActuar = {
   tomarCandado: (id, payload) => tomarCandado(id, payload),
   soltarCandado: async (id) => { await db().from("eventos_crudos").delete().eq("fuente", "shopify").eq("id_externo", id); },
@@ -49,7 +61,8 @@ export const depsReales: DepsActuar = {
     const { data } = await db().from("eventos_crudos").select("id_externo").eq("fuente", "shopify").eq("id_externo", id).maybeSingle();
     return !!data;
   },
-  avisar: (texto) => avisar(texto),
+  avisar: (texto, botones, opts) => avisar(texto, botones, opts),
+  textoCourierLucero,
   encolarReprogramar,
   esperar: (ms) => new Promise((z) => setTimeout(z, ms)),
 };

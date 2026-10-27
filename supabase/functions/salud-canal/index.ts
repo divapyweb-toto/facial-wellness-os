@@ -5,6 +5,8 @@ import { db } from "../_shared/db.ts";
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import {
+  AVISO_CANAL_SORDO,
+  AVISO_SALUD_CHEQUEO_FALLO,
   avisoSalud,
   type EstadoAvisos,
   evaluarSalud,
@@ -79,7 +81,7 @@ async function chequear() {
   if (!r.motivos.length) return { enHorario: r.enHorario, avisos: [] as string[] };
 
   const a = avisoSalud(r.motivos);
-  const env = await avisar(a.texto, a.botones);
+  const env = await avisar(a.texto, a.botones, AVISO_CANAL_SORDO);
   if (!env.ok) throw new Error(`Telegram: ${env.error}`); // no se guarda el estado → reintenta en 15 min
 
   const g = await db().from("config_wa").upsert({ clave: "salud_ultimo_aviso", valor: r.nuevoEstado });
@@ -95,7 +97,7 @@ Deno.serve(conServiceRole(async () => {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("salud-canal:", msg);
     // Si falla el propio chequeo, también es una señal: se intenta avisar.
-    await avisar(`<b>Atención: el chequeo de salud del canal falló</b>\n${msg.replace(/[<>&]/g, " ")}`).catch(() => {});
+    await avisar(`<b>Atención: el chequeo de salud del canal falló</b>\n${msg.replace(/[<>&]/g, " ")}`, undefined, AVISO_SALUD_CHEQUEO_FALLO).catch(() => {});
     return Response.json({ ok: false, error: msg }, { status: 500 });
   }
 }));

@@ -48,7 +48,7 @@ function mundo(o: Opciones = {}) {
   const versiones: Version[] = [{ id: "00000000-0000-4000-8000-000000000001", numero: 1, estado: "activa", prompt: "semilla" }];
   const cambiosGuardados: (CambioMin & { ciclo_id: string; aplicado: boolean })[] = [];
   const clasif = new Map<string, unknown>();
-  const avisos: { html: string; botones?: unknown }[] = [];
+  const avisos: { html: string; botones?: unknown; opts?: unknown }[] = [];
   const llamadas: string[] = [];
   let consultas = 0;
   const idsVistos: number[] = [];
@@ -140,8 +140,8 @@ function mundo(o: Opciones = {}) {
       versiones.find((v) => v.id === id)!.estado = estado;
       return Promise.resolve();
     },
-    avisar: (html, botones) => {
-      avisos.push({ html, botones });
+    avisar: (html, botones, opts) => {
+      avisos.push({ html, botones, opts });
       return Promise.resolve({ ok: true, message_id: 900 + avisos.length });
     },
   };
@@ -455,4 +455,20 @@ Deno.test("telegram-webhook enruta mej_* con idempotencia por update_id", async 
   const sin = { ...deps, mejora: undefined };
   const r = await procesarUpdate(updateMej("mej_volver:1", 3), sin);
   assertEquals(r.tipo, "ignorado");
+});
+
+Deno.test("27-10: propuesta con botones → Enrique; sin datos, descartada y error → administración", async () => {
+  const ok = mundo({ loteTerminaEn: 0 });
+  await ejecutarCiclo(ok.deps);
+  assertEquals(ok.ciclo().estado, "esperando_aprobacion");
+  assertEquals(ok.avisos.map((a) => a.opts), [{ tipo: "mejora_mensual_propuesta", destino: "enrique", clave: ok.ciclo().mes }]);
+  const pocos = mundo({ total: 40 });
+  await ejecutarCiclo(pocos.deps);
+  assertEquals(pocos.avisos.map((a) => a.opts), [{ tipo: "mejora_mensual_sin_datos", destino: "admin", clave: pocos.ciclo().mes }]);
+  const mala = mundo({ loteTerminaEn: 0, prueba: { ...PRUEBA_OK, aprobada: false, prohibidas: 1 } });
+  await ejecutarCiclo(mala.deps);
+  assertEquals(mala.avisos.map((a) => a.opts), [{ tipo: "mejora_mensual_descartada", destino: "admin", clave: mala.ciclo().mes }]);
+  const falla = mundo({ loteTerminaEn: 0, falla: "sintetizar" });
+  await ejecutarCiclo(falla.deps);
+  assertEquals(falla.avisos.map((a) => a.opts), [{ tipo: "mejora_mensual_error", destino: "admin", unaVezPorDia: true, clave: falla.ciclo().mes }]);
 });

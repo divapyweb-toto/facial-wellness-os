@@ -34,6 +34,6 @@ export function depsReales(): Deps {
         .upsert({ ...e, actualizado_en: new Date().toISOString() }, { onConflict: 'proveedor' })
       if (error) throw new Error(`guardarEstado: ${error.message}`)
     },
-    avisar: (texto) => avisar(escaparHtml(texto)),
+    avisar: (texto, botones, opts) => avisar(escaparHtml(texto), botones, opts),
   }
 }

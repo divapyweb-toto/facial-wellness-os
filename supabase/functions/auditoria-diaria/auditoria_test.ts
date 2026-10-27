@@ -1,6 +1,7 @@
 // Tests de la auditoría diaria con dependencias falsas (sin base, sin Telegram, sin Claude).
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import { type DepsAuditoria, ejecutarAuditoria, type EstadoLoteAud } from "./auditoria.ts";
+import { AVISO_AUDITORIA_FALLO, type DepsAuditoria, ejecutarAuditoria, type EstadoLoteAud } from "./auditoria.ts";
+import { decidirRuta, type OpcionesAviso } from "../_shared/telegram_politica.ts";
 import {
   armarAviso,
   CFG_POR_DEFECTO,
@@ -74,6 +75,7 @@ const TURNOS = [
 
 interface Falsas extends DepsAuditoria {
   avisos: string[];
+  opciones: OpcionesAviso[];
   guardado: Map<string, unknown>;
   lotesCreados: number;
   consultas: number;
@@ -91,6 +93,7 @@ function falsas(opc: {
   if (opc.estado) guardado.set("auditoria_estado", opc.estado);
   const f: Falsas = {
     avisos: [],
+    opciones: [],
     guardado,
     lotesCreados: 0,
     consultas: 0,
@@ -121,8 +124,9 @@ function falsas(opc: {
       f.consultas++;
       return Promise.resolve(opc.consultar ? opc.consultar(id) : { id, estado: "ended", simulado: false, resultados: [] });
     },
-    avisar: (texto) => {
+    avisar: (texto, _b, o) => {
       f.avisos.push(texto);
+      if (o) f.opciones.push(o);
       return Promise.resolve(opc.avisarOk === false ? { ok: false, error: "sin red" } : { ok: true });
     },
     log: () => {},
@@ -163,6 +167,23 @@ Deno.test("avisa SOLO las conversaciones raras, con enlace a la bandeja", async 
   assert(!a.includes("Rosa Ok"), "la conversación limpia no va en el aviso");
   assertEquals((f.guardado.get("auditoria_estado") as { estado: string }).estado, "enviado");
   assertEquals(r.costo_usd, 0.002);
+});
+
+Deno.test("27-10: el parte de la auditoría va a administración (sin Telegram) y la falla de la corrida, 1 por día", async () => {
+  const f = falsas({
+    lote: () => ({
+      id: "lote-1",
+      estado: "ended",
+      simulado: false,
+      resultados: [veredicto("conv-perdida", { enojado: false, venta_perdida: true, problema: null, resumen: "Sin precio" })],
+    }),
+  });
+  await ejecutarAuditoria(f);
+  assert(f.opciones.length >= 1);
+  assertEquals(f.opciones.length, f.avisos.length);
+  assert(f.opciones.every((o) => o.tipo === "auditoria_vendedor_parte" && o.destino === "admin" && !o.unaVezPorDia && o.clave === "2026-10-06"));
+  assertEquals(decidirRuta(null, f.opciones[0]), "admin");
+  assertEquals(AVISO_AUDITORIA_FALLO, { tipo: "auditoria_vendedor_fallo", destino: "admin", unaVezPorDia: true, clave: null });
 });
 
 Deno.test("si el día ya se informó no hace nada", async () => {

@@ -2,13 +2,17 @@
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   aperturaDeHoy,
+  AVISO_CANAL_SORDO,
+  AVISO_SALUD_CHEQUEO_FALLO,
   avisoSalud,
   CFG_SALUD_CONTRATO,
   type EntradaSalud,
   evaluarSalud,
   extraerEventosCalidad,
   leerCfgSalud,
+  MINIMO_ENTRE_AVISOS_H,
 } from "./salud.ts";
+import { decidirRuta } from "../_shared/telegram_politica.ts";
 
 // Asunción = UTC-3 todo el año (desde oct-2024).
 const local = (hhmm: string) => new Date(`2026-10-06T${hhmm}:00-03:00`);
@@ -58,11 +62,34 @@ Deno.test("3 o más fallidos en la última hora → aviso; 2 no", () => {
   assertEquals(evaluarSalud(entrada({ fallidosUltimaHora: 2 })).motivos, []);
 });
 
-Deno.test("no repite el mismo aviso antes de 3 h", () => {
-  const estado = { fallidos: local("12:00").toISOString() };
+Deno.test("no repite el mismo aviso antes de 6 h (27-10; antes 3 h)", () => {
+  const estado = { fallidos: local("09:00").toISOString() };
   assertEquals(evaluarSalud(entrada({ fallidosUltimaHora: 5, estado })).motivos, []);
-  const estadoViejo = { fallidos: local("10:59").toISOString() };
+  const estadoViejo = { fallidos: local("07:59").toISOString() };
   assertEquals(evaluarSalud(entrada({ fallidosUltimaHora: 5, estado: estadoViejo })).motivos.length, 1);
+});
+
+Deno.test("27-10: tope global de 1 aviso cada 6 h por cualquier motivo; lo nuevo sale al vencer la ventana", () => {
+  const eventosCalidad = [{ id: 30, recibido_en: "", campo: "phone_number_quality_update", evento: "FLAGGED", detalle: "" }];
+  // Se avisó "sin entrantes" a las 9:00: a las 14:00 ni fallidos ni calidad salen, y el id de calidad no avanza.
+  const estado = { sin_entrantes: local("09:00").toISOString() };
+  const dentro = evaluarSalud(entrada({ fallidosUltimaHora: 9, eventosCalidad, estado }));
+  assertEquals(dentro.motivos, []);
+  assertEquals(dentro.nuevoEstado, estado);
+  // 15:01 (6 h y 1 min después): sale todo junto en un solo aviso.
+  const fuera = evaluarSalud(entrada({ ahora: local("15:01"), ultimaEntrada: local("15:00").toISOString(), fallidosUltimaHora: 9, eventosCalidad, estado }));
+  assertEquals(fuera.motivos.map((m) => m.clave), ["fallidos", "calidad"]);
+  assertEquals(fuera.nuevoEstado.ultimo_evento_calidad_id, 30);
+  // La config no puede bajar el tope de 6 h.
+  assertEquals(leerCfgSalud({ repetir_cada_h: 1 }).repetir_cada_h, MINIMO_ENTRE_AVISOS_H);
+  assertEquals(leerCfgSalud({ repetir_cada_h: 12 }).repetir_cada_h, 12);
+});
+
+Deno.test("27-10: canal sordo → Enrique (Telegram); falla del chequeo → administración 1 por día", () => {
+  assertEquals(AVISO_CANAL_SORDO, { tipo: "whatsapp_canal_sordo", destino: "enrique" });
+  assertEquals(decidirRuta(null, AVISO_CANAL_SORDO), "telegram");
+  assertEquals(AVISO_SALUD_CHEQUEO_FALLO, { tipo: "salud_canal_chequeo_fallo", destino: "admin", unaVezPorDia: true, clave: null });
+  assertEquals(decidirRuta(null, AVISO_SALUD_CHEQUEO_FALLO), "admin");
 });
 
 Deno.test("canal sin estrenar (nunca entró nada): no avisa sin entrantes", () => {
@@ -121,7 +148,7 @@ Deno.test("aperturaDeHoy da las 8:00 locales", () => {
 Deno.test("leerCfgSalud usa el contrato si falta o es inválido", () => {
   assertEquals(leerCfgSalud(null), CFG_SALUD_CONTRATO);
   assertEquals(leerCfgSalud({ fallidos_por_hora: 5, repetir_cada_h: -1 }).fallidos_por_hora, 5);
-  assertEquals(leerCfgSalud({ repetir_cada_h: -1 }).repetir_cada_h, 3);
+  assertEquals(leerCfgSalud({ repetir_cada_h: -1 }).repetir_cada_h, 6);
 });
 
 Deno.test("avisoSalud arma un texto con los motivos", () => {

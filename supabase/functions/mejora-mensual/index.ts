@@ -260,7 +260,7 @@ const deps: DepsCiclo<ConversacionParaAnalizar, V> = {
     const { error } = await db().from("vendedor_versiones").update({ estado }).eq("id", id).neq("estado", "activa");
     if (error) throw new Error(`vendedor_versiones: ${error.message}`);
   },
-  avisar: (html, botones) => avisar(html, botones),
+  avisar: (html, botones, opts) => avisar(html, botones, opts),
 };
 
 async function guardarCambios(cicloId: string, versionId: string | null, cambios: CambioMin[]) {

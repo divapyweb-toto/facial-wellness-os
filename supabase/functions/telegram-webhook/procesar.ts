@@ -23,6 +23,7 @@ import {
 } from "../_shared/telegram_formato.ts";
 import type { ResultadoPago } from "../_shared/shopify_pagos.ts";
 import { LIMITE_LEYENDA_TELEGRAM, LIMITE_TEXTO_TELEGRAM } from "../_shared/telegram_formato.ts";
+import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
 import { TAG_PAGADO, TAG_PRIORIDAD } from "../_shared/pago_anticipado.ts";
 import { decidirMejora, type DepsDecision, type ResultadoDecision } from "../mejora-mensual/aprobacion.ts";
@@ -120,7 +121,8 @@ export interface Dependencias {
   /** 12-10: edita la leyenda de un aviso con foto o documento (editMessageCaption). Sin esto se usa editarMensaje. */
   editarLeyenda?(chatId: number, messageId: number, textoHtml: string, botones: BotonTelegram[][]): Promise<void>;
   /** 12-10: mensaje nuevo a Enrique (HTML ya escapado): el texto para el courier. */
-  avisar?(textoHtml: string): Promise<unknown>;
+  /** 27-10: opts = tipo/destino (el texto para el courier va a Enrique). */
+  avisar?(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   /** 12-10: la venta del pedido (VT-<n>) queda como pago anticipado; devuelve cuántas filas cambió. */
   marcarVentaPagada?(pedido: PedidoContexto): Promise<number>;
   /** Botones mej_* del ciclo mensual de mejora. Sin esto, se responden como desconocidos. */
@@ -411,7 +413,9 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
       } else if (pedidoEnCamino(pedido)) {
         if (deps.avisar) {
           try {
-            const t = await deps.avisar(avisoCourierPagado(pedido)) as { ok?: boolean; error?: string } | undefined;
+            const t = await deps.avisar(avisoCourierPagado(pedido), undefined, {
+              tipo: "pago_courier_no_cobrar", destino: "enrique", pedido: pedido.nombre ?? String(pedido.shopify_order_id),
+            }) as { ok?: boolean; error?: string } | undefined;
             notas.push(t?.ok === false
               ? `No pude mandarte el texto para el courier (${t.error ?? "error"}): avisale que NO cobre.`
               : "Ya estaba preparado: te mandé el texto para el courier (YA PAGADO, cobrar 0).");

@@ -278,3 +278,17 @@ Deno.test("26-10 saldo pendiente: si el Telegram falla, reintenta en la próxima
   assertEquals(log.avisos.length, 1)
   assert(!log.avisos[0].includes("₲"), "sin SALDO_<monto> no inventa un monto")
 })
+
+Deno.test('27-10: saldo pendiente → Enrique; falla de post-entrega → administración una vez por día (clave = pedido)', async () => {
+  const s = repoMemoria([pedido({ tags: [TAG_SALDO, 'SALDO_52000'], rendido: true })])
+  const optsS: unknown[] = []
+  s.repo.avisar = (_t, _b, o) => (optsS.push(o), Promise.resolve({ ok: true }))
+  await procesarPostEntrega(s.repo, cfg())
+  assertEquals(optsS, [{ tipo: 'saldo_pendiente_entregado', destino: 'enrique', pedido: '#1001' }])
+
+  const f = repoMemoria([pedido()], { pagoFalla: true })
+  const optsF: unknown[] = []
+  f.repo.avisar = (_t, _b, o) => (optsF.push(o), Promise.resolve({ ok: true }))
+  for (let i = 0; i < 5; i++) await procesarPostEntrega(f.repo, cfg())
+  assertEquals(optsF, [{ tipo: 'post_entrega_fallo', destino: 'admin', pedido: '#1001', unaVezPorDia: true, clave: '9001' }])
+})

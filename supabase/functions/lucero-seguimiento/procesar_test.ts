@@ -3,7 +3,7 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { type FilaCourier, type PedidoImport, procesarFilas, type Repo, type Resumen } from '../importar-courier/procesar.ts'
 import {
-  cambiosEntrega, correrSeguimiento, type Deps, estadoCrudo, type GuiaAbierta, normalizarConfig, parsearPagina, refVoltra,
+  cambiosEntrega, correrSeguimiento, type Deps, estadoCrudo, type GuiaAbierta, normalizarConfig, OPCIONES_AVISO_CONSULTAS, parsearPagina, refVoltra,
 } from './procesar.ts'
 
 const PASOS = ['Creado', 'Aceptado', 'En camino', 'Entregado', 'Devuelto', 'Fallido', 'Cancelado']
@@ -277,4 +277,14 @@ Deno.test('13-10: fallido en la web de Lucero → mismo pipeline que el Excel: I
   assertEquals(log.lotes[0][0].fecha, '2026-10-08 16:40')
   // fallido no es terminal: la guía se sigue consultando (categoría en_proceso).
   assertEquals((log.actualizadas[0].cambios as { categoria: string }).categoria, 'en_proceso')
+})
+
+Deno.test('27-10: el aviso de consultas fallidas va a administración, una vez por día', async () => {
+  const gs = ['1', '2'].map((n) => guia({ nro_guia_pap: `L-VT-910${n}`, n_referencia: `VT-910${n}`, envio_id: `9100${n}` }))
+  const { deps } = depsPrueba(gs, { '91001': new Error('timeout'), '91002': new Error('timeout') }, [pedido()])
+  const opts: unknown[] = []
+  deps.avisar = (_t, o) => (opts.push(o), Promise.resolve())
+  await correrSeguimiento(deps, { tope: 2 })
+  assertEquals(opts, [OPCIONES_AVISO_CONSULTAS])
+  assertEquals(OPCIONES_AVISO_CONSULTAS, { tipo: 'lucero_seguimiento_consultas', destino: 'admin', unaVezPorDia: true, clave: 'consultas' })
 })

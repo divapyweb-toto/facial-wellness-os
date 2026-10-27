@@ -14,6 +14,7 @@ import type { Courier } from '../_shared/estados_courier.ts'
 import { traducirEstado } from '../_shared/estados_courier.ts'
 import { fechaISO, numeroDesdeReferencia } from '../importar-courier/procesar.ts'
 import { dentroDePlazo, type OrigenAnuncio, type ResultadoCapi } from '../_shared/meta_capi.ts'
+import type { OpcionesAviso } from '../_shared/telegram_politica.ts'
 
 export const TAG_CAPI = 'META_ENTREGA_ENVIADA'
 /**
@@ -81,7 +82,7 @@ export interface Repo {
   marcarPagado(orderId: number): Promise<{ ok: boolean; error?: string; ya_pagado?: boolean }>
   enviarCapi(p: PedidoPendiente, origen: OrigenAnuncio | null): Promise<ResultadoCapi>
   agregarTags(orderId: number, tags: string[]): Promise<{ ok: boolean; error?: string }>
-  avisar(texto: string): Promise<{ ok: boolean; error?: string }>
+  avisar(texto: string, botones?: undefined, opts?: OpcionesAviso): Promise<{ ok: boolean; error?: string }>
   /**
    * factura/io.ts facturarPedidoEntregado (idempotente). Solo con cfg.facturaActiva. Opcional.
    * `entregadoEn` = la fecha de entrega de esta corrida (se guarda al final): la cola la usa para el corte facturar_desde.
@@ -218,6 +219,9 @@ export async function procesarPostEntrega(repo: Repo, cfg: ConfigPostEntrega): P
         `💰 Se entregó ${escapar(etiqueta)} y tiene saldo pendiente` +
           (monto ? ` de ₲${monto.toLocaleString('es-PY')}` : '') +
           `: cobrale el resto por transferencia (pagó una parte por adelantado). No está marcado como pagado.`,
+        undefined,
+        // 27-10 (#57): hoy el sistema NO le cobra el saldo al cliente solo → sigue para Enrique.
+        { tipo: 'saldo_pendiente_entregado', destino: 'enrique', pedido: p.nombre ?? null },
       ).catch((e) => ({ ok: false, error: msj(e) }))
       if (a.ok) {
         r.avisos++
@@ -304,6 +308,8 @@ export async function procesarPostEntrega(repo: Repo, cfg: ConfigPostEntrega): P
         const a = await repo.avisar(
           `⚠️ Post-entrega del pedido ${escapar(etiqueta)} falló ${intentos} veces.\n${escapar(texto)}\n` +
             `Se sigue reintentando cada 30 min (máximo ${cfg.maxIntentos} intentos).`,
+          undefined,
+          { tipo: 'post_entrega_fallo', destino: 'admin', pedido: p.nombre ?? null, unaVezPorDia: true, clave: String(p.shopify_order_id) },
         )
         if (a.ok) r.avisos++
       }
