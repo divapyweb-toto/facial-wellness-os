@@ -198,7 +198,7 @@ export interface DatosPedidoNuevo {
 }
 
 // 26-10 (administrador): JawFlex ×3 = el kit de los 3 niveles. Misma regla que src/lib/armado.js (Despacho y guías).
-export const NOTA_ARMADO_JAWFLEX = "ARMAR: 1 suave + 1 medio + 1 duro";
+export const NOTA_ARMADO_JAWFLEX = "ARMAR: 1 par suave + 1 par medio + 1 par duro";
 export function notaArmado(titulo: string, cantidad: number): string {
   return /jaw|mand[ií]bula|ejercitador/i.test(titulo) && cantidad === 3 ? NOTA_ARMADO_JAWFLEX : "";
 }

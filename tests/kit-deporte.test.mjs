@@ -57,7 +57,7 @@ try {
     assert.equal(D.getTipo('Botella Deportiva Flexible: se enrolla y no pesa'), 'Botella Flexible')
   })
   ok('JawFlex ×3: nota de armado; ×1, ×2 y otros productos ×3 no', () => {
-    assert.equal(notaArmado('Ejercitador de Mandíbula: entrená en minutos', 3), 'ARMAR: 1 suave + 1 medio + 1 duro')
+    assert.equal(notaArmado('Ejercitador de Mandíbula: entrená en minutos', 3), 'ARMAR: 1 par suave + 1 par medio + 1 par duro')
     assert.equal(notaArmado('Ejercitador de Mandíbula: entrená en minutos', 1), '')
     assert.equal(notaArmado('JawFlex Pro', 2), '')
     assert.equal(notaArmado('Tiras Nasales', 3), '')
@@ -67,9 +67,9 @@ try {
       Total: '300000', Subtotal: '300000', Tags: 'confirmado', 'Shipping City': 'Asunción', 'Shipping Address1': 'Calle 1', Phone: '0981000000',
       'Billing Name': 'Cliente Prueba', Vendor: 'VOLTRA PARAGUAY', 'Created at': '2026-10-26 10:00:00 -0300', ...extra })
     const ps = D.mapearGrupoAPedidos([fila('#1200', 'Raspador de Lengua: aliento más limpio', 1), fila('#1200', 'Ejercitador de Mandíbula: entrená en minutos', 3, { Name: '#1200' })])
-    assert.ok(ps.every(p => p.armado === 'ARMAR: 1 suave + 1 medio + 1 duro'))
+    assert.ok(ps.every(p => p.armado === 'ARMAR: 1 par suave + 1 par medio + 1 par duro'))
     const [paquete] = D.colapsarPorReferencia(ps)
-    assert.equal(paquete.armado, 'ARMAR: 1 suave + 1 medio + 1 duro')
+    assert.equal(paquete.armado, 'ARMAR: 1 par suave + 1 par medio + 1 par duro')
     const uno = D.mapearGrupoAPedidos([fila('#1201', 'Ejercitador de Mandíbula: entrená en minutos', 1)])
     assert.equal(uno[0].armado, '')
   })

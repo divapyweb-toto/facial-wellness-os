@@ -189,7 +189,7 @@ Deno.test("partirAviso: un aviso largo se parte entre casos, cada parte válida 
 Deno.test("pedido nuevo: JawFlex x3 lleva la nota de armado; x1, x2 u otros productos no", () => {
   const base = { shopify_order_id: 1, nombre_pedido: "#1200", cliente: { nombre: "Cliente Prueba" } };
   const tres = formatoPedidoNuevo({ ...base, productos: ["Ejercitador de Mandíbula: entrená en minutos x3"] });
-  assertStringIncludes(tres.texto, "ARMAR: 1 suave + 1 medio + 1 duro");
+  assertStringIncludes(tres.texto, "ARMAR: 1 par suave + 1 par medio + 1 par duro");
   for (const productos of [["Ejercitador de Mandíbula: entrená en minutos x1"], ["Ejercitador de Mandíbula x2"], ["Tiras Nasales x3"]]) {
     assert(!formatoPedidoNuevo({ ...base, productos }).texto.includes("ARMAR"), productos[0]);
   }
