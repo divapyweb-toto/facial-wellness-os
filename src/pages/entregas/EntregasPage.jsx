@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx'
 import { supabase, supabaseTienda, formatGs } from '../../lib/supabase'
 import { getTienda } from '../../lib/tienda'
 import { filasPaPParaVoltra, idsVentasParaEstado, diasDesdeParaguay, deudaPorCourier, esDeTienda } from './arreglosEntregas'
-import { sanearEntrega, soloColumnasEntregas, IMPORTE_MAX_RAZONABLE, COLS_VINCULO } from '../../lib/estadosPaP'
+import { sanearEntrega, soloColumnasEntregas, IMPORTE_MAX_RAZONABLE, COLS_VINCULO, conservarFinales } from '../../lib/estadosPaP'
 import { calcularVinculos } from '../../lib/vinculacion'
 import { parseXLSX, combinar } from '../../lib/importarPaP'
 import { tasaPorTransportadora } from '../../lib/riesgoCiudad'
@@ -600,6 +600,18 @@ export default function EntregasPage() {
           if (m.dias_rendicion == null) m.dias_rendicion = prev.dias_rendicion
         }
       }
+
+      // 1.6) 27-10: un estado no final nunca pisa uno final (ver conservarFinales en lib/estadosPaP).
+      const previoFinal = new Map()
+      for (let i = 0; i < guiasSubidas.length; i += 200) {
+        const { data, error } = await supabase.from('entregas')
+          .select('nro_guia_pap, categoria, estado_pap, cobrado, fecha_entrega, dias_entrega')
+          .in('nro_guia_pap', guiasSubidas.slice(i, i + 200)).in('categoria', ['entregado', 'devuelto', 'no_despachado'])
+        // Sin saber cuáles ya estaban cerradas, guardar podría volver entregados a "en proceso". Se corta.
+        if (error) { toast('No se guardó: no pude leer qué guías ya estaban cerradas (reintentá): ' + error.message, 'error'); return }
+        for (const row of (data || [])) previoFinal.set(String(row.nro_guia_pap), row)
+      }
+      conservarFinales(limpio, previoFinal)
 
       // ── 1) Guardar las entregas ──
       // Tolerante a columnas que todavía no existan: si la migración 001 aún

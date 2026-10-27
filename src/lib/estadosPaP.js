@@ -171,3 +171,24 @@ export function sanearEntrega(e) {
     cobrado: categoria === 'entregado' ? importe : 0,
   }
 }
+
+// 27-10: un estado NO final del reporte de PaP nunca pisa uno final ya guardado (entregado / devuelto / no despachado).
+// Caso VT-1028 y VT-1064: PaP confirmó por WhatsApp que estaban entregados (26-10), y al subir después un reporte con
+// la foto vieja ("En Oficina", "Asignado a ruta") volvieron a "en proceso". Lucero ya tenía esta regla
+// (EntregasPage, procesarExportLucero). Un final sí puede cambiar a otro final (p. ej. entregado → devuelto).
+export const CATEGORIAS_FINALES = new Set(['entregado', 'devuelto', 'no_despachado'])
+export function conservarFinales(regs, previoPorGuia) {
+  let conservados = 0
+  for (const r of regs) {
+    if (CATEGORIAS_FINALES.has(r.categoria)) continue
+    const ant = previoPorGuia.get(String(r.nro_guia_pap))
+    if (!ant || !CATEGORIAS_FINALES.has(ant.categoria)) continue
+    r.categoria = ant.categoria
+    r.estado_pap = ant.estado_pap ?? r.estado_pap
+    r.cobrado = ant.cobrado ?? r.cobrado
+    r.fecha_entrega = ant.fecha_entrega ?? r.fecha_entrega
+    r.dias_entrega = ant.dias_entrega ?? r.dias_entrega
+    conservados++
+  }
+  return conservados
+}
