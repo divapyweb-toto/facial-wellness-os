@@ -123,7 +123,7 @@ const PRIMER_TURNO_PRUEBA = {
     sin_oferta_2: true, media: "foto",
     texto: "Es un ejercitador de mandíbula de silicona. Lo mordés unos minutos por día para entrenar los músculos de la mandíbula.",
     linea_precio: "También tenés los 3 niveles (suave, medio y duro) por {total_3} con envío gratis.",
-    notas_cantidad: { "3": "KIT 3 NIVELES: 1 suave, 1 medio y 1 duro (uno de cada)." },
+    // La nota de armado del kit la pone Despacho (FUNCIONES 410a807b, src/lib/armado.js): acá no se duplica.
   },
   "botella-flexible-gudair-500-ml": { sin_oferta_2: true },
 };
@@ -776,7 +776,7 @@ export const ESCENARIOS: Escenario[] = [
   },
   {
     nombre: "jawflex_kit_3_niveles",
-    descripcion: "26-10: pide los 3 niveles → pedido de 3 ejercitadores (188.000 con envío gratis) con la nota KIT 3 NIVELES para Despacho.",
+    descripcion: "26-10: pide los 3 niveles → pedido de 3 ejercitadores (188.000 con envío gratis); la nota de armado la pone Despacho.",
     cliente: { nombre: "Ana Prueba", telefono: "+595981000171" },
     anuncio: "ejercitador-de-mandibula-3-niveles",
     consentimiento: "si",
@@ -784,7 +784,6 @@ export const ESCENARIOS: Escenario[] = [
     pasos: ["¡Hola! Quiero más información", "Quiero los 3 niveles", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo"],
     checks: [
       { paso: 3, tipo: "herramienta", nombre: "crear_pedido_cod" },
-      { paso: 3, tipo: "escritura", regex: /KIT 3 NIVELES/, desc: "nota del kit en el pedido" },
       { paso: 2, tipo: "texto", regex: /x3/, desc: "resumen con 3 unidades" },
       { tipo: "montos_catalogo" },
     ],
