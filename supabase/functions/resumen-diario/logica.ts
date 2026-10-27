@@ -44,6 +44,7 @@ export const canal = (p: Pedido): "wa" | "web" => (tieneTag(p, "ORIGEN_WHATSAPP"
 
 export function familia(titulo: string): string {
   const t = titulo.toLowerCase();
+  if (/kit ?deporte/.test(t) || (/botella/.test(t) && /tira|nasal/.test(t))) return "Kit Deporte"; // 26-10: antes que tiras
   if (/pack|gudair/.test(t)) return "Pack";
   if (/raspador|lengua/.test(t)) return "Raspador";
   if (/tira|nasal/.test(t)) return "Tiras";

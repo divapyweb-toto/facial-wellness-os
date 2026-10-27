@@ -28,7 +28,7 @@ const normRef = (ref) => {
   return r
 }
 const FAMILIAS_ADS_REP = [
-  ['nasal', 'Tiras Nasales'], ['parche', 'Parches Bucales'], ['gudair', 'Pack Gudair'],
+  ['nasal', 'Tiras Nasales'], ['parche', 'Parches Bucales'], ['gudair', 'Pack Gudair'], ['kit', 'Kit Deporte'],
   ['lengua', 'Raspador de Lengua'], ['jaw', 'JawFlex Pro'], ['botella', 'Botella Flexible'], ['bebird', 'Bebird Pro'],
 ]
 
@@ -1384,7 +1384,7 @@ ${(d.alertas && d.alertas.length) ? `<h2>12. Alertas</h2><ul>${d.alertas.map(a =
                 </thead>
                 <tbody>
                   {datos.campanas.map((c, i) => {
-                    const NF = { nasal: 'Tiras Nasales', parche: 'Parches Bucales', gudair: 'Pack Gudair', lengua: 'Raspador de Lengua', jaw: 'JawFlex Pro', botella: 'Botella Flexible', bebird: 'Bebird Pro', total: 'Total del mes' }
+                    const NF = { nasal: 'Tiras Nasales', parche: 'Parches Bucales', gudair: 'Pack Gudair', kit: 'Kit Deporte', lengua: 'Raspador de Lengua', jaw: 'JawFlex Pro', botella: 'Botella Flexible', bebird: 'Bebird Pro', total: 'Total del mes' }
                     return (
                       <tr key={c.id || i}>
                         <td data-label="Producto" style={{ fontWeight: 500 }}>{NF[c.nombre] || NF[c.familia] || c.nombre || '—'}</td>

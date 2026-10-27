@@ -180,3 +180,10 @@ Deno.test("21-10: línea de rendición atrasada con monto y total; sin filas no 
   assertStringIncludes(armarResumen({ ...base, pedidos, meta, rendicionAtrasada: rs }).texto, "total Gs 350.000");
   assert(!armarResumen({ ...base, pedidos, meta, rendicionAtrasada: [] }).texto.includes("Rendición atrasada"));
 });
+
+Deno.test("26-10: el Kit Deporte no cuenta como Tiras ni como Botella", async () => {
+  const { familia } = await import("./logica.ts");
+  assertEquals(familia("Kit Deporte: Botella Flexible + Tiras Nasales"), "Kit Deporte");
+  assertEquals(familia("Tiras Nasales: más aire por la nariz"), "Tiras");
+  assertEquals(familia("Botella Deportiva Flexible: se enrolla y no pesa"), "Botella");
+});

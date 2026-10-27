@@ -17,6 +17,7 @@ const FAMILIAS = [
   ['nasal', 'Tiras Nasales'],
   ['parche', 'Parches Bucales'],
   ['gudair', 'Pack Gudair'],
+  ['kit', 'Kit Deporte'],
   ['lengua', 'Raspador de Lengua'],
   ['jaw', 'JawFlex Pro'],
   ['botella', 'Botella Flexible'],

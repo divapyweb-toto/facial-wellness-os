@@ -38,6 +38,7 @@ const NOMBRE = {
   jaw:     'JawFlex Pro',
   botella: 'Botella Flexible',
   gudair:  'Pack Gudair',
+  kit:     'Kit Deporte',
   bebird:  'Bebird Pro',
 }
 
@@ -84,6 +85,9 @@ export function urlProducto(familia, tienda = getTienda()) {
 export function familiaProducto(nombre) {
   const n = (nombre || '').toLowerCase()
   if (!n) return null
+  // 26-10: Kit Deporte (botella + tiras) antes que tiras y botella: su nombre menciona a los dos. "deport" solo no
+  // alcanza: la botella sola pasa a llamarse "Botella Deportiva Flexible".
+  if (n.includes('kit deporte') || n.includes('kitdeporte') || (n.includes('botella') && (n.includes('tira') || n.includes('nasal')))) return 'kit'
   if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return 'gudair'
   if (n.includes('bebird')) return 'bebird'
   if (n.includes('raspador') || n.includes('lengua') || n.includes('limpiador') || n.includes('tongue') || n.includes('scraper')) return 'lengua'
@@ -155,6 +159,7 @@ export function segmentarRecompra(lineas, excluidos = new Set(), hoy = new Date(
       if (l.familia === 'nasal')  holdings.nasal.push(ev)
       if (l.familia === 'parche') holdings.parche.push(ev)
       if (l.familia === 'gudair') { holdings.nasal.push(ev); holdings.parche.push(ev) } // Gudair = tiras + parches
+      if (l.familia === 'kit') holdings.nasal.push(ev) // 26-10: Kit Deporte trae tiras
     }
 
     // Por cada consumible: entrega MÁS RECIENTE (fix repetidas) y ¿vencido? (ventana = 28 × cantidad)

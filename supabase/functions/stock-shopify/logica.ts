@@ -3,9 +3,11 @@
 // Un Pack sin descontar consume sus componentes. El Pack en Shopify vale lo que alcancen sus componentes.
 // Voltra OS manda: la sincronización reescribe en Shopify este número (nunca menos de 0).
 
-export type Familia = "Raspador" | "Tiras" | "Parches" | "Pack" | "JawFlex" | "Botella" | "Bebird" | "Otros";
+export type Familia = "Kit Deporte" | "Raspador" | "Tiras" | "Parches" | "Pack" | "JawFlex" | "Botella" | "Bebird" | "Otros";
 export function familia(texto: string): Familia {
   const t = texto.toLowerCase();
+  // 26-10: el kit menciona a sus componentes ("Botella + Tiras"): va antes que tiras. "deport" solo no (la botella es "Deportiva").
+  if (/kit ?deporte/.test(t) || (/botella/.test(t) && /tira|nasal/.test(t))) return "Kit Deporte";
   if (/pack|gudair/.test(t)) return "Pack";
   if (/raspador|lengua/.test(t)) return "Raspador";
   if (/tira|nasal/.test(t)) return "Tiras";

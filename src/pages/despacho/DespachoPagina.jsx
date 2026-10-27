@@ -16,6 +16,7 @@ import { sugerirTransportadora, ciudadParaPlanillaLucero, labelTransportadora, t
 import { leerProgramacion, estadoProgramacion, programacionDesdeShopify } from '../../lib/entregaProgramada'
 import { placeholderEntregaLucero, guiaLucero } from '../../lib/rendicionLucero'
 import { familiaProducto } from '../../lib/recompra'
+import { notaArmado } from '../../lib/armado'
 import { precioSugerido } from '../../lib/pedidos'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { construirHistorialClientes, evaluarRiesgo, motivoRiesgo, normalizarTel } from '../../lib/riesgoCliente'
@@ -112,6 +113,8 @@ const ESTADO_CONFIG = {
 
 function getTipo(nombre) {
   const n = (nombre || '').toLowerCase()
+  // 26-10: el Kit Deporte menciona botella y tiras: va primero (si no, la guía decía solo "Tiras nasales").
+  if (familiaProducto(nombre) === 'kit') return 'Kit Deporte'
   if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return 'Pack Gudair'
   if (n.includes('bebird')) return 'Bebird Pro' // FIX bebird antes de lengua: "Limpiador de Oídos" contiene "limpiador"
   if (n.includes('tira') || n.includes('nasal') || n.includes('nose') || n.includes('strip')) return 'Tiras nasales'
@@ -125,6 +128,7 @@ function getTipo(nombre) {
 function getDesc(nombre, cantidad) {
   const n = (nombre || '').toLowerCase()
   const u = parseInt(cantidad) || 1
+  if (familiaProducto(nombre) === 'kit') return `Kit Deporte: Botella Flexible + Tiras nasales (${u} kit${u > 1 ? 's' : ''})`
   if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return `Pack Gudair (${u} unidad${u > 1 ? 'es' : ''})`
   if (n.includes('bebird')) return 'Bebird Pro - Limpiador de Oídos' // FIX bebird antes de lengua: "Limpiador de Oídos" contiene "limpiador"
   if (n.includes('tira') || n.includes('nasal') || n.includes('nose') || n.includes('strip')) return 'Tiras nasales (30 unidades)'
@@ -326,6 +330,8 @@ function mapearGrupoAPedidos(grupoRows) {
     totalOrden,
     descripcionCombinada,
     tipoCombinado,
+    // 26-10: JawFlex ×3 = kit de 3 niveles (la nota del paquete, aunque el JawFlex sea otra línea).
+    armado: items.map(x => notaArmado(x.producto_nombre, x.cantidad)).find(Boolean) || '',
   }))
 }
 
@@ -345,6 +351,13 @@ function matchProducto(nombreVenta, productos) {
   const n = nombreVenta.toLowerCase().trim()
   let p = productos.find(x => (x.nombre || '').toLowerCase().trim() === n)
   if (p) return p
+  // 26-10: un kit menciona a sus componentes ("Kit Deporte: Botella Flexible + Tiras nasales") y el match parcial
+  // elegía "Botella Flexible": se descontaba solo la botella. Los combos se resuelven por familia primero.
+  const famCombo = familiaProducto(nombreVenta)
+  if (famCombo === 'kit' || famCombo === 'gudair') {
+    const combo = productos.find(x => familiaProducto(x.nombre) === famCombo)
+    if (combo) return combo
+  }
   const cand = productos
     .filter(x => { const c = (x.nombre || '').toLowerCase().trim(); return c && (n.includes(c) || c.includes(n)) })
     .sort((a, b) => (b.nombre || '').length - (a.nombre || '').length)
@@ -464,6 +477,7 @@ function parsearPedidoManual(bloque, catalogo, nRef) {
     n_referencia: nRef, cliente_nombre, ciudad, departamento: '', direccion,
     referencia_dir: '', telefono,
     producto_nombre: prod ? prod.nombre : productoTexto, cantidad,
+    armado: notaArmado(prod ? prod.nombre : productoTexto, cantidad),
     total, fecha: hoyLocal(),
     // Ya está confirmado: lo tipeó el propio Enrique después de cerrar la
     // venta — no pasa por el estado de Shopify/Tags.
@@ -560,12 +574,16 @@ function colapsarPorReferencia(pedidos) {
       numLineas: items.length,
       descripcionCombinada,
       tipoCombinado,
+      armado: items.map(armadoDe).find(Boolean) || '',
       cantidad: 1,           // el paquete es 1 bulto — cada producto ya lleva su "xN" en la descripción
       total: totalCombinado,
       costo_envio: costoEnvioCombinado,
     }
   })
 }
+
+// 26-10: nota de armado del paquete (JawFlex ×3). Las ventas ya guardadas no traen `armado`: se calcula.
+const armadoDe = (p) => p?.armado || notaArmado(p?.producto_nombre, p?.cantidad)
 
 // 13-10: texto de la entrega programada para el courier ("Entregar el viernes 16/10 antes de las 12"), o ''.
 const textoEntrega = (p) => p?.entregaProgramada?.textoCourier || ''
@@ -776,6 +794,8 @@ async function descargarGuiasDOCX(pedidos) {
           ? fila('DETALLE', p.descripcionCombinada)
           : fila('CANTIDAD', `${p.cantidad || 1} unidad${(p.cantidad || 1) === 1 ? '' : 'es'}`),
         fila('REFERENCIA', codigo || p.n_referencia || '—'),
+        // 26-10: JawFlex ×3 → uno de cada nivel, para quien arma el paquete.
+        ...(armadoDe(p) ? [fila('ARMAR', armadoDe(p).replace(/^ARMAR:\s*/, ''), { destacado: true })] : []),
         // 13-10: entrega programada, bien visible para el repartidor.
         ...(textoEntrega(p) ? [fila('ENTREGA', textoEntrega(p), { destacado: true })] : []),
       ]),
@@ -2408,7 +2428,7 @@ export default function DespachoPagina() {
                             : <span style={{ color: 'var(--yellow)' }} title="Sin dirección — completar en Excel o editar la venta">⚠ falta</span>}
                         </td>
                         <td data-label="Teléfono" className="muted">{v.cliente_telefono || '—'}</td>
-                        <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(v.producto_nombre)}</td>
+                        <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(v.producto_nombre)}{armadoDe(v) && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--purple)' }}>{armadoDe(v)}</div>}</td>
                         <td data-label="Cant.">{v.cantidad}</td>
                         <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
                       </tr>
@@ -2741,7 +2761,7 @@ export default function DespachoPagina() {
                       </td>
                       <td data-label="Ciudad" className="muted">{p.ciudad || '—'}</td>
                       <td data-label="Teléfono" className="muted">{p.telefono || '—'}</td>
-                      <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(p.producto_nombre)}</td>
+                      <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(p.producto_nombre)}{armadoDe(p) && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--purple)' }}>{armadoDe(p)}</div>}</td>
                       <td data-label="Cant.">{p.cantidad}</td>
                       <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(p.total)}</td>
                       <td data-label="Estado">

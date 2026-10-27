@@ -197,6 +197,12 @@ export interface DatosPedidoNuevo {
   cliente: DatosCliente;
 }
 
+// 26-10 (administrador): JawFlex ×3 = el kit de los 3 niveles. Misma regla que src/lib/armado.js (Despacho y guías).
+export const NOTA_ARMADO_JAWFLEX = "ARMAR: 1 suave + 1 medio + 1 duro";
+export function notaArmado(titulo: string, cantidad: number): string {
+  return /jaw|mand[ií]bula|ejercitador/i.test(titulo) && cantidad === 3 ? NOTA_ARMADO_JAWFLEX : "";
+}
+
 export function formatearGuaranies(n: number): string {
   return "₲" + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
@@ -207,6 +213,9 @@ export function formatoPedidoNuevo(p: DatosPedidoNuevo): AvisoArmado {
   const l = [titulo];
   if (p.total != null) l.push(`Total: ${formatearGuaranies(p.total)}`);
   if (p.productos?.length) l.push(`Productos: ${p.productos.map(escaparHtml).join(" · ")}`);
+  if (p.productos?.some((x) => notaArmado(x.replace(/\s*x\d+\s*$/, ""), Number(/x(\d+)\s*$/.exec(x)?.[1] ?? 1)))) {
+    l.push(`<b>${NOTA_ARMADO_JAWFLEX}</b>`);
+  }
   if (p.ciudad) l.push(`Ciudad: ${escaparHtml(p.ciudad)}`);
   const { lineas, enlace } = lineasContacto(p.cliente);
   l.push(...lineas);

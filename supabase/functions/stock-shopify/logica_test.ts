@@ -30,3 +30,18 @@ Deno.test("stock real = stock − pendientes; el Pack consume tiras y parches y 
 Deno.test("nunca negativo", () => {
   assertEquals(stockReal(P, [ped("Raspador", 500)]).get("Raspador")?.real, 0);
 });
+
+// 26-10: Kit Deporte = 1 botella + 1 tiras. Antes de este cambio el título del kit caía en "Tiras".
+Deno.test("Kit Deporte: familia propia (no Tiras ni Botella) y vale lo que alcancen botellas y tiras", () => {
+  assertEquals(familia("Kit Deporte: Botella Flexible + Tiras Nasales"), "Kit Deporte");
+  assertEquals(familia("Kit Deporte (Botella Flexible + Tiras nasales)"), "Kit Deporte");
+  assertEquals(familia("Botella Deportiva Flexible: se enrolla y no pesa"), "Botella");
+  const PK = [...P, { id: "b", nombre: "Botella Flexible", stock: 42, esCombo: false, componentes: [] },
+    { id: "kd", nombre: "Kit Deporte (Botella Flexible + Tiras nasales)", stock: 0, esCombo: true, componentes: [{ id: "b", qty: 1 }, { id: "t", qty: 1 }] }];
+  const r = stockReal(PK, [ped("Kit Deporte: Botella + Tiras", 2), ped("Botella Deportiva Flexible", 1)]);
+  assertEquals(r.get("Botella")?.real, 39); // 42 − 2 del kit − 1 suelta
+  assertEquals(r.get("Tiras")?.real, 29); // 31 − 2 del kit
+  assertEquals(r.get("Kit Deporte")?.real, 29); // lo que alcancen: min(39, 29)
+  assertEquals(r.get("Kit Deporte")?.sinDescontar, 2);
+  assertEquals(r.get("Pack")?.real, 29); // el Pack también comparte las tiras
+});
