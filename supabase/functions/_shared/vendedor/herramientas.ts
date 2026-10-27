@@ -761,6 +761,12 @@ export function linkMapa(ubicacion: string | null | undefined): string | null {
 export function inputOrderCreate(d: DatosPedidoChat, ctx: CtxTurno): Record<string, unknown> {
   const [nombre, ...resto] = d.nombre.split(/\s+/);
   const notas = [`Pedido creado por el vendedor con IA (WhatsApp).`];
+  // 26-10 (JawFlex): por cantidad, nota para Despacho (3 = "KIT 3 NIVELES: 1 suave, 1 medio y 1 duro").
+  const ptTodos = extrasVendedor(ctx.cfg.vendedor).primer_turno_producto;
+  for (const l of d.lineas) {
+    const n = ptTodos[l.handle]?.notas_cantidad?.[String(l.cantidad)];
+    if (n) notas.push(n);
+  }
   // 13-10: datos para el courier en la nota (nombre, celular, ciudad, calle, mapa, referencia).
   const mapa = linkMapa(d.ubicacion);
   if (d.entregaProgramada) notas.push(`ENTREGA PROGRAMADA: ${textoFechaCorta(d.entregaProgramada.fecha)}${d.entregaProgramada.franja ? ` (${d.entregaProgramada.franja})` : ""}. Despachar en el día y pedirle a la transportadora que entregue ese día.`);
@@ -1266,6 +1272,21 @@ export const esPack = (handle: string) => /(^|-)pack(-|$)/.test(handle);
 /** 26-10: ajuste del primer mensaje de ese producto (config_wa.vendedor.primer_turno_producto). */
 export const primerTurnoDe = (ctx: CtxTurno, handle: string) => extrasVendedor(ctx.cfg.vendedor).primer_turno_producto[handle] ?? {};
 
+/**
+ * 26-10 (JawFlex): línea después del precio de 1 con los totales del catálogo ("También tenés los 3 niveles (suave,
+ * medio y duro) por ₲188.000 con envío gratis"). Sin la oferta que nombra, no sale (nunca un monto inventado).
+ */
+export function lineaPrecioProducto(prod: ItemCatalogo, plantilla: string | undefined): string {
+  if (!plantilla) return "";
+  let falta = false;
+  const t = plantilla.replace(/\{total_(\d)\}/g, (_, c) => {
+    const o = prod.ofertas.find((x) => x.cantidad === Number(c));
+    if (!o) falta = true;
+    return o ? `₲${gs(o.total)}` : "";
+  });
+  return falta ? "" : t;
+}
+
 export function botonesPrimerTurno(prod: ItemCatalogo, sinOferta2 = false): { id: string; titulo: string }[] {
   const b = (clave: string, titulo: string) => ({ id: `vend_p1:${clave}:${prod.handle}`, titulo });
   if (esPack(prod.handle)) return [b("pack", "Quiero el pack"), b("duda", "Tengo una duda")];
@@ -1322,7 +1343,8 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
   const pt = primerTurnoDe(ctx, prod.handle);
   const g = pt.texto ? { ok: true as const, texto: pt.texto } : textoRevisado({ texto: input.gancho }, ctx);
   if (!g.ok) return g.r;
-  const cuerpo = cuerpoPrimerTurno(prod, pt.sin_oferta_2);
+  const linea = lineaPrecioProducto(prod, pt.linea_precio);
+  const cuerpo = cuerpoPrimerTurno(prod, pt.sin_oferta_2) + (linea ? `\n${linea}` : "");
   let interactivo: Record<string, unknown>;
   try {
     interactivo = botonesRespuesta(cuerpo, botonesPrimerTurno(prod, pt.sin_oferta_2));

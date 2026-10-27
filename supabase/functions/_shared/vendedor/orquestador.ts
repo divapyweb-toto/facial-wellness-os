@@ -41,7 +41,7 @@ import { partesAsuncion } from "../horario.ts";
 import { extrasVendedor } from "./config.ts";
 import { INSTRUCCION_ACCION_INVENTADA, INSTRUCCION_PROMESA_RECONTACTO, montosDeResultado, quitarFrasesConMontos, quitarPromesaRecontacto, revisarRespuesta } from "./filtro_salida.ts";
 import { type BloqueImagen, cargarImagen, contenidoConImagenes, type Descarga, type ImagenEntrada, imagenesPendientes, textoImagenNoVista } from "./imagenes.ts";
-import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type ItemCatalogo, itemsCatalogo, type MotivoDerivacion } from "./herramientas.ts";
+import { catalogo, derivarAEnrique, ejecutarHerramienta, HERRAMIENTAS, type ItemCatalogo, itemsCatalogo, lineaPrecioProducto, type MotivoDerivacion } from "./herramientas.ts";
 import { type IntencionEscrita, intencionEnBloque, lineaPrecioIntencion, notaIntencion, yaPidioDatos } from "./intencion.ts";
 import {
   fusionarPerfil,
@@ -279,6 +279,8 @@ export function contextoDinamico(
   perfil?: PerfilCliente,
   /** 26-10: ciudades que nombró el cliente (ciudadesMencionadas); undefined = sin la línea PLAZO PARA SU CIUDAD. */
   ciudades?: string[],
+  /** 26-10: reglas de venta de config (config_wa.vendedor.reglas_venta); vacío = sin el bloque. */
+  reglasVenta: string[] = [],
 ): string {
   const p = partesAsuncion(ahora);
   const dia = DIAS[new Date(Date.UTC(p.anio, p.mes - 1, p.dia)).getUTCDay()];
@@ -287,6 +289,7 @@ export function contextoDinamico(
     `AHORA: ${dia} ${p.dia}/${p.mes}/${p.anio}, ${hh}:${mm} (hora de Asunción).`,
     lineaPlazosHoy(ahora),
     ...(ciudades ? [lineaPlazoCiudades(ciudades, ahora)] : []),
+    ...(reglasVenta.length ? [`REGLAS DE VENTA (casos que se perdían; tienen prioridad sobre las de arriba):\n${reglasVenta.map((r) => `- ${r}`).join("\n")}`] : []),
     `CLIENTE: ${cli.nombre ? `se llama ${cli.nombre} en WhatsApp` : "sin nombre en WhatsApp"}; ${cli.telefono ? "el chat tiene su teléfono" : "el chat NO tiene su teléfono (pedilo con pedir_telefono antes de cerrar)"}.`,
     ...(perfil ? [textoPerfil(perfil)] : []),
   ].join("\n");
@@ -705,7 +708,7 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     { type: "text", text: promptBase },
     {
       type: "text",
-      text: contextoDinamico(ctx.ahora, cli, perfil.producto && !perfil0.producto ? { ...perfil0, producto: perfil.producto } : perfil0, ciudadesCliente),
+      text: contextoDinamico(ctx.ahora, cli, perfil.producto && !perfil0.producto ? { ...perfil0, producto: perfil.producto } : perfil0, ciudadesCliente, extra.reglas_venta),
     },
   ];
   const mensajes: Mensaje[] = armarHistorial(filasHistorial, entrada);
@@ -741,12 +744,13 @@ export async function procesarTurno(entrada: EntradaTurno, deps: DepsOrquestador
     if (prod && !prod.disponible) intencion = null;
     else {
       const sin2 = prod ? extra.primer_turno_producto[prod.handle]?.sin_oferta_2 === true : false; // 26-10
-      if (prod) permitidos.push(...montosDeResultado(lineaPrecioIntencion(prod, intencion.cantidad, sin2)));
+      const lineaKit = prod ? lineaPrecioProducto(prod, extra.primer_turno_producto[prod.handle]?.linea_precio) : ""; // 26-10 (JawFlex)
+      if (prod) permitidos.push(...montosDeResultado(lineaPrecioIntencion(prod, intencion.cantidad, sin2, lineaKit)));
       if (intencion.cantidad && !perfil.cantidad) perfil = { ...perfil, cantidad: intencion.cantidad };
       fila.herramientas.push({ nombre: "intencion_escrita(sistema)", input: { frase: intencion.frase, cantidad: intencion.cantidad }, resultado: { ok: true, handle: prod?.handle ?? null }, error: false });
       const ultimo = mensajes[mensajes.length - 1];
       if (ultimo.role === "user" && typeof ultimo.content === "string") {
-        mensajes[mensajes.length - 1] = { ...ultimo, content: `${ultimo.content}\n${notaIntencion(intencion, prod, sin2)}` };
+        mensajes[mensajes.length - 1] = { ...ultimo, content: `${ultimo.content}\n${notaIntencion(intencion, prod, sin2, lineaKit)}` };
       }
     }
   }

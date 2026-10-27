@@ -121,9 +121,24 @@ const OFERTA_BOTELLA_PRUEBA = {
 const PRIMER_TURNO_PRUEBA = {
   "ejercitador-de-mandibula-3-niveles": {
     sin_oferta_2: true, media: "foto",
-    texto: "Es un ejercitador de mandíbula de silicona con 3 niveles de dureza. Lo mordés unos minutos por día para entrenar los músculos de la mandíbula.",
+    texto: "Es un ejercitador de mandíbula de silicona. Lo mordés unos minutos por día para entrenar los músculos de la mandíbula.",
+    linea_precio: "También tenés los 3 niveles (suave, medio y duro) por {total_3} con envío gratis.",
+    notas_cantidad: { "3": "KIT 3 NIVELES: 1 suave, 1 medio y 1 duro (uno de cada)." },
   },
   "botella-flexible-gudair-500-ml": { sin_oferta_2: true },
+};
+/** 26-10: ficha de JawFlex corregida (1 unidad = 1 nivel, no se elige; el kit de 3 niveles son 3 unidades). */
+const FICHA_JAWFLEX_PRUEBA = {
+  "ejercitador-de-mandibula-3-niveles": {
+    ficha: "Ejercitador de mandíbula de silicona. 1 unidad = 1 ejercitador (el nivel NO se elige). El kit de 3 niveles (suave, medio y duro) son 3 unidades. Nunca digas \"elegís tu nivel\" ni \"3 piezas\" por el precio de 1.",
+    beneficios: ["Silicona flexible, fácil de limpiar", "Lo usás mientras trabajás, manejás o mirás una serie", "Con el kit de 3 niveles empezás por el suave y subís a tu ritmo"],
+    objeciones: [
+      { objecion: "¿Cuántos niveles tiene?", respuesta: "Cada ejercitador es de un nivel. Si querés los 3 (suave, medio y duro), está el kit de 3 niveles" },
+      { objecion: "¿Puedo elegir el nivel?", respuesta: "El de 1 no se elige; si querés empezar por el suave y subir, te conviene el kit de 3 niveles" },
+      { objecion: "¿Cuánto tiempo por día?", respuesta: "15 minutos al día, mientras trabajás, manejás o mirás una serie" },
+      { objecion: "Me duele la mandíbula", respuesta: "Eso te conviene consultarlo con tu médico antes de usarlo" },
+    ],
+  },
 };
 const FICHA_BOTELLA_PRUEBA = {
   "botella-flexible-gudair-500-ml": {
@@ -131,6 +146,10 @@ const FICHA_BOTELLA_PRUEBA = {
     beneficios: ["Vacía se enrolla y entra en cualquier bolsillo", "Liviana para correr, ir al gym o viajar", "Libre de BPA y PVC, con boquilla que no gotea"],
   },
 };
+
+/** 26-10: reglas de venta para los 4 casos perdidos de SUEÑO (config_wa.vendedor.reglas_venta). */
+const REGLAS_VENTA_PRUEBA = { activo: true, reglas: ["RETIRO HOY: si quiere retirar hoy y AHORA es lunes a viernes antes de las 15:30, decile que sí, que pase hoy hasta las 16 por la oficina (RETIRO) y armá el pedido con retiro_oficina en cuanto te dé su nombre. Si hoy no se puede (sábado, domingo o después de las 15:30), ofrecé las DOS opciones en el mismo mensaje: retirarlo el próximo día hábil de 8 a 16, o que se lo llevemos a domicilio con su plazo; y pedí los datos de la que elija. Nunca termines solo con \"¿te lo armo así?\".", "UN DÍA ELEGIDO (\"para el lunes\", \"el viernes\", \"cuando cobre\"): es una ENTREGA PROGRAMADA, no \"seguimos hablando ese día\". Pedí los datos que falten y armá el pedido con fecha_entrega ese día; si es antes del primer día posible para su ciudad, decile cuál es y armalo para ese día.", "MOTOBOL, DELIVERY PROPIO O \"MANDALO Y TE TRANSFIERO\": decí claro que no tenemos motobol ni delivery propio (el envío va con el courier de su ciudad) y que SÍ puede pagar por adelantado por transferencia: usá datos_transferencia y pedí la foto del comprobante; el pago se verifica y el pedido sale con prioridad en el primer despacho. Armá el pedido igual.", "QUEJA DEL ENVÍO (\"¿33 mil el delivery?\", \"caro el envío\"): decí que lo entendés y dale las salidas en UN mensaje: si es de Ciudad del Este, Hernandarias, Minga Guazú o Pdte. Franco, lo retira SIN costo de envío en la oficina (lunes a viernes de 8 a 16); en cualquier ciudad, llevando 2 el envío es gratis (precio de 2 del catálogo). Preguntá cuál prefiere. Nunca contestes solo \"sí, 33.000\".", "\"¿LLEGA ANTES?\" / \"¿SI PAGO MÁS LLEGA ANTES?\": no hay envío express ni costo extra. Decí el plazo real de su ciudad y la forma de acelerarlo: pagando ahora por transferencia sale con prioridad en el primer despacho, sin costo extra; si es de Ciudad del Este o alrededores, puede retirarlo hoy en la oficina (lunes a viernes de 8 a 16).", "COLORES DE LA BOTELLA: si pregunta por otro color (rosa, azul, la de un anuncio), respondé \"por ahora solo la tenemos en negro\".", "KIT DEPORTE (botella + tiras): todavía NO existe en la tienda. No lo ofrezcas, no lo nombres y no propongas botella + tiras juntas como combo. Si el cliente pide 2 productos distintos por su cuenta, rige la oferta de 2 distintos de siempre."] };
+const PACK = "pack-gudair-tiras-nasales-parches-bucales";
 
 export const ESCENARIOS: Escenario[] = [
   {
@@ -646,13 +665,15 @@ export const ESCENARIOS: Escenario[] = [
     descripcion: "26-10: anuncio de JawFlex: qué es y para qué sirve (texto fijo), foto en uso y precio de 1; sin el botón de 2.",
     cliente: { nombre: "Ana Prueba", telefono: "+595981000154" },
     anuncio: "ejercitador-de-mandibula-3-niveles",
-    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA } },
-    pasos: ["¡Hola! Quiero más información"],
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA }, vendedor_fichas: FICHA_JAWFLEX_PRUEBA },
+    pasos: ["¡Hola! Quiero más información", "¿Cuántos niveles tiene?"],
     checks: [
       { paso: 0, tipo: "texto", regex: /Es un ejercitador de mandíbula/, desc: "texto fijo de qué es" },
+      { paso: 0, tipo: "texto", regex: /3 niveles \(suave, medio y duro\) por ₲188\.000 con envío gratis/, desc: "línea del kit de 3" },
       { paso: 0, tipo: "boton", regex: /vend_p1:q1:/, desc: "Quiero 1" },
       { paso: 0, tipo: "boton", regex: /vend_p1:q2:/, negar: true, desc: "sin botón de 2" },
       { paso: 0, tipo: "texto", regex: /Llevando 2|158\.000/, negar: true, desc: "sin precio de 2" },
+      { tipo: "texto", regex: /eleg[ií]s (tu|el) nivel|3 piezas/i, negar: true, desc: "nunca 'elegís tu nivel' ni '3 piezas'" },
       { tipo: "montos_catalogo" },
     ],
   },
@@ -683,6 +704,113 @@ export const ESCENARIOS: Escenario[] = [
       { paso: 3, tipo: "texto", regex: /botella deportiva que se enrolla por ₲49\.000/ },
       { paso: 4, tipo: "escritura", regex: /OFERTA_EXTRA_BOTELLA/ },
       { tipo: "texto", regex: /plegable/i, negar: true },
+    ],
+  },
+  // 26-10: los 4 casos perdidos de SUEÑO (23-24/10), parafraseados con datos inventados.
+  {
+    nombre: "sueno_retiro_hoy_sabado",
+    descripcion: "26-10 (caso 1): sábado 14:56 quiere el pack y pasar a retirar hoy: ofrecer el próximo día hábil Y la entrega a domicilio, y pedir los datos (no quedarse en '¿te lo armo así?').",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000161" },
+    anuncio: PACK, ahora: "2026-10-24T17:55:00Z",
+    config: { vendedor: { reglas_venta: REGLAS_VENTA_PRUEBA } },
+    pasos: ["¡Hola! Quiero más información", "boton:Quiero el pack", "¿Puedo pasar a retirar hoy? ¿O ya es imposible?"],
+    checks: [
+      { paso: 2, tipo: "texto", regex: /lunes/i, desc: "ofrece el próximo día hábil" },
+      { paso: 2, tipo: "texto", regex: /domicilio|a tu casa|te lo llev|llevamos/i, desc: "ofrece también la entrega" },
+      { paso: 2, tipo: "texto", regex: /cuál prefer|nombre|ciudad|calle|barrio/i, desc: "hace elegir o pide los datos (no se queda en '¿te lo armo así?')" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "sueno_retiro_hoy_habil",
+    descripcion: "26-10 (caso 1, día hábil): martes 10:00 quiere retirar hoy: decirle que sí, que pase hasta las 16, y pedir el nombre.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000162" },
+    anuncio: PACK, ahora: "2026-10-27T13:00:00Z",
+    config: { vendedor: { reglas_venta: REGLAS_VENTA_PRUEBA } },
+    pasos: ["¡Hola! Quiero más información", "boton:Quiero el pack", "¿Puedo pasar a retirar hoy?"],
+    checks: [
+      { paso: 2, tipo: "texto", regex: /hoy/i },
+      { paso: 2, tipo: "texto", regex: /16/, desc: "hasta las 16" },
+      { paso: 2, tipo: "texto", regex: /nombre/i, desc: "pide el nombre para armarlo" },
+    ],
+  },
+  {
+    nombre: "sueno_lunes_motobol",
+    descripcion: "26-10 (caso 2): 'para el lunes' = entrega programada; 'motobol y te transfiero' = no hay motobol, sí transferencia con prioridad (datos_transferencia).",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000163" },
+    anuncio: PACK, ahora: "2026-10-24T20:23:00Z",
+    config: { vendedor: { reglas_venta: REGLAS_VENTA_PRUEBA } },
+    pasos: ["¡Hola! Me gustaría más información", "boton:Quiero el pack", "Para el lunes dejamos, ahora no estoy en casa", "O si no enviame por motobol y te pago con transferencia"],
+    checks: [
+      { paso: 2, tipo: "texto", regex: /ciudad|calle|barrio|ubicaci/i, desc: "pide los datos para programarlo" },
+      { paso: 3, tipo: "texto", regex: /motobol/i, desc: "aclara lo del motobol" },
+      { paso: 3, tipo: "texto", regex: /prioridad/i, desc: "transferencia = prioridad" },
+      { paso: 3, tipo: "herramienta", nombre: "datos_transferencia" },
+    ],
+  },
+  {
+    nombre: "sueno_delivery_33_cde",
+    descripcion: "26-10 (caso 3): preguntó si son de CDE, quiere la tira y '¿33 mil el delivery?': ofrecer retiro sin costo en la oficina y 2 con envío gratis.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000164" },
+    anuncio: PACK,
+    config: { vendedor: { reglas_venta: REGLAS_VENTA_PRUEBA } },
+    pasos: ["¡Hola! Quiero más información", "boton:Tengo una duda", "¿Son de CDE?", "Yo quiero la tira en la nariz", "¿33 mil el delivery?"],
+    checks: [
+      { paso: 4, tipo: "texto", regex: /retir/i, desc: "ofrece el retiro" },
+      { paso: 4, tipo: "texto", regex: /gratis/i, desc: "ofrece 2 con envío gratis" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "sueno_llega_antes_asuncion",
+    descripcion: "26-10 (caso 4): de Asunción, '¿si pago más llega antes?': plazo real + pagar por transferencia sale con prioridad (sin costo extra).",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000165" },
+    anuncio: PACK,
+    config: { vendedor: { reglas_venta: REGLAS_VENTA_PRUEBA } },
+    pasos: ["¡Hola! Quiero más información", "boton:Tengo una duda", "Soy de Asunción", "Si les pago un precio superior, ¿me puede llegar antes?"],
+    checks: [
+      { paso: 3, tipo: "texto", regex: /prioridad/i, desc: "pagar antes = prioridad" },
+      { tipo: "texto", regex: /(lunes|martes|miércoles|jueves|viernes|días? hábil|mañana)/i, desc: "dice el plazo real (en la charla)" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "jawflex_kit_3_niveles",
+    descripcion: "26-10: pide los 3 niveles → pedido de 3 ejercitadores (188.000 con envío gratis) con la nota KIT 3 NIVELES para Despacho.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000171" },
+    anuncio: "ejercitador-de-mandibula-3-niveles",
+    consentimiento: "si",
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA }, vendedor_fichas: FICHA_JAWFLEX_PRUEBA },
+    pasos: ["¡Hola! Quiero más información", "Quiero los 3 niveles", "Ana Prueba, Asunción, calle Palma 123", "boton:Confirmo"],
+    checks: [
+      { paso: 3, tipo: "herramienta", nombre: "crear_pedido_cod" },
+      { paso: 3, tipo: "escritura", regex: /KIT 3 NIVELES/, desc: "nota del kit en el pedido" },
+      { paso: 2, tipo: "texto", regex: /x3/, desc: "resumen con 3 unidades" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "botella_color_rosa",
+    descripcion: "26-10: pregunta por la botella rosa del anuncio: 'por ahora solo la tenemos en negro'.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000172" },
+    anuncio: "botella-flexible-gudair-500-ml",
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA, reglas_venta: REGLAS_VENTA_PRUEBA }, vendedor_fichas: FICHA_BOTELLA_PRUEBA },
+    pasos: ["Hola, quiero más información", "¿La tienen en rosa como la del anuncio?"],
+    checks: [
+      { paso: 1, tipo: "texto", regex: /solo la tenemos en negro/i },
+      { tipo: "texto", regex: /plegable/i, negar: true },
+    ],
+  },
+  {
+    nombre: "kit_deporte_no_se_ofrece",
+    descripcion: "26-10: cliente de la botella pregunta si hay algo más para correr: no se ofrece ni se nombra un 'Kit Deporte' (botella + tiras).",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000173" },
+    anuncio: "botella-flexible-gudair-500-ml",
+    config: { vendedor: { primer_turno_producto: PRIMER_TURNO_PRUEBA, reglas_venta: REGLAS_VENTA_PRUEBA }, vendedor_fichas: FICHA_BOTELLA_PRUEBA },
+    pasos: ["Hola, quiero más información", "Salgo a correr seguido, ¿tienen algún combo para correr?"],
+    checks: [
+      { tipo: "texto", regex: /kit deporte|combo deporte|botella \+ tiras|botella y (las )?tiras/i, negar: true, desc: "no ofrece el kit" },
+      { tipo: "montos_catalogo" },
     ],
   },
 ];

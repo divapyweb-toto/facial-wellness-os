@@ -5,7 +5,7 @@ import {
   botonOfertaExtra, datosModificacionExtra, elegirOfertaExtra, esModificacionExtra, interactivoOfertaExtra, textoOfertaExtra,
   textoTrasSi, TEXTO_EXTRA_EN_PROCESO, TEXTO_EXTRA_VENCIDA,
 } from "./oferta_extra.ts";
-import { botonesPrimerTurno, cuerpoPrimerTurno, frasesCantidad, type ItemCatalogo } from "./herramientas.ts";
+import { botonesPrimerTurno, cuerpoPrimerTurno, frasesCantidad, type ItemCatalogo, lineaPrecioProducto } from "./herramientas.ts";
 import type { CfgVendedor, PedidoChat, ProductoShopify } from "./tipos.ts";
 
 const PARCHES = "parches-bucales-gudair-30-unidades";
@@ -93,4 +93,23 @@ Deno.test("primer turno sin oferta de 2 (JawFlex, Botella): sin botón ni frase 
   assert(!cuerpoPrimerTurno(item, true).includes("Llevando 2"));
   assertEquals(frasesCantidad(item, true), {});
   assert("pasar_a_2" in frasesCantidad(item));
+});
+
+Deno.test("26-10 JawFlex: línea del kit de 3 con el total del catálogo; sin esa oferta no sale (nunca un monto inventado)", () => {
+  const item = {
+    handle: "ejercitador", titulo: "JawFlex", precio: 79000, total: 112000, disponible: true, frase_precio: "79.000 + 33.000",
+    ofertas: [{ cantidad: 2, precio: 125000, total: 158000, frase_precio: "2" }, { cantidad: 3, precio: 155000, total: 188000, frase_precio: "3" }],
+  } as unknown as ItemCatalogo;
+  const pl = "También tenés los 3 niveles (suave, medio y duro) por {total_3} con envío gratis.";
+  assertEquals(lineaPrecioProducto(item, pl), "También tenés los 3 niveles (suave, medio y duro) por ₲188.000 con envío gratis.");
+  assertEquals(lineaPrecioProducto({ ...item, ofertas: item.ofertas.slice(0, 1) } as ItemCatalogo, pl), "");
+  assertEquals(lineaPrecioProducto(item, undefined), "");
+});
+
+Deno.test("26-10 config: linea_precio y notas_cantidad del primer turno", () => {
+  const x = extrasVendedor({
+    tope_mensual_usd: 90,
+    primer_turno_producto: { jaw: { linea_precio: " L {total_3} ", notas_cantidad: { "3": " KIT ", x: "no", "2": 5 } } },
+  } as unknown as CfgVendedor);
+  assertEquals(x.primer_turno_producto.jaw, { linea_precio: "L {total_3}", notas_cantidad: { "3": "KIT" } });
 });

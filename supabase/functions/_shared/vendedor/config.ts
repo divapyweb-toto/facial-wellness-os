@@ -62,9 +62,21 @@ export type CfgVendedorExtra = {
   primer_turno_producto: Record<string, PrimerTurnoProducto>;
   /** 26-10: ofertas extra después de la compra (oferta_extra.ts). Cada una con su `activo`; vacío = ninguna. */
   ofertas_extra: Record<string, OfertaExtraCfg>;
+  /**
+   * 26-10 (ventas perdidas de SUEÑO): reglas de venta que el vendedor lee en cada turno (contexto, no prompt), para los
+   * casos que se perdían: retiro hoy, "para el lunes", motobol/transferencia, queja del envío, "¿llega antes?".
+   * config_wa.vendedor.reglas_venta = { activo, reglas: [texto…] }. Interruptor: activo = false. [] = apagado.
+   */
+  reglas_venta: string[];
 };
 
-export type PrimerTurnoProducto = { sin_oferta_2?: boolean; texto?: string; media?: "foto" | "video" | "uso" };
+export type PrimerTurnoProducto = {
+  sin_oferta_2?: boolean; texto?: string; media?: "foto" | "video" | "uso";
+  /** 26-10: una línea después del precio de 1; {total_2} / {total_3} = totales del catálogo (JawFlex: kit de 3 niveles). */
+  linea_precio?: string;
+  /** 26-10: nota para Despacho según la cantidad del producto en el pedido ({"3": "KIT 3 NIVELES…"}). */
+  notas_cantidad?: Record<string, string>;
+};
 
 /** 26-10: una oferta extra post-compra. Los montos y textos viven en config_wa.vendedor.ofertas_extra (nunca la IA). */
 export type OfertaExtraCfg = {
@@ -94,9 +106,20 @@ function primerTurnoDe(v: unknown): Record<string, PrimerTurnoProducto> {
       ...(o.sin_oferta_2 === true ? { sin_oferta_2: true } : {}),
       ...(typeof o.texto === "string" && o.texto.trim() ? { texto: o.texto.trim() } : {}),
       ...(o.media === "foto" || o.media === "video" || o.media === "uso" ? { media: o.media } : {}),
+      ...(typeof o.linea_precio === "string" && o.linea_precio.trim() ? { linea_precio: o.linea_precio.trim() } : {}),
+      ...(o.notas_cantidad && typeof o.notas_cantidad === "object" && !Array.isArray(o.notas_cantidad)
+        ? { notas_cantidad: Object.fromEntries(Object.entries(o.notas_cantidad as Record<string, unknown>).filter(([k, t]) => /^\d+$/.test(k) && typeof t === "string" && t.trim()).map(([k, t]) => [k, (t as string).trim()])) }
+        : {}),
     };
   }
   return out;
+}
+
+function reglasVentaDe(v: unknown): string[] {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return [];
+  const o = v as Record<string, unknown>;
+  if (o.activo !== true || !Array.isArray(o.reglas)) return [];
+  return (o.reglas as unknown[]).filter((r): r is string => typeof r === "string" && r.trim().length > 0).map((r) => r.trim()).slice(0, 20);
 }
 
 function ofertasExtraDe(v: unknown): Record<string, OfertaExtraCfg> {
@@ -141,6 +164,7 @@ export function extrasVendedor(v: CfgVendedor): CfgVendedorExtra {
     intencion_escrita: x.intencion_escrita !== false,
     primer_turno_producto: primerTurnoDe(x.primer_turno_producto),
     ofertas_extra: ofertasExtraDe(x.ofertas_extra),
+    reglas_venta: reglasVentaDe(x.reglas_venta),
   };
 }
 
