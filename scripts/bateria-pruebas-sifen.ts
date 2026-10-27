@@ -238,6 +238,8 @@ function emisorCon(over: Partial<DepsEmisorPropio> = {}, credOver: Partial<typeo
 const em = emisorCon();
 
 // ─── Documentos de prueba (datos inventados) ───
+// La ciudad tiene que ir con la descripción oficial del código (3428 = "CIUDAD DEL ESTE(PLANTA URBANA)"): si no, 1329.
+const CIUDAD = emisorDatos.ciudad ?? { codigo: 3428, descripcion: "CIUDAD DEL ESTE(PLANTA URBANA)" };
 const recRuc = envReal("SIFEN_BATERIA_RECEPTOR_RUC") ?? `${emisorDatos.ruc}-${emisorDatos.dv}`;
 const receptorRuc = {
   tipo: "ruc" as const,
@@ -248,13 +250,13 @@ const receptorRuc = {
   direccion: "Calle Inventada",
   numeroCasa: "1",
   departamento: 11,
-  ciudad: { codigo: 3428, descripcion: "CIUDAD DEL ESTE" },
+  ciudad: CIUDAD,
 };
 const items = (): ItemDE[] => [
   { codigo: "P-1", descripcion: "Producto de prueba uno", cantidad: 1, precioUnitario: 129000, ivaTasa: 10, ivaAfectacion: 1, unidadMedida: 77 },
   { codigo: "ENVIO", descripcion: "Envío a domicilio", cantidad: 1, precioUnitario: 33000, ivaTasa: 10, ivaAfectacion: 1, unidadMedida: 77 },
 ];
-const LUGAR = { direccion: "Depósito Inventado", departamento: 11, ciudad: { codigo: 3428, descripcion: "CIUDAD DEL ESTE" } };
+const LUGAR = { direccion: "Depósito Inventado", departamento: 11, ciudad: CIUDAD };
 const AUTOFACTURA = {
   naturalezaVendedor: 1, documentoTipo: 1, documentoNumero: "1234567", nombre: "Vendedor Inventado", direccion: "Ruta Inventada",
   numeroCasa: "", departamento: 11, ciudad: LUGAR.ciudad, lugar: LUGAR, constancia: { tipo: 1 },

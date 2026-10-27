@@ -6,7 +6,7 @@ const CDC = "01444444017001001001452822017012515873260988";
 Deno.test("eventos: cancelación", () => {
   const r = xmlEventoCancelacion({ cdc: CDC, motivo: "Pedido anulado por el cliente & reintegro", id: 15, fechaFirma: "2026-10-08T11:00:00" });
   assertEquals(r.idEvento, "15");
-  assertEquals(r.xml, `<?xml version="1.0" encoding="UTF-8"?><gGroupGesEve xmlns="http://ekuatia.set.gov.py/sifen/xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><rGesEve xsi:schemaLocation="http://ekuatia.set.gov.py/sifen/xsd siRecepEvento_v150.xsd"><rEve Id="15"><dFecFirma>2026-10-08T11:00:00</dFecFirma><dVerFor>150</dVerFor><gGroupTiEvt><rGeVeCan><Id>${CDC}</Id><mOtEve>Pedido anulado por el cliente &amp; reintegro</mOtEve></rGeVeCan></gGroupTiEvt></rEve></rGesEve></gGroupGesEve>`);
+  assertEquals(r.xml, `<?xml version="1.0" encoding="UTF-8"?><gGroupGesEve xmlns="http://ekuatia.set.gov.py/sifen/xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://ekuatia.set.gov.py/sifen/xsd siRecepEvento_v150.xsd"><rGesEve><rEve Id="15"><dFecFirma>2026-10-08T11:00:00</dFecFirma><dVerFor>150</dVerFor><gGroupTiEvt><rGeVeCan><Id>${CDC}</Id><mOtEve>Pedido anulado por el cliente &amp; reintegro</mOtEve></rGeVeCan></gGroupTiEvt></rEve></rGesEve></gGroupGesEve>`);
 });
 
 Deno.test("eventos: inutilización", () => {

@@ -39,7 +39,7 @@ declare
     'email', '',  -- el email real se carga aparte (docs/sifen-datos-privados.sql, fuera de Git)
     'actividades', jsonb_build_array(
       jsonb_build_object('codigo', '47190', 'descripcion', 'COMERCIO AL POR MENOR DE OTROS PRODUCTOS EN COMERCIOS NO ESPECIALIZADOS'),
-      jsonb_build_object('codigo', '46900', 'descripcion', 'COMERCIO AL POR MAYOR NO ESPECIALIZADO')
+      jsonb_build_object('codigo', '46900', 'descripcion', 'COMERCIO AL POR MAYOR NO ESPECIALIZADA')
     ),
     'establecimiento', '001',
     'punto', '001'  -- punto de expedición pendiente de confirmar con la DNIT

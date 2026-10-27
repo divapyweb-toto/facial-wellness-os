@@ -69,8 +69,10 @@ function motivoValido(m: string): string {
 function envolver(id: number, fechaFirma: string, grupo: string): XmlEvento {
   const idEvento = String(idValido(id));
   const xml = `<?xml version="1.0" encoding="UTF-8"?>` +
-    `<gGroupGesEve xmlns="${NAMESPACE_SIFEN}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` + // GDE000
-    `<rGesEve xsi:schemaLocation="${NAMESPACE_SIFEN} siRecepEvento_v150.xsd">` + // GDE001
+    // 27-10: igual que TIPS-SA (en producción): schemaLocation en gGroupGesEve y rGesEve sin atributos. Con el
+    // schemaLocation en rGesEve, SIFEN TEST devolvía 0160 "XML mal formado" en la inutilización. La firma (rEve) no cambia.
+    `<gGroupGesEve xmlns="${NAMESPACE_SIFEN}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="${NAMESPACE_SIFEN} siRecepEvento_v150.xsd">` + // GDE000
+    `<rGesEve>` + // GDE001
     `<rEve Id="${idEvento}">` + // GDE002 / GDE003
     `<dFecFirma>${fechaFirmaValida(fechaFirma)}</dFecFirma>` + // GDE004
     `<dVerFor>${VERSION_FORMATO}</dVerFor>` + // GDE005
