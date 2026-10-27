@@ -266,8 +266,9 @@ const AUTOFACTURA = {
 };
 const hoy = fechaSifen(new Date()).slice(0, 10);
 const manana = fechaSifen(new Date(Date.now() + 86_400_000)).slice(0, 10);
+// Traslado por ventas sin factura asociada: hay que informar la fecha futura de la factura (E506; SIFEN TEST 2605).
 const REMISION = {
-  motivo: 1, responsable: 1, km: 10,
+  motivo: 1, responsable: 1, km: 10, fechaFuturaFactura: manana,
   transporte: {
     tipo: 2, modalidad: 1, responsableFlete: 1, inicio: hoy, fin: manana, salida: LUGAR,
     entregas: [{ direccion: "Casa Inventada", numeroCasa: "12", departamento: 11, ciudad: LUGAR.ciudad }],
@@ -287,6 +288,8 @@ function documento(tipo: TipoDE, punto: string, over: Partial<DocumentoDE> = {})
   const total = 162000;
   if (tipo === 1) Object.assign(base, { condicion: { tipo: 1, pagos: [{ tipo: 1, monto: total }] } });
   if (tipo === 5 || tipo === 6) Object.assign(base, { asociado: { tipo: 1, cdc: E.cdcFeApoyo }, motivoNota: tipo === 5 ? 2 : 1 });
+  // Todas las NC van contra la misma FE de apoyo (₲ 162.000): cada una por ₲ 10.000, si no la suma la supera (2417).
+  if (tipo === 5) base.items = [{ codigo: "P-1", descripcion: "Devolución parcial de prueba", cantidad: 1, precioUnitario: 10000, ivaTasa: 10, ivaAfectacion: 1, unidadMedida: 77 }];
   if (tipo === 4) {
     Object.assign(base, {
       receptor: { tipo: "ruc", ruc: emisorDatos.ruc, dv: emisorDatos.dv, razonSocial: emisorDatos.razonSocial, pais: "PRY" },
@@ -596,7 +599,9 @@ async function correr() {
   // 4.3 Cancelaciones (FE aprobadas sin documentos asociados: se saltea la FE de apoyo).
   for (const a of E.aprobados[1].filter((x) => x.cdc !== E.cdcFeApoyo).slice(0, CASOS.cancelaciones)) {
     await paso(`cancelacion-${a.cdc}`, async () => {
-      const r = await em.cancelar(a.cdc, "Prueba de cancelación de la batería de habilitación");
+      let r = await em.cancelar(a.cdc, "Prueba de cancelación de la batería de habilitación");
+      // 0100 "Error inesperado" de SIFEN TEST (2 de 5 el 27-10, sin patrón): un reintento a los 5 s.
+      if (r.codigo === "0100") { await new Promise((z) => setTimeout(z, 5000)); r = await em.cancelar(a.cdc, "Prueba de cancelación de la batería de habilitación"); }
       marcarConexion("evento", r);
       E.res.push({ bloque: "4.3 cancelación", tipo: "FE", caso: a.cdc, esperado: "aprobado", obtenido: r.estado, ok: r.estado === "aprobado", cdc: a.cdc, numero: a.numero, codigo: r.codigo, mensaje: r.mensaje });
     });
