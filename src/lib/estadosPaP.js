@@ -177,10 +177,13 @@ export function sanearEntrega(e) {
 // la foto vieja ("En Oficina", "Asignado a ruta") volvieron a "en proceso". Lucero ya tenía esta regla
 // (EntregasPage, procesarExportLucero). Un final sí puede cambiar a otro final (p. ej. entregado → devuelto).
 export const CATEGORIAS_FINALES = new Set(['entregado', 'devuelto', 'no_despachado'])
-export function conservarFinales(regs, previoPorGuia) {
+// 28-10 (#1027): `reenvios` = referencias (VT-n) con la etiqueta REENVIO_PAP. Un reenvío desde la central de PaP vuelve
+// a ruta con la misma guía: ese "devuelto → en proceso" es real y no se frena.
+export function conservarFinales(regs, previoPorGuia, reenvios = new Set()) {
   let conservados = 0
   for (const r of regs) {
     if (CATEGORIAS_FINALES.has(r.categoria)) continue
+    if (r.n_referencia && reenvios.has(String(r.n_referencia).toUpperCase())) continue
     const ant = previoPorGuia.get(String(r.nro_guia_pap))
     if (!ant || !CATEGORIAS_FINALES.has(ant.categoria)) continue
     r.categoria = ant.categoria

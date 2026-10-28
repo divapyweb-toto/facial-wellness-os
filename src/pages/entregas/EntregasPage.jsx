@@ -611,7 +611,13 @@ export default function EntregasPage() {
         if (error) { toast('No se guardó: no pude leer qué guías ya estaban cerradas (reintentá): ' + error.message, 'error'); return }
         for (const row of (data || [])) previoFinal.set(String(row.nro_guia_pap), row)
       }
-      conservarFinales(limpio, previoFinal)
+      // 28-10: los reenvíos (REENVIO_PAP) sí pueden volver de "devuelto" a ruta. Si no se pueden leer, rige la protección.
+      const reenvios = new Set()
+      {
+        const { data } = await supabase.from('shopify_pedidos').select('nombre').contains('tags', ['REENVIO_PAP'])
+        for (const r of (data || [])) reenvios.add('VT-' + String(r.nombre || '').replace(/\D/g, ''))
+      }
+      conservarFinales(limpio, previoFinal, reenvios)
 
       // ── 1) Guardar las entregas ──
       // Tolerante a columnas que todavía no existan: si la migración 001 aún

@@ -16,3 +16,15 @@ assert.deepEqual([regs[0].categoria, regs[0].estado_pap, regs[0].cobrado, regs[0
 assert.equal(regs[1].categoria, 'entregado'); assert.equal(regs[1].cobrado, 99000)
 assert.equal(regs[2].categoria, 'en_proceso')
 console.log('✓ conservar finales: 3 casos OK')
+
+// 28-10 (#1027): un reenvío desde la central de PaP (REENVIO_PAP) vuelve a ruta con la misma guía: no se frena.
+{
+  const prev = new Map([['333', { nro_guia_pap: '333', categoria: 'devuelto', estado_pap: 'Custodio', cobrado: 0, fecha_entrega: null, dias_entrega: null }]])
+  const r1 = [{ nro_guia_pap: '333', n_referencia: 'VT-1027', categoria: 'en_proceso', estado_pap: 'Asignado a ruta' }]
+  assert.equal(conservarFinales(r1, prev, new Set(['VT-1027'])), 0)
+  assert.equal(r1[0].categoria, 'en_proceso')
+  const r2 = [{ nro_guia_pap: '333', n_referencia: 'VT-1027', categoria: 'en_proceso', estado_pap: 'Asignado a ruta' }]
+  assert.equal(conservarFinales(r2, prev), 1) // sin la etiqueta de reenvío: sigue la protección
+  assert.equal(r2[0].categoria, 'devuelto')
+  console.log('✓ conservar finales: el reenvío REENVIO_PAP vuelve a ruta; sin la etiqueta, la protección sigue')
+}
