@@ -434,7 +434,7 @@ const RUTEO_OFICIAL = {
     'Itacurubí de la Cordillera',  'Itauguá',                     'J. Augusto Saldívar',
     'Limpio',                      'María Auxiliadora',           'Mariscal Estigarribia (Chaco)',
     'Natalio',                     'Neuland',                     'Ñemby',
-    'Pedro Juan Caballero',        'Pilar',                       'Puente Kyjhá',
+    'Pedro Juan Caballero',        'Pilar', /* 28-10: Puente Kyjhá fuera (PaP 27-10: "No llegamos"; va por Lucero, corredor Salto del Guairá) */
     'Salto del Guairá',            'San Antonio',                 'San Cristóbal',
     'San Ignacio Misiones',        'San José de los Arroyos',     'San Juan Nepomuceno',
     'Santa Rosa del Mbutuy',       'Trinidad',                    'Villa Hayes',

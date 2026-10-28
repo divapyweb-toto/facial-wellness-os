@@ -109,7 +109,7 @@ const CIUDADES_COBRANZA = {
   'mariscal estigarribia': 'interior2',
   'natalio': 'interior2',
   'neuland': 'interior2',
-  'puente kyjha': 'interior2',
+  // 28-10: PaP avisó el 27-10 "No llegamos en Puente kyjha" → sin cobertura (va por Lucero, corredor Salto del Guairá).
   'san cristobal': 'interior2',
   'san jose de los arroyos': 'interior1',
   'san juan nepomuceno': 'interior2',

@@ -135,7 +135,8 @@ try {
   assert.equal(emparejarCiudad('Pte. Franco', CIUDADES_PAP_LISTA), 'presidente franco')
   // "pte" también puede ser "puente": la expansión no inventa un "presidente kyjha" (queda como antes)
   assert.equal(emparejarCiudad('Pte. Kyjha', CIUDADES_PAP_LISTA), null)
-  assert.equal(emparejarCiudad('Puente Kyjha', CIUDADES_PAP_LISTA), 'puente kyjha')
+  // 28-10: PaP ya no llega a Puente Kyjhá (avisó el 27-10): salió de la lista.
+  assert.equal(emparejarCiudad('Puente Kyjha', CIUDADES_PAP_LISTA), null)
   assert.equal(emparejarCiudad('Mcal. Estigarribia', CIUDADES_PAP_LISTA), 'mariscal estigarribia')
   assert.equal(emparejarCiudad('Asunción', CIUDADES_PAP_LISTA), 'asuncion')
   ok('Ciudades: "Cnel. Bogado" empareja igual que "Coronel Bogado" (cnel/gral/pte/sta en general)')
