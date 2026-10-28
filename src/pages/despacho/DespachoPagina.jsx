@@ -1251,6 +1251,59 @@ export default function DespachoPagina() {
   const trayendoVoltraRef = useRef(false)   // candado: el estado tarda un render, el ref no
   // 12-10: pedidos de Voltra confirmados sin transportadora que cubra: no se pasan a Ventas.
   const [voltraSinCobertura, setVoltraSinCobertura] = useState([])
+  // 28-10 (caso #1089: se retiró y cobró en la oficina y nunca se registró): retiros en persona confirmados sin cerrar.
+  const [retirosAbiertos, setRetirosAbiertos] = useState([])
+  const [formRetiro, setFormRetiro] = useState({})
+  const [cerrandoRetiro, setCerrandoRetiro] = useState(null)
+  async function cargarRetirosAbiertos() {
+    const desde = new Date(Date.now() - 60 * 86400000).toISOString()
+    const { data, error } = await supabase.from('shopify_pedidos')
+      .select('shopify_order_id, nombre, es_borrador, raw, estado_envio, entregado_en, tags, total, creado_en')
+      .contains('tags', ['RETIRO_EN_CASA', 'CONFIRMADO']).gte('creado_en', desde)
+    if (error) { console.warn('retiros abiertos:', error.message); return }
+    setRetirosAbiertos((data || []).filter(f => !f.es_borrador && !f.raw?.cancelled_at &&
+      !(f.tags || []).some(t => /^RETIRADO_|^REEMPLAZADO_POR_/i.test(t))))
+  }
+  useEffect(() => { cargarRetirosAbiertos() }, [])
+  // "Retirado y cobrado": Shopify (función retiro-cobrado: pagado + etiquetas + preparado sin aviso) y la venta con el
+  // mismo armado de Despacho (retiro: transportadora 'otra', flete 0, entregada en la fecha elegida, stock descontado).
+  async function cerrarRetiro(fila) {
+    const f = formRetiro[fila.shopify_order_id] || {}
+    const fecha = f.fecha || hoyParaguay(), medio = f.medio || 'efectivo'
+    if (!window.confirm(`${fila.nombre}: ¿lo retiró el ${fecha} y pagó por ${medio}? Se marca pagado y preparado en Shopify (sin aviso al cliente) y se carga la venta entregada.`)) return
+    setCerrandoRetiro(fila.shopify_order_id)
+    try {
+      const { data, error } = await supabase.functions.invoke('retiro-cobrado', { body: { pedido: fila.nombre, fecha, medio } })
+      if (error || !data?.ok) throw new Error(data?.error || error?.message || 'no respondió')
+      const { data: catalogo, error: errCat } = await supabase.from('productos')
+        .select('id, nombre, costo_unit, precio_1u, precio_2u, precio_3u, es_combo, grupo_envio').eq('activo', true)
+      if (errCat) throw errCat
+      const pedidos = agruparFilasPorReferencia(filasCsvDesdePedidoShopify(fila)).flatMap(mapearGrupoAPedidos)
+      const nota = `Retirado en la oficina el ${fecha} y cobrado por ${medio} (botón Retirado y cobrado).`
+      const filas = pedidos.map(p => ({
+        ...filaVentaDePedido({ ...p, fecha, prepago: medio === 'transferencia', retiroEnPersona: true, entregadoRetiro: true }, catalogo || []),
+        ...(medio === 'efectivo' ? { metodo_pago_nombre: 'Efectivo (retiro en oficina)', pago_anticipado: false } : {}),
+        notas: nota,
+      }))
+      const ref = filas[0]?.n_referencia
+      const { data: ya, error: errYa } = await supabase.from('ventas').select('id').eq('n_referencia', ref).is('deleted_at', null)
+      if (errYa) throw errYa
+      if ((ya || []).length) {
+        const { error: eu } = await supabase.from('ventas').update({
+          estado: 'entregado', fecha, transportadora: 'otra', costo_envio: 0, flete_estimado: false, metodo_envio_nombre: METODO_ENVIO_RETIRO,
+          metodo_pago_nombre: filas[0].metodo_pago_nombre, pago_anticipado: filas[0].pago_anticipado, notas: nota,
+        }).in('id', ya.map(v => v.id))
+        if (eu) throw eu
+      } else {
+        const { error: ei } = await supabase.from('ventas').insert(filas)
+        if (ei) throw ei
+      }
+      toast(`${fila.nombre} cerrado: retirado ${fecha}, ${medio}.${data.notas?.length ? ' Ojo: ' + data.notas.join('; ') : ''}`, data.notas?.length ? 'info' : 'success')
+      await cargarRetirosAbiertos()
+    } catch (e) {
+      toast(`${fila.nombre}: no se pudo cerrar el retiro (${e.message || e}). Si Shopify ya quedó pagado, la venta se carga con "Traer pedidos de Voltra".`, 'error')
+    } finally { setCerrandoRetiro(null) }
+  }
   // 21-10: ventas de pedidos cancelados en Shopify que YA están en el courier (no se cancelan solas).
   const [canceladosEnCourier, setCanceladosEnCourier] = useState([])
   const [busqVentas, setBusqVentas] = useState('')
@@ -2241,6 +2294,32 @@ export default function DespachoPagina() {
         <div className="ultra-split" style={{ gap: 20 }}>
           {/* Ultrawide: tabla a la izquierda, avisos + barra de acción en el riel. Abajo de 1900 px los envoltorios no existen y se ve igual. */}
           <div className="ultra-rail ultra-contents" style={{ gridColumn: 2, gridRow: 1 }}>
+          {/* 28-10: retiros en la oficina confirmados que nadie cerró (caso #1089) */}
+          {retirosAbiertos.length > 0 && (
+            <div className="alert" style={{ background: 'rgba(168,85,247,0.10)', border: '1px solid rgba(168,85,247,0.45)', borderRadius: 10, padding: '10px 14px', display: 'grid', gap: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                <strong>🏠 {retirosAbiertos.length} retiro{retirosAbiertos.length === 1 ? '' : 's'} en la oficina sin cerrar.</strong> Cuando lo retiren y paguen, tocá "Retirado y cobrado".
+              </span>
+              {retirosAbiertos.map(f => {
+                const id = f.shopify_order_id, v = formRetiro[id] || {}
+                const prods = (f.raw?.line_items || []).map(li => `${String(li.name || li.title || '').split(':')[0]} ×${li.quantity ?? 1}`).join(' + ')
+                return (
+                  <div key={id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <strong>{f.nombre}</strong><span style={{ color: 'var(--text-secondary)' }}>{prods} · {formatGs(Number(f.total) || 0)}</span>
+                    <input type="date" value={v.fecha || hoyParaguay()} max={hoyParaguay()} onChange={e => setFormRetiro(s => ({ ...s, [id]: { ...v, fecha: e.target.value } }))} style={{ fontSize: 12 }} />
+                    <select value={v.medio || 'efectivo'} onChange={e => setFormRetiro(s => ({ ...s, [id]: { ...v, medio: e.target.value } }))} style={{ fontSize: 12 }}>
+                      <option value="efectivo">Efectivo</option>
+                      <option value="transferencia">Transferencia</option>
+                    </select>
+                    <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={cerrandoRetiro === id} onClick={() => cerrarRetiro(f)}>
+                      {cerrandoRetiro === id ? 'Cerrando…' : 'Retirado y cobrado'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {/* 12-10: pedidos de Voltra sin cobertura — no se cargan con PaP por defecto */}
           {voltraSinCobertura.length > 0 && (
             <div className="alert ultra-o1" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>

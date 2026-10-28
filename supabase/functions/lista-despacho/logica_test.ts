@@ -78,7 +78,7 @@ Deno.test("No despachar con el motivo: faltan datos, comprobante sin verificar, 
   ], [], new Set());
   assertEquals(l.noDespachar.map((x) => x.p.nombre), ["#30", "#31", "#32"]);
   const t = textoLista(l, AHORA)!;
-  assert(t.includes("No despachar (3)") && t.includes("sin pin ni calle utilizable") && t.includes("verificá el pago") && t.includes("espera el pago anticipado"));
+  assert(t.includes("No despachar (3)") && t.includes("sin pin ni calle o zona con ciudad") && t.includes("verificá el pago") && t.includes("espera el pago anticipado"));
 });
 
 Deno.test("sin nada para despachar no hay mensaje; prueba marca el texto", () => {

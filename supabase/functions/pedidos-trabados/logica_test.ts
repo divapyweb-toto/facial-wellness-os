@@ -150,3 +150,12 @@ Deno.test("21-10: JawFlex donde Lucero no cobra pero PaP sí → aviso (una vez)
   assertEquals(ninguno.includes("avisar_sin_cobertura") && !ninguno.includes("avisar_jawflex_pap"), true); // flujo de sin cobertura
   assertEquals(accionesPara(ped(["JawFlex Pro"], ["PAGADO"]), AH, false, cob(false, true)).includes("avisar_jawflex_pap"), false);
 });
+
+Deno.test("28-10: zona o barrio + ciudad es dirección (Enrique: 'area 4 sirve ya como direccion'); sin ciudad no", () => {
+  for (const d of ["Área 1", "Area 4", "Zona 2", "Km 7", "Barrio San Miguel", "Ruta 2", "B° Obrero", "Compañía Itá"]) {
+    assertEquals(direccionUtilizable(base({ direccion: d, ciudad: "Ciudad del Este" })), true, d);
+  }
+  assertEquals(direccionUtilizable(base({ direccion: "Área 1", ciudad: "" })), false);
+  assertEquals(direccionUtilizable(base({ direccion: "Seivo", ciudad: "Nueva esperanza" })), false); // 5 letras, sin número ni zona
+  assertEquals(direccionUtilizable(base({ direccion: "", ciudad: "Luque" })), false);
+});

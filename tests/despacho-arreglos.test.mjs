@@ -70,7 +70,8 @@ try {
   ok('histórico Releasit deduplica por referencia y suma el total')
 
   // 8) Catálogo: las 3 consultas cortan si fallan
-  assert.equal((fuente.match(/if \(errCat\) throw/g) || []).length, 2)
+  // 28-10: + el botón Retirado y cobrado (también corta si no puede leer el catálogo).
+  assert.equal((fuente.match(/if \(errCat\) throw/g) || []).length, 3)
   assert.match(fuente, /No se pudo leer el catálogo, no se cargó nada/)
   ok('las 3 consultas de catálogo cortan la carga si fallan')
 

@@ -108,7 +108,7 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
     if (!p.pagado && tiene(tags, "pago_anticipado_comprobante")) { out.noDespachar.push({ p, motivo: "mandó comprobante: verificá el pago antes de despachar" }); continue; }
     // Enrique 27-10: "si tiene pin o solo tiene calle y ciudad sin pin igual ya se puede despachar". FALTAN_DATOS lo pone
     // pedidos-trabados con esa misma regla (direccionUtilizable: pin, o calle + ciudad); SIN_PIN solo no frena.
-    if (tiene(tags, "faltan_datos")) { out.noDespachar.push({ p, motivo: "falta la dirección: sin pin ni calle utilizable (solo barrio, zona o nada)" }); continue; }
+    if (tiene(tags, "faltan_datos")) { out.noDespachar.push({ p, motivo: "falta la dirección: sin pin ni calle o zona con ciudad" }); continue; }
     if (!p.pagado && (tiene(tags, "sin_cobertura") || !p.courier)) { out.noDespachar.push({ p, motivo: "sin cobertura contra entrega: espera el pago anticipado" }); continue; }
     // Enrique 27-10: "ya está pagada no necesita cobranza" → pagado sin courier con cobranza: va por el que llegue.
     if (!p.courier) p.courier = "libre";

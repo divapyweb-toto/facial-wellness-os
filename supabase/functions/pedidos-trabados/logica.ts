@@ -7,6 +7,7 @@
 //      12-10: con pin se entrega igual) + ciudad. Si después se completa, se saca la etiqueta, pero SOLO si la puso el
 //      sistema (una puesta a mano no se toca).
 //      15-10 (Enrique, #1055): "con el pin basta y sobra" → con pin es utilizable aunque falte la ciudad.
+//      28-10 (Enrique): una zona o barrio reconocible + ciudad también ("Área 4", "Km 7", "Zona 2").
 //   4. Pedido del bot que llegó a Shopify SIN dirección (Shopify la descarta entera si el apellido va vacío: nombre de
 //      una sola palabra, #1055) pero con Ciudad/Calle/Mapa en la nota → se completa la dirección desde la nota.
 //   5. Ciudad "Ver mapa" (el bot no pudo leer el mapa, #1056) y hay pin → se busca la ciudad del pin y se carga en
@@ -44,11 +45,17 @@ export function tienePin(p: Pick<PedidoAbierto, "direccion" | "notas">): boolean
   return PIN.test(p.direccion) || PIN.test(p.notas);
 }
 
+/** 28-10 (Enrique: "area 4 sirve ya como direccion ya que es una zona... figura en google maps"): zona o barrio reconocible. */
+const ZONA = /\b(?:[aá]rea|zona|barrio|b[°º]|km|kil[oó]metro|villa|compa[nñ][ií]a|asentamiento|sector|fracci[oó]n|loteamiento|manzana|mz)\b/i;
+
 export function direccionUtilizable(p: Pick<PedidoAbierto, "direccion" | "notas" | "ciudad">): boolean {
   if (tienePin(p)) return true; // 15-10: con el pin se entrega igual, aunque falte la ciudad
   if (!p.ciudad.trim() || p.ciudad.trim() === "-") return false;
-  const calle = p.direccion.replace(/pin de ubicaci[oó]n:?/gi, "").replace(/sin calle \(ubicaci[oó]n pendiente\)/gi, "").replace(PIN, "").replace(/https?:\/\/\S+/g, "").replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, "");
-  return calle.length >= 6;
+  const texto = p.direccion.replace(/pin de ubicaci[oó]n:?/gi, "").replace(/sin calle \(ubicaci[oó]n pendiente\)/gi, "").replace(PIN, "").replace(/https?:\/\/\S+/g, "");
+  const letras = texto.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, "");
+  if (letras.length >= 6) return true; // calle escrita
+  // 28-10: zona/barrio + ciudad también es dirección ("Área 4", "Km 7", "Zona 2"); también "Ruta 2" (≥ 3 letras + número).
+  return ZONA.test(texto) || (letras.length >= 3 && /\d/.test(texto));
 }
 
 export interface DireccionNota {
