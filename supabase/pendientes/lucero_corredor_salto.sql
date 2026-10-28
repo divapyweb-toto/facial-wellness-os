@@ -1,3 +1,5 @@
+-- PENDIENTE (no es una migración): aplicar cuando Lucero pase TARIFA y COBRANZA del corredor. La tabla exige precio
+-- (precio NOT NULL): reemplazar el null de abajo por el precio real y aplica_cobranza por lo que diga Lucero.
 -- 28-10 · Cobertura (datos de administración):
 --   · PaP avisó el 27-10 15:36 "No llegamos en Puente kyjha" → sacado de la lista de PaP en src/lib/cobranzaPaP.js
 --     (la tabla no tenía fila de PaP para Puente Kyjhá: la cobertura salía de esa lista).
