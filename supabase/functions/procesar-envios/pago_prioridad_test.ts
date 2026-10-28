@@ -167,3 +167,14 @@ Deno.test("config: pago_prioridad desde config_wa; sin clave o sin alias, apagad
   assertEquals(configDesdeFilas([]).pagoPrioridad.activo, false);
   assertEquals(configDesdeFilas([{ clave: "pago_prioridad", valor: { activo: true, alias: null } }]).pagoPrioridad.activo, false);
 });
+
+Deno.test("28-10 (#1027): pago parcial (SALDO_PENDIENTE / PAGO_PARCIAL) → no sale ningún aviso de entrega con monto", () => {
+  const ruta = prio({ plantilla: "voltra_entrega_proxima", variables: { nombre: "María", total: "112.000" }, clave_unica: "courier:1001:EN_RUTA" });
+  for (const tags of [["CONFIRMADO", "PAGO_PARCIAL", "SALDO_PENDIENTE", "SALDO_52000", "REENVIO_PAP"], ["CONFIRMADO", "SALDO_PENDIENTE"]]) {
+    const d = decidir(ruta, ctx({ tags }, { ultimaEntrada: ABIERTA }), cfg(), AHORA, horario);
+    assertEquals(d, { accion: "cancelar", motivo: "pago_parcial_aviso_con_monto" });
+  }
+  // Pagado del todo: sigue saliendo el texto sin monto (como antes).
+  const pag = decidir(ruta, ctx({ tags: ["CONFIRMADO", "PAGADO", "PAGO_VERIFICADO"] }, { ultimaEntrada: ABIERTA }), cfg(), AHORA, horario);
+  assert(pag.accion === "texto" || pag.accion === "botones");
+});

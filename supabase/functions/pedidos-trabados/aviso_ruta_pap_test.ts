@@ -20,3 +20,8 @@ Deno.test("reemplaza el 'ya está por llegar' del 2.º día si sigue pendiente; 
   assertEquals(decidirRuta(c({ envios: prox("enviado", "2026-10-19T11:00:00Z") }), AHORA).accion, "registrar_sin_enviar");
   assertEquals(decidirRuta(c({ envios: prox("enviado", "2026-10-17T11:00:00Z") }), AHORA), { accion: "enviar", cancelarProxima: false });
 });
+
+Deno.test("28-10 (#1027): pago parcial no programa el aviso de ruta (pediría el total)", () => {
+  assertEquals(decidirRuta(c({ tags: ["CONFIRMADO", "PAGO_PARCIAL", "SALDO_PENDIENTE", "SALDO_52000", "REENVIO_PAP"] }), new Date()), { accion: "omitir", motivo: "pago_parcial" });
+  assertEquals(decidirRuta(c({ tags: ["CONFIRMADO", "PAGADO"] }), new Date()).accion, "enviar"); // pagado: procesar-envios manda el texto sin monto
+});

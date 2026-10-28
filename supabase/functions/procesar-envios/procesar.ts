@@ -31,6 +31,7 @@ import {
   type CfgPagoPrioridad,
   leerConfigPagoPrioridad,
   motivoSinOfertaPrioridad,
+  pagoParcial,
   pedidoPagado,
   PLANTILLA_PAGO_PRIORIDAD,
   TAG_OFERTA_PAGO,
@@ -655,6 +656,10 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
   const p = armarParametros(def, variables, ctx.pedido, ctx.cliente);
   if (!p.ok) return { accion: "fallar", motivo: `falta_variable:${p.falta}` };
 
+  // 28-10 (#1027): pago parcial → la plantilla diría "Tené listo Gs <total>" y el courier no cobra eso: no sale.
+  if (AVISOS_PREVIOS_ENTREGA.has(nombre) && ctx.pedido && pagoParcial(ctx.pedido) && !pedidoPagado(ctx.pedido)) {
+    return { accion: "cancelar", motivo: "pago_parcial_aviso_con_monto" };
+  }
   // 12-10: pedido ya pagado (pago con prioridad, QR o transferencia): el aviso no le pide plata.
   if (AVISOS_PREVIOS_ENTREGA.has(nombre) && ctx.pedido && pedidoPagado(ctx.pedido)) {
     const base = TEXTOS_AVISO_PAGADO[nombre];

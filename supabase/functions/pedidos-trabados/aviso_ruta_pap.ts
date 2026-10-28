@@ -27,6 +27,9 @@ export function decidirRuta(c: CandidatoRuta, ahora: Date): DecisionRuta {
   if (c.estadoConfirmacion !== "confirmado") return { accion: "omitir", motivo: "sin_confirmar" };
   if (TERMINALES.includes(c.estadoEnvio ?? "")) return { accion: "omitir", motivo: "terminal" };
   if (c.tags.some((t) => /RETIRO_EN_CASA/i.test(t))) return { accion: "omitir", motivo: "retiro" };
+  // 28-10 (#1027): pago parcial (SALDO_PENDIENTE / PAGO_PARCIAL): la plantilla pide "Tené listo Gs <total>" y el courier
+  // no cobra eso. No se programa (procesar-envios también lo frena).
+  if (c.tags.some((t) => /^(SALDO_PENDIENTE|PAGO_PARCIAL)$/i.test(t))) return { accion: "omitir", motivo: "pago_parcial" };
   if (!c.clienteId) return { accion: "omitir", motivo: "sin_cliente" };
   const prox = c.envios.find((e) => e.clave === `courier:${c.shopifyOrderId}:ENTREGA_HOY` && e.plantilla === PLANTILLA_RUTA);
   if (prox?.estado === "enviado" && ahora.getTime() - Date.parse(prox.creadoEn) < 24 * 3_600_000) {

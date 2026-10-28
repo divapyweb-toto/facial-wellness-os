@@ -73,6 +73,15 @@ export function pedidoPagado(p: { tags?: unknown; raw?: unknown }): boolean {
   return txt(r.financial_status)?.toLowerCase() === "paid" || txt(r.displayFinancialStatus)?.toUpperCase() === "PAID";
 }
 
+/**
+ * 28-10 (#1027): pago parcial (pagó una parte y el saldo lo transfiere: SALDO_PENDIENTE / PAGO_PARCIAL). No es "pagado"
+ * (falta el saldo) pero el courier tampoco cobra el total: ningún aviso de entrega con monto tiene que salir.
+ */
+export function pagoParcial(p: { tags?: unknown }): boolean {
+  const t = tagsMayus(p.tags);
+  return t.includes("SALDO_PENDIENTE") || t.includes("PAGO_PARCIAL");
+}
+
 /** Estados de envío en los que el paquete ya salió con el courier (o terminó): la oferta ya no tiene sentido. */
 const ENVIO_YA_SALIO = new Set(["DESPACHADO", "INTENTO_FALLIDO", "ENTREGADO", "NO_ENTREGADO_RESCATABLE", "NO_ENTREGADO", "CANCELADO", "RENDIDO"]);
 
