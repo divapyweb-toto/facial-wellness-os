@@ -4,6 +4,15 @@ import { _limpiarCachePolitica, avisar, depsAvisos } from "./telegram.ts";
 
 const POL = { enrique: ["cancelado_en_courier"], resumen: ["plazo_pap"], descartar: ["sin_confirmar_horas"] };
 
+// 28-10: hermética. Con .env.produccion cargado (TELEGRAM_BOT_TOKEN/CHAT_ID reales) avisar() mandaba un Telegram de
+// verdad a Enrique. Se borran las credenciales y la red queda bloqueada: cualquier llamada real hace fallar la prueba.
+for (const v of ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]) Deno.env.delete(v);
+const llamadasRed: string[] = [];
+globalThis.fetch = ((u: string | URL | Request) => {
+  llamadasRed.push(String(u instanceof Request ? u.url : u));
+  return Promise.reject(new Error("red bloqueada en la prueba"));
+}) as typeof fetch;
+
 Deno.test("ruta: sin opciones y 'todos' van por Telegram como antes", () => {
   assertEquals(decidirRuta(POL, undefined), "telegram");
   assertEquals(decidirRuta("todos", { tipo: "stock_bajo", destino: "admin" }), "telegram");
@@ -81,4 +90,8 @@ Deno.test("avisar: política 'todos' (vuelta atrás) manda todo por Telegram", a
   await avisar("x", undefined, { tipo: "sin_confirmar_horas", destino: "admin" });
   assertEquals(cola.length, 0);
   assertEquals(registro.length, 2);
+});
+
+Deno.test("hermética: ninguna prueba de esta suite salió a la red", () => {
+  assertEquals(llamadasRed, []);
 });
