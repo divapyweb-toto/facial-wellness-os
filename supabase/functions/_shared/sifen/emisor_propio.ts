@@ -43,6 +43,8 @@ export interface ClienteWsSifen {
   consultarRuc(ruc: string): Promise<{ ok: boolean; existe: boolean; razonSocial?: string; estado?: string; mensaje?: string }>;
   /** siConsLoteDE (opcional). */
   consultarLote?(protocolo: string): Promise<RespuestaSifen>;
+  /** siRecepLoteDE (opcional). 29-10: en prod Voltra no tiene habilitado el síncrono (1264) y manda por lote. */
+  enviarLote?(xmlsFirmados: string[]): Promise<RespuestaSifen>;
 }
 
 /** Armadores de XML de eventos (los implementa B en eventos_xml.ts). Devuelven XML SIN firmar y el Id a firmar. */
@@ -81,9 +83,14 @@ export interface DepsEmisorPropio {
   esperar?(ms: number): Promise<void>;
   /** Cuántas veces se reintenta el envío tras confirmar por consulta que el CDC NO existe. */
   reintentosRed?: number;
+  /** 29-10: arrancar mandando por lote (sin probar el síncrono). */
+  soloLote?: boolean;
   esperaRedMs?: number;
   fechaSifen(d: Date): string;
 }
+
+/** MT v150 validación D101c: "RUC del emisor no está habilitado para utilizar el servicio síncrono". */
+export const CODIGO_SINCRONO_NO_HABILITADO = "1264";
 
 export interface OpcionesEmision {
   /** CDC de un intento anterior de ESTE mismo documento: si viene, se consulta antes de enviar. */
@@ -91,6 +98,8 @@ export interface OpcionesEmision {
   /** XML firmado (con QR) del intento anterior: se retransmite el MISMO (no se vuelve a firmar). */
   xmlFirmadoPrevio?: string | null;
   urlQrPrevio?: string | null;
+  /** 29-10: protocolo del lote del intento anterior: si el CDC todavía no aparece, se consulta el lote antes de reenviar. */
+  protocoloPrevio?: string | null;
 }
 
 export interface EmisorPropio extends Emisor {
@@ -105,11 +114,23 @@ const noExiste = (r: RespuestaSifen) => (r as { existe?: boolean }).existe === f
 export function crearEmisorPropio(d: DepsEmisorPropio): EmisorPropio {
   const esperar = d.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const reintentos = d.reintentosRed ?? 2;
+  // 29-10: en prod el síncrono devolvió 1264 para Voltra → desde ahí todo por lote (vale para esta instancia).
+  let soloLote = d.soloLote === true;
   const esperaMs = d.esperaRedMs ?? 2000;
 
   async function firmarEvento(arm: { xml: string; id: string }): Promise<string> {
     const f = await d.firmarXml(arm.xml, arm.id, d.cred.certP12, d.cred.certClave);
     return f.xmlFirmado;
+  }
+
+  /** Síncrono; si SIFEN responde 1264 (síncrono no habilitado para el RUC) pasa a lote y no vuelve a probar el síncrono. */
+  async function enviarUno(xml: string): Promise<RespuestaSifen> {
+    if (!soloLote || !d.ws.enviarLote) {
+      const s = await d.ws.enviarDE(xml);
+      if (!(s.estado === "rechazado" && s.codigo === CODIGO_SINCRONO_NO_HABILITADO && d.ws.enviarLote)) return s;
+      soloLote = true;
+    }
+    return await d.ws.enviarLote!([xml]);
   }
 
   async function emitir(docEntrada: DocumentoDE, op: OpcionesEmision = {}): Promise<ResultadoEmision> {
@@ -174,13 +195,26 @@ export function crearEmisorPropio(d: DepsEmisorPropio): EmisorPropio {
       const c = await d.ws.consultarDE(cdc);
       if (aprobado(c)) r = c;
       else if (!noExiste(c)) return { ...conDatos, ok: false, estado: "enviada", codigo: c.codigo, mensaje: `consulta previa sin respuesta definitiva: ${c.mensaje ?? c.estado}` };
+      else if (op.protocoloPrevio && d.ws.consultarLote) {
+        // Salió por lote y el CDC todavía no aparece: el lote manda (en proceso → esperar; rechazado → rechazada).
+        const l = await d.ws.consultarLote(op.protocoloPrevio);
+        const doc = ((l as { documentos?: Array<{ cdc: string; estado: string; codigo?: string; mensaje?: string }> }).documentos ?? []).find((x) => x.cdc === cdc);
+        if (l.estado === "en_proceso" || l.estado === "error_red") {
+          return { ...conDatos, ok: false, estado: "enviada", protocolo: op.protocoloPrevio, codigo: l.codigo, mensaje: `lote ${op.protocoloPrevio} en proceso` };
+        }
+        if (doc?.estado === "rechazado") return { ...conDatos, ok: false, estado: "rechazada", codigo: doc.codigo, mensaje: doc.mensaje };
+        if (doc && aprobado(doc as unknown as RespuestaSifen)) r = { ...(doc as unknown as RespuestaSifen), ok: true };
+        // Lote inexistente o extemporáneo (0360/0364) y sin el CDC: se reenvía abajo.
+      }
     }
     for (let intento = 0; !r; intento++) {
-      const env = await d.ws.enviarDE(xmlFinal);
+      const env = await enviarUno(xmlFinal);
       if (env.estado !== "error_red") {
         r = env;
         break;
       }
+      // Por lote no se reintenta a ciegas: puede haber llegado. La próxima corrida consulta el CDC.
+      if (soloLote) return { ...conDatos, ok: false, estado: "enviada", codigo: env.codigo, mensaje: `lote sin respuesta (${env.mensaje ?? "red"}); se consulta en la próxima corrida` };
       // Caída de red a mitad del envío: puede haber llegado. Consultar ANTES de cualquier reenvío.
       await esperar(esperaMs * (intento + 1));
       const c = await d.ws.consultarDE(cdc);
@@ -193,7 +227,9 @@ export function crearEmisorPropio(d: DepsEmisorPropio): EmisorPropio {
       }
     }
 
-    if (r.estado === "en_proceso") return { ...conDatos, ok: false, estado: "enviada", codigo: r.codigo, mensaje: r.mensaje };
+    if (r.estado === "en_proceso") {
+      return { ...conDatos, ok: false, estado: "enviada", codigo: r.codigo, protocolo: r.protocolo, mensaje: r.protocolo ? `enviado por lote (protocolo ${r.protocolo}); se consulta en la próxima corrida` : r.mensaje };
+    }
     if (r.estado === "rechazado") return { ...conDatos, ok: false, estado: "rechazada", codigo: r.codigo, mensaje: r.mensaje };
     if (!aprobado(r)) return { ...conDatos, ok: false, estado: "error", codigo: r.codigo, mensaje: r.mensaje ?? r.estado };
 

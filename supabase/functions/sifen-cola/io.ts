@@ -7,7 +7,7 @@
 //   - enviarKudeWhatsApp(...)   → plantilla voltra_factura con el PDF (cola y sifen-reenviar).
 
 import { datosEntregaKude } from "../_shared/sifen/entrega_kude.ts";
-import { entregarKudeReal } from "../_shared/sifen/entrega_kude_io.ts";
+import { depsEntregaKude, entregarKudeReal } from "../_shared/sifen/entrega_kude_io.ts";
 import { db } from "../_shared/db.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
@@ -115,13 +115,27 @@ function nombreDePedido(p: PedidoSifen | null): string | null {
   return (r.shipping_address?.first_name as string) ?? (r.customer?.first_name as string) ?? (r.shipping_address?.name as string) ?? null;
 }
 
+/** Mail que el cliente pidió por WhatsApp (tabla pedido_email_factura, migración 20261029000009). Sin tabla → nada. */
+async function emailPedidoPorCliente(orderId: number): Promise<string | undefined> {
+  const { data, error } = await db().from("pedido_email_factura").select("email").eq("shopify_order_id", orderId).maybeSingle();
+  return error || !data?.email ? undefined : String(data.email);
+}
+
 /**
  * 29-10: entrega del KuDE por cadena de respaldo (_shared/sifen/entrega_kude.ts): plantilla aprobada → documento por
  * WhatsApp con ventana de 24 h → correo (Resend) → Telegram a Enrique. Devuelve el canal por el que salió.
  */
 export async function enviarKudeWhatsApp(f: Pick<FilaFactura, "kude_path" | "numero_completo" | "total">, ped: PedidoSifen | null, plantilla = "voltra_factura") {
   if (!f.kude_path || !f.numero_completo) return { ok: false, error: "sin KuDE" };
-  return await entregarKudeReal(datosEntregaKude(f, ped, await urlKude(f.kude_path)), plantilla);
+  const d = datosEntregaKude(f, ped, await urlKude(f.kude_path));
+  // Mail que el cliente pidió por WhatsApp (pedido_email_factura): manda sobre el de Shopify y la factura también
+  // sale por correo aunque WhatsApp haya funcionado (lo pidió así).
+  const pedido = ped?.shopify_order_id;
+  const pidio = pedido ? await emailPedidoPorCliente(pedido).catch(() => undefined) : undefined;
+  if (pidio) d.email = pidio;
+  const r = await entregarKudeReal(d, plantilla);
+  if (pidio && r.ok && r.canal !== "correo") await depsEntregaKude(plantilla).enviarCorreo(d).catch(() => null);
+  return r;
 }
 
 async function datosEmisor(cfg: ConfigSifen): Promise<DatosEmisor | null> {

@@ -97,6 +97,8 @@ export interface FilaFactura {
   proximo_intento?: string | null;
   lease_hasta?: string | null;
   kude_enviado_en?: string | null;
+  /** Protocolo del lote (siRecepLoteDE) o de autorización. */
+  protocolo?: string | null;
   /** 29-10: por dónde salió el KuDE (contrato §4). Se escribe junto con kude_enviado_en. */
   kude_canal?: CanalKudeCola | null;
 }
@@ -430,7 +432,7 @@ export async function emitirFila(f: FilaFactura, ped: PedidoSifen | null, d: Dep
     }
 
     const intentos = (fila.intentos ?? 0) + 1;
-    const r = await d.emisor.emitir(armado.doc, { cdcPrevio: fila.cdc, xmlFirmadoPrevio: fila.xml_firmado, urlQrPrevio: fila.url_qr });
+    const r = await d.emisor.emitir(armado.doc, { cdcPrevio: fila.cdc, xmlFirmadoPrevio: fila.xml_firmado, urlQrPrevio: fila.url_qr, protocoloPrevio: fila.protocolo });
     const comunes: Partial<FilaFactura> = {
       intentos,
       cdc: r.cdc ?? fila.cdc ?? null,
@@ -438,6 +440,7 @@ export async function emitirFila(f: FilaFactura, ped: PedidoSifen | null, d: Dep
       xml_firmado: r.xmlFirmado ?? fila.xml_firmado ?? null,
       url_qr: r.urlQr ?? fila.url_qr ?? null,
       codigo_respuesta: r.codigo ?? null,
+      protocolo: r.protocolo ?? fila.protocolo ?? null,
       simulado: r.simulado ?? d.simulado,
       enviada_en: fila.enviada_en ?? ahora.toISOString(),
       ...(r.totales

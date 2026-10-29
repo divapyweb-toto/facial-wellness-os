@@ -209,6 +209,8 @@ export interface ResultadoEmision {
   codigo?: string;
   mensaje?: string;
   simulado?: boolean;
+  /** 29-10: protocolo del lote (dProtConsLote) cuando el DE salió por siRecepLoteDE y quedó en proceso. */
+  protocolo?: string;
 }
 
 export interface Emisor {

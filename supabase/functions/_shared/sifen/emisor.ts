@@ -227,6 +227,7 @@ export async function cargarModulosSifen(
       consultarDE(cdc: string): Promise<RespuestaSifen>;
       enviarEvento(x: string): Promise<RespuestaSifen>;
       consultarLote(p: string): Promise<RespuestaSifen>;
+      enviarLote(xs: string[]): Promise<RespuestaSifen>;
       consultarRuc(r: string): Promise<RespuestaSifen & { existe?: boolean; contribuyente?: { razonSocial: string; estado: string } }>;
     };
     cliente = {
@@ -234,6 +235,7 @@ export async function cargarModulosSifen(
       consultarDE: (cdc) => c.consultarDE(cdc),
       enviarEvento: (x) => c.enviarEvento(x),
       consultarLote: (p) => c.consultarLote(p),
+      enviarLote: (xs) => c.enviarLote(xs),
       async consultarRuc(ruc) {
         const r = await c.consultarRuc(ruc.split("-")[0]);
         // 27-10: ok solo con respuesta definitiva (0502 encontrado / 0500 no existe). Antes un 0160 o un HTTP 400 de SIFEN

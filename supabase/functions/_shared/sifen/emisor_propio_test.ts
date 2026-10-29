@@ -184,3 +184,41 @@ Deno.test("FE con RUC: solo un 'no existe' definitivo pasa a innominado; una con
     assertEquals(tipos, [esperado], rr.mensaje ?? rr.estado);
   }
 });
+
+Deno.test("29-10 prod: síncrono no habilitado (1264) → manda por lote, queda 'enviada' con protocolo y no vuelve a probar el síncrono", async () => {
+  let sync = 0, lotes = 0;
+  const base = wsSimulado();
+  const ws: ClienteWsSifen = {
+    ...base,
+    enviarDE: () => (sync++, Promise.resolve({ ok: false, estado: "rechazado", codigo: "1264", mensaje: "RUC del emisor no está habilitado para utilizar este tipo de servicio" } as RespuestaSifen)),
+    enviarLote: () => (lotes++, Promise.resolve({ ok: true, estado: "en_proceso", codigo: "0300", protocolo: "999123" } as RespuestaSifen)),
+  };
+  const em = crearEmisorPropio(deps(ws).d);
+  const r = await em.emitir(doc());
+  assertEquals([r.estado, r.protocolo, sync, lotes], ["enviada", "999123", 1, 1]);
+  assert(r.cdc && r.xmlFirmado);
+  await em.emitir(doc({ numero: 16 }));
+  assertEquals([sync, lotes], [1, 2]);
+});
+
+Deno.test("29-10 reintento de un DE mandado por lote: en proceso → espera sin reenviar; aprobado en el lote → aprobada con KuDE; rechazado → rechazada", async () => {
+  const xs: string[] = [];
+  const mk = (lote: RespuestaSifen) => ({
+    ...wsSimulado(),
+    consultarDE: () => Promise.resolve({ ok: false, estado: "error", existe: false, codigo: "0420" } as RespuestaSifen),
+    enviarDE: (x: string) => (xs.push(x), Promise.resolve({ ok: false, estado: "rechazado", codigo: "1264" } as RespuestaSifen)),
+    enviarLote: (l: string[]) => (xs.push(...l), Promise.resolve({ ok: true, estado: "en_proceso", codigo: "0300", protocolo: "1" } as RespuestaSifen)),
+    consultarLote: () => Promise.resolve(lote),
+  }) as ClienteWsSifen;
+  const primero = await crearEmisorPropio(deps(wsSimulado()).d).emitir(doc());
+  const op = { cdcPrevio: primero.cdc, xmlFirmadoPrevio: primero.xmlFirmado, urlQrPrevio: primero.urlQr, protocoloPrevio: "1" };
+  const enProceso = await crearEmisorPropio(deps(mk({ ok: true, estado: "en_proceso", codigo: "0361" } as RespuestaSifen)).d).emitir(doc(), op);
+  assertEquals([enProceso.estado, xs.length], ["enviada", 0]);
+  const loteOk = { ok: true, estado: "aprobado", codigo: "0362", documentos: [{ cdc: primero.cdc!, estado: "aprobado", codigo: "0260", mensaje: "Aprobado" }] } as unknown as RespuestaSifen;
+  const { d, log } = deps(mk(loteOk));
+  const aprob = await crearEmisorPropio(d).emitir(doc(), op);
+  assertEquals([aprob.estado, xs.length, log.kudes], ["aprobada", 0, 1]);
+  const loteMal = { ok: true, estado: "rechazado", codigo: "0362", documentos: [{ cdc: primero.cdc!, estado: "rechazado", codigo: "1001", mensaje: "x" }] } as unknown as RespuestaSifen;
+  const rech = await crearEmisorPropio(deps(mk(loteMal)).d).emitir(doc(), op);
+  assertEquals([rech.estado, rech.codigo, xs.length], ["rechazada", "1001", 0]);
+});
