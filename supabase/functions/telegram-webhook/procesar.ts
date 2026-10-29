@@ -9,6 +9,10 @@
 // 12-10 (botón "Recibido" del pago con prioridad): además tags PRIORIDAD y PAGADO (Shopify y Voltra OS), la venta
 // queda como pago anticipado y, si el pedido ya estaba preparado o en camino, a Enrique le llega el texto para el
 // courier con "YA PAGADO" (cobrar 0). El aviso del comprobante es una foto: se edita la leyenda, no el texto.
+// 29-10: es_este:<id>:<ref> (transferencia ambigua, _shared/pagos_ranking.ts): Enrique elige el pedido entre los
+// candidatos → hace lo mismo que pagado:<id> (mismo candado, así "Recibido" y "Es este" no marcan dos veces).
+// 29-10 (factura al cobrar): tras marcar pagado se dispara facturarAlCobrar(id) sin esperar (la cola de 10 min lo
+// levanta igual si falla).
 // Mejora mensual (M3): mej_aplicar:<ciclo>, mej_descartar:<ciclo>, mej_detalle:<ciclo>,
 // mej_volver:<numero de versión> → lógica en ../mejora-mensual/aprobacion.ts.
 // Idempotencia en dos capas:
@@ -28,8 +32,8 @@ import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier
 import { TAG_PAGADO, TAG_PRIORIDAD } from "../_shared/pago_anticipado.ts";
 import { decidirMejora, type DepsDecision, type ResultadoDecision } from "../mejora-mensual/aprobacion.ts";
 
-// AccionTelegram (en _shared) cubre los botones genéricos; "pagado" es propio de este webhook.
-export type AccionCallback = AccionTelegram | "pagado";
+// AccionTelegram (en _shared) cubre los botones genéricos; "pagado" y "es_este" son propios de este webhook.
+export type AccionCallback = AccionTelegram | "pagado" | "es_este";
 
 /** Tag de Shopify: Enrique verificó el pago anticipado en ueno. */
 export const TAG_PAGO_VERIFICADO = "PAGO_VERIFICADO";
@@ -125,6 +129,11 @@ export interface Dependencias {
   avisar?(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   /** 12-10: la venta del pedido (VT-<n>) queda como pago anticipado; devuelve cuántas filas cambió. */
   marcarVentaPagada?(pedido: PedidoContexto): Promise<number>;
+  /**
+   * 29-10: emite la factura al quedar cobrado (factura/io.ts facturarAlCobrar). Se llama sin esperar y sin bloquear
+   * el botón; quien la conecta la mantiene viva (EdgeRuntime.waitUntil). Sin esto no se dispara (la cola la levanta).
+   */
+  facturarAlCobrar?(orderId: number): Promise<unknown>;
   /** Botones mej_* del ciclo mensual de mejora. Sin esto, se responden como desconocidos. */
   mejora?: DepsDecision;
 }
@@ -139,13 +148,17 @@ export type Resultado =
 
 const VENTANA_MS = 24 * 60 * 60 * 1000;
 
-export function parsearCallback(data: string | undefined): { accion: AccionCallback; id: number } | null {
-  const m = /^(cancelar|reponer|escribo|pagado):(\d{1,19})$/.exec(data ?? "");
+export function parsearCallback(data: string | undefined): { accion: AccionCallback; id: number; ref?: string } | null {
+  const m = /^(cancelar|reponer|escribo|pagado):(\d{1,19})$/.exec(data ?? "") ??
+    /^(es_este):(\d{1,19}):([A-Za-z0-9_-]{1,40})$/.exec(data ?? "");
   if (!m) return null;
   const id = Number(m[2]);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
-  return { accion: m[1] as AccionCallback, id };
+  return { accion: m[1] as AccionCallback, id, ...(m[3] ? { ref: m[3] } : {}) };
 }
+
+/** "Es este" y "Recibido" son la misma acción (marcar pagado). */
+const esPago = (a: AccionCallback) => a === "pagado" || a === "es_este";
 
 /** Ventana de 24 h de WhatsApp: abierta si el último entrante fue hace menos de 24 h. */
 export function ventanaAbierta(ultimaEntrada: string | null | undefined, ahora: Date): boolean {
@@ -182,6 +195,7 @@ export function botonesTrasDecision(
       if (!p) continue;
       if (accion === "cancelar") continue; // pedido cancelado: no queda nada por decidir
       if (p.accion === accion) continue; // la acción ya hecha
+      if (esPago(accion) && esPago(p.accion)) continue; // pago asociado: no quedan "Es este" ni "Recibido"
       if (accion === "reponer" && p.accion === "cancelar") continue; // reponer y cancelar se excluyen
       nueva.push({ texto: b.text, callback: b.callback_data });
     }
@@ -203,6 +217,7 @@ const DECISION: Record<AccionCallback, string> = {
   reponer: "reponer el producto",
   escribo: "le escribo yo",
   pagado: "pago verificado",
+  es_este: "pago asociado a este pedido",
 };
 
 const YA_HECHO: Record<AccionCallback, string> = {
@@ -210,6 +225,7 @@ const YA_HECHO: Record<AccionCallback, string> = {
   reponer: "La reposición ya estaba registrada.",
   escribo: "Ese chat ya estaba en tus manos.",
   pagado: "Ese pago ya estaba verificado.",
+  es_este: "Ese pedido ya figuraba con el pago verificado.",
 };
 
 /** 12-10: el paquete ya está preparado o con el courier (todavía sin entregar): hay que avisarle que no cobre. */
@@ -312,7 +328,8 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
   }
   const { accion, id } = cb;
   const ahora = deps.ahora();
-  const clave = `accion:${accion}:${id}`;
+  // es_este comparte el candado de pagado: tocar los dos (o dos avisos) no marca dos veces.
+  const clave = `accion:${esPago(accion) ? "pagado" : accion}:${id}`;
 
   const cerrar = async (r: Resultado, textoCallback: string, error?: string) => {
     await deps.responderCallback(cq.id, textoCallback);
@@ -321,8 +338,9 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
   };
 
   const reclamado = await deps.reclamarAccion(clave, {
-    tipo: accion === "reponer" ? "reclamo_reposicion" : `decision_${accion}`,
+    tipo: accion === "reponer" ? "reclamo_reposicion" : `decision_${esPago(accion) ? "pagado" : accion}`,
     shopify_order_id: id,
+    ...(accion === "es_este" ? { via: "es_este", ref_pago: cb.ref ?? null } : {}),
     decidido_en: ahora.toISOString(),
     origen: "telegram",
     update_id: update.update_id,
@@ -371,11 +389,12 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
         });
         await paso("marcar cancelado", () => deps.marcarPedidoCancelado(id, avisado));
       }
-    } else if (accion === "pagado") {
+    } else if (esPago(accion)) {
       // Si Shopify no lo marca pagado, no se agrega el tag (fallar libera el candado para reintentar).
       const r = await deps.marcarPagadoEnShopify(id);
       if (!r.ok) return fallar(`Shopify no lo marcó pagado (${r.error ?? "error"})`);
       notas.push(r.ya_pagado ? "Ya figuraba pagado en Shopify." : "Marcado como pagado en Shopify.");
+      if (accion === "es_este" && cb.ref) notas.push(`Transferencia ${cb.ref} asociada a ${pedido.nombre ?? `#${id}`}.`);
       // Desde acá Shopify ya está pagado: un error no libera el candado; se anota y se sigue.
       // 12-10: PAGO_VERIFICADO + PRIORIDAD + PAGADO (Despacho lo pone primero y con cobro 0).
       const nombresTags = TAGS_PAGO_RECIBIDO.join(", ");
@@ -400,6 +419,7 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
           notas.push(`Falló "marcar la venta como pago anticipado" (${e instanceof Error ? e.message : e}); revisalo en Ventas.`);
         }
       }
+      dispararFactura(deps, id);
       try {
         await avisarCliente(deps, pedido, "pagado", notas);
       } catch (e) {
@@ -461,6 +481,16 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
   }
   const resumen = `Listo: ${DECISION[accion]}.`;
   return cerrar({ tipo: "hecho", accion, id, notas }, resumen);
+}
+
+/** 29-10: factura al cobrar, sin esperar ni bloquear el botón. Un error solo queda en el log (la cola lo levanta). */
+function dispararFactura(deps: Dependencias, id: number): void {
+  if (!deps.facturarAlCobrar) return;
+  try {
+    deps.facturarAlCobrar(id).catch((e) => console.error(`facturarAlCobrar ${id}:`, e instanceof Error ? e.message : e));
+  } catch (e) {
+    console.error(`facturarAlCobrar ${id}:`, e instanceof Error ? e.message : e);
+  }
 }
 
 /** Aviso con foto o documento (sin texto propio): se edita con editMessageCaption. */

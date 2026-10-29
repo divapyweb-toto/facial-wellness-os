@@ -10,6 +10,7 @@ import { db } from "../_shared/db.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { dependencias } from "../telegram-webhook/dependencias.ts";
 import { procesarCallback } from "../telegram-webhook/procesar.ts";
+import { facturarAlCobrar } from "../factura/io.ts";
 import type { PedidoPago } from "./logica.ts";
 import { type DepsPago, type Entrada, procesarPago } from "./procesar.ts";
 
@@ -66,6 +67,8 @@ const deps: DepsPago = {
   async registrarAdmin(texto, pedido) {
     await avisar(texto.replace(/[<>&]/g, " "), undefined, { tipo: "pago_verificado_auto", destino: "admin", pedido });
   },
+  // 29-10: factura al cobrar (sifen-cola motivo "pagado"); no tira excepción.
+  facturarAlCobrar: (id) => facturarAlCobrar(id),
 };
 
 Deno.serve(conServiceRole(async (req: Request) => {

@@ -103,3 +103,25 @@ Deno.test("procesarPago: datos inválidos", async () => {
     assertEquals(r.ok ? null : r.error, "datos_invalidos");
   }
 });
+
+Deno.test("29-10 factura al cobrar: marcado el pago se llama facturarAlCobrar una vez; si Recibido falla, no; su error no frena", async () => {
+  const facturas: number[] = [];
+  const { d } = dobles({ facturarAlCobrar: (id) => (facturas.push(id), Promise.resolve({ accion: "aprobada" })) });
+  const r = await procesarPago({ pedido: "#9001", monto: 158000, nro_transaccion: "T-90" }, d);
+  assert(r.ok && !r.prueba && r.notas.includes("Factura emitida al cobrar."));
+  assertEquals(facturas, [9001]);
+  // Prueba (prueba:true) y transacción repetida: no se factura.
+  await procesarPago({ pedido: "#9001", monto: 158000, nro_transaccion: "T-91", prueba: true }, d);
+  await procesarPago({ pedido: "#9001", monto: 158000, nro_transaccion: "T-90" }, d);
+  assertEquals(facturas, [9001]);
+  // Recibido falla → no se factura.
+  const f = dobles({ marcarRecibido: () => Promise.resolve({ tipo: "error", error: "x" }), facturarAlCobrar: (id) => (facturas.push(id), Promise.resolve({ accion: "aprobada" })) });
+  await procesarPago({ pedido: "#9001", monto: 158000, nro_transaccion: "T-92" }, f.d);
+  assertEquals(facturas, [9001]);
+  // La factura falla o tira excepción: el pago queda marcado igual (la cola reintenta).
+  for (const falla of [() => Promise.resolve({ accion: "error", error: "sifen-cola 500" }), () => Promise.reject(new Error("red"))]) {
+    const g = dobles({ facturarAlCobrar: falla });
+    const x = await procesarPago({ pedido: "#9001", monto: 158000, nro_transaccion: "T-93" }, g.d);
+    assert(x.ok && !x.prueba && x.notas.some((n) => n.includes("la reintenta la cola")));
+  }
+});

@@ -1,6 +1,8 @@
 // factura · I/O. Desde 08-10-2026 delega en la cola SIFEN (sistema propio o FacturaSend según config_wa['sifen'].emisor).
-// Exporta las dos funciones que usan otros módulos (firmas sin cambios):
+// Exporta las funciones que usan otros módulos:
 //   - facturarPedidoEntregado(orderId)   → la llama post-entrega cuando el pedido pasa a ENTREGADO.
+//   - facturarAlCobrar(orderId)          → 29-10: la llaman pago-verificado, pago-qr-webhook y telegram-webhook
+//                                          ("Recibido") apenas el pedido queda pagado por adelantado.
 //   - envioSeguimientoParaPedido(orderId) → la llama procesar-envios (mejora 7) antes de voltra_seguimiento_entrega.
 // La lógica vieja (facturar.ts, FacturaSend directo) queda como LEGADO y ya no se llama desde acá.
 
@@ -35,6 +37,24 @@ export interface ResultadoFacturarIo {
 export async function facturarPedidoEntregado(orderId: number, entregadoEn?: string | null): Promise<ResultadoFacturarIo> {
   try {
     const r = await invocarCola({ shopify_order_id: orderId, ...(entregadoEn ? { entregado_en: entregadoEn } : {}) });
+    const accion = String(r.accion ?? (r.ok === false ? "error" : "sin_detalle"));
+    const detalle = (r.detalle ?? r.error) as string | undefined;
+    return { orderId, accion, ...(accion === "error" || accion === "revisar" || accion === "sin_corte" ? { error: detalle ?? "sin detalle" } : {}) };
+  } catch (e) {
+    return { orderId, accion: "error", error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * 29-10 · FACTURA AL COBRAR. Disparo inmediato cuando el pedido queda pagado por adelantado (contrato §3).
+ * Invoca sifen-cola con {shopify_order_id, motivo:"pagado"}: factura si el pago es COMPLETO y pagado_en ≥ facturar_desde
+ * (si no, no_facturable / retenido). Idempotente (un pedido ya facturado responde ya_existe). No tira excepción: si
+ * falla, la cola de 10 min lo levanta igual por pagado_en.
+ */
+export async function facturarAlCobrar(orderId: number): Promise<ResultadoFacturarIo> {
+  try {
+    if (!Number.isFinite(orderId)) return { orderId, accion: "error", error: "shopify_order_id inválido" };
+    const r = await invocarCola({ shopify_order_id: orderId, motivo: "pagado" });
     const accion = String(r.accion ?? (r.ok === false ? "error" : "sin_detalle"));
     const detalle = (r.detalle ?? r.error) as string | undefined;
     return { orderId, accion, ...(accion === "error" || accion === "revisar" || accion === "sin_corte" ? { error: detalle ?? "sin detalle" } : {}) };

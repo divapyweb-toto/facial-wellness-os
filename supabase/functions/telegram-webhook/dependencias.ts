@@ -6,6 +6,7 @@ import { marcarPagado } from "../_shared/shopify_pagos.ts";
 import { enviarTexto } from "../_shared/wa.ts";
 import { avisar, editarLeyenda, editarMensaje, responderCallback } from "../_shared/telegram.ts";
 import type { CicloDecision, DepsDecision, EstadoVersion, VersionMin } from "../mejora-mensual/aprobacion.ts";
+import { facturarAlCobrar } from "../factura/io.ts";
 import type { ClaveTextoCliente, Dependencias, PedidoContexto } from "./procesar.ts";
 
 export async function obtenerPedido(id: number): Promise<PedidoContexto | null> {
@@ -118,6 +119,17 @@ function depsMejora(): DepsDecision {
   };
 }
 
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
+
+/** 29-10: factura al cobrar en segundo plano (no bloquea el botón; waitUntil la mantiene viva tras responder). */
+function facturarEnSegundoPlano(id: number): Promise<unknown> {
+  const p = facturarAlCobrar(id)
+    .then((r) => console.log("facturarAlCobrar:", JSON.stringify(r)))
+    .catch((e) => console.error(`facturarAlCobrar ${id}:`, e instanceof Error ? e.message : e));
+  if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(p);
+  return p;
+}
+
 export function dependencias(chatId: string): Dependencias {
   return {
     mejora: depsMejora(),
@@ -201,6 +213,8 @@ export function dependencias(chatId: string): Dependencias {
       if (!r.ok) console.error("editMessageCaption:", r.error);
     },
     avisar: (html, botones, opts) => avisar(html, botones, opts),
+    // 29-10: "Recibido" / "Es este" (y pago-verificado, que reusa estas deps) → factura al cobrar.
+    facturarAlCobrar: (id) => facturarEnSegundoPlano(id),
     // 12-10: "Recibido" → la venta (VT-<n>) queda como pago anticipado: Despacho "Desde Ventas" sale con cobro 0 y la
     // rendición no espera ese cobro del courier. Si todavía no está en Ventas, entra pagada (tags PAGO_VERIFICADO/PAGADO).
     marcarVentaPagada: async (pedido) => {

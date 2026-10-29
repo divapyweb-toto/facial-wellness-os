@@ -465,3 +465,85 @@ Deno.test("Le escribo yo en el aviso con foto: también edita la leyenda (no el 
   assertEquals(f.leyendas.length, 1);
   assertStringIncludes(f.leyendas[0].html, "le escribo yo");
 });
+
+// ─── 29-10: "Es este" (transferencia ambigua) y factura al cobrar ───
+
+function updateCandidatos(data: string, updateId = 900): TgUpdate {
+  const u = update(data, updateId);
+  u.callback_query!.message!.text = "💸 Transferencia de Gs 112.000 sin pedido claro: hay 17 pedidos esperando ese monto.";
+  u.callback_query!.message!.reply_markup = {
+    inline_keyboard: [
+      [{ text: "Es este: #1001", callback_data: "es_este:5001:t2610291530" }],
+      [{ text: "Es este: #1002", callback_data: "es_este:5002:t2610291530" }],
+      [{ text: "Es este: #1003", callback_data: "es_este:5003:t2610291530" }],
+    ],
+  };
+  return u;
+}
+
+function conFactura(f: ReturnType<typeof fakes>, falla = false) {
+  const facturados: number[] = [];
+  f.deps.facturarAlCobrar = (id) => {
+    facturados.push(id);
+    return falla ? Promise.reject(new Error("sifen-cola caída")) : Promise.resolve({ orderId: id, accion: "emitida" });
+  };
+  return facturados;
+}
+
+Deno.test("parsearCallback: es_este:<id>:<ref>", () => {
+  assertEquals(parsearCallback("es_este:5001:t2610291530"), { accion: "es_este", id: 5001, ref: "t2610291530" });
+  assertEquals(parsearCallback("es_este:5001"), null);
+  assertEquals(parsearCallback("es_este:5001:a b"), null);
+});
+
+Deno.test("Es este: marca pagado como Recibido, dispara facturarAlCobrar y saca los otros botones", async () => {
+  const f = fakes();
+  const facturados = conFactura(f);
+  const r = await procesarUpdate(updateCandidatos("es_este:5001:t2610291530"), f.deps);
+  assertEquals(r.tipo, "hecho");
+  assert(f.llamadas.includes("pagado:5001"));
+  assert(f.llamadas.includes(`tags:5001:${TAGS_PAGO_RECIBIDO.join(",")}`));
+  assertEquals(facturados, [5001]);
+  assertEquals(f.enviados.length, 1); // cliente avisado (ventana abierta)
+  assert(f.candados.has("accion:pagado:5001"));
+  assertEquals(f.candados.get("accion:pagado:5001")?.via, "es_este");
+  assertStringIncludes(f.ediciones[0].html, "pago asociado a este pedido");
+  assertEquals(f.ediciones[0].botones, []); // ya no quedan "Es este"
+  assertEquals(f.respuestas, ["Listo: pago asociado a este pedido."]);
+});
+
+Deno.test("Es este y después Recibido del mismo pedido: un solo pago y una sola factura", async () => {
+  const f = fakes();
+  const facturados = conFactura(f);
+  await procesarUpdate(updateCandidatos("es_este:5001:t2610291530", 901), f.deps);
+  const r = await procesarUpdate(update("pagado:5001", 902), f.deps);
+  assertEquals(r.tipo, "ya_hecho");
+  assertEquals(f.llamadas.filter((l) => l === "pagado:5001").length, 1);
+  assertEquals(facturados, [5001]);
+});
+
+Deno.test("Recibido: dispara facturarAlCobrar; si falla, el botón igual responde Listo", async () => {
+  const f = fakes();
+  const facturados = conFactura(f, true);
+  const r = await procesarUpdate(update("pagado:5001", 903), f.deps);
+  assertEquals(r.tipo, "hecho");
+  assertEquals(facturados, [5001]);
+  assertEquals(f.respuestas, ["Listo: pago verificado."]);
+});
+
+Deno.test("Recibido: si Shopify no lo marca pagado, no se factura", async () => {
+  const f = fakes(pedidoBase(), { pago: { ok: false, error: "boom" } as ResultadoPago });
+  const facturados = conFactura(f);
+  const r = await procesarUpdate(update("pagado:5001", 904), f.deps);
+  assertEquals(r.tipo, "error");
+  assertEquals(facturados, []);
+});
+
+Deno.test("facturarAlCobrar no bloquea el botón (no se espera su promesa)", async () => {
+  const f = fakes();
+  let resolver: () => void = () => {};
+  f.deps.facturarAlCobrar = () => new Promise<void>((res) => { resolver = res; });
+  const r = await procesarUpdate(update("pagado:5001", 905), f.deps);
+  assertEquals(r.tipo, "hecho"); // terminó aunque la factura sigue pendiente
+  resolver();
+});

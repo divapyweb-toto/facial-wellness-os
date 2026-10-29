@@ -3,6 +3,8 @@
 // Pedido de shopify_pedidos (columna raw = JSON del webhook de Shopify) → DocumentoDE del contrato (tipos.ts).
 //
 // Reglas de negocio (Voltra, COD):
+//   - 29-10 FACTURA AL COBRAR: se factura cuando el dinero está cobrado, nunca antes (fechaCobro). Pago anticipado
+//     completo → al pagarse (pagado_en); contra entrega y pago parcial → al quedar ENTREGADO o RENDIDO (entregado_en).
 //   - Se factura lo COBRADO de verdad: el precio de cada line_item menos sus descuentos (las ofertas ×2/×3/pack
 //     ya vienen en el precio; el upsell es otro line_item; el downsell es un descuento o un precio menor).
 //   - El envío va como ítem aparte ("Envío", Gs 33.000 por defecto, IVA 10 % configurable). [VERIFICAR contadora]
@@ -23,6 +25,7 @@
 import type { DocumentoDE, ItemDE, ReceptorDE, TipoEmision } from "./tipos.ts";
 import { atributosPedido, digitoVerificadorRuc } from "../facturacion.ts";
 import { partesAsuncion } from "../horario.ts";
+import { pagadoCompleto } from "../pago_anticipado.ts";
 
 export interface PedidoSifen {
   shopify_order_id: number;
@@ -33,6 +36,8 @@ export interface PedidoSifen {
   raw: unknown;
   telefono?: string | null;
   entregado_en?: string | null;
+  /** 29-10: cuándo quedó cobrado POR COMPLETO por adelantado (trigger por tags, migración 20261029000001). */
+  pagado_en?: string | null;
   es_borrador?: boolean | null;
   estado_confirmacion?: string | null;
   /** true si el pedido pasó alguna vez por RENDIDO (pedido_estados). Lo llena la cola. */
@@ -132,7 +137,8 @@ export const CONFIG_DESDE_PEDIDO_DEFECTO: ConfigDesdePedido = {
   tolerancia_gs: 0,
 };
 
-/** Estados de shopify_pedidos.estado_envio que habilitan la factura (RENDIDO = entregado y plata rendida). */
+/** Estados de shopify_pedidos.estado_envio que habilitan la factura contra entrega (RENDIDO = entregado y plata rendida).
+ * El pago anticipado completo no necesita estos estados: ver fechaCobro. */
 export function esFacturable(estadoEnvio: string | null | undefined): boolean {
   return estadoEnvio === "ENTREGADO" || estadoEnvio === "RENDIDO";
 }
@@ -141,17 +147,59 @@ export function esDevuelto(estadoEnvio: string | null | undefined): boolean {
   return estadoEnvio === "NO_ENTREGADO" || estadoEnvio === "CANCELADO";
 }
 
+/** Tag que pone el bot/Telegram cuando el cliente cancela (pedidos-trabados, importar-courier la leen igual). */
+export const TAG_CANCELADO_CLIENTE = "CANCELADO_CLIENTE";
+
 /**
- * Motivo por el que un pedido NUNCA se factura (null = se puede): cancelado en Shopify o por el cliente,
- * borrador, pedido de prueba (raw.test o etiqueta PRUEBA_E2E). Hallazgo de la revisión G (08-10).
+ * Motivo por el que un pedido NUNCA se factura (null = se puede): devuelto (NO_ENTREGADO / CANCELADO), cancelado en
+ * Shopify o por el cliente, borrador, pedido de prueba (raw.test o etiqueta PRUEBA_E2E). Hallazgo de la revisión G (08-10).
+ * 29-10: como ahora se factura también al pagarse (sin entrega), entran el estado devuelto y la tag CANCELADO_CLIENTE
+ * (esta solo si no se entregó: una tag vieja no frena la factura de un pedido que sí se entregó y cobró).
  */
 export function motivoNoFacturable(ped: PedidoSifen, cfg: Pick<ConfigDesdePedido, "tag_prueba"> = CONFIG_DESDE_PEDIDO_DEFECTO): string | null {
   const r = obj(ped.raw);
   if (ped.es_borrador) return "borrador";
+  if (esDevuelto(ped.estado_envio)) return `devuelto (${ped.estado_envio})`;
   if (str(r.cancelled_at)) return "cancelado en Shopify";
   if ((ped.estado_confirmacion ?? "").startsWith("cancelado")) return `cancelado (${ped.estado_confirmacion})`;
+  if (!esFacturable(ped.estado_envio) && tagsMayus(ped.tags).includes(TAG_CANCELADO_CLIENTE)) return "cancelado por el cliente (tag CANCELADO_CLIENTE)";
   if (r.test === true) return "pedido de prueba (raw.test)";
   if ((ped.tags ?? []).includes(cfg.tag_prueba)) return `pedido de prueba (${cfg.tag_prueba})`;
+  return null;
+}
+
+const tagsMayus = (tags: unknown): string[] => (Array.isArray(tags) ? tags : []).map((t) => String(t).trim().toUpperCase());
+
+export type ViaCobro = "pagado" | "entregado";
+
+/**
+ * 29-10 · FACTURA AL COBRAR. Fecha de cobro del pedido (la que se compara con facturar_desde) y por qué camino:
+ *   - pagado: cobrado POR COMPLETO por adelantado (pagadoCompleto: PAGADO / PAGO_VERIFICADO / PAGADO_QR sin
+ *     SALDO_PENDIENTE ni PAGO_PARCIAL) y con pagado_en (lo llena el trigger). Se factura sin esperar la entrega.
+ *   - entregado: contra entrega o pago parcial → ENTREGADO o RENDIDO con entregado_en.
+ *   - null: todavía no está cobrado (no se factura). Un pagado sin pagado_en (pagó antes de la migración) cae al
+ *     camino de la entrega.
+ * No mira cancelaciones ni pruebas: eso es motivoNoFacturable.
+ */
+export function fechaCobro(ped: Pick<PedidoSifen, "tags" | "pagado_en" | "estado_envio" | "entregado_en">): { fecha: string; via: ViaCobro } | null {
+  if (ped.pagado_en && pagadoCompleto(ped)) return { fecha: ped.pagado_en, via: "pagado" };
+  if (esFacturable(ped.estado_envio) && ped.entregado_en) return { fecha: ped.entregado_en, via: "entregado" };
+  return null;
+}
+
+/**
+ * Pedido con FE que hay que anular (cancelación o NC) y por qué; null = no se toca la factura.
+ * Devuelto (NO_ENTREGADO / CANCELADO, incluye el rechazo en la puerta) siempre; cancelado en Shopify, por el cliente
+ * (estado_confirmacion cancelado_* o tag CANCELADO_CLIENTE) solo si NO se entregó (el pagado que nunca llegó).
+ * Reenvío / reprogramación (INTENTO_FALLIDO, NO_ENTREGADO_RESCATABLE, DESPACHADO o EN_PREPARACION otra vez): null.
+ */
+export function motivoAnulacion(ped: PedidoSifen): string | null {
+  if (esDevuelto(ped.estado_envio)) return `devuelto (${ped.estado_envio})`;
+  if (esFacturable(ped.estado_envio)) return null;
+  const r = obj(ped.raw);
+  if (str(r.cancelled_at)) return "cancelado en Shopify";
+  if ((ped.estado_confirmacion ?? "").startsWith("cancelado")) return `cancelado (${ped.estado_confirmacion})`;
+  if (tagsMayus(ped.tags).includes(TAG_CANCELADO_CLIENTE)) return "cancelado por el cliente (tag CANCELADO_CLIENTE)";
   return null;
 }
 

@@ -1,6 +1,6 @@
 // 12-10: pago anticipado con prioridad, sin descuento. Datos inventados (repo público).
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
-import { claveOfertaPrioridad, leerConfigPagoPrioridad, motivoSinOfertaPrioridad, pedidoPagado, textoOfertaPrioridad } from "./pago_anticipado.ts";
+import { claveOfertaPrioridad, leerConfigPagoPrioridad, medioPagoAnticipado, motivoSinOfertaPrioridad, pagadoCompleto, pedidoPagado, textoOfertaPrioridad } from "./pago_anticipado.ts";
 
 const ON = { activo: true, alias: "alias@ejemplo.com", titular: "Voltra E.A.S." };
 
@@ -67,4 +67,17 @@ Deno.test("seed_config_wa.sql: pago_prioridad apagado y sin alias (el alias va s
   assertEquals(json("pago_anticipado_descuento")?.activo, false);
   // La clave vieja pago_anticipado (con los datos de la cuenta en null) está en su propia semilla.
   assertEquals(json("pago_anticipado"), undefined);
+});
+
+Deno.test("29-10 pagadoCompleto: tags de pago sin saldo pendiente; Shopify paid NO cuenta; medio para el reembolso", () => {
+  assert(pagadoCompleto({ tags: ["PAGADO", "PRIORIDAD"] }));
+  assert(pagadoCompleto({ tags: ["pago_verificado"] }));
+  assert(pagadoCompleto({ tags: "PAGADO_QR, OTRA" }));
+  assertFalse(pagadoCompleto({ tags: ["PAGADO", "SALDO_PENDIENTE"] }));
+  assertFalse(pagadoCompleto({ tags: ["PAGO_VERIFICADO", "PAGO_PARCIAL"] }));
+  assertFalse(pagadoCompleto({ tags: [] }));
+  assertFalse(pagadoCompleto({ tags: ["PAGO_ANTICIPADO_COMPROBANTE"] }));
+  assertEquals(medioPagoAnticipado({ tags: ["PAGADO_QR", "PAGO_VERIFICADO"] }), "QR");
+  assertEquals(medioPagoAnticipado({ tags: ["PAGADO", "PAGO_VERIFICADO"] }), "transferencia");
+  assert(medioPagoAnticipado({ tags: ["PAGADO"] }).includes("sin registrar"));
 });

@@ -14,6 +14,9 @@
 //      (pagado:<id>). El pedido no cambia hasta que lo toca.
 //   3. telegram-webhook (pagado:<id>): pagado en Shopify + tags PAGO_VERIFICADO, PRIORIDAD y PAGADO; si ya estaba
 //      preparado, el texto para el courier con "YA PAGADO" (cobrar 0).
+//   4. 29-10 (factura al cobrar): con el pago COMPLETO (pagadoCompleto) el trigger de la base llena
+//      shopify_pedidos.pagado_en y se factura en ese momento (factura/io.ts facturarAlCobrar, o la cola de 10 min).
+//      Pago parcial (SALDO_PENDIENTE / PAGO_PARCIAL): se factura al entregarse, como contra entrega.
 //
 // Config (solo en Supabase, nunca en Git): config_wa['pago_prioridad'] =
 //   {"activo": true, "alias": "<alias de la cuenta>", "titular": "Voltra E.A.S."}
@@ -80,6 +83,28 @@ export function pedidoPagado(p: { tags?: unknown; raw?: unknown }): boolean {
 export function pagoParcial(p: { tags?: unknown }): boolean {
   const t = tagsMayus(p.tags);
   return t.includes("SALDO_PENDIENTE") || t.includes("PAGO_PARCIAL");
+}
+
+/** Tags de pago anticipado y de pago parcial. Las mismas listas usa el trigger shopify_pedidos_pagado_en (migración 20261029000001). */
+export const TAGS_PAGADO_ANTICIPADO = TAGS_PAGADO;
+export const TAGS_PAGO_PARCIAL = ["SALDO_PENDIENTE", "PAGO_PARCIAL"];
+
+/**
+ * 29-10 (factura al cobrar): cobrado POR COMPLETO por adelantado = tag PAGADO / PAGO_VERIFICADO / PAGADO_QR y sin
+ * SALDO_PENDIENTE ni PAGO_PARCIAL. Solo por tags: el financial_status "paid" de Shopify no cuenta (post-entrega lo pone
+ * al rendir el courier, y eso es contra entrega). Con esto se factura al pagarse, sin esperar la entrega.
+ */
+export function pagadoCompleto(p: { tags?: unknown }): boolean {
+  const t = tagsMayus(p.tags);
+  return TAGS_PAGADO.some((x) => t.includes(x)) && !pagoParcial(p);
+}
+
+/** Medio del pago anticipado, para el aviso de reembolso: QR, transferencia o "pago anticipado" sin detalle. */
+export function medioPagoAnticipado(p: { tags?: unknown }): string {
+  const t = tagsMayus(p.tags);
+  if (t.includes(TAG_PAGADO_QR)) return "QR";
+  if (t.includes(TAG_PAGO_VERIFICADO)) return "transferencia";
+  return "pago anticipado (medio sin registrar)";
 }
 
 /** Estados de envío en los que el paquete ya salió con el courier (o terminó): la oferta ya no tiene sentido. */

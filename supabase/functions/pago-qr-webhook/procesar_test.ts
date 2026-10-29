@@ -125,3 +125,22 @@ Deno.test("27-10: pago recibido y monto distinto → Enrique; QR sin cobro y reg
   await atenderEventoQR(e.d, "e1");
   assertEquals(e.log.opciones, [{ tipo: "pago_qr_registro_fallido", destino: "admin", unaVezPorDia: true, clave: "e1" }]);
 });
+
+Deno.test("29-10 factura al cobrar: pago QR con tag puesta → facturarAlCobrar una vez; sin tag o repetido, no", async () => {
+  const facturas: number[] = [];
+  const a = setup(cobro);
+  a.d.facturarAlCobrar = (id) => (facturas.push(id), Promise.resolve({ accion: "aprobada" }));
+  await procesarPagoQR("adamspay", ev(), cfg, a.d);
+  await procesarPagoQR("adamspay", ev(), cfg, a.d); // repetido: ya_pagado
+  assertEquals(facturas, [9001]);
+  // Shopify no puso la tag: el trigger no llena pagado_en → no se dispara (se factura al entregar).
+  const b = setup(cobro, false);
+  b.d.facturarAlCobrar = (id) => (facturas.push(id), Promise.resolve({ accion: "aprobada" }));
+  assertEquals((await procesarPagoQR("adamspay", ev(), cfg, b.d)).accion, "pagado");
+  assertEquals(facturas, [9001]);
+  // La factura falla: el pago queda registrado y el aviso lo dice.
+  const c = setup(cobro);
+  c.d.facturarAlCobrar = () => Promise.reject(new Error("red"));
+  assertEquals((await procesarPagoQR("adamspay", ev(), cfg, c.d)).accion, "pagado");
+  assertEquals(c.log.avisos[0].includes("la reintenta la cola"), true);
+});

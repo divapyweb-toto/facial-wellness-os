@@ -4,7 +4,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import type { DocumentoDE, TipoDE } from "./tipos.ts";
 import type { OpcionesAviso } from "../telegram_politica.ts";
 import { digitoVerificadorRuc } from "../facturacion.ts";
-import { codigoSeguridadAleatorio, fechaSifen, type PedidoSifen } from "./desde_pedido.ts";
+import { codigoSeguridadAleatorio, fechaCobro, fechaSifen, motivoAnulacion, type PedidoSifen } from "./desde_pedido.ts";
 import { crearEmisorPropio, type OpcionesWsSimulado, wsSimulado } from "./emisor_propio.ts";
 import { cdcSimuladoDoc, credencialesDesdeEnv, datosEmisorPrueba, type EmisorCola, totalesSimulados } from "./emisor.ts";
 import {
@@ -17,6 +17,7 @@ import {
   desdeFacturar,
   type FilaFactura,
   procesarCola,
+  procesarDevolucion,
   type Retencion,
   procesarInutilizacion,
   rangosAInutilizar,
@@ -96,10 +97,13 @@ function entorno(op: { ws?: OpcionesWsSimulado; cfg?: Record<string, unknown>; a
     emisor,
     fechaSifen,
     codigoSeguridad: () => codigoSeguridadAleatorio(),
-    // Igual que sifen-cola/io.ts: ventana SOLO por entregado_en, sin FE y sin retención.
+    // Igual que sifen-cola/io.ts (29-10): dos caminos, pagado_en ≥ desde (sin devueltos) o ENTREGADO/RENDIDO con
+    // entregado_en ≥ desde; sin FE y sin retención.
     pedidosSinFactura: (desde) =>
-      Promise.resolve([...pedidos.values()].filter((p) => ["ENTREGADO", "RENDIDO"].includes(p.estado_envio ?? "") &&
-        !!p.entregado_en && p.entregado_en >= desde && !retenidas.has(p.shopify_order_id) &&
+      Promise.resolve([...pedidos.values()].filter((p) =>
+        ((!!p.pagado_en && p.pagado_en >= desde && !["NO_ENTREGADO", "CANCELADO"].includes(p.estado_envio ?? "")) ||
+          (["ENTREGADO", "RENDIDO"].includes(p.estado_envio ?? "") && !!p.entregado_en && p.entregado_en >= desde)) &&
+        !retenidas.has(p.shopify_order_id) &&
         ![...filas.values()].some((f) => f.tipo_documento === 1 && f.shopify_order_id === p.shopify_order_id))),
     liberadosSinFactura: () =>
       Promise.resolve([...retenidas.entries()].filter(([id, r]) => r.liberado_en && pedidos.has(id) &&
@@ -111,8 +115,9 @@ function entorno(op: { ws?: OpcionesWsSimulado; cfg?: Record<string, unknown>; a
     },
     facturasVencidas: (ahoraIso) =>
       Promise.resolve([...filas.values()].filter((f) => f.proximo_intento && f.proximo_intento <= ahoraIso && ["pendiente", "enviada", "error", "aprobada"].includes(f.estado)).map((f) => ({ ...f }))),
+    // Igual que io (29-10): devueltos + cancelados sin entregar (motivoAnulacion).
     facturasDevueltas: () =>
-      Promise.resolve([...filas.values()].filter((f) => f.tipo_documento === 1 && f.estado === "aprobada" && ["NO_ENTREGADO", "CANCELADO"].includes(pedidos.get(f.shopify_order_id!)?.estado_envio ?? ""))
+      Promise.resolve([...filas.values()].filter((f) => f.tipo_documento === 1 && f.estado === "aprobada" && pedidos.has(f.shopify_order_id!) && !!motivoAnulacion(pedidos.get(f.shopify_order_id!)!))
         .map((f) => ({ factura: { ...f }, pedido: pedidos.get(f.shopify_order_id!)! }))),
     leerPedido: (id) => Promise.resolve(pedidos.get(id) ?? null),
     leerFactura: (id) => Promise.resolve(filas.has(id) ? { ...filas.get(id)! } : null),
@@ -536,4 +541,226 @@ Deno.test("cobro anticipado por transferencia (PAGO_VERIFICADO, Gs 112.000): iTi
   e.retenidas.get(10)!.liberado_en = "2026-10-08T14:00:00Z";
   await procesarCola(e.d);
   assertEquals([fe(e, 10).estado, pagos.get(10)], ["aprobada", 5]);
+});
+
+// ─── 29-10 · FACTURA AL COBRAR ───────────────────────────────
+// Corte del entorno por defecto: facturar_desde 2026-01-01; reloj 2026-10-08T13:00Z (ventana desde 06-10 13:00).
+
+const pagado = (id: number, over: Partial<PedidoSifen> = {}) =>
+  pedido(id, { estado_envio: "EN_PREPARACION", entregado_en: null, tags: ["PAGADO", "PAGO_VERIFICADO", "PRIORIDAD"], pagado_en: "2026-10-08T12:30:00Z", ...over });
+
+Deno.test("29-10 anticipado total → factura al pagar, sin esperar la entrega (iTiPago 5; QR → 7)", async () => {
+  const e = entorno();
+  const pagos = espiarPagos(e);
+  e.agregar(pagado(1), pagado(2, { tags: ["PAGADO_QR"] }));
+  // Disparo inmediato (facturarAlCobrar → sifen-cola {motivo:"pagado"} → facturarPedido).
+  assertEquals((await facturarPedido(1, e.d)).accion, "aprobada");
+  assertEquals([fe(e, 1).estado, pagos.get(1)], ["aprobada", 5]);
+  // La cola toma el otro pagado no entregado (pagado_en dentro de la ventana).
+  const r = await procesarCola(e.d);
+  assertEquals(r.nuevos.map((x) => x.accion), ["aprobada"]);
+  assertEquals(fe(e, 2).estado, "aprobada");
+  assertEquals(pagos.get(2), 7);
+  assertEquals(e.filas.size, 2);
+});
+
+Deno.test("29-10 contra entrega → solo al entregar; antes de la entrega no factura", async () => {
+  const e = entorno();
+  e.agregar(pedido(1, { estado_envio: "DESPACHADO", entregado_en: null }));
+  const r0 = await facturarPedido(1, e.d);
+  assertEquals(r0.accion, "no_facturable");
+  assert(r0.detalle?.includes("todavía no está cobrado"), r0.detalle);
+  await procesarCola(e.d);
+  assertEquals(e.filas.size, 0);
+  Object.assign(e.pedidos.get(1)!, { estado_envio: "ENTREGADO", entregado_en: "2026-10-08T12:45:00Z" });
+  const r = await procesarCola(e.d);
+  assertEquals(r.nuevos.map((x) => x.accion), ["aprobada"]);
+});
+
+Deno.test("29-10 pago parcial (SALDO_PENDIENTE / PAGO_PARCIAL) → no factura al pagar, sí al entregar", async () => {
+  const e = entorno();
+  // Aunque tenga PAGADO y (por error) pagado_en, con saldo pendiente no es pago completo.
+  e.agregar(
+    pedido(1, { estado_envio: "DESPACHADO", entregado_en: null, tags: ["PAGADO", "SALDO_PENDIENTE", "SALDO_50000"], pagado_en: "2026-10-08T12:00:00Z" }),
+    pedido(2, { estado_envio: "DESPACHADO", entregado_en: null, tags: ["PAGO_VERIFICADO", "PAGO_PARCIAL"] }),
+  );
+  const r1 = await facturarPedido(1, e.d);
+  assertEquals(r1.accion, "no_facturable");
+  assert(r1.detalle?.includes("pago parcial"), r1.detalle);
+  await procesarCola(e.d);
+  assertEquals(e.filas.size, 0);
+  for (const id of [1, 2]) Object.assign(e.pedidos.get(id)!, { estado_envio: "ENTREGADO", entregado_en: "2026-10-08T12:50:00Z" });
+  const r = await procesarCola(e.d);
+  assertEquals(r.nuevos.map((x) => x.accion), ["aprobada", "aprobada"]);
+});
+
+Deno.test("29-10 anticipado y después entregado → una sola factura (post-entrega responde ya_existe)", async () => {
+  const e = entorno();
+  e.agregar(pagado(1));
+  await procesarCola(e.d);
+  const f1 = fe(e, 1);
+  assertEquals(f1.estado, "aprobada");
+  Object.assign(e.pedidos.get(1)!, { estado_envio: "ENTREGADO", entregado_en: "2026-10-08T12:55:00Z" });
+  assertEquals((await facturarPedido(1, e.d, { entregadoEn: "2026-10-08T12:55:00Z" })).accion, "ya_existe");
+  const r = await procesarCola(e.d);
+  assertEquals(r.nuevos.length, 0);
+  assertEquals([...e.filas.values()].filter((f) => f.tipo_documento === 1).length, 1);
+  assertEquals(e.ws.recibidos.size, 1);
+});
+
+Deno.test("29-10 doble 'Recibido' y cola + webhook en paralelo → una sola factura (conflicto del índice único)", async () => {
+  // Simula la base: facturaDePedido todavía no ve la fila (las tres llamadas leen a la vez) y el INSERT que
+  // pierde contra facturas_una_fe_por_pedido_ambiente recibe 23505 → crearFactura devuelve null.
+  const e = entorno();
+  e.agregar(pagado(1));
+  e.d.facturaDePedido = () => Promise.resolve(null);
+  let inserts = 0;
+  const crear = e.d.crearFactura;
+  e.d.crearFactura = (f) => (inserts++, crear(f));
+  const r = await Promise.all([facturarPedido(1, e.d), facturarPedido(1, e.d), procesarCola(e.d)]);
+  const acciones = [r[0].accion, r[1].accion, ...(r[2] as Awaited<ReturnType<typeof procesarCola>>).nuevos.map((x) => x.accion)];
+  assertEquals(acciones.filter((a) => a === "aprobada").length, 1, JSON.stringify(acciones));
+  assertEquals(acciones.filter((a) => a === "ya_existe").length, 2, JSON.stringify(acciones));
+  assertEquals(inserts, 3);
+  assertEquals(e.filas.size, 1);
+  assertEquals([...e.ws.recibidos.values()], [1]);
+  assertEquals(e.numeracion.get("12345678/001/001/1"), 1);
+});
+
+Deno.test("29-10 crearFactura falso que devuelve null la segunda vez → ya_existe, sin emitir", async () => {
+  const e = entorno();
+  e.agregar(pagado(1));
+  e.d.facturaDePedido = () => Promise.resolve(null); // la lectura previa no ve la fila (carrera)
+  let n = 0;
+  const crear = e.d.crearFactura;
+  e.d.crearFactura = (f) => (++n === 1 ? crear(f) : Promise.resolve(null));
+  assertEquals((await facturarPedido(1, e.d)).accion, "aprobada");
+  assertEquals((await facturarPedido(1, e.d)).accion, "ya_existe");
+  assertEquals([e.filas.size, e.ws.recibidos.size], [1, 1]);
+});
+
+Deno.test("29-10 pagado + cancelado sin entregar (48 h) → evento de cancelación + aviso de reembolso a Enrique, una vez", async () => {
+  for (const cambio of [
+    { raw: { cancelled_at: "2026-10-08T15:00:00Z" } },
+    { estado_confirmacion: "cancelado_cliente" },
+    { tags: ["PAGADO", "PAGO_VERIFICADO", "CANCELADO_CLIENTE"] },
+    { estado_envio: "NO_ENTREGADO" },
+    { estado_envio: "CANCELADO" },
+  ] as Array<Partial<PedidoSifen> & { raw?: Record<string, unknown> }>) {
+    const e = entorno();
+    e.agregar(pagado(1, { telefono: "595981000111" }));
+    await procesarCola(e.d);
+    horas(e, 3);
+    const p = e.pedidos.get(1)!;
+    Object.assign(p, { ...cambio, raw: { ...(p.raw as Record<string, unknown>), ...(cambio.raw ?? {}) } });
+    const r = await procesarCola(e.d);
+    assertEquals(r.devoluciones.map((x) => x.accion), ["cancelada"], JSON.stringify(cambio));
+    assertEquals(fe(e, 1).estado, "cancelada");
+    assertEquals(e.eventos.map((x) => x.tipo), ["cancelacion"]);
+    const i = e.opciones.findIndex((o) => o.tipo === "sifen_reembolso");
+    assert(i >= 0, JSON.stringify(e.opciones));
+    assertEquals([e.opciones[i].destino, e.opciones[i].clave, e.opciones[i].unaVezPorDia], ["enrique", "reembolso:1", true]);
+    const txt = e.avisos.find((a) => a.includes("Reembolso pendiente"))!;
+    for (const x of ["#1", "162000", "595981000111", "transferencia"]) assert(txt.includes(x), `${x} en ${txt}`);
+    // Otra corrida: la factura ya está cancelada → no se repite nada.
+    await procesarCola(e.d);
+    assertEquals(e.avisos.filter((a) => a.includes("Reembolso pendiente")).length, 1);
+    assertEquals(e.eventos.length, 1);
+  }
+});
+
+Deno.test("29-10 pagado con RUC, cancelado fuera de las 48 h → NC por el total + aviso de reembolso (QR)", async () => {
+  const e = entorno();
+  e.agregar(pagado(1, { tags: ["PAGADO_QR"] }, ), );
+  e.pedidos.get(1)!.raw = { ...(e.pedidos.get(1)!.raw as Record<string, unknown>), note_attributes: [{ name: "Ruc", value: `80012345-${digitoVerificadorRuc("80012345")}` }, { name: "Razon social", value: "Empresa Ficticia SA" }] };
+  await procesarCola(e.d);
+  horas(e, 72);
+  e.pedidos.get(1)!.estado_confirmacion = "cancelado_cliente";
+  const r = await procesarCola(e.d);
+  assertEquals(r.devoluciones[0].accion, "nota_credito");
+  assertEquals([...e.filas.values()].filter((f) => f.tipo_documento === 5).length, 1);
+  const txt = e.avisos.find((a) => a.includes("Reembolso pendiente"))!;
+  assert(txt.includes("QR") && txt.includes("nota de crédito"), txt);
+  await procesarCola(e.d);
+  assertEquals(e.avisos.filter((a) => a.includes("Reembolso pendiente")).length, 1);
+});
+
+Deno.test("29-10 contra entrega devuelto → cancelación SIN aviso de reembolso (no pagó nada)", async () => {
+  const e = entorno();
+  e.agregar(pedido(1));
+  await procesarCola(e.d);
+  e.pedidos.get(1)!.estado_envio = "NO_ENTREGADO";
+  await procesarCola(e.d);
+  assertEquals(fe(e, 1).estado, "cancelada");
+  assert(!e.opciones.some((o) => o.tipo === "sifen_reembolso"));
+});
+
+Deno.test("29-10 reenvío / reprogramación → la factura no se toca", async () => {
+  for (const estado of ["INTENTO_FALLIDO", "NO_ENTREGADO_RESCATABLE", "DESPACHADO", "EN_PREPARACION"]) {
+    const e = entorno();
+    e.agregar(pagado(1, { estado_envio: "DESPACHADO" }));
+    await procesarCola(e.d);
+    const antes = { ...fe(e, 1) };
+    e.pedidos.get(1)!.estado_envio = estado;
+    const r = await procesarCola(e.d);
+    assertEquals([r.nuevos.length, r.devoluciones.length], [0, 0], estado);
+    assertEquals((await procesarDevolucion(fe(e, 1), e.pedidos.get(1)!, e.d)).accion, "sin_cambios");
+    assertEquals((await facturarPedido(1, e.d)).accion, "ya_existe");
+    assertEquals([fe(e, 1).estado, fe(e, 1).numero, e.eventos.length, e.filas.size], [antes.estado, antes.numero, 0, 1], estado);
+  }
+  // Entregado con una tag CANCELADO_CLIENTE vieja: tampoco se anula (se entregó y se cobró).
+  const e = entorno();
+  e.agregar(pedido(1, { tags: ["CANCELADO_CLIENTE"] }));
+  await procesarCola(e.d);
+  assertEquals(fe(e, 1).estado, "aprobada");
+  assertEquals((await procesarDevolucion(fe(e, 1), e.pedidos.get(1)!, e.d)).accion, "sin_cambios");
+});
+
+Deno.test("29-10 fecha de cobro anterior a facturar_desde → retenido (pagado antes del corte, aunque se entregue después)", async () => {
+  const e = entorno({ cfg: { facturar_desde: "2026-10-08T03:00:00Z" } });
+  e.agregar(pagado(1, { pagado_en: "2026-10-07T20:00:00Z" }));
+  const r = await facturarPedido(1, e.d);
+  assertEquals([r.accion, r.detalle], ["retenido", "anterior_al_corte"]);
+  assert(e.retenidas.get(1)?.nota.startsWith("pagado 2026-10-07T20:00:00Z"), e.retenidas.get(1)?.nota);
+  // Se entrega después del corte: manda la fecha de COBRO (pagado_en), sigue retenido.
+  Object.assign(e.pedidos.get(1)!, { estado_envio: "ENTREGADO", entregado_en: "2026-10-08T12:00:00Z" });
+  await procesarCola(e.d);
+  assertEquals(e.filas.size, 0);
+  assertEquals((await facturarPedido(1, e.d)).accion, "retenido");
+});
+
+Deno.test("29-10 la cola toma los pagados no entregados; pagado sin pagado_en espera la entrega; cancelado no", async () => {
+  const e = entorno();
+  e.agregar(
+    pagado(1),
+    pagado(2, { estado_envio: null }),
+    pagado(3, { pagado_en: null }), // pagó antes de la migración: sin fecha → al entregar
+    pagado(4, { estado_confirmacion: "cancelado_cliente" }),
+    pagado(5, { pagado_en: "2026-10-01T00:00:00Z" }), // fuera de la ventana de 2 días
+  );
+  const r = await procesarCola(e.d);
+  assertEquals(r.nuevos.filter((x) => x.accion === "aprobada").length, 2);
+  assertEquals([fe(e, 1)?.estado, fe(e, 2)?.estado], ["aprobada", "aprobada"]);
+  assertEquals((await facturarPedido(3, e.d)).detalle?.startsWith("pagado sin pagado_en"), true);
+  assertEquals((await facturarPedido(4, e.d)).accion, "no_facturable");
+  assert(!fe(e, 3) && !fe(e, 4) && !fe(e, 5));
+  // El 5 igual se factura: la llamada directa no depende de la ventana, solo del corte.
+  assertEquals((await facturarPedido(5, e.d)).accion, "aprobada");
+});
+
+Deno.test("29-10 KuDE: se guarda kude_canal junto con kude_enviado_en ('plantilla' si el canal no viene)", async () => {
+  const e = entorno();
+  e.agregar(pedido(1), pedido(2));
+  let n = 0;
+  e.d.enviarKude = () => Promise.resolve(++n === 1 ? { ok: true } : { ok: true, canal: "correo" as const });
+  await procesarCola(e.d);
+  assertEquals([fe(e, 1).kude_canal, fe(e, 2).kude_canal], ["plantilla", "correo"]);
+  assert(fe(e, 1).kude_enviado_en && fe(e, 2).kude_enviado_en);
+  // Si falla, no se marca canal.
+  const f = entorno();
+  f.agregar(pedido(1));
+  f.d.enviarKude = () => Promise.resolve({ ok: false, error: "x" });
+  await procesarCola(f.d);
+  assertEquals([fe(f, 1).kude_canal, fe(f, 1).kude_enviado_en], [undefined, undefined]);
+  assertEquals(fechaCobro(f.pedidos.get(1)!)?.via, "entregado");
 });

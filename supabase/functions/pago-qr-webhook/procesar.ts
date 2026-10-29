@@ -3,6 +3,8 @@
 // Al confirmarse un pago QR: cobros_qr → 'pagado' (una sola vez, update condicional), tag PAGADO_QR
 // en Shopify y aviso a Telegram con lo que hay que decirle al courier para que NO cobre en la puerta.
 // Si el monto no coincide con el cobro: 'monto_distinto', aviso y nada más (Enrique decide).
+// 29-10 (factura al cobrar): con la tag puesta (el trigger llena pagado_en) → facturarAlCobrar, sin esperar la entrega.
+// No tira excepción y es idempotente: si falla, la cola de 10 min lo toma por pagado_en.
 
 import type { EventoPagoQR, ProveedorQR } from "../_shared/pago_qr.ts";
 import type { BotonTelegram } from "../_shared/telegram_formato.ts";
@@ -57,6 +59,8 @@ export interface DepsPagoQR {
   avisar(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   escapar(s: unknown): string;
   ahora(): Date;
+  /** factura/io.ts facturarAlCobrar (opcional en pruebas). No tira excepción. */
+  facturarAlCobrar?(orderId: number): Promise<{ accion: string; error?: string }>;
 }
 
 export type AccionPagoQR = "cobro_desconocido" | "ya_pagado" | "no_pagado" | "monto_distinto" | "pagado";
@@ -118,6 +122,11 @@ export async function procesarPagoQR(
   const ped = await deps.leerPedido(orderId);
   let texto = textoAvisoPago(ped, orderId, ev.monto ?? Number(cobro.monto), proveedor, cfg, deps.escapar);
   if (!tag.ok) texto += `\nNo se pudo poner la tag ${deps.escapar(cfg.tag_shopify)} en Shopify: ${deps.escapar(tag.error ?? "")}`;
+  // Sin la tag en la copia local el trigger no llena pagado_en: la factura queda para la entrega (o hasta corregir la tag).
+  if (tag.ok && deps.facturarAlCobrar) {
+    const f = await deps.facturarAlCobrar(orderId).catch((e) => ({ accion: "error", error: e instanceof Error ? e.message : String(e) }));
+    if (f.accion === "error" || f.accion === "revisar") texto += `\nFactura: ${deps.escapar(f.accion)} (${deps.escapar(f.error ?? "sin detalle")}); la reintenta la cola.`;
+  }
   // 27-10: texto para el courier (que NO cobre) → Telegram inmediato a Enrique.
   await deps.avisar(texto, undefined, { tipo: "pago_qr_recibido", destino: "enrique", pedido: ped?.nombre ?? String(orderId) });
   return { accion: "pagado", orderId };

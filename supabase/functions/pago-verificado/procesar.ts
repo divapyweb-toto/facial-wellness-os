@@ -2,6 +2,9 @@
 // Orden: interruptor → datos → pedido → decidir (monto exacto + coincidencia) → reservar el n.º de transacción (único)
 // → el MISMO "Recibido" del Telegram (procesarCallback pagado:<id>, con su candado accion:pagado:<id>).
 // Si "Recibido" falla, se libera el n.º de transacción para poder reintentar. Nunca se marca dos veces.
+// 29-10 (factura al cobrar): marcado el pago → facturarAlCobrar (factura ya si el pago quedó COMPLETO; con saldo
+// pendiente la cola responde no_facturable y se factura al entregar). Idempotente y sin excepción: si falla, la cola
+// de 10 min lo toma por pagado_en. Telegram "Recibido" (agente C) también lo llama: dos llamadas = una sola factura.
 import { decidir, type Decision, nombrePedido, type PedidoPago } from "./logica.ts";
 
 export interface Entrada {
@@ -27,6 +30,8 @@ export interface DepsPago {
   /** procesarCallback("pagado:<id>") del telegram-webhook. */
   marcarRecibido(shopifyOrderId: number, nro: string): Promise<ResultadoRecibido>;
   registrarAdmin(texto: string, pedido: string): Promise<void>;
+  /** factura/io.ts facturarAlCobrar (opcional en pruebas). No tira excepción. */
+  facturarAlCobrar?(shopifyOrderId: number): Promise<{ accion: string; error?: string }>;
 }
 
 export type Salida =
@@ -66,6 +71,11 @@ export async function procesarPago(e: Entrada, d: DepsPago): Promise<Salida> {
     return { ok: false, error: "recibido_fallo", detalle: r.error, pedido: nombre };
   }
   const notas = r.notas ?? [];
+  if (d.facturarAlCobrar) {
+    const f = await d.facturarAlCobrar(p.shopify_order_id).catch((ex) => ({ accion: "error", error: ex instanceof Error ? ex.message : String(ex) }));
+    if (f.accion === "aprobada") notas.push("Factura emitida al cobrar.");
+    else if (f.accion === "error" || f.accion === "revisar") notas.push(`Factura: ${f.accion} (${f.error ?? "sin detalle"}); la reintenta la cola.`);
+  }
   await d.guardarResultado(nro, { resultado: r.tipo, notas });
   await d.registrarAdmin(
     `Pago verificado solo (${e.origen ?? "gmail_ueno"}): ${nombre} · Gs ${monto.toLocaleString("es-PY")} · ${dec.motivo} · coincidencia por ${dec.coincidencia} · ${r.tipo === "ya_hecho" ? "ya estaba marcado (Recibido)" : "marcado"}${notas.length ? `\n${notas.join("\n")}` : ""}`,

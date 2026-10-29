@@ -1,30 +1,39 @@
 // _shared/sifen/cola.ts · Dueño: E. Cola de facturación SIFEN — lógica pura (todo el I/O entra por DepsCola).
 //
-// Qué hace cada corrida (sifen-cola, cron cada 10 min; también la llama post-entrega vía factura/io.ts):
-//   1. Pedidos ENTREGADO o RENDIDO (decisión de Enrique 08-10: RENDIDO = entregado) sin factura → una FE por pedido.
+// Qué hace cada corrida (sifen-cola, cron cada 10 min; también la llaman post-entrega y el pago vía factura/io.ts):
+//   1. 29-10 FACTURA AL COBRAR (fechaCobro): pedidos COBRADOS sin factura → una FE por pedido, por dos caminos:
+//        - pago anticipado completo (PAGADO / PAGO_VERIFICADO / PAGADO_QR sin SALDO_PENDIENTE ni PAGO_PARCIAL):
+//          al pagarse (pagado_en), sin esperar la entrega;
+//        - contra entrega y pago parcial: al quedar ENTREGADO o RENDIDO (decisión de Enrique 08-10: RENDIDO = entregado).
+//      Un pedido facturado al pagarse no se vuelve a facturar al entregarse (índice único por pedido y ambiente).
 //      Nunca: devueltos/NO_ENTREGADO, cancelados, borradores ni pruebas (motivoNoFacturable).
 //   2. Facturas pendiente/enviada/error con proximo_intento vencido → reintento con espera creciente
 //      (si ya hubo envío, el emisor CONSULTA el CDC antes de reenviar: nunca duplica).
 //      Aprobadas sin KuDE o sin WhatsApp → se completan.
-//   3. Devoluciones: FE aprobada cuyo pedido pasó a NO_ENTREGADO/CANCELADO:
+//   3. Devoluciones: FE aprobada cuyo pedido pasó a NO_ENTREGADO/CANCELADO o, si no se entregó, se canceló en Shopify o
+//      por el cliente (motivoAnulacion: el pagado que nunca llegó). Reenvío / reprogramación no toca la factura:
 //        - si el pedido había sido RENDIDO → NO se toca: estado 'revisar' + Telegram (decisión de Enrique 08-10);
 //        - si no: dentro del plazo de cancelación (48 h FE) → evento de cancelación (antes se cancelan sus NC);
 //          fuera de plazo → nota de crédito (tipo 5) por el total asociada por CDC. Telegram en ambos casos.
+//        - 29-10: si el cliente había pagado por adelantado → aviso a Enrique para el reembolso (monto, pedido,
+//          teléfono, medio de pago), una vez por pedido.
 //   Un error en un pedido no frena al resto (try/catch por ítem).
 //
 // Blindaje 10-10 (agente P1):
 //   - Corte obligatorio: con activo=true y facturar_desde vacío NO se factura nada nuevo (aviso por Telegram, 1 por hora).
-//     Ventana de la cola = desde max(facturar_desde, ahora − dias_atras), solo por entregado_en.
-//   - facturarPedido (cola, post-entrega y llamada manual) respeta el corte: entregado_en < facturar_desde → se registra
+//     Ventana de la cola = desde max(facturar_desde, ahora − dias_atras), por pagado_en o entregado_en.
+//   - facturarPedido (cola, post-entrega, pago y llamada manual) respeta el corte: fecha de cobro < facturar_desde → se registra
 //     en facturas_retenidas ('anterior_al_corte') y NO se factura. Un pedido retenido sin liberar nunca se factura;
 //     al liberarlo (RPC sifen_liberar, con el criterio de la contadora) lo toma la cola por liberadosSinFactura.
 //   - Ventas directas (showroom/mayorista): EN ESPERA (decisión de Enrique 10-10). La cola no las toca.
-// Idempotencia: índice único parcial (una FE por pedido, una NC por factura) + lease atómico (tomarLease)
+// Idempotencia: índice único parcial (una FE por pedido y ambiente, facturas_una_fe_por_pedido_ambiente; una NC por
+//   factura) → crearFactura devuelve null al segundo INSERT, + lease atómico (tomarLease)
 //   + número asignado en SQL junto con la fila (sifen_asignar_numero: sin saltos ni duplicados).
 
 import type { DocumentoDE, RespuestaSifen, TipoDE } from "./tipos.ts";
 import type { BotonTelegram } from "../telegram_formato.ts";
 import type { OpcionesAviso } from "../telegram_politica.ts";
+import { medioPagoAnticipado, pagadoCompleto, pagoParcial } from "../pago_anticipado.ts";
 import {
   type BaseDocumento,
   CONFIG_DESDE_PEDIDO_DEFECTO,
@@ -32,6 +41,8 @@ import {
   documentoDesdePedido,
   esDevuelto,
   esFacturable,
+  fechaCobro,
+  motivoAnulacion,
   motivoNoFacturable,
   notaCreditoDesdeFactura,
   type PedidoSifen,
@@ -86,7 +97,12 @@ export interface FilaFactura {
   proximo_intento?: string | null;
   lease_hasta?: string | null;
   kude_enviado_en?: string | null;
+  /** 29-10: por dónde salió el KuDE (contrato §4). Se escribe junto con kude_enviado_en. */
+  kude_canal?: CanalKudeCola | null;
 }
+
+/** Igual que CanalKude de entrega_kude.ts (agente B); se repite acá para no acoplar la lógica pura de la cola. */
+export type CanalKudeCola = "plantilla" | "whatsapp_documento" | "correo" | "telegram_manual";
 
 export interface EventoSifen {
   factura_id: string | null;
@@ -105,7 +121,7 @@ export interface ConfigSifen extends ConfigDesdePedido {
   /** Datos del emisor (DatosEmisor). No son secretos; van en config_wa['sifen'].datos_emisor (lo lee sifen-cola/io.ts). */
   datos_emisor?: unknown;
   /**
-   * Corte OBLIGATORIO al activar (ISO): solo se factura lo entregado desde esta fecha. Con activo=true y null no se
+   * Corte OBLIGATORIO al activar (ISO): solo se factura lo COBRADO (pagado_en o entregado_en) desde esta fecha. Con activo=true y null no se
    * factura nada nuevo. Lo anterior que llegue por post-entrega o llamada manual queda en facturas_retenidas.
    */
   facturar_desde: string | null;
@@ -180,7 +196,10 @@ export interface DepsCola {
   emisor: EmisorCola;
   fechaSifen(d: Date): string;
   codigoSeguridad(): string;
-  /** ENTREGADO/RENDIDO con entregado_en ≥ desde, sin FE del ambiente y SIN retención (liberada o no). */
+  /**
+   * Cobrados sin FE del ambiente y SIN retención (liberada o no), por los dos caminos (29-10):
+   * pagado_en ≥ desde (pago anticipado completo, entregado o no) y ENTREGADO/RENDIDO con entregado_en ≥ desde.
+   */
   pedidosSinFactura(desdeIso: string, limite: number): Promise<PedidoSifen[]>;
   /** Pedidos con retención LIBERADA y sin FE del ambiente (los toma la cola aunque estén fuera de la ventana). */
   liberadosSinFactura(limite: number): Promise<PedidoSifen[]>;
@@ -188,7 +207,7 @@ export interface DepsCola {
   /** INSERT en facturas_retenidas (si ya existe, no hace nada). */
   retener(orderId: number, motivo: string, nota: string): Promise<void>;
   facturasVencidas(ahoraIso: string, limite: number): Promise<FilaFactura[]>;
-  /** FE (tipo 1) aprobadas cuyo pedido figura NO_ENTREGADO/CANCELADO. */
+  /** FE (tipo 1) aprobadas cuyo pedido hay que anular: NO_ENTREGADO/CANCELADO, o cancelado sin entregarse (motivoAnulacion). */
   facturasDevueltas(limite: number): Promise<Array<{ factura: FilaFactura; pedido: PedidoSifen }>>;
   leerPedido(id: number): Promise<PedidoSifen | null>;
   leerFactura(id: string): Promise<FilaFactura | null>;
@@ -203,7 +222,8 @@ export interface DepsCola {
   actualizar(id: string, cambios: Partial<FilaFactura>): Promise<void>;
   registrarEvento(e: EventoSifen): Promise<void>;
   subirKude(f: FilaFactura, pdf: Uint8Array): Promise<string>;
-  enviarKude(f: FilaFactura, pedido: PedidoSifen | null): Promise<{ ok: boolean; error?: string }>;
+  /** 29-10: `canal` = por dónde salió (entregarKude del agente B); sin canal se guarda 'plantilla'. */
+  enviarKude(f: FilaFactura, pedido: PedidoSifen | null): Promise<{ ok: boolean; error?: string; canal?: CanalKudeCola | null }>;
   /** 27-10: opts = tipo/destino del aviso (todos los de SIFEN van a administración, ver avisoSifen). */
   avisar(html: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   escapar(s: unknown): string;
@@ -214,10 +234,11 @@ export interface DepsCola {
  * administración (cola avisos_admin, la lee el parte diario). `unaVezPorDia` + clave estable (id de la factura
  * o del pedido, nunca el texto del error) para los que se pueden repetir en cada corrida de la cola.
  */
-export function avisoSifen(tipo: string, o: { pedido?: unknown; clave?: unknown; unaVezPorDia?: boolean } = {}): OpcionesAviso {
+export function avisoSifen(tipo: string, o: { pedido?: unknown; clave?: unknown; unaVezPorDia?: boolean; destino?: "admin" | "enrique" } = {}): OpcionesAviso {
   return {
     tipo,
-    destino: "admin",
+    // 29-10: solo el reembolso va a Enrique (devolver plata es algo que el sistema no puede hacer).
+    destino: o.destino ?? "admin",
     pedido: o.pedido == null ? null : String(o.pedido),
     clave: o.clave == null ? null : String(o.clave),
     ...(o.unaVezPorDia ? { unaVezPorDia: true } : {}),
@@ -274,15 +295,24 @@ export function desdeFacturar(cfg: ConfigSifen, ahora: Date): string | null {
   return new Date(Math.max(minimo, corte)).toISOString();
 }
 
-/** El pedido se entregó antes del corte (sin fecha de entrega no se puede saber: lo decide quien llama). */
-export function anteriorAlCorte(entregadoEn: string, facturarDesde: string): boolean {
-  return new Date(entregadoEn).getTime() < new Date(facturarDesde).getTime();
+/** El pedido se cobró (pagado_en o entregado_en, ver fechaCobro) antes del corte. Sin fecha lo decide quien llama. */
+export function anteriorAlCorte(fechaDeCobro: string, facturarDesde: string): boolean {
+  return new Date(fechaDeCobro).getTime() < new Date(facturarDesde).getTime();
 }
 
 // ─── 1. Pedido → factura ─────────────────────────────────────
 
+/** Por qué todavía no se puede facturar (sin fecha de cobro). */
+function motivoSinCobro(ped: PedidoSifen): string {
+  if (esFacturable(ped.estado_envio)) return "sin fecha de entrega (entregado_en): lo toma la cola cuando se guarde";
+  if (pagadoCompleto(ped)) return "pagado sin pagado_en (lo llena el trigger de la base): se factura al entregarse o cuando tenga la fecha";
+  if (pagoParcial(ped)) return `pago parcial: se factura al entregarse (estado_envio ${ped.estado_envio})`;
+  return `todavía no está cobrado (estado_envio ${ped.estado_envio}, sin pago anticipado completo)`;
+}
+
 /**
- * Factura un pedido (idempotente). Lo usan la cola, post-entrega y la llamada manual (sifen-cola con shopify_order_id).
+ * Factura un pedido (idempotente). Lo usan la cola, post-entrega, el pago (facturarAlCobrar) y la llamada manual
+ * (sifen-cola con shopify_order_id). 29-10: se factura si está COBRADO (fechaCobro) y esa fecha es ≥ facturar_desde.
  * `op.entregadoEn`: fecha de entrega que post-entrega acaba de calcular y todavía no guardó (solo si la fila no la tiene).
  */
 export async function facturarPedido(pedidoOId: number | PedidoSifen, d: DepsCola, op: { entregadoEn?: string | null } = {}): Promise<ResultadoItem> {
@@ -291,22 +321,21 @@ export async function facturarPedido(pedidoOId: number | PedidoSifen, d: DepsCol
   if (!ped) return { ref, accion: "no_facturable", detalle: "no existe" };
   if (!d.cfg.facturar_desde) return { ref, accion: "sin_corte", detalle: MOTIVO_SIN_CORTE };
   if (!ped.entregado_en && op.entregadoEn) ped = { ...ped, entregado_en: op.entregadoEn };
-  if (!esFacturable(ped.estado_envio)) return { ref, accion: "no_facturable", detalle: `estado_envio ${ped.estado_envio}` };
   const no = motivoNoFacturable(ped, d.cfg);
   if (no) return { ref, accion: "no_facturable", detalle: no };
+  const cobro = fechaCobro(ped);
+  if (!cobro) return { ref, accion: "no_facturable", detalle: motivoSinCobro(ped) };
 
+  // Ya facturado (por ejemplo al pagarse, y ahora llega la entrega): no se factura de nuevo.
   const previa = await d.facturaDePedido(ped.shopify_order_id);
   if (previa) return { ref, accion: "ya_existe", detalle: previa.estado };
 
   // Retenido (anterior al corte u otro motivo) y sin liberar: nunca se factura solo.
   const ret = await d.retencion(ped.shopify_order_id);
   if (ret && !ret.liberado_en) return { ref, accion: "retenido", detalle: ret.motivo };
-  if (!ret) {
-    if (!ped.entregado_en) return { ref, accion: "no_facturable", detalle: "sin fecha de entrega (entregado_en): lo toma la cola cuando se guarde" };
-    if (anteriorAlCorte(ped.entregado_en, d.cfg.facturar_desde)) {
-      await d.retener(ped.shopify_order_id, "anterior_al_corte", `entregado ${ped.entregado_en} < facturar_desde ${d.cfg.facturar_desde}`);
-      return { ref, accion: "retenido", detalle: "anterior_al_corte" };
-    }
+  if (!ret && anteriorAlCorte(cobro.fecha, d.cfg.facturar_desde)) {
+    await d.retener(ped.shopify_order_id, "anterior_al_corte", `${cobro.via} ${cobro.fecha} < facturar_desde ${d.cfg.facturar_desde}`);
+    return { ref, accion: "retenido", detalle: "anterior_al_corte" };
   }
 
   // Validación ANTES de reservar número (un número reservado y no usado obliga a inutilizarlo).
@@ -469,9 +498,9 @@ async function enviarKudeWa(f: FilaFactura, ped: PedidoSifen | null, d: DepsCola
   const ref = `factura ${f.numero_completo ?? f.id}`;
   const ahora = d.ahora();
   const vence = f.aprobada_en && ahora.getTime() - new Date(f.aprobada_en).getTime() > d.cfg.dias_reintento_whatsapp * 86_400_000;
-  const r = await d.enviarKude(f, ped).catch((e) => ({ ok: false, error: msj(e) }));
+  const r: { ok: boolean; error?: string; canal?: CanalKudeCola | null } = await d.enviarKude(f, ped).catch((e) => ({ ok: false, error: msj(e) }));
   if (r.ok) {
-    await d.actualizar(f.id, { kude_enviado_en: ahora.toISOString(), proximo_intento: null });
+    await d.actualizar(f.id, { kude_enviado_en: ahora.toISOString(), kude_canal: r.canal ?? "plantilla", proximo_intento: null });
     return { ref, accion: "kude_enviado" };
   }
   await d.actualizar(f.id, { proximo_intento: vence ? null : proximoIntento(f.intentos + 1, ahora, d.cfg.esperas_min), error: `WhatsApp: ${r.error ?? "falló"}` });
@@ -548,23 +577,56 @@ export async function cancelarFactura(f: FilaFactura, motivo: string, d: DepsCol
   return { ok: true, detalle: "cancelada" };
 }
 
+/** El cliente había pagado por adelantado (todo o una parte): al anular la factura hay que devolverle la plata. */
+export function pagoAnticipadoADevolver(ped: PedidoSifen): boolean {
+  return pagadoCompleto(ped) || pagoParcial(ped) || !!ped.pagado_en;
+}
+
+/**
+ * 29-10: aviso a Enrique para que haga el reembolso (el sistema no puede devolver plata). Monto, pedido, teléfono y
+ * medio de pago. Una vez por pedido: sale solo en el paso que cambia el estado de la factura (cancelada, NC creada o
+ * 'revisar'), que no se repite, y además con clave por pedido y unaVezPorDia.
+ */
+async function avisarReembolso(f: FilaFactura, ped: PedidoSifen, queSePaso: string, d: DepsCola): Promise<void> {
+  if (!pagoAnticipadoADevolver(ped)) return;
+  const monto = f.total ?? ped.total ?? null;
+  const parcial = pagoParcial(ped) && !pagadoCompleto(ped);
+  await d.avisar(
+    `<b>Reembolso pendiente</b> · pedido ${d.escapar(ped.nombre ?? ped.shopify_order_id)}\n` +
+      (parcial
+        ? `Pagó una parte por adelantado (${d.escapar(medioPagoAnticipado(ped))}); total del pedido Gs ${d.escapar(monto ?? "?")}: revisá cuánto devolver.\n`
+        : `Pagó Gs ${d.escapar(monto ?? "?")} por adelantado (${d.escapar(medioPagoAnticipado(ped))}).\n`) +
+      `Teléfono: ${d.escapar(ped.telefono ?? "sin teléfono")}\n` +
+      `Motivo: ${d.escapar(motivoAnulacion(ped) ?? ped.estado_envio)}. Factura ${d.escapar(f.numero_completo ?? f.id)}: ${d.escapar(queSePaso)}.\n` +
+      `Hay que devolverle la plata al cliente (el sistema no la devuelve solo).`,
+    undefined,
+    avisoSifen("sifen_reembolso", { pedido: ped.nombre ?? ped.shopify_order_id, clave: `reembolso:${ped.shopify_order_id}`, unaVezPorDia: true, destino: "enrique" }),
+  );
+}
+
 export async function procesarDevolucion(f: FilaFactura, ped: PedidoSifen, d: DepsCola): Promise<ResultadoItem> {
   const ref = `factura ${f.numero_completo ?? f.id}`;
   const nombre = d.escapar(ped.nombre ?? ped.shopify_order_id);
   if (f.estado !== "aprobada" || f.tipo_documento !== 1 || !f.cdc) return { ref, accion: "sin_cambios" };
+  // 29-10: reenvío / reprogramación (o lo que io haya traído de más) no toca la factura.
+  const motivo = motivoAnulacion(ped);
+  if (!motivo) return { ref, accion: "sin_cambios", detalle: `estado_envio ${ped.estado_envio}: no se anula` };
   // Decisión de Enrique 08-10: si ya se había RENDIDO, nada automático.
   if (ped.rendido) {
     await d.actualizar(f.id, { estado: "revisar", error: "pedido RENDIDO y después devuelto: decidir a mano (cancelación o NC)" });
     await d.avisar(`<b>Factura a revisar</b> · pedido ${nombre}\nFiguraba RENDIDO y ahora está ${d.escapar(ped.estado_envio)}. No se canceló ni se hizo NC: decidir a mano.`, undefined, avisoSifen("sifen_revisar_rendido_devuelto", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id, unaVezPorDia: true }));
+    await avisarReembolso(f, ped, "a revisar a mano (figuraba RENDIDO)", d);
     return { ref, accion: "revisar", detalle: "rendido y devuelto" };
   }
   const notas = await d.notasDeFactura(f.id);
   if (notas.length) return { ref, accion: "sin_cambios", detalle: "ya tiene NC" };
 
+  // Decisión de Enrique 08-10: dentro de las 48 h se usa el EVENTO de cancelación (no nota de crédito).
   if (dentroPlazoCancelacion(f, d.ahora(), d.cfg)) {
     const c = await cancelarFactura(f, d.cfg.motivo_cancelacion, d);
     if (c.ok) {
-      await d.avisar(`<b>Factura cancelada</b> · pedido ${nombre} (${d.escapar(f.numero_completo)})\nEl pedido volvió dentro de las 48 h.`, undefined, avisoSifen("sifen_factura_cancelada", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id }));
+      await d.avisar(`<b>Factura cancelada</b> · pedido ${nombre} (${d.escapar(f.numero_completo)})\nEl pedido volvió o se canceló dentro de las 48 h (${d.escapar(motivo)}).`, undefined, avisoSifen("sifen_factura_cancelada", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id }));
+      await avisarReembolso(f, ped, "cancelada (evento de cancelación)", d);
       return { ref, accion: "cancelada" };
     }
     // Si SIFEN no aceptó la cancelación, se sigue con la NC (camino que siempre vale).
@@ -579,6 +641,7 @@ export async function procesarDevolucion(f: FilaFactura, ped: PedidoSifen, d: De
       undefined,
       avisoSifen("sifen_revisar_innominada", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id, unaVezPorDia: true }),
     );
+    await avisarReembolso(f, ped, "a revisar (innominada fuera de las 48 h: sin NC automática)", d);
     return { ref, accion: "revisar", detalle: "innominada fuera de plazo" };
   }
   const nc = await d.crearFactura({
@@ -605,6 +668,7 @@ export async function procesarDevolucion(f: FilaFactura, ped: PedidoSifen, d: De
     undefined,
     avisoSifen("sifen_nota_credito", { pedido: ped.nombre ?? ped.shopify_order_id, clave: f.id }),
   );
+  await avisarReembolso(f, ped, `nota de crédito por el total (${r.accion})`, d);
   return { ref, accion: r.accion === "aprobada" ? "nota_credito" : r.accion, detalle: r.detalle };
 }
 

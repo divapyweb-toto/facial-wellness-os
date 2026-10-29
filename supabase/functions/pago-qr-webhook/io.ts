@@ -6,6 +6,7 @@ import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { agregarTags, orderGid } from "../_shared/shopify.ts";
 import { crearCobroQR } from "../_shared/pago_qr.ts";
+import { facturarAlCobrar } from "../factura/io.ts";
 import { configQR, type ConfigOla4QR, type CobroQR, type DepsPagoQR, textoOfertaQR } from "./procesar.ts";
 
 export async function leerConfigQR(): Promise<ConfigOla4QR> {
@@ -65,6 +66,8 @@ export const depsReales: DepsPagoQR = {
   avisar: (t, b, o) => avisar(t, b, o),
   escapar: escaparHtml,
   ahora: () => new Date(),
+  // 29-10: factura al cobrar (sifen-cola motivo "pagado"); no tira excepción.
+  facturarAlCobrar: (id) => facturarAlCobrar(id),
 };
 
 /**

@@ -7,7 +7,9 @@ import {
   documentoDesdePedido,
   esDevuelto,
   esFacturable,
+  fechaCobro,
   fechaSifen,
+  motivoAnulacion,
   motivoNoFacturable,
   notaCreditoDesdeFactura,
   type PedidoSifen,
@@ -267,4 +269,44 @@ Deno.test("crédito con plazo_dias (tabla o atributos del pedido mayorista) → 
   }
   const innom = documentoDesdePedido(pedido(rawMayorista({ note_attributes: [{ name: "condicion", value: "credito" }, { name: "plazo_dias", value: "30" }] })), CFG, BASE);
   assert(!innom.ok && innom.motivo.includes("crédito"));
+});
+
+Deno.test("29-10 fechaCobro: pago completo → pagado_en; contra entrega / parcial → entregado_en; nada → null", () => {
+  const P = "2026-10-29T18:00:00Z", E = "2026-10-30T15:00:00Z";
+  const f = (over: Partial<PedidoSifen>) => fechaCobro(pedido({}, { entregado_en: null, ...over }));
+  assertEquals(f({ estado_envio: "EN_PREPARACION", tags: ["PAGADO", "PAGO_VERIFICADO"], pagado_en: P }), { fecha: P, via: "pagado" });
+  assertEquals(f({ estado_envio: null, tags: ["pagado_qr"], pagado_en: P }), { fecha: P, via: "pagado" });
+  // Pagado y además entregado: manda la fecha del pago (la primera en que quedó cobrado).
+  assertEquals(f({ estado_envio: "ENTREGADO", entregado_en: E, tags: ["PAGADO"], pagado_en: P }), { fecha: P, via: "pagado" });
+  // Parcial: aunque tenga PAGADO y pagado_en, espera la entrega.
+  assertEquals(f({ estado_envio: "DESPACHADO", tags: ["PAGADO", "SALDO_PENDIENTE"], pagado_en: P }), null);
+  assertEquals(f({ estado_envio: "ENTREGADO", entregado_en: E, tags: ["PAGO_PARCIAL"] }), { fecha: E, via: "entregado" });
+  // Contra entrega.
+  assertEquals(f({ estado_envio: "RENDIDO", entregado_en: E }), { fecha: E, via: "entregado" });
+  assertEquals(f({ estado_envio: "DESPACHADO" }), null);
+  assertEquals(f({ estado_envio: "ENTREGADO" }), null); // sin fecha de entrega
+  // Tag PAGADO sin pagado_en (pagó antes de la migración) o pagado_en sin tags (se sacaron): no es pago anticipado.
+  assertEquals(f({ estado_envio: "DESPACHADO", tags: ["PAGADO"] }), null);
+  assertEquals(f({ estado_envio: "DESPACHADO", pagado_en: P }), null);
+  // financial_status "paid" de Shopify NO cuenta (post-entrega lo pone al rendir).
+  assertEquals(fechaCobro(pedido({ financial_status: "paid" }, { estado_envio: "DESPACHADO", entregado_en: null })), null);
+});
+
+Deno.test("29-10 motivoAnulacion: devuelto siempre; cancelado solo si no se entregó; reenvío no", () => {
+  const m = (over: Partial<PedidoSifen>, raw: Record<string, unknown> = {}) => motivoAnulacion(pedido(raw, over));
+  assert(m({ estado_envio: "NO_ENTREGADO" }));
+  assert(m({ estado_envio: "CANCELADO" }));
+  assert(m({ estado_envio: "DESPACHADO" }, { cancelled_at: "2026-10-29T00:00:00Z" }));
+  assert(m({ estado_envio: "EN_PREPARACION", estado_confirmacion: "cancelado_sin_respuesta" }));
+  assert(m({ estado_envio: null, tags: ["cancelado_cliente"] }));
+  for (const e of ["INTENTO_FALLIDO", "NO_ENTREGADO_RESCATABLE", "DESPACHADO", "EN_PREPARACION", "ENTREGADO", "RENDIDO"]) assertEquals(m({ estado_envio: e }), null, e);
+  // Entregado/rendido con cancelación o tag vieja: no se anula automático.
+  assertEquals(m({ estado_envio: "ENTREGADO", tags: ["CANCELADO_CLIENTE"] }, { cancelled_at: "2026-10-29T00:00:00Z" }), null);
+});
+
+Deno.test("29-10 motivoNoFacturable: devuelto y CANCELADO_CLIENTE sin entregar no se facturan; entregado con tag vieja sí", () => {
+  assert(motivoNoFacturable(pedido({}, { estado_envio: "NO_ENTREGADO" })));
+  assert(motivoNoFacturable(pedido({}, { estado_envio: "DESPACHADO", tags: ["PAGADO", "CANCELADO_CLIENTE"] })));
+  assertEquals(motivoNoFacturable(pedido({}, { estado_envio: "ENTREGADO", tags: ["CANCELADO_CLIENTE"] })), null);
+  assertEquals(motivoNoFacturable(pedido({}, { estado_envio: "DESPACHADO", tags: ["PAGADO"] })), null);
 });

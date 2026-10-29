@@ -268,6 +268,25 @@ export function enviarTexto(to: string, texto: string, opciones?: OpcionesEnvio)
   return enviar(to, "text", { text: { body: texto, preview_url: false } }, texto, [texto], opciones);
 }
 
+/**
+ * 29-10: documento como mensaje libre (type "document" de la Cloud API). Solo sale con la ventana de 24 h abierta
+ * (fuera de ella Meta lo rechaza con 131047). `link` tiene que ser https y público para Meta (p. ej. URL firmada).
+ * El caption pasa por el filtro de palabras prohibidas como cualquier texto.
+ */
+export function enviarDocumento(
+  to: string,
+  doc: { link: string; filename: string; caption?: string | null },
+  opciones?: OpcionesEnvio,
+): Promise<ResultadoEnvio> {
+  if (!/^https:\/\/\S+$/.test(doc?.link ?? "")) return Promise.resolve({ ok: false, error: "link_invalido" });
+  if (!doc.filename?.trim() || doc.filename.length > 240) return Promise.resolve({ ok: false, error: "filename_invalido" });
+  const caption = doc.caption?.trim() || "";
+  if (caption.length > 1024) return Promise.resolve({ ok: false, error: "caption_mayor_a_1024" });
+  const document: Record<string, string> = { link: doc.link, filename: doc.filename.trim() };
+  if (caption) document.caption = caption;
+  return enviar(to, "document", { document }, `[documento ${document.filename}] ${caption}`.trim(), caption ? [caption] : [], opciones);
+}
+
 export function enviarBotones(
   to: string,
   texto: string,
