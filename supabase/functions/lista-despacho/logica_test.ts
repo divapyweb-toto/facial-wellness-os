@@ -1,12 +1,12 @@
 import { assert, assertEquals } from "@std/assert";
-import { armarLista, esKit, NOTA_ARMADO_KIT, textoLista } from "./logica.ts";
+import { armarLista, ciudadesAConsultar, esKit, NOTA_ARMADO_KIT, textoLista } from "./logica.ts";
 import { NOTA_ARMADO_JAWFLEX } from "../_shared/telegram_formato.ts";
 
 const AHORA = new Date("2026-10-27T15:30:00Z");
 
 const ped = (n: number, tags: string, prods: [string, number][], extra: Record<string, unknown> = {}, estado: string | null = null, ciudad = "Asunción") => ({
   nombre: `#${n}`, estado_envio: estado, es_borrador: false, creado_en: "2026-10-27T10:00:00-03:00",
-  raw: { name: `#${n}`, tags, financial_status: "pending", total_price: "158000", shipping_address: { city: ciudad },
+  raw: { name: `#${n}`, tags, financial_status: "pending", total_price: "158000", shipping_address: { city: ciudad, address1: "Calle Inventada 123" },
     line_items: prods.map(([name, quantity]) => ({ name, quantity })), ...extra },
 });
 
@@ -99,4 +99,43 @@ Deno.test("27-10: SIN_PIN con calle + ciudad se despacha; pagado sin cobertura v
   assertEquals(l.noDespachar.map((x) => x.p.nombre), ["#62"]);
   const t = textoLista(l, AHORA)!;
   assert(t.includes("Courier libre (ya pagado) (1)") && t.includes("📍 sin pin"));
+});
+
+// 29-10: misma regla que Despacho (_shared/sale_hoy.js). Datos inventados.
+Deno.test("29-10: cancelados o anulados (voided, CANCELADO_CLIENTE, cancelled_at) no aparecen en ningún lado", () => {
+  const l = armarLista([
+    ped(70, "CONFIRMADO", [["Raspador", 1]], { financial_status: "voided" }),
+    ped(71, "CANCELADO_CLIENTE, OFERTA_PAGO_ANTICIPADO", [["Raspador", 1]]),
+    ped(72, "CONFIRMADO", [["Raspador", 1]], { cancelled_at: "2026-10-21T19:13:04-03:00" }),
+  ], [], new Set(), AHORA);
+  assertEquals([...l.porCourier.values()].flat().length + l.noDespachar.length + l.retiros.length + l.sinConfirmar, 0);
+});
+
+Deno.test("29-10: dirección no utilizable (sin pin, calle ni zona) no sale aunque no tenga FALTAN_DATOS", () => {
+  const sin = { ...ped(73, "CONFIRMADO", [["Raspador", 1]]) };
+  (sin.raw as Record<string, unknown>).shipping_address = { city: "Asunción", address1: "Seivo" };
+  const l = armarLista([sin], [], new Set(), AHORA);
+  assertEquals(l.noDespachar.map((x) => [x.p.nombre, x.clave, x.quien]), [["#73", "faltan_datos", "bot"]]);
+});
+
+Deno.test("29-10: 'Mbocayaty' sale por Lucero con cobranza; 'Casa' es faltan datos (ciudad), nunca sin cobertura", () => {
+  const l0 = armarLista([
+    ped(74, "CONFIRMADO", [["Kit Deporte: Botella Deportiva + Tiras Nasales", 1]], { total_price: "188000" }, null, "Mbocayaty"),
+    ped(75, "CONFIRMADO", [["Raspador", 1]], {}, null, "Casa"),
+  ], [], new Set(), AHORA);
+  assertEquals(l0.porCourier.get("lucero")?.map((p) => p.nombre), ["#74"]);
+  const t74 = textoLista(l0, AHORA)!;
+  assert(t74.includes("Cobrar Gs 188.000"));
+  assertEquals(l0.noDespachar.map((x) => [x.p.nombre, x.clave]), [["#75", "ciudad"]]);
+  assertEquals(ciudadesAConsultar(l0), ["Casa"]);
+  // Con la tabla: "Casa" no reconocida → sigue siendo ciudad; una ciudad reconocida sin courier con cobranza → sin cobertura.
+  const l1 = armarLista([ped(75, "CONFIRMADO", [["Raspador", 1]], {}, null, "Casa"), ped(76, "CONFIRMADO", [["Raspador", 1]], {}, null, "Pueblo Reconocido")],
+    [], new Set(), AHORA, new Map([["Casa", { ciudad_reconocida: false, sin_cobertura: true, sugerido: null }], ["Pueblo Reconocido", { ciudad_reconocida: true, sin_cobertura: true, sugerido: null }]]));
+  assertEquals(l1.noDespachar.map((x) => [x.p.nombre, x.clave]), [["#75", "ciudad"], ["#76", "sin_cobertura"]]);
+  const t = textoLista(l1, AHORA)!;
+  assert(t.includes("ciudad no reconocida") && t.includes("resuelve sistema"));
+  // La lista vieja no la conoce pero la tabla sí (alias/fonética) → sale por el courier de la tabla.
+  const l2 = armarLista([ped(77, "CONFIRMADO", [["Raspador", 1]], {}, null, "Pueblo Con Alias")], [], new Set(), AHORA,
+    new Map([["Pueblo Con Alias", { ciudad_reconocida: true, sin_cobertura: false, sugerido: "lucero" }]]));
+  assertEquals(l2.porCourier.get("lucero")?.map((p) => p.nombre), ["#77"]);
 });

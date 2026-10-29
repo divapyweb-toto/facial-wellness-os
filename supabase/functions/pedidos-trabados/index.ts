@@ -25,7 +25,9 @@ async function automatico(simular: boolean) {
   const hechos: Array<{ pedido: string; accion: string; ok: boolean; error?: string }> = [];
   for (const p of pedidos) {
     const puse = tomados.has(idCandadoAuto("agregar_faltan_datos", p.shopifyOrderId));
-    for (const a of accionesPara(p, ahora, puse, coberturas, sinCob)) {
+    // 29-10: si ya se buscó la ciudad del pin una vez y sigue sin reconocerse, se le pide al cliente (pedir_ciudad).
+    const pinIntentado = tomados.has(idCandadoAuto("ciudad_desde_pin", p.shopifyOrderId));
+    for (const a of accionesPara(p, ahora, puse, coberturas, sinCob, pinIntentado)) {
       const id = idCandadoAuto(a, p.shopifyOrderId);
       if (tomados.has(id)) continue; // ya se hizo una vez: si alguien lo deshizo a mano, se respeta
       if (simular) {

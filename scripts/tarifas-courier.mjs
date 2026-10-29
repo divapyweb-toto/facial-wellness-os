@@ -45,6 +45,9 @@ const ALIAS = {
   'fernando de la mora': ['fdo de la mora', 'frenando de la mora'],
   'asuncion': ['asucion'],
   'mauricio jose troche': ['troche'],
+  // 29-10: grafías reales sin tarifa (#1159 Mbocayaty; Villa Rica). Mismos que la migración 20261029000002.
+  'mbocajaty': ['mbocayaty'],
+  'villarrica': ['villa rica'],
 }
 // Días hábiles desde el despacho. PaP cuenta sus horas desde Asunción: +1 día al máximo por el tramo CDE → Asunción.
 const DIAS_PAP = { '24HS': [1, 2], '24/48HS': [1, 3], '48/72HS': [2, 4], '72/96HS': [3, 5] }

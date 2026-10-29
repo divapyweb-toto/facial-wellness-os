@@ -5,7 +5,20 @@
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { db } from "../_shared/db.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { armarLista, type PedidoShopify, textoLista, type VentaDespacho } from "./logica.ts";
+import { armarLista, ciudadesAConsultar, type CoberturaCiudad, type PedidoShopify, textoLista, type VentaDespacho } from "./logica.ts";
+
+/** 29-10: cobertura según la tabla de tarifas (rpc sugerir_courier, contra entrega). Una ciudad cuya llamada falla queda afuera. */
+async function coberturas(ciudades: string[]): Promise<Map<string, CoberturaCiudad>> {
+  const m = new Map<string, CoberturaCiudad>();
+  await Promise.all(ciudades.map(async (c) => {
+    const { data, error } = await db().rpc("sugerir_courier", { p_ciudad: c, p_cod: true });
+    const r = (data ?? {}) as Record<string, unknown>;
+    if (!error && typeof r.ciudad_reconocida === "boolean") {
+      m.set(c, { ciudad_reconocida: r.ciudad_reconocida, sin_cobertura: r.sin_cobertura === true, sugerido: typeof r.sugerido === "string" ? r.sugerido : null });
+    } else console.warn(`lista-despacho: sugerir_courier('${c}') falló:`, error?.message ?? "sin dato");
+  }));
+  return m;
+}
 
 async function activa(): Promise<boolean> {
   const { data } = await db().from("config").select("valor").eq("clave", "lista_despacho").maybeSingle();
@@ -28,7 +41,11 @@ Deno.serve(conServiceRole(async (req: Request) => {
     ]);
     if (ev) throw new Error(`ventas: ${ev.message}`);
     if (ee) throw new Error(`entregas: ${ee.message}`);
-    const lista = armarLista((filas ?? []) as PedidoShopify[], (ventas ?? []) as VentaDespacho[], new Set((ents ?? []).map((e) => String(e.n_referencia))), ahora);
+    const enCourier = new Set((ents ?? []).map((e) => String(e.n_referencia)));
+    let lista = armarLista((filas ?? []) as PedidoShopify[], (ventas ?? []) as VentaDespacho[], enCourier, ahora);
+    // 29-10: los que quedaron sin courier se vuelven a mirar con la tabla de tarifas (ciudad mal escrita ≠ sin cobertura).
+    const consultar = ciudadesAConsultar(lista);
+    if (consultar.length) lista = armarLista((filas ?? []) as PedidoShopify[], (ventas ?? []) as VentaDespacho[], enCourier, ahora, await coberturas(consultar));
     const texto = textoLista(lista, ahora, prueba);
     const resumen = { despachar: [...lista.porCourier.values()].reduce((s, l) => s + l.length, 0), retiros: lista.retiros.length, no_despachar: lista.noDespachar.length, sin_confirmar: lista.sinConfirmar };
     if (prueba || !texto) return Response.json({ ok: true, prueba, enviado: false, ...resumen, texto });

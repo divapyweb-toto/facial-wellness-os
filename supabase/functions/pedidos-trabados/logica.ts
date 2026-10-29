@@ -19,11 +19,16 @@
 //      contra entrega). La lista vieja de transportadoras.js daba a PaP como "con cobranza" en Ayolas, Choré, San José
 //      de los Arroyos y San Juan Nepomuceno (se perdió un pedido contra entrega). Si la tabla no reconoce la ciudad
 //      (typo, pueblo chico) o la rpc falló, se usa la lista vieja como respaldo. io.ts arma el mapa antes de decidir.
+//      29-10 (#1150 ciudad "Casa", #1159 "Mbocayaty"): SIN_COBERTURA SOLO con la ciudad reconocida por la tabla y
+//      ningún courier que cobre ahí. Ciudad que no está en la tabla (ni la lista vieja la conoce con un courier que
+//      cobre) → NUNCA sin cobertura: primero la ciudad del pin (ciudad_desde_pin, una vez) y, si no hay pin o no
+//      alcanzó, se le pide al cliente (pedir_ciudad) y queda FALTAN_DATOS. Sin dato de la rpc (falló) → no se decide.
 // Cada acción se hace una sola vez por pedido (candado en eventos_crudos): si Enrique la deshace a mano, se respeta.
 
 import { transportadorasDisponibles } from "../_shared/transportadoras.js";
+import { direccionUtilizable as direccionUtilizableRegla, tienePin as tienePinRegla } from "../_shared/sale_hoy.js";
 
-export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura" | "avisar_jawflex_pap";
+export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura" | "avisar_jawflex_pap" | "pedir_ciudad";
 
 export interface PedidoAbierto {
   shopifyOrderId: number;
@@ -39,23 +44,18 @@ export interface PedidoAbierto {
 }
 
 export const MARGEN_CANCELACION_MS = 2 * 3_600_000;
-const PIN = /-\d{1,2}\.\d{3,}\s*,\s*-\d{1,2}\.\d{3,}/;
 
+/** Pin GPS en la dirección o en las notas. 29-10: la regla vive en _shared/sale_hoy.js (la misma que usa Despacho). */
 export function tienePin(p: Pick<PedidoAbierto, "direccion" | "notas">): boolean {
-  return PIN.test(p.direccion) || PIN.test(p.notas);
+  return tienePinRegla(p);
 }
 
-/** 28-10 (Enrique: "area 4 sirve ya como direccion ya que es una zona... figura en google maps"): zona o barrio reconocible. */
-const ZONA = /\b(?:[aá]rea|zona|barrio|b[°º]|km|kil[oó]metro|villa|compa[nñ][ií]a|asentamiento|sector|fracci[oó]n|loteamiento|manzana|mz)\b/i;
-
+/**
+ * Pin (15-10: con el pin basta, aunque falte la ciudad), o ciudad + calle (≥ 6 letras), o ciudad + zona/barrio
+ * (28-10: "Área 4", "Km 7"). 29-10: la regla vive en _shared/sale_hoy.js (la misma que usa Despacho).
+ */
 export function direccionUtilizable(p: Pick<PedidoAbierto, "direccion" | "notas" | "ciudad">): boolean {
-  if (tienePin(p)) return true; // 15-10: con el pin se entrega igual, aunque falte la ciudad
-  if (!p.ciudad.trim() || p.ciudad.trim() === "-") return false;
-  const texto = p.direccion.replace(/pin de ubicaci[oó]n:?/gi, "").replace(/sin calle \(ubicaci[oó]n pendiente\)/gi, "").replace(PIN, "").replace(/https?:\/\/\S+/g, "");
-  const letras = texto.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, "");
-  if (letras.length >= 6) return true; // calle escrita
-  // 28-10: zona/barrio + ciudad también es dirección ("Área 4", "Km 7", "Zona 2"); también "Ruta 2" (≥ 3 letras + número).
-  return ZONA.test(texto) || (letras.length >= 3 && /\d/.test(texto));
+  return direccionUtilizableRegla(p);
 }
 
 export interface DireccionNota {
@@ -99,16 +99,25 @@ export type Cobertura = { sin_cobertura: boolean; ciudad_reconocida: boolean; /*
 export type MapaCobertura = ReadonlyMap<string, Cobertura>;
 export const claveCobertura = (ciudad: string) => ciudad.trim();
 
-/** Respaldo: la lista de transportadoras.js (ruteo del front). */
-export const sinCoberturaLista = (ciudad: string) => !transportadorasDisponibles(ciudad).some((t: string) => t === "pap" || t === "lucero");
+/** La lista vieja (transportadoras.js, con tolerancia a typos) conoce la ciudad con un courier que cobra contra entrega. */
+export const conCobranzaLista = (ciudad: string) => transportadorasDisponibles(ciudad).some((t: string) => t === "pap" || t === "lucero");
 
 /**
- * ¿Ninguna transportadora con cobro contra entrega (PaP o Lucero) llega a esa ciudad? 20-10: con la ciudad reconocida
- * por la rpc sugerir_courier, manda su sin_cobertura; si no (typo o sin dato), la lista vieja.
+ * ¿Ningún courier con cobro contra entrega (PaP o Lucero) llega a esa ciudad? 29-10: SOLO si la tabla (rpc
+ * sugerir_courier) reconoce la ciudad. Ciudad no reconocida o sin dato de la rpc → false (nunca "sin cobertura").
  */
-export function sinCobertura(ciudad: string, cobertura?: Cobertura | null): boolean {
-  if (cobertura?.ciudad_reconocida) return cobertura.sin_cobertura;
-  return sinCoberturaLista(ciudad);
+export function sinCobertura(_ciudad: string, cobertura?: Cobertura | null): boolean {
+  return cobertura?.ciudad_reconocida === true && cobertura.sin_cobertura === true;
+}
+
+/**
+ * 29-10: la ciudad no se sabe cuál es: la tabla no la reconoce y la lista vieja tampoco la conoce con un courier que
+ * cobre ("Casa", "Central", un pueblo que no figura). Sin dato de la rpc → false (no se decide nada hasta tenerlo).
+ * Si la lista vieja sí la conoce (p. ej. un typo que tolera), se sigue como antes: no se pide nada.
+ */
+export function ciudadDesconocida(ciudad: string, cobertura?: Cobertura | null): boolean {
+  if (!cobertura || cobertura.ciudad_reconocida) return false;
+  return !conCobranzaLista(ciudad);
 }
 
 export const ciudadPendiente = (ciudad: string) => !ciudad.trim() || /^ver mapa$/i.test(ciudad.trim());
@@ -158,9 +167,10 @@ export function accionSinCobertura(p: PedidoAbierto, ahora: Date, s?: EstadoSinC
 
 /**
  * Acciones para un pedido. `puseFaltanDatos` = el sistema puso la etiqueta (candado). `coberturas` = rpc
- * sugerir_courier por ciudad (claveCobertura); sin dato para la ciudad → lista vieja.
+ * sugerir_courier por ciudad (claveCobertura). `pinIntentado` = ya se buscó una vez la ciudad del pin (candado
+ * auto_ciudad_desde_pin): si la ciudad sigue sin reconocerse, se le pide al cliente.
  */
-export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boolean, coberturas?: MapaCobertura, sinCob?: MapaSinCobertura): Accion[] {
+export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boolean, coberturas?: MapaCobertura, sinCob?: MapaSinCobertura, pinIntentado = false): Accion[] {
   const a: Accion[] = [];
   if (p.estado === "cancelado_cliente" || (tiene(p, "CANCELADO_CLIENTE") && p.estado !== "confirmado")) {
     const t = p.actualizadoEn ? Date.parse(p.actualizadoEn) : NaN;
@@ -179,9 +189,14 @@ export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boo
     return a;
   }
   if (ciudadPendiente(p.ciudad) && p.direccion.trim() && coordenadasPin(p)) a.push("ciudad_desde_pin");
-  if (necesitaCobertura(p) && sinCobertura(p.ciudad, coberturas?.get(claveCobertura(p.ciudad)))) a.push("avisar_sin_cobertura");
-  else if (necesitaAvisoJawflexPap(p, coberturas?.get(claveCobertura(p.ciudad)))) a.push("avisar_jawflex_pap");
-  const ok = direccionUtilizable(p);
+  const cob = coberturas?.get(claveCobertura(p.ciudad));
+  // 29-10: ciudad que no está en las tablas → nunca SIN_COBERTURA: primero el pin (una vez), si no, preguntarle al cliente.
+  const desconocida = necesitaCobertura(p) && ciudadDesconocida(p.ciudad, cob);
+  const pedirCiudad = desconocida && (!coordenadasPin(p) || pinIntentado);
+  if (desconocida) a.push(pedirCiudad ? "pedir_ciudad" : "ciudad_desde_pin");
+  else if (necesitaCobertura(p) && sinCobertura(p.ciudad, cob)) a.push("avisar_sin_cobertura");
+  else if (necesitaAvisoJawflexPap(p, cob)) a.push("avisar_jawflex_pap");
+  const ok = direccionUtilizable(p) && !pedirCiudad;
   if (!ok && !tiene(p, "FALTAN_DATOS") && !tiene(p, "RETIRO_EN_CASA")) a.push("agregar_faltan_datos");
   if (ok && tiene(p, "FALTAN_DATOS") && puseFaltanDatos) a.push("quitar_faltan_datos");
   return a;

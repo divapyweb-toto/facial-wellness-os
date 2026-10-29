@@ -20,6 +20,7 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   pap_ultima_chance: { titulo: "PaP custodio/inubicable", ruta: "inmediato", inventario: "#43 (hasta que el bot le escriba al cliente)" },
   sin_cobertura_revisar_comprobante: { titulo: "Sin cobertura: revisar comprobante", ruta: "inmediato", inventario: "#52" },
   sin_cobertura_escribile: { titulo: "Sin cobertura: no se le pudo escribir", ruta: "inmediato", inventario: "#49-51 (sin vía al cliente)" },
+  pedir_ciudad_escribile: { titulo: "Ciudad no reconocida: no se le pudo pedir", ruta: "inmediato", inventario: "nuevo 29-10 (sin vía al cliente)" },
   saldo_pendiente_entregado: { titulo: "Entregado con saldo pendiente", ruta: "inmediato", inventario: "#57 (hasta que el bot cobre)" },
   preparado_no_despachable: { titulo: "Preparado pero no se puede despachar", ruta: "inmediato", inventario: "#18" },
   preparado_no_despachable_sin_revertir: { titulo: "Preparado no despachable (sin revertir)", ruta: "inmediato", inventario: "#18" },

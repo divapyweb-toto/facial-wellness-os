@@ -5,8 +5,13 @@
 //   (27-10: pagado → "courier libre" aunque nadie cobre en esa ciudad);
 //   retiro en persona confirmado → sección Retiro; confirmados trabados → "No despachar" con el motivo.
 // Lo que ya pasó por Despacho (EN_PREPARACION, DESPACHADO…, venta con salida o fila en entregas) no se lista.
+// 29-10: la decisión "sale / no sale" es la de _shared/sale_hoy.js (la MISMA que usa la web de Despacho), con el
+// motivo y quién lo resuelve. Ciudad mal escrita: si la lista vieja no encuentra courier, manda la tabla de tarifas
+// (rpc sugerir_courier, misma normalización y alias que la base); una ciudad que la tabla no reconoce NO es "sin
+// cobertura" sino "faltan datos: ciudad" (#1150).
 import { escaparHtml, notaArmado } from "../_shared/telegram_formato.ts";
 import { sugerirTransportadora } from "../_shared/transportadoras.js";
+import { decidirSalida, direccionUtilizable, esCancelado, esConfirmado } from "../_shared/sale_hoy.js";
 
 export interface PedidoShopify { nombre: string | null; estado_envio: string | null; es_borrador: boolean | null; creado_en: string; raw: Record<string, unknown> | null }
 export interface VentaDespacho { n_referencia: string; transportadora: string | null; despachado_at: string | null }
@@ -36,7 +41,10 @@ export interface PedidoLista {
   factura: string | null; programado: boolean; reemplaza: string | null; totalDistinto: string | null; sinPin: boolean;
   courier: string | null; armado: string[]; creado_en: string;
 }
-export interface ListaDespacho { porCourier: Map<string, PedidoLista[]>; retiros: PedidoLista[]; noDespachar: { p: PedidoLista; motivo: string }[]; sinConfirmar: number }
+export interface NoDespachar { p: PedidoLista; motivo: string; clave: string; quien: string }
+export interface ListaDespacho { porCourier: Map<string, PedidoLista[]>; retiros: PedidoLista[]; noDespachar: NoDespachar[]; sinConfirmar: number }
+/** 29-10: cobertura de la tabla de tarifas (rpc sugerir_courier) por ciudad tal cual viene (sin espacios de los costados). */
+export interface CoberturaCiudad { ciudad_reconocida: boolean; sin_cobertura: boolean; sugerido: string | null }
 
 function lineaDe(nota: string, etiqueta: RegExp): string | null {
   const l = nota.split(/\n/).find((x) => etiqueta.test(x));
@@ -59,7 +67,7 @@ export function pagadoAntes(raw: Record<string, unknown>, tags: string[]): boole
   return ff === "" || ff === "unfulfilled" || ff === "null";
 }
 
-function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined): PedidoLista & { tags: string[] } {
+function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined): PedidoLista & { tags: string[]; direccionOk: boolean } {
   const raw = f.raw ?? {};
   const tags = tagsDe(raw);
   const dir = (raw.shipping_address ?? raw.billing_address ?? {}) as Record<string, unknown>;
@@ -70,7 +78,11 @@ function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined): PedidoList
   const armado = [...new Set(lineas.flatMap((l) => [esKit(l.nombre) ? NOTA_ARMADO_KIT : "", notaArmado(l.nombre, l.cantidad)]).filter(Boolean))];
   const forzado = lineas.find((l) => /jaw|mand[ií]bula|ejercitador/i.test(l.nombre))?.nombre ?? lineas[0]?.nombre ?? "";
   const courier = venta?.transportadora && venta.transportadora !== "otra" ? venta.transportadora : (sugerirTransportadora(ciudad, forzado, { cod: !pagado }).transportadora ?? null);
+  const direccion = [dir.address1, dir.address2].map((x) => String(x ?? "").trim()).filter(Boolean).join(", ");
+  const notas = [nota, ...[...(Array.isArray(raw.note_attributes) ? raw.note_attributes : []), ...(Array.isArray(raw.customAttributes) ? raw.customAttributes : [])]
+    .map((a: Record<string, unknown>) => `${a?.name ?? a?.key ?? ""}: ${a?.value ?? ""}`)].join("\n");
   return {
+    direccionOk: direccionUtilizable({ direccion, notas, ciudad }),
     nombre: String(raw.name ?? f.nombre ?? ""), ref: refVoltra(String(raw.name ?? f.nombre ?? "")), ciudad, lineas,
     total: Math.round(Number(raw.total_price ?? 0)) || 0, pagado, prioridad: tiene(tags, "prioridad") || pagado,
     factura: lineaDe(nota, /^\s*factura\s*:\s*/i) ?? atributo(raw, /facturar/i), programado: tiene(tags, "entrega_programada"),
@@ -80,8 +92,8 @@ function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined): PedidoList
   };
 }
 
-/** Clasifica los pedidos de los últimos días en lo que hay que despachar hoy. */
-export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refsEnCourier: Set<string>, ahora = new Date()): ListaDespacho {
+/** Clasifica los pedidos de los últimos días en lo que hay que despachar hoy. `coberturas` (29-10): tabla de tarifas por ciudad. */
+export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refsEnCourier: Set<string>, ahora = new Date(), coberturas?: ReadonlyMap<string, CoberturaCiudad>): ListaDespacho {
   const limiteRetiro = new Date(ahora.getTime() - 7 * 86400_000).toISOString();
   const ventaPorRef = new Map(ventas.map((v) => [v.n_referencia, v]));
   const out: ListaDespacho = { porCourier: new Map(), retiros: [], noDespachar: [], sinConfirmar: 0 };
@@ -90,7 +102,8 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
     if (f.es_borrador || raw.test === true || !Array.isArray(raw.line_items) || !raw.line_items.length) continue;
     if (YA_PROCESADO.has(String(f.estado_envio ?? ""))) continue;
     const tags = tagsDe(raw);
-    if (raw.cancelled_at || tags.some((t) => t.includes("cancelado")) || tiene(tags, "anterior_al_corte") || conPrefijo(tags, "reemplazado_por_")) continue;
+    // Cancelado o anulado (cancelled_at, CANCELADO_*, voided, ANTERIOR_AL_CORTE, REEMPLAZADO_POR_): en ningún lado.
+    if (esCancelado({ tags, cancelledAt: raw.cancelled_at, financialStatus: raw.financial_status })) continue;
     if (tiene(tags, "despachado") || tiene(tags, "entregado")) continue;
     // Ya preparado en Shopify (Despacho crea el fulfillment al marcar "preparado"): #1060.
     if (String(raw.fulfillment_status ?? "").toLowerCase() === "fulfilled") continue;
@@ -98,26 +111,46 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
     const venta = ventaPorRef.get(ref);
     if (venta?.despachado_at || refsEnCourier.has(ref)) continue;
     const p = aPedido(f, venta);
-    const confirmado = tiene(tags, "confirmado") || tiene(tags, "ayuda") || tiene(tags, "help");
-    if (tiene(tags, "retiro_en_casa")) {
+    const cob = coberturas?.get(p.ciudad.trim());
+    // La lista vieja no encontró courier pero la tabla sí (ciudad mal escrita que la tabla reconoce por alias o fonética).
+    if (!p.courier && !p.pagado && cob?.ciudad_reconocida && !cob.sin_cobertura && cob.sugerido) p.courier = cob.sugerido;
+    const r = decidirSalida({
+      cancelado: false,
+      retiro: tiene(tags, "retiro_en_casa"),
+      confirmado: esConfirmado(tags),
+      pagado: p.pagado,
+      comprobante: tiene(tags, "pago_anticipado_comprobante"),
+      // Enrique 27-10: "si tiene pin o solo tiene calle y ciudad sin pin igual ya se puede despachar". FALTAN_DATOS lo
+      // pone pedidos-trabados con esta misma regla (direccionUtilizable); SIN_PIN solo no frena.
+      faltanDatos: tiene(tags, "faltan_datos"),
+      direccionOk: p.direccionOk,
+      courier: tiene(tags, "sin_cobertura") && !p.pagado ? null : p.courier,
+      sinCoberturaTag: tiene(tags, "sin_cobertura"),
+      // Sin dato de la tabla y sin SIN_COBERTURA: la lista vieja tampoco la conoce → ciudad por confirmar, no "sin cobertura".
+      ciudadReconocida: cob ? cob.ciudad_reconocida : tiene(tags, "sin_cobertura"),
+    });
+    if (r.retiro) {
       // Retiros: hasta 7 días (uno viejo sin marcar entregado no se repite todos los días: #1089).
-      if (confirmado && new Date(p.creado_en).toISOString() >= limiteRetiro) out.retiros.push(p); else if (!confirmado) out.sinConfirmar++;
+      if (esConfirmado(tags) && new Date(p.creado_en).toISOString() >= limiteRetiro) out.retiros.push(p); else if (!esConfirmado(tags)) out.sinConfirmar++;
       continue;
     }
-    if (!confirmado) { out.sinConfirmar++; continue; }
-    if (!p.pagado && tiene(tags, "pago_anticipado_comprobante")) { out.noDespachar.push({ p, motivo: "mandó comprobante: verificá el pago antes de despachar" }); continue; }
-    // Enrique 27-10: "si tiene pin o solo tiene calle y ciudad sin pin igual ya se puede despachar". FALTAN_DATOS lo pone
-    // pedidos-trabados con esa misma regla (direccionUtilizable: pin, o calle + ciudad); SIN_PIN solo no frena.
-    if (tiene(tags, "faltan_datos")) { out.noDespachar.push({ p, motivo: "falta la dirección: sin pin ni calle o zona con ciudad" }); continue; }
-    if (!p.pagado && (tiene(tags, "sin_cobertura") || !p.courier)) { out.noDespachar.push({ p, motivo: "sin cobertura contra entrega: espera el pago anticipado" }); continue; }
+    if (!r.sale) {
+      if (r.clave === "sin_confirmar") out.sinConfirmar++;
+      else out.noDespachar.push({ p, clave: r.clave, quien: r.quien, motivo: `${r.motivo}: ${r.detalle} · resuelve ${r.quien}` });
+      continue;
+    }
     // Enrique 27-10: "ya está pagada no necesita cobranza" → pagado sin courier con cobranza: va por el que llegue.
-    if (!p.courier) p.courier = "libre";
-    if (!out.porCourier.has(p.courier)) out.porCourier.set(p.courier, []);
-    out.porCourier.get(p.courier)!.push(p);
+    p.courier = r.courier;
+    if (!out.porCourier.has(p.courier!)) out.porCourier.set(p.courier!, []);
+    out.porCourier.get(p.courier!)!.push(p);
   }
   for (const l of out.porCourier.values()) l.sort((a, b) => Number(b.prioridad) - Number(a.prioridad) || a.creado_en.localeCompare(b.creado_en));
   return out;
 }
+
+/** 29-10: ciudades de los "no despachar" por cobertura o ciudad, para consultar la tabla de tarifas (rpc). */
+export const ciudadesAConsultar = (l: ListaDespacho) =>
+  [...new Set(l.noDespachar.filter((x) => x.clave === "sin_cobertura" || x.clave === "ciudad").map((x) => x.p.ciudad.trim()).filter(Boolean))];
 
 const NOMBRE_COURIER: Record<string, string> = { lucero: "Lucero del Este", pap: "Punto a Punto", libre: "Courier libre (ya pagado)" };
 const gs = (n: number) => `Gs ${n.toLocaleString("es-PY")}`;

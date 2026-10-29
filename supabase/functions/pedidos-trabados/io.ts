@@ -156,7 +156,7 @@ export const idCandadoAuto = (accion: Accion, orderId: number) => `auto_${accion
 /** Candados auto_* ya tomados para estos pedidos. */
 export async function candadosTomados(ids: number[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
-  const claves = ids.flatMap((id) => (["agregar_confirmado", "cancelar", "agregar_faltan_datos", "quitar_faltan_datos", "completar_direccion", "ciudad_desde_pin", "avisar_sin_cobertura", "cancelar_sin_cobertura", "revisar_comprobante_sin_cobertura", "avisar_jawflex_pap"] as Accion[]).map((a) => idCandadoAuto(a, id)));
+  const claves = ids.flatMap((id) => (["agregar_confirmado", "cancelar", "agregar_faltan_datos", "quitar_faltan_datos", "completar_direccion", "ciudad_desde_pin", "avisar_sin_cobertura", "cancelar_sin_cobertura", "revisar_comprobante_sin_cobertura", "avisar_jawflex_pap", "pedir_ciudad"] as Accion[]).map((a) => idCandadoAuto(a, id)));
   const { data, error } = await db().from("eventos_crudos").select("id_externo").eq("fuente", "shopify").in("id_externo", claves);
   if (error) throw new Error(`eventos_crudos: ${error.message}`);
   return new Set((data ?? []).map((x) => x.id_externo as string));
@@ -292,7 +292,56 @@ async function avisarSinCobertura(orderId: number): Promise<string | null> {
   return e ?? (enviado || motivo === "ventana de 24 h cerrada" ? null : motivo);
 }
 
+/** 29-10: texto libre para pedir la ciudad (ventana de 24 h abierta). El pin primero: con el pin la ciudad sale sola. */
+export function textoPedirCiudad(primerNombre: string, pedido: string): string {
+  return `${primerNombre ? `${primerNombre}, para` : "Para"} despachar tu pedido ${pedido} nos falta saber la ciudad 🙌\n` +
+    "¿Nos mandás tu ubicación 📍 por acá, o el nombre de tu ciudad?";
+}
+
+/**
+ * 29-10 (#1150 ciudad "Casa"): la ciudad no está en las tablas y no hay pin (o el pin no alcanzó) → se le pide al
+ * cliente, UNA vez (candado auto_pedir_ciudad). Con la ventana de 24 h abierta, texto libre; si no, la plantilla
+ * aprobada voltra_completar_direccion por la cola (envios_programados, clave dir:<id>: la misma que usa
+ * seguimiento-chat para FALTAN_DATOS, así el cliente no recibe dos pedidos de datos). Sin teléfono o sin chat →
+ * Telegram a Enrique (lo único que el sistema no puede hacer solo). Nunca pone SIN_COBERTURA.
+ */
+async function pedirCiudad(orderId: number): Promise<string | null> {
+  const sb = db();
+  const { data: ped } = await sb.from("shopify_pedidos").select("nombre,cliente_id,telefono,raw").eq("shopify_order_id", orderId).maybeSingle();
+  if (!ped) return "pedido no encontrado";
+  const dir = ((ped.raw as Obj | null)?.shipping_address ?? {}) as Obj;
+  const ciudad = txt(dir.city), crudo = txt(dir.first_name) || txt(dir.name).split(" ")[0] || "";
+  const primer = crudo ? crudo[0].toUpperCase() + crudo.slice(1).toLowerCase() : "";
+  const tel = String(ped.telefono ?? "").replace(/\D/g, "");
+  const { data: conv } = ped.cliente_id
+    ? await sb.from("wa_conversaciones").select("id,ultima_entrada_en").eq("cliente_id", ped.cliente_id).order("ultima_entrada_en", { ascending: false, nullsFirst: false }).limit(1).maybeSingle()
+    : { data: null };
+  const abierta = conv?.ultima_entrada_en && Date.now() - Date.parse(conv.ultima_entrada_en) < 23 * 3_600_000;
+  const fila = (estado: "pendiente" | "cancelado", nota: string | null) => ({
+    cliente_id: ped.cliente_id, shopify_order_id: orderId, plantilla: "voltra_completar_direccion",
+    variables: { nombre: primer || "Hola", pedido: ped.nombre ?? `#${orderId}` }, categoria: "utilidad",
+    enviar_desde: new Date().toISOString(), clave_unica: `dir:${orderId}`, estado, ultimo_error: nota,
+  });
+  if (tel && ped.cliente_id && abierta) {
+    const r = await enviarTexto(tel, textoPedirCiudad(primer, String(ped.nombre)), { clienteId: ped.cliente_id, conversacionId: conv?.id ?? null });
+    if (r.ok) {
+      // Se ocupa la clave dir:<id> (cancelada) para que seguimiento-chat no le mande además la plantilla de dirección.
+      await sb.from("envios_programados").upsert([fila("cancelado", "pedir_ciudad: ya se le preguntó por texto")], { onConflict: "clave_unica", ignoreDuplicates: true });
+      return null;
+    }
+  }
+  if (tel && ped.cliente_id) {
+    const { error } = await sb.from("envios_programados").upsert([fila("pendiente", null)], { onConflict: "clave_unica", ignoreDuplicates: true });
+    if (!error) return null;
+  }
+  const r = await avisar(`📍 <b>${ped.nombre}</b>: la ciudad "${ciudad || "vacía"}" no figura en las tablas de los couriers y no hay pin. ` +
+    `No le pude pedir la ciudad al cliente (sin teléfono o sin chat).${tel ? ` Escribile vos: https://wa.me/${tel}` : ""}`, undefined,
+    { tipo: "pedir_ciudad_escribile", destino: "enrique", pedido: ped.nombre }).catch((e) => ({ ok: false, error: String(e) }));
+  return r.ok ? null : `Telegram: ${r.error ?? "falló"}`;
+}
+
 export async function ejecutar(accion: Accion, orderId: number, notas = "", direccion = ""): Promise<string | null> {
+  if (accion === "pedir_ciudad") return await pedirCiudad(orderId);
   if (accion === "avisar_sin_cobertura") return await avisarSinCobertura(orderId);
   if (accion === "avisar_jawflex_pap") return await avisarJawflexPap(orderId);
   if (accion === "cancelar_sin_cobertura") return await cancelarSinCobertura(orderId);

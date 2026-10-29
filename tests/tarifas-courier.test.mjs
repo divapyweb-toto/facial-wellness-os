@@ -253,3 +253,20 @@ test('26-10: regla preferir Lucero (config.courier_preferir_lucero) — Lucero d
   assert.match(textoSugerenciaCosto(sugerirCourier('Cuidad del Este')).texto, /^Sugerido: Lucero, llega con cobranza · /)
   fijarTarifasCourier(FIXTURE)
 })
+
+// 29-10 (#1159): ciudad mal escrita → misma clave fonética que public.ciudad_fonetica (migración 20261029000002).
+test('29-10: "Mbocayaty" → Lucero con cobranza; "Villa Rica" = Villarrica; "AsunciÓn"/"asuncion" reconocidas; "Casa" no', () => {
+  fijarTarifasCourier({ ...FIXTURE, tarifas: [...FIXTURE.tarifas, fila('lucero', 'mbocajaty', 'Mbocajaty', 39000)] })
+  const m = sugerirCourier('Mbocayaty')
+  assert.equal(m.ciudad_reconocida, true)
+  assert.equal(m.sin_cobertura, false)
+  assert.equal(m.sugerido, 'lucero')
+  assert.equal(m.opciones.find(o => o.courier === 'lucero').cobranza, true)
+  assert.equal(sugerirCourier('  MBOCAYATY ').sugerido, 'lucero')
+  assert.equal(filaTarifa('pap', 'Villa Rica')?.ciudad, 'villarrica')
+  for (const c of ['AsunciÓn', 'asuncion', ' ASUNCION ', 'Ciudad Del Este']) assert.equal(sugerirCourier(c).ciudad_reconocida, true, c)
+  assert.equal(sugerirCourier('Casa').ciudad_reconocida, false)
+  // la fonética nunca gana a una coincidencia exacta o parcial
+  assert.equal(filaTarifa('pap', 'Asunción, barrio Inventado')?.ciudad, 'asuncion')
+  fijarTarifasCourier(FIXTURE)
+})

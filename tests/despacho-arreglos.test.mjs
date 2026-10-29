@@ -81,7 +81,8 @@ try {
   assert.equal(D.faltaFleteOtra('otra', undefined), true)
   assert.equal(D.faltaFleteOtra('otra', '35000'), false)
   assert.equal(D.faltaFleteOtra('pap', ''), false)
-  assert.match(fuente, /!bloqueadoPorCiudad && !sinFleteOtra/)
+  // 29-10: lo decide la regla única (sale_hoy.js): riesgo de ciudad y flete de 'otra' frenan igual que antes.
+  assert.match(fuente, /bloqueadoCiudad: bloqueadoPorCiudad, sinFlete: sinFleteOtra/)
   ok("transportadora 'otra' sin flete queda bloqueada con faltante")
 
   // 10) Serie WA-

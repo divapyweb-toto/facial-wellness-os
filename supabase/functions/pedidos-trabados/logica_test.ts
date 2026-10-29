@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { accionesPara, ciudadPendiente, type Cobertura, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, necesitaCobertura, type PedidoAbierto } from "./logica.ts";
+import { accionesPara, ciudadDesconocida, ciudadPendiente, type Cobertura, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, necesitaCobertura, type PedidoAbierto } from "./logica.ts";
 
 const AHORA = new Date("2026-10-12T18:00:00Z");
 const base = (o: Partial<PedidoAbierto> = {}): PedidoAbierto => ({
@@ -75,11 +75,14 @@ Deno.test("15-10 (#1056): ciudad 'Ver mapa' con pin → buscar la ciudad del pin
 });
 
 Deno.test("15-10 (#1056): ciudad sin cobertura contra entrega → avisar una vez; con cobertura, pagado o ya avisado, nada", () => {
-  assertEquals([sinCobertura("General Isidoro Resquín"), sinCobertura("Luque"), sinCobertura("Choré")], [true, false, false]);
-  const p = base({ direccion: "Pin de ubicación, Mapa: https://maps.google.com/?q=-24.1000000,-56.5000000", ciudad: "General Isidoro Resquín" });
-  assertEquals(accionesPara(p, AHORA, false), ["avisar_sin_cobertura"]);
-  for (const t of ["PAGADO", "SIN_COBERTURA", "RETIRO_EN_CASA"]) assertEquals(accionesPara({ ...p, tags: ["CONFIRMADO", t] }, AHORA, false), [], t);
-  assertEquals(accionesPara({ ...p, estado: "pendiente", tags: [] }, AHORA, false), []);
+  // 29-10: sin dato de la tabla (la rpc falló) ya no se decide con la lista vieja: nunca "sin cobertura" a ciegas.
+  assertEquals([sinCobertura("General Isidoro Resquín"), sinCobertura("Luque"), sinCobertura("Choré")], [false, false, false]);
+  const p = base({ direccion: "Pin de ubicación, Mapa: https://maps.google.com/?q=-24.1000000,-56.5000000", ciudad: "Pueblo Reconocido" });
+  const m = new Map([["Pueblo Reconocido", { sin_cobertura: true, ciudad_reconocida: true }]]);
+  assertEquals(accionesPara(p, AHORA, false, m), ["avisar_sin_cobertura"]);
+  assertEquals(accionesPara(p, AHORA, false), []); // sin dato: se espera la próxima corrida
+  for (const t of ["PAGADO", "SIN_COBERTURA", "RETIRO_EN_CASA"]) assertEquals(accionesPara({ ...p, tags: ["CONFIRMADO", t] }, AHORA, false, m), [], t);
+  assertEquals(accionesPara({ ...p, estado: "pendiente", tags: [] }, AHORA, false, m), []);
   assertEquals(accionesPara(base(), AHORA, false), []); // Asunción: cubierta
 });
 
@@ -93,15 +96,20 @@ const SIN: Cobertura = { sin_cobertura: true, ciudad_reconocida: true };
 const CON: Cobertura = { sin_cobertura: false, ciudad_reconocida: true };
 const DESCONOCIDA: Cobertura = { sin_cobertura: true, ciudad_reconocida: false };
 
-Deno.test("20-10: ciudad reconocida por la tabla → manda su sin_cobertura; no reconocida o sin dato → lista vieja", () => {
+Deno.test("20-10/29-10: SIN_COBERTURA solo con la ciudad reconocida por la tabla; no reconocida o sin dato → nunca", () => {
   // San Juan Nepomuceno: la lista vieja daba PaP con cobranza (se perdió un pedido); la tabla dice que PaP no cobra ahí.
   assertEquals(sinCobertura("San Juan Nepomuceno"), false);
   assertEquals(sinCobertura("San Juan Nepomuceno", SIN), true);
   for (const c of ["Ayolas", "Choré", "San José de los Arroyos"]) assertEquals(sinCobertura(c, SIN), true, c);
   assertEquals(sinCobertura("General Isidoro Resquín", CON), false); // la tabla manda aunque la lista diga otra cosa
-  assertEquals(sinCobertura("Luque", { sin_cobertura: true, ciudad_reconocida: false }), false); // typo → lista vieja
-  assertEquals(sinCobertura("Pueblo Inventado", DESCONOCIDA), true); // lista vieja: no está
-  assertEquals(sinCobertura("General Isidoro Resquín", null), true);
+  assertEquals(sinCobertura("Luque", { sin_cobertura: true, ciudad_reconocida: false }), false);
+  assertEquals(sinCobertura("Pueblo Inventado", DESCONOCIDA), false); // 29-10: no reconocida → nunca sin cobertura
+  assertEquals(sinCobertura("General Isidoro Resquín", null), false); // 29-10: sin dato → no se decide
+  // ¿Ciudad desconocida? Solo si la tabla no la reconoce Y la lista vieja (con tolerancia a typos) tampoco.
+  assertEquals(ciudadDesconocida("Casa", DESCONOCIDA), true);
+  assertEquals(ciudadDesconocida("Mbocayaty", DESCONOCIDA), false); // la lista vieja la empareja con Mbocajaty (Lucero)
+  assertEquals(ciudadDesconocida("Casa", null), false); // sin dato de la rpc
+  assertEquals(ciudadDesconocida("Casa", CON), false);
 });
 
 Deno.test("20-10: accionesPara usa el mapa ciudad → cobertura (clave = ciudad sin espacios de los costados)", () => {
@@ -109,7 +117,7 @@ Deno.test("20-10: accionesPara usa el mapa ciudad → cobertura (clave = ciudad 
   assertEquals(accionesPara(p, AHORA, false), []); // sin mapa: como antes (lista vieja)
   assertEquals(accionesPara(p, AHORA, false, new Map([["San Juan Nepomuceno", SIN]])), ["avisar_sin_cobertura"]);
   assertEquals(accionesPara(p, AHORA, false, new Map([["San Juan Nepomuceno", CON]])), []);
-  assertEquals(accionesPara(p, AHORA, false, new Map([["San Juan Nepomuceno", DESCONOCIDA]])), []); // no reconocida → lista vieja
+  assertEquals(accionesPara(p, AHORA, false, new Map([["San Juan Nepomuceno", DESCONOCIDA]])), []); // no reconocida, la lista vieja la conoce: nada
   // Ya avisado, pagado, retiro, no confirmado o cancelado: nada, y tampoco hace falta preguntar la cobertura.
   for (const t of ["PAGADO", "SIN_COBERTURA", "RETIRO_EN_CASA", "CANCELADO_CLIENTE"]) {
     const q = { ...p, tags: ["CONFIRMADO", t] };
@@ -158,4 +166,34 @@ Deno.test("28-10: zona o barrio + ciudad es dirección (Enrique: 'area 4 sirve y
   assertEquals(direccionUtilizable(base({ direccion: "Área 1", ciudad: "" })), false);
   assertEquals(direccionUtilizable(base({ direccion: "Seivo", ciudad: "Nueva esperanza" })), false); // 5 letras, sin número ni zona
   assertEquals(direccionUtilizable(base({ direccion: "", ciudad: "Luque" })), false);
+});
+
+// 29-10 (#1150 ciudad "Casa" con una calle de Asunción centro; #1159 "Mbocayaty"). Datos inventados.
+Deno.test("29-10: ciudad 'Casa' sin pin → pedir la ciudad + FALTAN_DATOS, nunca SIN_COBERTURA", () => {
+  const p = base({ nombre: "#9150", direccion: "Calle Inventada 1234 c/ Otra", ciudad: "Casa" });
+  const m = new Map([["Casa", DESCONOCIDA]]);
+  const a = accionesPara(p, AHORA, false, m);
+  assertEquals(a, ["pedir_ciudad", "agregar_faltan_datos"]);
+  assertEquals(a.includes("avisar_sin_cobertura"), false);
+  // Ya tiene FALTAN_DATOS (la puso el sistema): no se saca mientras la ciudad siga sin reconocerse.
+  assertEquals(accionesPara({ ...p, tags: ["CONFIRMADO", "FALTAN_DATOS"] }, AHORA, true, m), ["pedir_ciudad"]);
+  // El cliente contestó y la ciudad ya es reconocida con courier → se saca FALTAN_DATOS, nada de sin cobertura.
+  const ok = { ...p, ciudad: "Asunción", tags: ["CONFIRMADO", "FALTAN_DATOS"] };
+  assertEquals(accionesPara(ok, AHORA, true, new Map([["Asunción", CON]])), ["quitar_faltan_datos"]);
+});
+
+Deno.test("29-10: ciudad 'Casa' con pin → la ciudad sale del pin (una vez); si no alcanzó, se le pide al cliente", () => {
+  const p = base({ nombre: "#9151", direccion: "Calle Inventada 1234, Mapa: https://maps.google.com/?q=-25.2800000,-57.6300000", ciudad: "Casa" });
+  const m = new Map([["Casa", DESCONOCIDA]]);
+  assertEquals(accionesPara(p, AHORA, false, m), ["ciudad_desde_pin"]); // con pin la dirección sirve: sin FALTAN_DATOS todavía
+  assertEquals(accionesPara(p, AHORA, false, m, undefined, true), ["pedir_ciudad", "agregar_faltan_datos"]);
+});
+
+Deno.test("29-10: ciudad reconocida sin courier con cobranza → SIN_COBERTURA como hoy; 'Mbocayaty' no", () => {
+  const p = base({ nombre: "#9152", direccion: "Calle Inventada 1234", ciudad: "Pueblo Reconocido" });
+  assertEquals(accionesPara(p, AHORA, false, new Map([["Pueblo Reconocido", SIN]])), ["avisar_sin_cobertura"]);
+  // Mbocayaty: con la migración la tabla la reconoce (Lucero cobra); sin la migración, la lista vieja la empareja. Nunca sin cobertura.
+  const mb = base({ nombre: "#9159", direccion: "Calle Inventada 1234", ciudad: "Mbocayaty" });
+  assertEquals(accionesPara(mb, AHORA, false, new Map([["Mbocayaty", { sin_cobertura: false, ciudad_reconocida: true, lucero: true, pap: false }]])), []);
+  assertEquals(accionesPara(mb, AHORA, false, new Map([["Mbocayaty", DESCONOCIDA]])), []);
 });

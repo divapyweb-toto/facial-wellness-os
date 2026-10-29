@@ -118,9 +118,10 @@ try {
   const sep2 = D.separarPedidosVoltra([...sinCob, ...D.mapearGrupoAPedidos([fila('#9021', 'CONFIRMADO')])])
   assert.deepEqual(sep2.sinCobertura.map(p => p.n_referencia), ['VT-9020'])
   assert.deepEqual(sep2.listos.map(p => p.n_referencia), ['VT-9021'])
-  assert.match(fuente, /setVoltraSinCobertura\(\[\.\.\.pendientesDecidir\.values\(\)\]\)/)
-  assert.match(fuente, /sin cobertura: decidir a mano/)
-  ok('Sin cobertura: queda afuera de Ventas con aviso "decidir a mano"')
+  // 29-10: ya no es un aviso rojo "decidir a mano": va a "No sale hoy" con el motivo y quién lo resuelve.
+  assert.match(fuente, /setVoltraNoSale\(noSale\)/)
+  assert.match(fuente, /No sale hoy \(\{noSaleVentas\.length\}\)/)
+  ok('Sin cobertura: queda afuera de Ventas, en "No sale hoy" con el motivo')
 
   // Abreviaturas generales en ciudades
   assert.equal(expandirAbreviaturas('cnel bogado'), 'coronel bogado')
