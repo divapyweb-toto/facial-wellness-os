@@ -15,6 +15,8 @@
 // public.sugerir_courier: si cambia una, cambiar la otra.
 // ═══════════════════════════════════════════════════════════
 import { supabase } from './supabase'
+// 29-10: la misma clave fonética que public.ciudad_fonetica (migración 20261029000002): "Mbocayaty" = "Mbocajaty".
+import { claveFonetica } from '../../supabase/functions/_shared/sale_hoy.js'
 
 // Tasa de entrega de respaldo (la misma que usa la vista con menos de 10 pedidos resueltos).
 export const TASA_RESPALDO = { lucero: 85, pap: 75 }
@@ -134,19 +136,24 @@ export async function cargarTarifasCourier() {
 export const asegurarTarifasCourier = () => (tarifasCourierCargadas() ? Promise.resolve(true) : cargarTarifasCourier())
 
 // ── Búsqueda de la ciudad (= public.tarifa_courier) ──
-// Clave exacta o alias → si no, la ciudad/alias más larga contenida como palabras completas en el texto.
+// Clave exacta o alias → si no, la ciudad/alias más larga contenida como palabras completas en el texto →
+// 29-10: si no, la misma clave fonética entera (y→j, v→b, z→s, sin espacios ni letras repetidas).
 const contiene = (texto, palabra) => (' ' + texto + ' ').includes(' ' + palabra + ' ')
 
 export function filaTarifa(courier, ciudad, d = datos) {
   if (!d) return null
   const k = normCiudad(ciudad)
   if (!k) return null
+  const f = claveFonetica(ciudad)
   let mejor = null, mejorOrden = 9, mejorLargo = -1
   for (const v of d.tarifas) {
     if (v.courier !== courier) continue
     const exacta = v.ciudad === k || v.alias.includes(k)
-    if (!exacta && !contiene(k, v.ciudad) && !v.alias.some((a) => contiene(k, a))) continue
-    const orden = exacta ? 0 : 1
+    const parcial = !exacta && (contiene(k, v.ciudad) || v.alias.some((a) => contiene(k, a)))
+    // 29-10: último intento (orden 2), la clave fonética ENTERA de la ciudad o de un alias (= public.tarifa_courier).
+    const fonetica = !exacta && !parcial && (claveFonetica(v.ciudad) === f || v.alias.some((a) => claveFonetica(a) === f))
+    if (!exacta && !parcial && !fonetica) continue
+    const orden = exacta ? 0 : parcial ? 1 : 2
     const largo = Math.max(v.ciudad.length, ...v.alias.filter((a) => contiene(k, a)).map((a) => a.length), 0)
     if (orden < mejorOrden || (orden === mejorOrden && largo > mejorLargo)) { mejor = v; mejorOrden = orden; mejorLargo = largo }
   }

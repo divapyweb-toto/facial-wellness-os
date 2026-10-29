@@ -24,7 +24,10 @@ import { construirHistorialCiudades, evaluarCiudad } from '../../lib/riesgoCiuda
 import { useToast } from '../../lib/toast'
 import { prepararEnShopify } from '../../lib/prepararShopify'
 import { esPrioridad, ordenarGuias, ordenarPorPrioridad, pagadoPorTags, tienePrioridad } from './prioridad'
-import { asegurarTarifasCourier } from '../../lib/tarifasCourier'
+import { asegurarTarifasCourier, sugerirCourier } from '../../lib/tarifasCourier'
+// 29-10 (Enrique: "si no da para despachar es mejor que no se muestre"): la regla "sale hoy / no sale hoy" es UNA sola,
+// la misma que usa la lista de despacho de Telegram (supabase/functions/_shared/sale_hoy.js).
+import { decidirSalida, direccionUtilizable, esCancelado, esConfirmado } from '../../../supabase/functions/_shared/sale_hoy.js'
 import SugerenciaCosto from './SugerenciaCosto'
 import LineaMotor from './LineaMotor'
 // 21-10: motor de courier (ganancia esperada). Detrás del interruptor config 'motor_courier': apagado = solo sugiere.
@@ -91,11 +94,11 @@ function extraerNota(notas, clave) {
 
 
 // ─── Clasificar estado Releasit ──────────────────────────
-function clasificarEstado(tags, cancelledAt) {
+function clasificarEstado(tags, cancelledAt, financialStatus) {
   const t = (tags || '').toLowerCase()
-  if (t.includes('cancelado') || cancelledAt) return 'cancelado'
-  // 10-10: venta mayorista ya entregada y cobrada antes del corte de facturación: nunca se despacha.
-  if (t.includes('anterior_al_corte')) return 'cancelado'
+  // 29-10: cancelado o anulado (cancelled_at, CANCELADO_*, voided, REEMPLAZADO_POR_) = misma regla que lista-despacho.
+  // 10-10: ANTERIOR_AL_CORTE (venta mayorista ya entregada y cobrada antes del corte de facturación) también.
+  if (esCancelado({ tags, cancelledAt, financialStatus })) return 'cancelado'
   // 09-10: retira en persona o le faltan datos de entrega → no va al courier aunque esté confirmado.
   if (t.includes('retiro_en_casa') || t.includes('faltan_datos')) return 'pending'
   if (t.includes('confirmado')) return 'confirmado'
@@ -178,7 +181,7 @@ function mapearGrupoAPedidos(grupoRows) {
     return ''
   }
   const notas = primero('Note Attributes')
-  const estado = clasificarEstado(primero('Tags'), primero('Cancelled at'))
+  const estado = clasificarEstado(primero('Tags'), primero('Cancelled at'), primero('Financial Status'))
   // 13-10: entrega programada (tag ENTREGA_PROGRAMADA + atributos, o tag viejo ENTREGAR_…). No frena el
   // despacho: sale el mismo día y el courier recibe "Entregar el viernes 16/10 antes de las 12".
   const hoyPy = hoyParaguay()
@@ -303,7 +306,19 @@ function mapearGrupoAPedidos(grupoRows) {
     ? [...new Set(items.map(it => getTipo(it.producto_nombre)))].join(' + ')
     : null
 
+  // 29-10: datos para la regla única de salida (sale_hoy.js): confirmado, etiquetas que frenan y dirección utilizable
+  // (pin, calle de 6 letras o más + ciudad, o zona/barrio + ciudad: la misma que pone FALTAN_DATOS en pedidos-trabados).
+  const regla = {
+    confirmadoTag: esConfirmado(primero('Tags')),
+    comprobanteSinVerificar,
+    faltanDatosTag: tagsTxt.includes('faltan_datos'),
+    sinCoberturaTag: /(^|[\s,])sin_cobertura($|[\s,])/.test(tagsTxt),
+    retiroTag: tagsTxt.includes('retiro_en_casa'),
+    direccionOk: direccionUtilizable({ direccion, notas: [notas, primero('Notes')].filter(Boolean).join('\n'), ciudad }),
+  }
+
   return items.map((it, i) => ({
+    ...regla,
     n_referencia: ref, tienda, origenWhatsApp, cliente_nombre: nombre, ciudad, departamento, direccion,
     referencia_dir: refDir,          // separada: Lucero la pide en su propia columna
     telefono, producto_nombre: it.producto_nombre, cantidad: it.cantidad,
@@ -1161,6 +1176,101 @@ async function aplicarMotorLote(lista) {
 //   · retiros: RETIRO_EN_CASA confirmados → Ventas SIN courier.
 //   · sinCobertura: confirmados sin transportadora que cubra (ciudad o regla
 //     de producto) → NO se insertan con PaP por defecto: decide Enrique a mano.
+// 29-10: la regla única (sale_hoy.js) aplicada a un pedido de Despacho. `o.cubierto` = tiene courier que llega (o lo
+// forzaste a mano); `o.prepago` = ya pagado (courier libre). Ciudad sin courier: la tabla de tarifas dice si la ciudad
+// existe (sin cobertura) o no se reconoce (faltan datos: la ciudad), nunca "sin cobertura" a una ciudad mal escrita.
+// → { sale, courier } | { sale: false, clave, motivo, quien, detalle } | { oculto: true } (cancelado: en ningún lado).
+function salidaDePedido(p, o = {}) {
+  const cubierto = o.cubierto ?? !!(p.cfg?.despachar && p.cobranzaOk)
+  const prepago = o.prepago ?? !!p.pagadoShopify
+  const tabla = !cubierto && !prepago && p.ciudad ? sugerirCourier(p.ciudad) : null
+  const r = decidirSalida({
+    cancelado: p.estado_releasit === 'cancelado',
+    retiro: !!(p.retiroTag ?? p.retiroConfirmado),
+    confirmado: p.confirmadoTag ?? (p.estado_releasit === 'confirmado' || p.estado_releasit === 'ayuda'),
+    pagado: prepago,
+    comprobante: !!p.comprobanteSinVerificar,
+    faltanDatos: !!p.faltanDatosTag || !!(p.origenManual && (p.faltantes || []).length),
+    direccionOk: p.direccionOk,
+    courier: cubierto ? (o.transportadora ?? p.transportadora ?? 'otra') : null,
+    sinCoberturaTag: !!p.sinCoberturaTag,
+    // Sin la tabla cargada: con SIN_COBERTURA (lo pone pedidos-trabados solo a ciudades reconocidas) es sin cobertura;
+    // si no, la ciudad está por confirmar (nunca "sin cobertura" a una ciudad que nadie reconoce).
+    ciudadReconocida: tabla ? tabla.ciudad_reconocida : !!p.sinCoberturaTag,
+    bloqueadoRiesgo: !!o.bloqueadoRiesgo,
+    bloqueadoCiudad: !!o.bloqueadoCiudad,
+    sinFlete: !!o.sinFlete,
+  })
+  return r
+}
+
+// 29-10: "No sale hoy" de los pedidos de Voltra que no pasan a Ventas: uno por referencia, de los últimos `dias` días,
+// sin los cancelados (en ningún lado), sin los que ya salieron y sin los que ya están en Ventas.
+function noSaleVoltra(pedidos, { envioPorRef = new Map(), enVentas = new Set(), hoy = hoyParaguay(), dias = 14 } = {}) {
+  const desde = new Date(Date.parse(hoy) - dias * 86400000).toISOString().slice(0, 10)
+  const vistos = new Set(), out = []
+  for (const p of pedidos || []) {
+    const ref = String(p.n_referencia)
+    if (vistos.has(ref)) continue
+    vistos.add(ref)
+    if (enVentas.has(ref) || String(p.fecha || '').slice(0, 10) < desde) continue
+    const envio = envioPorRef.get(ref)?.estado_envio
+    if (ENVIO_YA_SALIO.includes(envio) || envio === 'EN_PREPARACION' || envio === 'CANCELADO') continue
+    const r = salidaDePedido(p, { cubierto: !!p.transportadora && !!p.cfg?.despachar })
+    if (r.sale || r.oculto || r.retiro) continue
+    out.push({ ref, ciudad: p.ciudad, total: p.totalOrden ?? p.total, fecha: p.fecha, clave: r.clave, motivo: r.motivo, quien: r.quien, detalle: r.detalle,
+      dias: Math.max(0, Math.round((Date.parse(hoy) - Date.parse(String(p.fecha || hoy).slice(0, 10))) / 86400000)) })
+  }
+  return out
+}
+
+// 29-10: un paquete cancelado que el courier ya devolvió (o cerró) no es un aviso: ya no hay nada que hacer.
+const estadoCourierFinal = (e) => /devuel|cancel|rendid|entregad|anulad/i.test(String(e || ''))
+
+// 29-10: "3 los resuelve el bot · 1 el sistema · 2 vos" (para la línea de "No sale hoy").
+function resumenQuien(motivos) {
+  const n = { bot: 0, sistema: 0, Enrique: 0 }
+  for (const m of motivos || []) if (m && n[m.quien] != null) n[m.quien]++
+  return [n.bot && `${n.bot} el bot`, n.sistema && `${n.sistema} el sistema`, n.Enrique && `${n.Enrique} vos`].filter(Boolean).join(' · ')
+    .replace(/^/, (n.bot || n.sistema || n.Enrique) ? 'resuelve: ' : '')
+}
+
+// 29-10: ventas pendientes de Voltra cruzadas con su pedido de Shopify (tags, cancelado, pago) → { sale, noSale }.
+// Puro: `filasShopify` = [{ nombre: '#1001', tags, cancelado, fin }]. Las ventas sin pedido en Shopify (FW, WA-) salen.
+function clasificarVentasPendientes(ventas, filasShopify) {
+  const porRef = new Map((filasShopify || []).map(f => [normalizarRef(refVoltra(f.nombre)), f]))
+  const sale = [], noSale = []
+  for (const v of ventas || []) {
+    const f = porRef.get(normalizarRef(v.n_referencia))
+    if (!f) { sale.push(v); continue }
+    const tags = listaTagsVenta(f.tags)
+    if (esCancelado({ tags, cancelledAt: f.cancelado, financialStatus: f.fin })) continue // en ningún lado
+    const pagado = !!v.pago_anticipado || pagadoPorTags(tags, '')
+    const r = decidirSalida({
+      confirmado: true, pagado, faltanDatos: tags.includes('faltan_datos'),
+      courier: tags.includes('sin_cobertura') && !pagado ? null : (v.transportadora || 'pap'), sinCoberturaTag: tags.includes('sin_cobertura'),
+    })
+    if (r.sale) sale.push(v)
+    else noSale.push({ ref: v.n_referencia, ciudad: v.ciudad, total: v.total, fecha: v.fecha, clave: r.clave, motivo: r.motivo, quien: r.quien, detalle: r.detalle,
+      dias: Math.max(0, Math.round((Date.parse(hoyParaguay()) - Date.parse(String(v.fecha || hoyParaguay()).slice(0, 10))) / 86400000)) })
+  }
+  return { sale, noSale }
+}
+const listaTagsVenta = (t) => (Array.isArray(t) ? t : String(t || '').split(',')).map(x => String(x).trim().toLowerCase()).filter(Boolean)
+
+async function separarVentasPorShopify(ventas) {
+  const nombres = [...new Set((ventas || []).filter(v => /^VT-\d+$/i.test(String(v.n_referencia || ''))).map(v => `#${String(v.n_referencia).replace(/^VT-/i, '')}`))]
+  if (!nombres.length) return { sale: ventas || [], noSale: [] }
+  try {
+    const { data, error } = await supabase.from('shopify_pedidos').select('nombre, tags, cancelado:raw->>cancelled_at, fin:raw->>financial_status').in('nombre', nombres).eq('es_borrador', false)
+    if (error) throw error
+    return clasificarVentasPendientes(ventas, data || [])
+  } catch (e) {
+    console.warn('Despacho: no se pudo cruzar Ventas con Shopify (se muestran todas):', e?.message || e)
+    return { sale: ventas || [], noSale: [] }
+  }
+}
+
 function separarPedidosVoltra(pedidos, envioPorRef = new Map()) {
   const listos = [], retiros = [], sinCobertura = []
   for (const p of pedidos || []) {
@@ -1250,7 +1360,9 @@ export default function DespachoPagina() {
   const [trayendoVoltra, setTrayendoVoltra] = useState(false)
   const trayendoVoltraRef = useRef(false)   // candado: el estado tarda un render, el ref no
   // 12-10: pedidos de Voltra confirmados sin transportadora que cubra: no se pasan a Ventas.
-  const [voltraSinCobertura, setVoltraSinCobertura] = useState([])
+  // 29-10: ahora es todo lo que "No sale hoy" (con motivo y quién lo resuelve), de Shopify y de Ventas.
+  const [voltraNoSale, setVoltraNoSale] = useState([])
+  const [ventasNoSale, setVentasNoSale] = useState([])
   // 28-10 (caso #1089: se retiró y cobró en la oficina y nunca se registró): retiros en persona confirmados sin cerrar.
   const [retirosAbiertos, setRetirosAbiertos] = useState([])
   const [formRetiro, setFormRetiro] = useState({})
@@ -1445,6 +1557,11 @@ export default function DespachoPagina() {
       const ciudadOk = ciudadHabilitada.has(p.n_referencia)
       const bloqueadoPorCiudad = evCiudad.nivel === 'bloqueado' && !ciudadOk
       const sinFleteOtra = faltaFleteOtra(transportadora, costoOtraManual[p.n_referencia])
+      // Pagado en Shopify → prepago por defecto; tocar el botón lo invierte (el Set guarda los cambios a mano).
+      const prepago = p.pagadoShopify ? !prepagos.has(p.n_referencia) : prepagos.has(p.n_referencia)
+      // 29-10: la regla única decide si sale hoy (y, si no, el motivo y quién lo resuelve). "Forzar" sigue valiendo
+      // para la cobertura; riesgo de cliente o de ciudad y el flete de "otra" frenan como antes.
+      const regla = salidaDePedido(p, { cubierto: despacharBase, prepago, transportadora, bloqueadoRiesgo: bloqueadoPorRiesgo, bloqueadoCiudad: bloqueadoPorCiudad, sinFlete: sinFleteOtra })
       return {
         ...p,
         faltantes: sinFleteOtra ? [...(p.faltantes || []), 'flete de otra transportadora'] : p.faltantes,
@@ -1454,11 +1571,13 @@ export default function DespachoPagina() {
         riesgoCiudad: evCiudad,
         ciudadHabilitada: ciudadOk,
         bloqueadoPorCiudad,
-        despachar: despacharBase && !bloqueadoPorRiesgo && !bloqueadoPorCiudad && !sinFleteOtra,
+        despachar: regla.sale === true,
+        noSale: regla.sale ? null : regla,
+        oculto: !!regla.oculto,
         forzado: forzados.has(p.n_referencia),
-        // Pagado en Shopify → prepago por defecto; tocar el botón lo invierte (el Set guarda los cambios a mano).
-        prepago: p.pagadoShopify ? !prepagos.has(p.n_referencia) : prepagos.has(p.n_referencia),
-        transportadora,
+        prepago,
+        // Pagado sin courier con cobranza: va por el que llegue ("otra", courier libre), como dice la regla del 27-10.
+        transportadora: transportadora || (regla.courier === 'libre' ? 'otra' : transportadora),
         transpManual: !!transpOverride[p.n_referencia],
         // Si la transportadora elegida no cubre la ciudad, tarifa queda null y
         // se avisa en la UI en vez de guardar un costo inventado.
@@ -1493,7 +1612,8 @@ export default function DespachoPagina() {
 
   // 12-10: PRIORIDAD primero (lista, cabecera y guías salen en este orden).
   const paraDespacho = useMemo(() => ordenarPorPrioridad(todosConOverride.filter(p => p.despachar)), [todosConOverride])
-  const excluidos = useMemo(() => todosConOverride.filter(p => !p.despachar), [todosConOverride])
+  // 29-10: "No sale hoy" = lo que no sale, sin los cancelados (esos no se muestran en ningún lado).
+  const excluidos = useMemo(() => todosConOverride.filter(p => !p.despachar && !p.oculto), [todosConOverride])
 
   const toggleForzar = (ref) => {
     setForzados(prev => {
@@ -1559,9 +1679,11 @@ export default function DespachoPagina() {
   const conFaltantes = useMemo(() => paraDespacho.filter(p => p.faltantes.length > 0), [paraDespacho])
   const tablaFiltrada = useMemo(() => {
     // 12-10: PRIORIDAD primero en la lista.
-    if (!busqueda.trim()) return ordenarPorPrioridad(todosConOverride)
+    // 29-10: cancelados o anulados no aparecen en ningún lado.
+    const visibles = todosConOverride.filter(p => !p.oculto)
+    if (!busqueda.trim()) return ordenarPorPrioridad(visibles)
     const q = busqueda.toLowerCase()
-    return ordenarPorPrioridad(todosConOverride).filter(p =>
+    return ordenarPorPrioridad(visibles).filter(p =>
       p.cliente_nombre.toLowerCase().includes(q) ||
       p.ciudad.toLowerCase().includes(q) ||
       p.n_referencia.includes(q) ||
@@ -1615,6 +1737,18 @@ export default function DespachoPagina() {
   }
 
   // ── Memos Ventas ───────────────────────────────────────
+  // 29-10: "No sale hoy" en Desde Ventas = pedidos de Voltra que no pasaron a Ventas + ventas cuyo pedido ya no sale.
+  const noSaleVentas = useMemo(() => {
+    const vistos = new Set(), out = []
+    for (const x of [...ventasNoSale, ...voltraNoSale]) {
+      const k = normalizarRef(x.ref)
+      if (vistos.has(k)) continue
+      vistos.add(k); out.push(x)
+    }
+    // Lo que resuelve Enrique primero; después el sistema y el bot (eso se mueve solo).
+    const orden = { Enrique: 0, sistema: 1, bot: 2 }
+    return out.sort((a, b) => (orden[a.quien] ?? 3) - (orden[b.quien] ?? 3) || (b.dias ?? 0) - (a.dias ?? 0))
+  }, [ventasNoSale, voltraNoSale])
   const ventasFiltradas = useMemo(() => {
     // 12-10: lo pagado por adelantado (pago con prioridad) primero.
     const base = ordenarPorPrioridad(ventasPend.map(v => ({ ...v, prioridad: !!v.pago_anticipado })))
@@ -1996,16 +2130,22 @@ export default function DespachoPagina() {
         toast('No se pudieron leer las entregas programadas de Shopify: revisá las fechas antes de despachar', 'error')
       }
       const programadas = programadasPorRef(resProg.data || [])
-      setVentasPend(pendientesDesdeVentas(data || [], {
+      const pendientes = pendientesDesdeVentas(data || [], {
         tienda: getTienda(),
         enCourier: refsEnCourier(resEnt.data || []),
         salidasShopify: refsSalidasShopify(resShop.data || []),
-      }).map(v => ({ ...v, entregaProgramada: programadas.get(normalizarRef(v.n_referencia)) || null })))
+      }).map(v => ({ ...v, entregaProgramada: programadas.get(normalizarRef(v.n_referencia)) || null }))
+      // 29-10: misma regla que la lista de Telegram. Venta de Voltra cuyo pedido de Shopify se canceló o anuló → no se
+      // muestra en ningún lado; con FALTAN_DATOS o SIN_COBERTURA (sin pagar) → "No sale hoy". Si la consulta falla, como antes.
+      const { sale, noSale } = await separarVentasPorShopify(pendientes)
+      setVentasPend(sale)
+      setVentasNoSale(noSale)
       setSelVentas(new Set())
       setBusqVentas('')
       // 21-10: pedidos cancelados en Shopify cuyo paquete ya está en el courier (la vista los calcula; no bloquea nada).
       supabase.from('ventas_cancelacion_shopify').select('nombre, courier_real, transportadora, estado_courier').eq('clase', 'cancelado_en_courier')
-        .then(({ data: cc }) => setCanceladosEnCourier((cc || []).map(c => ({ nombre: c.nombre, courier: c.courier_real || c.transportadora, estado: c.estado_courier }))),
+        // 29-10 (#1091): si el courier ya lo devolvió o lo cerró, no hay nada que hacer: no se muestra.
+        .then(({ data: cc }) => setCanceladosEnCourier((cc || []).filter(c => !estadoCourierFinal(c.estado_courier)).map(c => ({ nombre: c.nombre, courier: c.courier_real || c.transportadora, estado: c.estado_courier }))),
           () => setCanceladosEnCourier([]))
       // 21-10: pedidos confirmados de más de 24 h que todavía no salieron (vista pedidos_parados). Si falla, no se muestra.
       supabase.from('pedidos_parados').select('ref, nombre, ciudad, horas, dias, etapa, courier, producto').order('horas', { ascending: false }).limit(200)
@@ -2050,13 +2190,15 @@ export default function DespachoPagina() {
       let { listos: conCourier, retiros, sinCobertura } = separarPedidosVoltra(pedidos, envioPorRef)
       let listos = [...conCourier, ...retiros]
       const sinConfirmar = new Set(pedidos.filter(p => !p.cfg?.despachar && !p.retiroConfirmado && p.estado_releasit !== 'cancelado').map(p => p.n_referencia)).size
-      if (!listos.length && !sinCobertura.length) {
-        setVoltraSinCobertura([])
+      // 29-10: lo que no sale hoy (sin confirmar, faltan datos, ciudad, sin cobertura…), con motivo y quién lo resuelve.
+      const candidatosNoSale = noSaleVoltra(pedidos, { envioPorRef })
+      if (!listos.length && !sinCobertura.length && !candidatosNoSale.length) {
+        setVoltraNoSale([])
         if (!silencioso) toast(sinConfirmar ? `Hay ${sinConfirmar} pedido(s) de Voltra sin confirmar todavía` : 'No hay pedidos de Voltra para traer', 'info')
         return
       }
 
-      const refs = [...new Set([...listos, ...sinCobertura].map(p => p.n_referencia))]
+      const refs = [...new Set([...listos, ...sinCobertura].map(p => p.n_referencia).concat(candidatosNoSale.map(c => c.ref)))]
       const cuenta = new Map()
       const { data: ya, error: errYa } = await supabase.from('ventas').select('n_referencia').in('n_referencia', refs).is('deleted_at', null)
       // Sin saber qué ya existe, insertar duplicaría ventas: se aborta.
@@ -2065,27 +2207,26 @@ export default function DespachoPagina() {
       // 21-10: motor de courier, SOLO para pedidos que todavía no están en Ventas (los ya cargados no se reasignan nunca).
       // Anota courier_motor/courier_regla y, si el interruptor está activo, asigna el ganador; un pedido puede pasar de
       // "con courier" a "sin cobertura" (y al revés). Si el motor falla o tarda, todo queda como hoy.
+      const conMotorDe = new Map()
       {
         const frescos = [...conCourier, ...sinCobertura].filter(p => !cuenta.has(String(p.n_referencia)))
         if (frescos.length) {
           const conMotor = await aplicarMotorLote(frescos)
-          const nuevoDe = new Map(frescos.map((p, i) => [p, conMotor[i]]))
-          const todosP = [...conCourier, ...sinCobertura].map(p => nuevoDe.get(p) || p)
+          frescos.forEach((p, i) => conMotorDe.set(p, conMotor[i]))
+          const todosP = [...conCourier, ...sinCobertura].map(p => conMotorDe.get(p) || p)
           conCourier = todosP.filter(p => p.transportadora)
           sinCobertura = todosP.filter(p => !p.transportadora)
           listos = [...conCourier, ...retiros]
         }
       }
-      // 12-10: sin cobertura y todavía fuera de Ventas → aviso "decidir a mano" (uno por pedido).
-      const pendientesDecidir = new Map()
-      for (const p of sinCobertura) {
-        if (cuenta.has(String(p.n_referencia)) || pendientesDecidir.has(p.n_referencia)) continue
-        pendientesDecidir.set(p.n_referencia, { ref: p.n_referencia, ciudad: p.ciudad, dias: Math.max(0, Math.round((Date.parse(hoyParaguay()) - Date.parse(String(p.fecha || hoyParaguay()).slice(0, 10))) / 86400000)), motivo: p.motivoTransportadora || 'Ninguna transportadora cubre esta ciudad' })
+      // 12-10 / 29-10: sin cobertura (o ciudad no reconocida) y todavía fuera de Ventas → "No sale hoy" con el motivo.
+      const noSale = noSaleVoltra(pedidos.map(p => conMotorDe.get(p) || p), { envioPorRef, enVentas: new Set(cuenta.keys()) })
+      setVoltraNoSale(noSale)
+      const decidir = noSale.filter(x => x.clave === 'sin_cobertura' || x.clave === 'ciudad').length
+      if (decidir && !silencioso) {
+        toast(`${decidir} pedido(s) de Voltra sin courier todavía: ver "No sale hoy" (no se pasaron a Ventas)`, 'info')
       }
-      setVoltraSinCobertura([...pendientesDecidir.values()])
-      if (pendientesDecidir.size && !silencioso) {
-        toast(`${pendientesDecidir.size} pedido(s) de Voltra sin cobertura: decidir a mano (no se pasaron a Ventas)`, 'error')
-      }
+      if (!listos.length) { if (!silencioso) toast(sinConfirmar ? `Hay ${sinConfirmar} pedido(s) de Voltra sin confirmar todavía` : 'No hay pedidos de Voltra para traer', 'info'); return }
       // 21-10: un pedido nuevo que REEMPLAZA a otro (etiqueta REEMPLAZA_A_#n) cuyo paquete ya está en el courier NO se
       // carga como envío nuevo: se vincula a la venta existente (nota) y no aparece doble en Despacho.
       const reemplazaA = mapaReemplazos(filas)
@@ -2215,9 +2356,233 @@ export default function DespachoPagina() {
     }
   }
 
+  // ── 29-10: tabla de Despacho = "Para despachar hoy"; lo que no sale va cerrado en "No sale hoy (N)" ──
+  const paraDespachoTabla = tablaFiltrada.filter(p => p.despachar)
+  const noSaleTabla = tablaFiltrada.filter(p => !p.despachar)
+  const encabezadoPedidos = (
+                <thead>
+                  <tr>
+                    <th>Ref.</th>
+                    <th>Fecha</th>
+                    <th>Nombre</th>
+                    <th>Ciudad</th>
+                    <th>Teléfono</th>
+                    <th>Producto</th>
+                    <th>Cant.</th>
+                    <th>Total</th>
+                    <th>Estado</th>
+                    <th>Transportadora</th>
+                    <th>Cliente</th>
+                    <th>Despacho</th>
+                    <th>Pago</th>
+                    <th></th>
+                  </tr>
+                </thead>
+  )
+  const filaPedido = (p, i) => (
+                    <tr key={`${p.n_referencia}-${i}`} style={{ opacity: p.despachar ? 1 : 0.7 }}>
+                      <td data-label="Ref." className="mono">#{p.n_referencia}</td>
+                      <td data-label="Fecha" className="muted" style={{ fontSize: 11 }}>{p.fecha}</td>
+                      <td data-label="Nombre" style={{ fontWeight: 500 }}>
+                        {p.cliente_nombre || '—'}
+                        {p.faltantes.length > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--yellow)' }} title={`Falta ${p.faltantes.join(', ')}`}>⚠</span>}
+                      </td>
+                      <td data-label="Ciudad" className="muted">{p.ciudad || '—'}</td>
+                      <td data-label="Teléfono" className="muted">{p.telefono || '—'}</td>
+                      <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(p.producto_nombre)}{armadoDe(p) && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--purple)' }}>{armadoDe(p)}</div>}</td>
+                      <td data-label="Cant.">{p.cantidad}</td>
+                      <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(p.total)}</td>
+                      <td data-label="Estado">
+                        {p.noSale ? (
+                          <span title={p.noSale.detalle} style={{ fontSize: 11, fontWeight: 600, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>
+                            ⛔ {p.noSale.motivo}
+                            <span style={{ display: 'block', fontSize: 10, fontWeight: 500, color: 'var(--text-muted)' }}>resuelve: {p.noSale.quien}</span>
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 11, fontWeight: 600, color: p.cfg.color, whiteSpace: 'nowrap' }}>
+                            {p.cfg.label}
+                          </span>
+                        )}
+                        <BadgeEntrega e={p.entregaProgramada} />
+                      </td>
+                      <td data-label="Transportadora" onClick={e => e.stopPropagation()}>
+                        {(() => {
+                          const disponibles = transportadorasDisponibles(p.ciudad, { cod: !p.prepago })
+                          if (!disponibles.length) {
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>Sin cobertura</span>
+                                <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
+                                <LineaMotor decision={p.motorDecision} asignada={p.transportadora} activo={motorOn} />
+                              </div>
+                            )
+                          }
+                          const cubre = p.transportadora && disponibles.includes(p.transportadora)
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <select
+                                className="form-input"
+                                value={p.transportadora || ''}
+                                onChange={e => {
+                                  const val = e.target.value
+                                  setTranspOverride(prev => ({ ...prev, [p.n_referencia]: val }))
+                                  // Nudge: si se está pisando un bloqueo de producto a mano,
+                                  // se sugiere pago anticipado (la razón de fondo del bloqueo
+                                  // era justamente evitar mandar este producto en COD). Queda
+                                  // togglear normal después si el admin decide lo contrario.
+                                  if (!p.transportadora && p.bloqueadoPorProducto && !prepagos.has(p.n_referencia)) {
+                                    togglePrepago(p.n_referencia)
+                                  }
+                                }}
+                                style={{ fontSize: 11, padding: '3px 6px', height: 'auto', minWidth: 96 }}
+                              >
+                                {Object.values(TRANSPORTADORAS).map(t => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.label}{disponibles.includes(t.id) ? '' : ' (no cubre)'}
+                                  </option>
+                                ))}
+                              </select>
+                              <span style={{ fontSize: 9, color: cubre ? 'var(--text-dim)' : 'var(--red)', whiteSpace: 'nowrap' }}>
+                                {!p.transportadora && p.bloqueadoPorProducto
+                                  ? 'Solo Lucero — no cubre acá'
+                                  : !cubre
+                                    ? 'No cubre esta ciudad'
+                                    : p.transportadora === 'otra'
+                                      ? null
+                                      : `${formatGs(p.costo_envio || 0)}${p.flete_estimado ? ' · estimado' : ''}${p.transpManual ? ' · manual' : ''}`}
+                              </span>
+                              {p.fallbackProducto && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'normal' }}>⚠ {p.motivoTransportadora}</div>}
+                              <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
+                              <LineaMotor decision={p.motorDecision} asignada={p.transportadora} activo={motorOn} />
+                              {p.transportadora === 'otra' && (
+                                <input
+                                  type="number"
+                                  className="form-input"
+                                  placeholder="Costo flete"
+                                  value={costoOtraManual[p.n_referencia] ?? ''}
+                                  onChange={e => setCostoOtraManual(prev => ({ ...prev, [p.n_referencia]: e.target.value }))}
+                                  style={{ fontSize: 10, padding: '2px 6px', height: 'auto', width: 90 }}
+                                />
+                              )}
+                              {!p.transportadora && p.bloqueadoPorProducto && (
+                                <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                                  Elegí transportadora a mano + marcá pago anticipado
+                                </span>
+                              )}
+                              {p.riesgoCiudad?.nivel === 'bloqueado' && (
+                                <button
+                                  onClick={() => toggleCiudad(p.n_referencia)}
+                                  title={p.riesgoCiudad.motivo}
+                                  style={{
+                                    fontSize: 9, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
+                                    border: '1px solid var(--red)', whiteSpace: 'nowrap',
+                                    background: p.ciudadHabilitada ? 'var(--red)' : 'transparent',
+                                    color: p.ciudadHabilitada ? '#fff' : 'var(--red)',
+                                  }}
+                                >
+                                  {p.ciudadHabilitada
+                                    ? '⚠ Forzado'
+                                    : `Ciudad ${Math.round((p.riesgoCiudad.tasa ?? 0) * 100)}% · forzar`}
+                                </button>
+                              )}
+                              {p.riesgoCiudad?.nivel === 'riesgo' && (
+                                <span style={{ fontSize: 9, color: 'var(--orange, #f59e0b)', whiteSpace: 'nowrap' }} title={p.riesgoCiudad.motivo}>
+                                  {p.riesgoCiudad.alternativa
+                                    ? `↔ Mejor por ${labelTransportadora(p.riesgoCiudad.alternativa.transportadora)} (${Math.round(p.riesgoCiudad.alternativa.tasa * 100)}%)`
+                                    : `Ciudad ${Math.round((p.riesgoCiudad.tasa ?? 0) * 100)}% entrega`}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })()}
+                      </td>
+                      <td data-label="Cliente">
+                        {p.riesgo?.nivel === 'bloqueado' ? (
+                          <button
+                            onClick={() => toggleRiesgo(p.n_referencia)}
+                            title={`${motivoRiesgo(p.riesgo)}\n\nClic para habilitar el despacho bajo tu criterio.`}
+                            style={{ cursor: 'pointer', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap',
+                              border: `1px solid ${p.riesgoHabilitado ? 'var(--green)' : 'var(--red)'}`,
+                              background: p.riesgoHabilitado ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+                              color: p.riesgoHabilitado ? 'var(--green)' : 'var(--red)' }}
+                          >
+                            {p.riesgoHabilitado ? '✓ Habilitado' : `🚫 ${p.riesgo.fallos}/${p.riesgo.pedidos} no recibió`}
+                          </button>
+                        ) : p.riesgo?.nivel === 'riesgo' ? (
+                          <span
+                            title={motivoRiesgo(p.riesgo)}
+                            style={{ borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
+                              background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', border: '1px solid var(--yellow)' }}
+                          >
+                            ⚠ {p.riesgo.fallos}/{p.riesgo.pedidos} · conviene prepago
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
+                        )}
+                      </td>
+                      <td data-label="Despacho">
+                        {p.forzado ? (
+                          <button
+                            onClick={() => toggleForzar(p.n_referencia)}
+                            title="Forzado por vos. Clic para volver a excluir."
+                            style={{ cursor: 'pointer', border: '1px solid var(--green)', background: 'rgba(34,197,94,0.12)', color: 'var(--green)', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700 }}
+                          >
+                            ✓ Despachar (forzado)
+                          </button>
+                        ) : p.despachar ? (
+                          <span className="badge badge-green" style={{ fontSize: 10 }}>✓ Despachar</span>
+                        ) : (p.cfg.despachar && !p.cobranzaOk) ? (
+                          <button
+                            onClick={() => toggleForzar(p.n_referencia)}
+                            title="PaP no figura con cobranza en esta ciudad. Si sabés que igual llega, clic para despacharlo."
+                            style={{ cursor: 'pointer', background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 600 }}
+                          >
+                            📍 Sin cobranza · forzar
+                          </button>
+                        ) : (
+                          <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>
+                        )}
+                      </td>
+                      <td data-label="" onClick={e => e.stopPropagation()} style={{ textAlign: 'right' }}>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setEditando(p)}
+                          title="Corregir datos del pedido (ciudad, teléfono, dirección…)"
+                          style={{ padding: '3px 7px' }}
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                      </td>
+                      <td data-label="Pago">
+                        {p.despachar ? (
+                          <button
+                            onClick={() => togglePrepago(p.n_referencia)}
+                            title={p.prepago ? 'Pagó por transferencia. Clic para volver a contra entrega.' : 'Marcar como pagado por adelantado (transferencia). El repartidor no cobra.'}
+                            style={{
+                              cursor: 'pointer', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700,
+                              display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+                              border: `1px solid ${p.prepago ? 'var(--green)' : 'var(--border)'}`,
+                              background: p.prepago ? 'rgba(34,197,94,0.12)' : 'transparent',
+                              color: p.prepago ? 'var(--green)' : 'var(--text-muted)',
+                            }}
+                          >
+                            {p.prepago ? '💳 Ya pagó' : '💳 Contra entrega'}
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
+                        )}
+                        {p.prioridad && (
+                          <span title="Pagó por adelantado con prioridad: sale primero" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: 'var(--green)', whiteSpace: 'nowrap' }}>
+                            ⚡ Prioridad
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+  )
+
   // ── Subtítulo dinámico ─────────────────────────────────
   const subtitle = modo === 'ventas'
-    ? `${ventasPend.length} ventas pendientes en DB`
+    ? `${ventasPend.length} para despachar hoy${noSaleVentas.length ? ` · ${noSaleVentas.length} no salen` : ''}`
     : step === 'preview'
       ? `${modo === 'manual' ? 'Cargados por WhatsApp' : nombreArchivo} · ${todos.length} pedido${todos.length === 1 ? '' : 's'} procesado${todos.length === 1 ? '' : 's'}`
       : modo === 'manual'
@@ -2320,18 +2685,8 @@ export default function DespachoPagina() {
             </div>
           )}
 
-          {/* 12-10: pedidos de Voltra sin cobertura — no se cargan con PaP por defecto */}
-          {voltraSinCobertura.length > 0 && (
-            <div className="alert ultra-o1" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 10, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px' }}>
-              <AlertTriangle size={14} color="var(--red)" style={{ flexShrink: 0, marginTop: 1 }} />
-              <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>
-                <strong>{voltraSinCobertura.length} pedido{voltraSinCobertura.length === 1 ? '' : 's'} de Voltra sin cobertura: decidir a mano.</strong>{' '}
-                No se pasaron a Ventas ni se les puso PaP por defecto:{' '}
-                {voltraSinCobertura.map(x => `${x.ref} (${x.ciudad || 'sin ciudad'}) · ${x.dias} día${x.dias === 1 ? '' : 's'} esperando`).join(' · ')}.{' '}
-                Corregí la ciudad en Shopify, o subí el CSV de pedidos, elegí la transportadora y tocá "Sin cobranza · forzar".
-              </span>
-            </div>
-          )}
+          {/* 12-10 → 29-10: los pedidos de Voltra sin cobertura (o con la ciudad sin reconocer) ya no van en un aviso rojo:
+              están en "No sale hoy", abajo de la lista, con el motivo y quién lo resuelve. */}
 
           {/* 21-10: confirmados hace más de 24 h que todavía no salieron (vista pedidos_parados) */}
           {pedidosParados.length > 0 && (() => {
@@ -2424,6 +2779,7 @@ export default function DespachoPagina() {
           <div className="ultra-main ultra-contents" style={{ gridColumn: 1, gridRow: 1 }}>
           <div className="card ultra-o6" style={{ padding: 0 }}>
             <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Para despachar hoy ({ventasPend.length})</span>
               <Search size={13} color="var(--text-muted)" />
               <input
                 value={busqVentas}
@@ -2443,7 +2799,7 @@ export default function DespachoPagina() {
             ) : ventasFiltradas.length === 0 ? (
               <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
                 {ventasPend.length === 0
-                  ? 'No hay ventas en estado pendiente en la base de datos.'
+                  ? 'Hoy no hay nada para despachar.'
                   : 'Sin resultados para esa búsqueda.'}
               </div>
             ) : (
@@ -2519,6 +2875,36 @@ export default function DespachoPagina() {
               </div>
             )}
           </div>
+
+          {/* 29-10: lo que NO sale hoy, cerrado por defecto: motivo en pocas palabras y quién lo resuelve. Cancelados: en ningún lado. */}
+          {noSaleVentas.length > 0 && (
+            <details className="card ultra-o7" style={{ padding: 0 }}>
+              <summary style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                No sale hoy ({noSaleVentas.length})
+                <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>{resumenQuien(noSaleVentas)}</span>
+              </summary>
+              <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)' }}>
+                <table className="tabla-responsive">
+                  <thead>
+                    <tr><th>Ref.</th><th>Ciudad</th><th>Total</th><th>Motivo</th><th>Resuelve</th><th>Qué pasa</th><th>Días</th></tr>
+                  </thead>
+                  <tbody>
+                    {noSaleVentas.map(x => (
+                      <tr key={x.ref}>
+                        <td data-label="Ref." className="mono">{String(x.ref).startsWith('#') ? x.ref : `#${x.ref}`}</td>
+                        <td data-label="Ciudad" className="muted">{x.ciudad || '—'}</td>
+                        <td data-label="Total">{x.total ? formatGs(x.total) : '—'}</td>
+                        <td data-label="Motivo" style={{ fontWeight: 600, color: 'var(--yellow)', whiteSpace: 'nowrap' }}>⛔ {x.motivo}</td>
+                        <td data-label="Resuelve" style={{ whiteSpace: 'nowrap' }}>{x.quien === 'Enrique' ? 'vos' : x.quien}</td>
+                        <td data-label="Qué pasa" className="muted" style={{ fontSize: 11, whiteSpace: 'normal', maxWidth: 320 }}>{x.detalle}</td>
+                        <td data-label="Días" className="muted">{x.dias ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
           </div>
         </div>
       )}
@@ -2797,7 +3183,7 @@ export default function DespachoPagina() {
           <div className="card ultra-o5" style={{ padding: 0 }}>
             <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <Eye size={14} color="var(--text-muted)" />
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Todos los pedidos</span>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Para despachar hoy ({paraDespachoTabla.length})</span>
               <div style={{ position: 'relative', marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
                 <Search size={13} color="var(--text-muted)" style={{ position: 'absolute', left: 9 }} />
                 <input
@@ -2808,227 +3194,42 @@ export default function DespachoPagina() {
                 />
               </div>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {paraDespacho.length} se despachan · {excluidos.length} excluidos
+                {paraDespacho.length} salen hoy · {excluidos.length} no salen
               </span>
             </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="tabla-responsive">
-                <thead>
-                  <tr>
-                    <th>Ref.</th>
-                    <th>Fecha</th>
-                    <th>Nombre</th>
-                    <th>Ciudad</th>
-                    <th>Teléfono</th>
-                    <th>Producto</th>
-                    <th>Cant.</th>
-                    <th>Total</th>
-                    <th>Estado</th>
-                    <th>Transportadora</th>
-                    <th>Cliente</th>
-                    <th>Despacho</th>
-                    <th>Pago</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tablaFiltrada.map((p, i) => (
-                    <tr key={i} style={{ opacity: p.despachar ? 1 : 0.45 }}>
-                      <td data-label="Ref." className="mono">#{p.n_referencia}</td>
-                      <td data-label="Fecha" className="muted" style={{ fontSize: 11 }}>{p.fecha}</td>
-                      <td data-label="Nombre" style={{ fontWeight: 500 }}>
-                        {p.cliente_nombre || '—'}
-                        {p.faltantes.length > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--yellow)' }} title={`Falta ${p.faltantes.join(', ')}`}>⚠</span>}
-                      </td>
-                      <td data-label="Ciudad" className="muted">{p.ciudad || '—'}</td>
-                      <td data-label="Teléfono" className="muted">{p.telefono || '—'}</td>
-                      <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(p.producto_nombre)}{armadoDe(p) && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--purple)' }}>{armadoDe(p)}</div>}</td>
-                      <td data-label="Cant.">{p.cantidad}</td>
-                      <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(p.total)}</td>
-                      <td data-label="Estado">
-                        <span style={{ fontSize: 11, fontWeight: 600, color: p.cfg.color, whiteSpace: 'nowrap' }}>
-                          {p.cfg.label}
-                        </span>
-                        <BadgeEntrega e={p.entregaProgramada} />
-                      </td>
-                      <td data-label="Transportadora" onClick={e => e.stopPropagation()}>
-                        {(() => {
-                          const disponibles = transportadorasDisponibles(p.ciudad, { cod: !p.prepago })
-                          if (!disponibles.length) {
-                            return (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <span style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>Sin cobertura</span>
-                                <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
-                                <LineaMotor decision={p.motorDecision} asignada={p.transportadora} activo={motorOn} />
-                              </div>
-                            )
-                          }
-                          const cubre = p.transportadora && disponibles.includes(p.transportadora)
-                          return (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                              <select
-                                className="form-input"
-                                value={p.transportadora || ''}
-                                onChange={e => {
-                                  const val = e.target.value
-                                  setTranspOverride(prev => ({ ...prev, [p.n_referencia]: val }))
-                                  // Nudge: si se está pisando un bloqueo de producto a mano,
-                                  // se sugiere pago anticipado (la razón de fondo del bloqueo
-                                  // era justamente evitar mandar este producto en COD). Queda
-                                  // togglear normal después si el admin decide lo contrario.
-                                  if (!p.transportadora && p.bloqueadoPorProducto && !prepagos.has(p.n_referencia)) {
-                                    togglePrepago(p.n_referencia)
-                                  }
-                                }}
-                                style={{ fontSize: 11, padding: '3px 6px', height: 'auto', minWidth: 96 }}
-                              >
-                                {Object.values(TRANSPORTADORAS).map(t => (
-                                  <option key={t.id} value={t.id}>
-                                    {t.label}{disponibles.includes(t.id) ? '' : ' (no cubre)'}
-                                  </option>
-                                ))}
-                              </select>
-                              <span style={{ fontSize: 9, color: cubre ? 'var(--text-dim)' : 'var(--red)', whiteSpace: 'nowrap' }}>
-                                {!p.transportadora && p.bloqueadoPorProducto
-                                  ? 'Solo Lucero — no cubre acá'
-                                  : !cubre
-                                    ? 'No cubre esta ciudad'
-                                    : p.transportadora === 'otra'
-                                      ? null
-                                      : `${formatGs(p.costo_envio || 0)}${p.flete_estimado ? ' · estimado' : ''}${p.transpManual ? ' · manual' : ''}`}
-                              </span>
-                              {p.fallbackProducto && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'normal' }}>⚠ {p.motivoTransportadora}</div>}
-                              <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
-                              <LineaMotor decision={p.motorDecision} asignada={p.transportadora} activo={motorOn} />
-                              {p.transportadora === 'otra' && (
-                                <input
-                                  type="number"
-                                  className="form-input"
-                                  placeholder="Costo flete"
-                                  value={costoOtraManual[p.n_referencia] ?? ''}
-                                  onChange={e => setCostoOtraManual(prev => ({ ...prev, [p.n_referencia]: e.target.value }))}
-                                  style={{ fontSize: 10, padding: '2px 6px', height: 'auto', width: 90 }}
-                                />
-                              )}
-                              {!p.transportadora && p.bloqueadoPorProducto && (
-                                <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>
-                                  Elegí transportadora a mano + marcá pago anticipado
-                                </span>
-                              )}
-                              {p.riesgoCiudad?.nivel === 'bloqueado' && (
-                                <button
-                                  onClick={() => toggleCiudad(p.n_referencia)}
-                                  title={p.riesgoCiudad.motivo}
-                                  style={{
-                                    fontSize: 9, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
-                                    border: '1px solid var(--red)', whiteSpace: 'nowrap',
-                                    background: p.ciudadHabilitada ? 'var(--red)' : 'transparent',
-                                    color: p.ciudadHabilitada ? '#fff' : 'var(--red)',
-                                  }}
-                                >
-                                  {p.ciudadHabilitada
-                                    ? '⚠ Forzado'
-                                    : `Ciudad ${Math.round((p.riesgoCiudad.tasa ?? 0) * 100)}% · forzar`}
-                                </button>
-                              )}
-                              {p.riesgoCiudad?.nivel === 'riesgo' && (
-                                <span style={{ fontSize: 9, color: 'var(--orange, #f59e0b)', whiteSpace: 'nowrap' }} title={p.riesgoCiudad.motivo}>
-                                  {p.riesgoCiudad.alternativa
-                                    ? `↔ Mejor por ${labelTransportadora(p.riesgoCiudad.alternativa.transportadora)} (${Math.round(p.riesgoCiudad.alternativa.tasa * 100)}%)`
-                                    : `Ciudad ${Math.round((p.riesgoCiudad.tasa ?? 0) * 100)}% entrega`}
-                                </span>
-                              )}
-                            </div>
-                          )
-                        })()}
-                      </td>
-                      <td data-label="Cliente">
-                        {p.riesgo?.nivel === 'bloqueado' ? (
-                          <button
-                            onClick={() => toggleRiesgo(p.n_referencia)}
-                            title={`${motivoRiesgo(p.riesgo)}\n\nClic para habilitar el despacho bajo tu criterio.`}
-                            style={{ cursor: 'pointer', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap',
-                              border: `1px solid ${p.riesgoHabilitado ? 'var(--green)' : 'var(--red)'}`,
-                              background: p.riesgoHabilitado ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
-                              color: p.riesgoHabilitado ? 'var(--green)' : 'var(--red)' }}
-                          >
-                            {p.riesgoHabilitado ? '✓ Habilitado' : `🚫 ${p.riesgo.fallos}/${p.riesgo.pedidos} no recibió`}
-                          </button>
-                        ) : p.riesgo?.nivel === 'riesgo' ? (
-                          <span
-                            title={motivoRiesgo(p.riesgo)}
-                            style={{ borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
-                              background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', border: '1px solid var(--yellow)' }}
-                          >
-                            ⚠ {p.riesgo.fallos}/{p.riesgo.pedidos} · conviene prepago
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
-                        )}
-                      </td>
-                      <td data-label="Despacho">
-                        {p.forzado ? (
-                          <button
-                            onClick={() => toggleForzar(p.n_referencia)}
-                            title="Forzado por vos. Clic para volver a excluir."
-                            style={{ cursor: 'pointer', border: '1px solid var(--green)', background: 'rgba(34,197,94,0.12)', color: 'var(--green)', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700 }}
-                          >
-                            ✓ Despachar (forzado)
-                          </button>
-                        ) : p.despachar ? (
-                          <span className="badge badge-green" style={{ fontSize: 10 }}>✓ Despachar</span>
-                        ) : (p.cfg.despachar && !p.cobranzaOk) ? (
-                          <button
-                            onClick={() => toggleForzar(p.n_referencia)}
-                            title="PaP no figura con cobranza en esta ciudad. Si sabés que igual llega, clic para despacharlo."
-                            style={{ cursor: 'pointer', background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 600 }}
-                          >
-                            📍 Sin cobranza · forzar
-                          </button>
-                        ) : (
-                          <span className="badge badge-red" style={{ fontSize: 10 }}>✗ Excluido</span>
-                        )}
-                      </td>
-                      <td data-label="" onClick={e => e.stopPropagation()} style={{ textAlign: 'right' }}>
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setEditando(p)}
-                          title="Corregir datos del pedido (ciudad, teléfono, dirección…)"
-                          style={{ padding: '3px 7px' }}
-                        >
-                          <Edit2 size={13} />
-                        </button>
-                      </td>
-                      <td data-label="Pago">
-                        {p.despachar ? (
-                          <button
-                            onClick={() => togglePrepago(p.n_referencia)}
-                            title={p.prepago ? 'Pagó por transferencia. Clic para volver a contra entrega.' : 'Marcar como pagado por adelantado (transferencia). El repartidor no cobra.'}
-                            style={{
-                              cursor: 'pointer', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700,
-                              display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
-                              border: `1px solid ${p.prepago ? 'var(--green)' : 'var(--border)'}`,
-                              background: p.prepago ? 'rgba(34,197,94,0.12)' : 'transparent',
-                              color: p.prepago ? 'var(--green)' : 'var(--text-muted)',
-                            }}
-                          >
-                            {p.prepago ? '💳 Ya pagó' : '💳 Contra entrega'}
-                          </button>
-                        ) : (
-                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>
-                        )}
-                        {p.prioridad && (
-                          <span title="Pagó por adelantado con prioridad: sale primero" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: 'var(--green)', whiteSpace: 'nowrap' }}>
-                            ⚡ Prioridad
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {paraDespachoTabla.length === 0 ? (
+              <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+                {busqueda.trim() ? 'Sin resultados para esa búsqueda.' : 'Hoy no hay nada para despachar.'}
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="tabla-responsive">
+                  {encabezadoPedidos}
+                  <tbody>
+                    {paraDespachoTabla.map(filaPedido)}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
+
+          {/* 29-10: lo que NO sale hoy, cerrado por defecto, con el motivo y quién lo resuelve (cancelados: en ningún lado) */}
+          {noSaleTabla.length > 0 && (
+            <details className="card ultra-o6" style={{ padding: 0 }}>
+              <summary style={{ padding: '12px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                No sale hoy ({noSaleTabla.length})
+                <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>{resumenQuien(noSaleTabla.map(p => p.noSale))}</span>
+              </summary>
+              <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)' }}>
+                <table className="tabla-responsive">
+                  {encabezadoPedidos}
+                  <tbody>
+                    {noSaleTabla.map(filaPedido)}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
           </div>
           </div>
         </>
