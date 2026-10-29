@@ -45,3 +45,28 @@ export async function enviarPlantilla(def: Record<string, unknown>, f: Fetch = f
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/**
+ * 29-10: sube un archivo de ejemplo con la Resumable Upload API y devuelve el `header_handle` que exige una plantilla
+ * con encabezado DOCUMENT/IMAGE/VIDEO. El id de la app sale del propio token (GET /app).
+ */
+export async function subirEjemplo(bytes: Uint8Array, tipo: string, nombre: string, f: Fetch = fetch): Promise<{ ok: boolean; handle?: string; error?: string }> {
+  const token = env("WA_TOKEN");
+  if (!token) return { ok: false, error: "falta WA_TOKEN" };
+  const g = `https://graph.facebook.com/${GRAPH_VERSION}`;
+  const h = { Authorization: `OAuth ${token}` };
+  try {
+    const app = await f(`${g}/app?fields=id`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) })
+      .then((r) => r.json()) as { id?: string; error?: { message?: string } };
+    if (!app.id) return { ok: false, error: `app: ${app.error?.message ?? "sin id"}` };
+    const q = new URLSearchParams({ file_name: nombre, file_length: String(bytes.length), file_type: tipo });
+    const ses = await f(`${g}/${app.id}/uploads?${q}`, { method: "POST", headers: h, signal: AbortSignal.timeout(15_000) })
+      .then((r) => r.json()) as { id?: string; error?: { message?: string } };
+    if (!ses.id) return { ok: false, error: `sesión: ${ses.error?.message ?? "sin id"}` };
+    const up = await f(`${g}/${ses.id}`, { method: "POST", headers: { ...h, file_offset: "0" }, body: bytes as unknown as BodyInit, signal: AbortSignal.timeout(30_000) })
+      .then((r) => r.json()) as { h?: string; error?: { message?: string } };
+    return up.h ? { ok: true, handle: up.h } : { ok: false, error: `subida: ${up.error?.message ?? "sin handle"}` };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
