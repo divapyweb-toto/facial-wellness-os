@@ -2269,7 +2269,7 @@ export async function aplicarBotonEntrega(ctx: Ctx, accion: AccionEntrega, id: s
     ? `[reprogramar entrega pedido ${etiqueta}] El cliente tocó Reprogramar en el aviso de entrega. ` +
       "Preguntale qué día le queda mejor y coordiná como dice COORDINAR UNA ENTREGA (sin prometer hora)."
     : `[corregir pedido ${etiqueta}] El cliente tocó Corregir en la confirmación del pedido (todavía sin confirmar). ` +
-      "Preguntale en 1 línea qué dato cambia; dirección, referencia o pin van con actualizar_direccion. " +
+      "Preguntale en 1 línea qué dato cambia; dirección, ciudad, referencia o pin van con actualizar_direccion. " +
       'Después pedile que confirme respondiendo "sí".';
   const texto = await conPedidoAbierto(deps, ctx.clienteId, ctx.telefono, contexto);
   await deps.completarContenidoMensaje(ctx.m.id, { texto_vendedor: texto }).catch(() => {});

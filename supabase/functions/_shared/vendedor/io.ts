@@ -2,7 +2,7 @@
 // I/O real del vendedor (Supabase, Shopify, WhatsApp, Telegram, Claude). La lógica está en orquestador.ts y
 // herramientas.ts; acá solo se conectan las dependencias.
 import { direccionUtilizable } from "../../pedidos-trabados/logica.ts";
-import { unirReferencia } from "./herramientas.ts";
+import { ciudadDeTarifas, unirReferencia } from "./herramientas.ts";
 import { depsPedidosWebReales } from "./pedidos_web_io.ts";
 import { depsEmailFacturaReales } from "./email_factura_io.ts";
 import { db } from "../db.ts";
@@ -74,6 +74,27 @@ export const depsHerramientasReales: DepsHerramientas = {
   pedidosWeb: depsPedidosWebReales,
   emailFactura: depsEmailFacturaReales,
   consultarCourier: (ciudad) => consultarCourierCiudad(db(), ciudad),
+  // 29-10: ciudad del cliente → nombre de la tabla de tarifas (rpc tarifa_courier, la misma que usa sugerir_courier).
+  async reconocerCiudad(texto) {
+    const consulta = (courier: string) => {
+      let reloj: ReturnType<typeof setTimeout> | undefined;
+      return Promise.race([
+        Promise.resolve(db().rpc("tarifa_courier", { p_courier: courier, p_ciudad: texto })).then(({ data, error }) => {
+          if (error) throw new Error(error.message);
+          return data as unknown;
+        }),
+        new Promise<never>((_, no) => (reloj = setTimeout(() => no(new Error("tarifa_courier: timeout")), 4_000))),
+      ]).finally(() => clearTimeout(reloj));
+    };
+    const r = await Promise.allSettled([consulta("pap"), consulta("lucero")]);
+    const ciudad = ciudadDeTarifas(r.flatMap((x) => (x.status === "fulfilled" ? [x.value] : [])));
+    if (ciudad) return { reconocida: true, ciudad };
+    if (r.some((x) => x.status === "rejected")) {
+      console.warn("reconocerCiudad: tarifa_courier falló:", r.map((x) => (x.status === "rejected" ? String(x.reason) : "ok")).join(" | "));
+      return null;
+    }
+    return { reconocida: false, ciudad: null };
+  },
   async catalogoShopify(estado) {
     const d = await gql<{ products: { nodes: NodoProducto[] } }>(QUERY_CATALOGO, { q: `status:${estado.toLowerCase()}` });
     return d.products.nodes.map((n): ProductoShopify => ({
@@ -172,6 +193,9 @@ export const depsHerramientasReales: DepsHerramientas = {
   async actualizarDireccionOrden(orderId, d) {
     const direccion: Record<string, string> = {};
     if (d.direccion) direccion.address1 = d.direccion;
+    // 29-10: la ciudad (ya normalizada con la tabla de tarifas si se reconoció). La copia de shopify_pedidos la
+    // refresca el orders/updated de shopify-webhook, igual que la calle y la referencia.
+    if (d.ciudad) direccion.city = d.ciudad;
     if (d.referencia) {
       // 10-10: se suma a la referencia que ya tenía el pedido (no se pisa).
       const act = await gql<{ order: { shippingAddress: { address2: string | null } | null } | null }>(
@@ -192,7 +216,10 @@ export const depsHerramientasReales: DepsHerramientas = {
         `query($id: ID!) { order(id: $id) { note shippingAddress { address1 address2 city } } }`, { id: `gid://shopify/Order/${orderId}` },
       ).catch(() => null);
       const a = fin?.order?.shippingAddress;
-      if (a && direccionUtilizable({ direccion: [a.address1, a.address2].filter(Boolean).join(", "), ciudad: a.city ?? "", notas: fin?.order?.note ?? "" })) {
+      // 29-10: con una ciudad que no se reconoció (o no se pudo verificar) la etiqueta queda: la decide pedidos-trabados
+      // con sugerir_courier (si no, un "Casa" + calle saldría de FALTAN_DATOS sin saber a qué ciudad va).
+      const ciudadDudosa = !!d.ciudad && d.ciudadReconocida !== true;
+      if (a && !ciudadDudosa && direccionUtilizable({ direccion: [a.address1, a.address2].filter(Boolean).join(", "), ciudad: a.city ?? "", notas: fin?.order?.note ?? "" })) {
         await gql(`mutation($id: ID!) { tagsRemove(id: $id, tags: ["FALTAN_DATOS"]) { userErrors { message } } }`, { id: `gid://shopify/Order/${orderId}` })
           .catch((e) => console.warn("tagsRemove FALTAN_DATOS:", e instanceof Error ? e.message : e));
       }

@@ -21,8 +21,12 @@ import {
   textoClienteDerivacion,
   textoResumen,
   cuerpoPrecioProducto,
+  ciudadDeTarifas,
 } from "./herramientas.ts";
 import { configPrueba, ctxPrueba, depsPrueba } from "./prueba_utiles.ts";
+import type { DepsHerramientas } from "./tipos.ts";
+import { normCiudad } from "../sale_hoy.js";
+import { accionesPara } from "../../pedidos-trabados/logica.ts";
 
 Deno.test("definiciones: las herramientas del contrato (19-10: + buscar_pedido, modificar_pedido, guardar_factura), con JSON Schema", () => {
   assertEquals(HERRAMIENTAS.map((h) => h.name).sort(), [
@@ -869,4 +873,115 @@ Deno.test("27-10 JawFlex = 1 PAR: cuerpo del precio desde config con montos del 
   assertEquals(cuerpoPrecioProducto(prod, undefined), "");
   assertEquals(botonesPrimerTurno(prod, false, { q1: "Quiero 1 par", q2: "2 pares envío gratis" }).map((b) => b.titulo), ["2 pares envío gratis", "Quiero 1 par", "Tengo una duda"]);
   assertEquals(botonesPrimerTurno(prod).map((b) => b.titulo), ["2 con envío gratis", "Quiero 1", "Tengo una duda"]);
+});
+
+// ── 29-10: actualizar_direccion con ciudad (respuesta al pedir_ciudad de pedidos-trabados) ──
+// Simula la rpc tarifa_courier (la real se verificó con SELECT): misma normalización (normCiudad) + exacta o "contiene".
+const TABLA_CIUDADES: Record<string, string> = { luque: "Luque", asuncion: "Asunción", "san lorenzo": "San Lorenzo" };
+function depsCiudad(over: Partial<DepsHerramientas> = {}) {
+  const cambios: Array<[number, Record<string, unknown>]> = [];
+  const consultas: string[] = [];
+  const { deps, reg } = depsPrueba({
+    actualizarDireccionOrden: (id, d) => (cambios.push([id, d]), Promise.resolve({ ok: true })),
+    // El pedido abierto es SOLO del cliente de prueba (ctxPrueba): otro cliente no tiene pedido.
+    pedidoTiendaAbierto: (clienteId) => Promise.resolve(clienteId === ctxPrueba().clienteId ? { shopify_order_id: 777, creado_en: new Date().toISOString() } : null),
+    reconocerCiudad: (texto) => {
+      consultas.push(texto);
+      const k = normCiudad(texto);
+      const fila = Object.entries(TABLA_CIUDADES).find(([c]) => k === c || ` ${k} `.includes(` ${c} `));
+      const respuestas = [fila ? { ciudad: fila[1], estimado: false } : { ciudad: null, estimado: true }, fila ? { ciudad: fila[1], estimado: false } : null];
+      const ciudad = ciudadDeTarifas(respuestas);
+      return Promise.resolve(ciudad ? { reconocida: true, ciudad } : { reconocida: false, ciudad: null });
+    },
+    ...over,
+  });
+  return { deps, reg, cambios, consultas };
+}
+const ahoraYa = () => ctxPrueba({ ahora: new Date() });
+
+Deno.test("29-10 actualizar_direccion: la definición tiene ciudad y le dice al modelo cuándo usarla", () => {
+  const h = HERRAMIENTAS.find((x) => x.name === "actualizar_direccion")!;
+  const props = (h.input_schema as { properties: Record<string, unknown> }).properties;
+  assert("ciudad" in props);
+  assert(/responde con la ciudad/.test(h.description), h.description);
+});
+
+Deno.test("29-10 actualizar_direccion: guarda la ciudad junto con la calle (normalizada con la tabla)", async () => {
+  const { deps, reg, cambios } = depsCiudad();
+  const r = await ejecutarHerramienta("actualizar_direccion", { direccion: "Mcal. López 1234", ciudad: "luque" }, ahoraYa(), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  assertEquals(cambios, [[777, { direccion: "Mcal. López 1234", ciudad: "Luque", ciudadReconocida: true }]]);
+  assertEquals([r.resultado.ciudad, r.resultado.ciudad_reconocida], ["Luque", true]);
+  assert(reg.avisos.some((a) => a.texto.includes("Mcal. López 1234 · Luque")), JSON.stringify(reg.avisos));
+});
+
+Deno.test("29-10 actualizar_direccion: solo la ciudad (\"es en Asunción\") alcanza", async () => {
+  const { deps, cambios } = depsCiudad();
+  const r = await ejecutarHerramienta("actualizar_direccion", { ciudad: "es en Asunción." }, ahoraYa(), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  assertEquals(cambios, [[777, { ciudad: "Asunción", ciudadReconocida: true }]]);
+  // Sin ningún dato sigue siendo error (y no toca nada).
+  const vacio = await ejecutarHerramienta("actualizar_direccion", { ciudad: "  " }, ahoraYa(), deps);
+  assert(vacio.esError && String(vacio.resultado.error).startsWith("sin_datos"));
+  assertEquals(cambios.length, 1);
+});
+
+Deno.test("29-10 actualizar_direccion: tildes y mayúsculas mal puestas → el nombre de la tabla", async () => {
+  const { deps, cambios } = depsCiudad();
+  for (const escrita of ["ASUNCION", "asunción", "SAN lorénzo", "  LuQuE  "]) {
+    const r = await ejecutarHerramienta("actualizar_direccion", { ciudad: escrita }, ahoraYa(), deps);
+    assertFalse(r.esError, `${escrita}: ${JSON.stringify(r.resultado)}`);
+  }
+  assertEquals(cambios.map(([, d]) => d.ciudad), ["Asunción", "Asunción", "San Lorenzo", "Luque"]);
+  assert(cambios.every(([, d]) => d.ciudadReconocida === true));
+});
+
+Deno.test("29-10 actualizar_direccion: ciudad no reconocida → se guarda tal cual y el modelo se entera", async () => {
+  const { deps, reg, cambios } = depsCiudad();
+  const r = await ejecutarHerramienta("actualizar_direccion", { ciudad: "Casa", direccion: "Calle Las Palmas 55" }, ahoraYa(), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  assertEquals(cambios, [[777, { direccion: "Calle Las Palmas 55", ciudad: "Casa", ciudadReconocida: false }]]);
+  assertEquals([r.resultado.ciudad, r.resultado.ciudad_reconocida], ["Casa", false]);
+  assert(/no figura/.test(String(r.resultado.nota)), String(r.resultado.nota));
+  assert(reg.avisos.some((a) => a.texto.includes("Casa (ciudad no reconocida)")));
+  // Si la consulta falla: se guarda igual, sin decir que se reconoció (pedidos-trabados decide en su corrida).
+  const caida = depsCiudad({ reconocerCiudad: () => Promise.reject(new Error("timeout")) });
+  const r2 = await ejecutarHerramienta("actualizar_direccion", { ciudad: "Luque" }, ahoraYa(), caida.deps);
+  assertFalse(r2.esError, JSON.stringify(r2.resultado));
+  assertEquals(caida.cambios, [[777, { ciudad: "Luque", ciudadReconocida: null }]]);
+});
+
+Deno.test("29-10 actualizar_direccion: el pedido de otro cliente no se toca (mismas reglas)", async () => {
+  const { deps, cambios, consultas } = depsCiudad();
+  const otro = ctxPrueba({ ahora: new Date(), clienteId: "otro-cliente", conversacionId: "otra-conversacion" });
+  const r = await ejecutarHerramienta("actualizar_direccion", { ciudad: "Luque", direccion: "Calle 1 de Mayo" }, otro, deps);
+  assert(r.esError && String(r.resultado.error).startsWith("no_hay_pedido_creado"), JSON.stringify(r.resultado));
+  assertEquals(cambios, []);
+  assertEquals(consultas, []); // ni siquiera se consulta la ciudad
+  // Pedido viejo (> 72 h, sin reintento): tampoco.
+  const viejo = depsCiudad({ pedidoTiendaAbierto: () => Promise.resolve({ shopify_order_id: 778, creado_en: "2026-01-01T00:00:00Z" }) });
+  const rv = await ejecutarHerramienta("actualizar_direccion", { ciudad: "Luque" }, ahoraYa(), viejo.deps);
+  assert(rv.esError && String(rv.resultado.error).startsWith("pedido_viejo"));
+  assertEquals(viejo.cambios, []);
+});
+
+Deno.test("29-10 ciudadDeTarifas: solo una fila real de la tabla reconoce (el estimado de PaP no)", () => {
+  assertEquals(ciudadDeTarifas([{ ciudad: null, estimado: true }, { ciudad: "Mbocajaty", estimado: false }]), "Mbocajaty");
+  assertEquals(ciudadDeTarifas([{ ciudad: "Luque", estimado: false }, { ciudad: "Luque", estimado: false }]), "Luque");
+  assertEquals(ciudadDeTarifas([{ ciudad: null, estimado: true }, null]), null);
+  assertEquals(ciudadDeTarifas([]), null);
+});
+
+Deno.test("29-10 contrato con pedidos-trabados: guardada la ciudad reconocida, la próxima corrida quita FALTAN_DATOS", () => {
+  const base = {
+    shopifyOrderId: 777, nombre: "#9999", estado: "confirmado", tags: ["CONFIRMADO", "FALTAN_DATOS"], actualizadoEn: null,
+    direccion: "Calle Las Palmas 55", notas: "", productos: ["Tiras"],
+  };
+  const ahora = new Date("2026-10-29T15:00:00Z");
+  // Antes: ciudad "Casa" (la tabla no la reconoce) → se le pide la ciudad; no se quita la etiqueta.
+  const antes = accionesPara({ ...base, ciudad: "Casa" }, ahora, true, new Map([["Casa", { sin_cobertura: true, ciudad_reconocida: false }]]), undefined, true);
+  assert(antes.includes("pedir_ciudad") && !antes.includes("quitar_faltan_datos"), JSON.stringify(antes));
+  // Después de actualizar_direccion con ciudad "Luque" (Shopify → orders/updated → shopify_pedidos).
+  const despues = accionesPara({ ...base, ciudad: "Luque" }, ahora, true, new Map([["Luque", { sin_cobertura: false, ciudad_reconocida: true, pap: true, lucero: true }]]), undefined, true);
+  assert(despues.includes("quitar_faltan_datos") && !despues.includes("pedir_ciudad"), JSON.stringify(despues));
 });

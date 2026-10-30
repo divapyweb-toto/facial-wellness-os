@@ -212,7 +212,13 @@ export type DepsHerramientas = {
   /** Textos del cliente (texto_vendedor o texto) en la conversación desde `desdeISO`, del más viejo al más nuevo (08-10). */
   entradasDesde?(conversacionId: string, desdeISO: string): Promise<string[]>;
   /** Cambia la dirección de envío de un pedido ya creado en Shopify (solo los campos que vienen). 08-10. */
-  actualizarDireccionOrden?(orderId: number, d: { direccion?: string; referencia?: string }): Promise<{ ok: boolean; error?: string }>;
+  actualizarDireccionOrden?(orderId: number, d: { direccion?: string; referencia?: string; ciudad?: string; ciudadReconocida?: boolean | null }): Promise<{ ok: boolean; error?: string }>;
+  /**
+   * 29-10: ciudad escrita por el cliente → nombre de la tabla de tarifas (rpc tarifa_courier: misma normalización que
+   * sugerir_courier: tildes, mayúsculas, alias, "contiene" y clave fonética). reconocida=false: ningún courier la tiene.
+   * null = no se pudo consultar.
+   */
+  reconocerCiudad?(texto: string): Promise<{ reconocida: boolean; ciudad: string | null } | null>;
   /** Último pedido de la tienda del cliente sin despachar ni cancelar (≤ 72 h), aunque no lo haya creado el bot. 09-10. */
   pedidoTiendaAbierto?(clienteId: string): Promise<{ shopify_order_id: number; creado_en: string; en_reintento?: boolean } | null>;
   /** Pedido guardado + courier asignado (para el texto que se reenvía al courier). 10-10. */

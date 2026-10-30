@@ -397,11 +397,13 @@ export const HERRAMIENTAS: Herramienta[] = [
   {
     name: "actualizar_direccion",
     description:
-      "Suma al pedido YA CREADO los datos de entrega que el cliente mandó después (número de casa, referencia, calle). No hace falta derivar a Enrique por esto. Mandá solo lo que agregó o corrigió.",
+      "Suma al pedido YA CREADO los datos de entrega que el cliente mandó después (número de casa, referencia, calle, ciudad). No hace falta derivar a Enrique por esto. Mandá solo lo que agregó o corrigió. " +
+      "Si le pedimos la ciudad o completar la dirección y responde con la ciudad (\"Luque\", \"es en Asunción\"), mandala en ciudad.",
     input_schema: {
       type: "object",
       properties: {
         direccion: { type: "string", description: "Calle, número o barrio (solo si lo corrigió o lo agregó)" },
+        ciudad: { type: "string", description: "Ciudad donde se entrega, solo el nombre (\"Luque\"), si la dio o la corrigió" },
         referencia: { type: "string", description: "Referencia para el courier: color de casa, portón, comercio cerca" },
         ubicacion: { type: "string", description: "Pin que mandó el cliente, \"lat,lng\" (de un mensaje [ubicación] o link de Maps)" },
       },
@@ -1186,13 +1188,27 @@ async function enviarMediaHerr(input: Record<string, unknown>, ctx: CtxTurno, de
   return { resultado: { ok: true, enviado: true, nota: "Se mandó el archivo. Si hace falta, escribí una línea corta con una pregunta." } };
 }
 
+/**
+ * 29-10: nombre de la ciudad según la tabla de tarifas, de las respuestas de la rpc tarifa_courier (una por courier).
+ * Solo cuenta una fila real (estimado=false con ciudad): el estimado de PaP por zona no reconoce nada. null = ninguna.
+ */
+export function ciudadDeTarifas(respuestas: unknown[]): string | null {
+  for (const r of respuestas) {
+    const o = (r ?? null) as { ciudad?: unknown; estimado?: unknown } | null;
+    if (o && o.estimado !== true && typeof o.ciudad === "string" && o.ciudad.trim()) return o.ciudad.trim();
+  }
+  return null;
+}
+
 async function actualizarDireccion(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
   const t = (k: string) => (typeof input[k] === "string" ? (input[k] as string).trim().slice(0, 200) : "");
   const direccion = t("direccion");
+  // 29-10: la ciudad que respondió el cliente (pedir_ciudad de pedidos-trabados o completar dirección).
+  const ciudadEscrita = t("ciudad").replace(/[\s.,;:!?]+$/, "").slice(0, 80);
   // 12-10: el pin va como "lat,lng" en la referencia (pedidos-trabados lo reconoce como dirección utilizable).
   const pin = /(-\d{1,2}\.\d{3,})\s*,\s*(-\d{1,2}\.\d{3,})/.exec(t("ubicacion"));
   const referencia = [t("referencia"), pin ? `Pin: ${pin[1]},${pin[2]} https://maps.google.com/?q=${pin[1]},${pin[2]}` : ""].filter(Boolean).join(". ");
-  if (!direccion && !referencia) return error("sin_datos: mandá la dirección, la referencia o el pin nuevo.");
+  if (!direccion && !referencia && !ciudadEscrita) return error("sin_datos: mandá la dirección, la ciudad, la referencia o el pin nuevo.");
   const chat = await deps.ultimoPedidoChat(ctx.conversacionId);
   // Pedido del bot ya creado o, si no, el pedido de la tienda abierto (Releasit) del cliente.
   // 13-10: un pedido en reintento de entrega manda (el cliente coordina día y horario), aunque tenga más de 72 h.
@@ -1204,22 +1220,41 @@ async function actualizarDireccion(input: Record<string, unknown>, ctx: CtxTurno
   }
   if (!previo.en_reintento && ctx.ahora.getTime() - new Date(previo.creado_en).getTime() > 72 * 3600_000) return error("pedido_viejo: derivá a Enrique.");
   if (!deps.actualizarDireccionOrden) return error("no_disponible: derivá a Enrique con motivo direccion_dudosa.");
-  const d = { ...(direccion ? { direccion } : {}), ...(referencia ? { referencia } : {}) };
+  // 29-10: la ciudad se normaliza con la tabla de tarifas ("luque" → "Luque", "es en Asunción" → "Asunción"). Si no la
+  // reconoce (o no se pudo consultar), se guarda tal como la escribió: no frena; pedidos-trabados decide en su corrida.
+  let ciudad = "";
+  let ciudadReconocida: boolean | null = null;
+  if (ciudadEscrita) {
+    const rc = deps.reconocerCiudad ? await deps.reconocerCiudad(ciudadEscrita).catch(() => null) : null;
+    ciudadReconocida = rc ? rc.reconocida && !!rc.ciudad : null;
+    ciudad = ciudadReconocida && rc?.ciudad ? rc.ciudad : ciudadEscrita;
+  }
+  const d = { ...(direccion ? { direccion } : {}), ...(referencia ? { referencia } : {}), ...(ciudad ? { ciudad, ciudadReconocida } : {}) };
   const r = await deps.actualizarDireccionOrden(previo.shopify_order_id, d);
   if (!r.ok) return error(`no_se_pudo_actualizar: ${r.error}. Derivá a Enrique con motivo direccion_dudosa.`);
   const quien = escaparHtml(ctx.nombreCliente ?? ctx.telefono ?? "Cliente");
+  const partes = [direccion, ciudad ? (ciudadReconocida === false ? `${ciudad} (ciudad no reconocida)` : ciudad) : "", referencia].filter(Boolean);
   // 10-10: si el pedido ya salió, va el texto listo para reenviar al courier con el cambio (13-10: un solo Telegram).
   const pc = deps.pedidoParaCourier ? await deps.pedidoParaCourier(previo.shopify_order_id).catch(() => null) : null;
   if (!pc?.despachado) {
-    await deps.avisar(`📍 <b>${quien}</b> completó la dirección del pedido (Shopify ${previo.shopify_order_id}): ${escaparHtml([direccion, referencia].filter(Boolean).join(" · "))}`)
+    await deps.avisar(`📍 <b>${quien}</b> completó la dirección del pedido (Shopify ${previo.shopify_order_id}): ${escaparHtml(partes.join(" · "))}`)
       .catch(() => {});
   }
   if (pc?.despachado) {
     const base = datosCourierDesdeRaw(pc.nombre, pc.raw, pc.telefono ?? ctx.telefono);
-    const datos = { ...base, ...(direccion ? { direccion } : {}), ...(referencia ? { referencia: unirReferencia(base.referencia, referencia) } : {}) };
-    await deps.avisar(avisoParaCourier(datos, `Cambio que pidió el cliente: ${[direccion, referencia].filter(Boolean).join(" · ")}`, pc.courier)).catch(() => {});
+    const datos = { ...base, ...(direccion ? { direccion } : {}), ...(ciudad ? { ciudad } : {}), ...(referencia ? { referencia: unirReferencia(base.referencia, referencia) } : {}) };
+    await deps.avisar(avisoParaCourier(datos, `Cambio que pidió el cliente: ${partes.join(" · ")}`, pc.courier)).catch(() => {});
   }
-  return { resultado: { ok: true, actualizado: true, nota: "Listo, quedó en el pedido. Confirmale corto que lo anotaste." } };
+  if (ciudad && ciudadReconocida === false) {
+    return {
+      resultado: {
+        ok: true, actualizado: true, ciudad, ciudad_reconocida: false,
+        nota: "Quedó guardada tal como la escribió, pero esa ciudad no figura entre las que cubren los couriers. Confirmale corto que lo anotaste " +
+          "y pedile UNA vez el pin 📍 de su casa o el nombre de la ciudad más cercana (si ya se lo pediste o no lo tiene, no insistas).",
+      },
+    };
+  }
+  return { resultado: { ok: true, actualizado: true, ...(ciudad ? { ciudad, ciudad_reconocida: ciudadReconocida } : {}), nota: "Listo, quedó en el pedido. Confirmale corto que lo anotaste." } };
 }
 
 async function datosTransferencia(_input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
