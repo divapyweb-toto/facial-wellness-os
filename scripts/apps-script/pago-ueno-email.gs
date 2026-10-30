@@ -43,3 +43,10 @@ function instalar() {
 function desinstalar() {
   ScriptApp.getProjectTriggers().forEach((t) => ScriptApp.deleteTrigger(t));
 }
+
+function probarConexion() {
+  // Manda un texto que no es un aviso: Voltra OS responde 200 (ignorado) si el secreto coincide, 401 si no.
+  const secreto = PropertiesService.getScriptProperties().getProperty('UENO_SECRET');
+  const r = UrlFetchApp.fetch(URL_VOLTRA, { method: 'post', contentType: 'application/json', headers: { 'x-voltra-secret': secreto || '' }, payload: JSON.stringify({ id: 'prueba', cuerpo: 'prueba de conexion' }), muteHttpExceptions: true });
+  Logger.log('HTTP ' + r.getResponseCode() + ' ' + r.getContentText());
+}
