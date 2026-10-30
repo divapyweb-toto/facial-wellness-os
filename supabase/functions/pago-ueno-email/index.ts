@@ -24,4 +24,3 @@ Deno.serve(async (req) => {
   if (!r.llego) return Response.json({ ok: false, error: r.error }, { status: 502 });
   return Response.json({ ok: true, id: b?.id ?? null, aviso: { monto: aviso.monto, fecha: aviso.fecha }, resultado: r.datos });
 });
-});
