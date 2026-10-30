@@ -125,3 +125,151 @@ Deno.test("29-10 factura al cobrar: marcado el pago se llama facturarAlCobrar un
     assert(x.ok && !x.prueba && x.notas.some((n) => n.includes("la reintenta la cola")));
   }
 });
+
+// ---------- 29-10 modo sin pedido (el ranking elige el pedido). Datos inventados (repo público). ----------
+import type { CandidatoPago } from "../_shared/pagos_ranking.ts";
+
+const TRANSF_1164 = { monto: 112000, fecha: "2026-10-29T15:30:00-03:00" }; // aviso de ueno desde otro banco: solo monto y hora
+
+let k = 0;
+function cnd(o: Partial<CandidatoPago> = {}): CandidatoPago {
+  k++;
+  return {
+    shopify_order_id: 80000 + k, pedido: `#${5000 + k}`, monto_pendiente: 112000, total: 112000, ciudad: "Ciudad Prueba",
+    creado_en: `2026-10-${String(10 + (k % 15)).padStart(2, "0")}T12:00:00Z`, tags: ["CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"],
+    telefono: `+59598200${String(1000 + k).slice(-4)}`, nombresCliente: [`Cliente${k} Apellido${k}`], comprobantes: [], ...o,
+  };
+}
+const lista17 = (extra: Partial<CandidatoPago>[]) => [...extra.map((e) => cnd(e)), ...Array.from({ length: 17 - extra.length }, () => cnd())];
+
+function doblesSin(cands: CandidatoPago[], over: Partial<DepsPago> = {}) {
+  const base = dobles({
+    leerPedido: (n) => {
+      const c = cands.find((x) => x.pedido === n);
+      return Promise.resolve(c ? ped({ shopify_order_id: c.shopify_order_id, nombre: c.pedido, tags: c.tags, total: c.total, nombresCliente: c.nombresCliente ?? [] }) : null);
+    },
+    ...over,
+  });
+  const avisos: { texto: string; botones: unknown[][]; clave: string }[] = [];
+  const consultas: number[] = [];
+  base.d.candidatos = (monto) => (consultas.push(monto), Promise.resolve(cands));
+  base.d.avisarEnrique = (texto, botones, clave) => (avisos.push({ texto, botones, clave }), Promise.resolve(true));
+  base.d.transferenciaYaAsociada = over.transferenciaYaAsociada ?? (() => Promise.resolve(false));
+  base.d.ahora = () => new Date("2026-10-29T18:40:00Z");
+  return { ...base, avisos, consultas };
+}
+
+Deno.test("sin pedido · caso #1164: aviso solo con monto y hora, 17 esperan Gs 112.000, comprobante desde el celular del pedido → ese", async () => {
+  const cands = lista17([{ pedido: "#1164", shopify_order_id: 1164, creado_en: "2026-10-29T18:24:04Z", telefono: "0981 222 333", comprobantes: [{ en: "2026-10-29T18:30:14Z", telefono: "+595981222333", monto: 112000 }] }]);
+  const { d, log, avisos } = doblesSin(cands);
+  const r = await procesarPago(TRANSF_1164, d);
+  assert(r.ok && !r.prueba, JSON.stringify(r));
+  assertEquals([r.pedido, r.coincidencia, r.senales], ["#1164", "telefono", ["telefono"]]);
+  assertEquals(log.recibidos, [1164]);
+  assertEquals(log.reservas, ["SN-t2610291530-112000"]); // sin nro. en el aviso: clave por hora y monto
+  assertEquals(avisos.length, 0);
+});
+
+Deno.test("sin pedido · nro. del comprobante = nro. del aviso → se asocia aunque el titular sea otro (un familiar)", async () => {
+  const cands = lista17([
+    { pedido: "#5101", shopify_order_id: 5101, nombresCliente: ["Ana Prueba Uno"], comprobantes: [{ en: "2026-10-28T10:00:00Z", telefono: "0985000000", nro_transaccion: "000987654321" }] },
+    { pedido: "#5102", nombresCliente: ["Carlos Familiar Prueba"] },
+  ]);
+  const { d, log } = doblesSin(cands);
+  const r = await procesarPago({ ...TRANSF_1164, nro_transaccion: "987654321", titular: "CARLOS FAMILIAR PRUEBA" }, d);
+  assert(r.ok && !r.prueba, JSON.stringify(r));
+  assertEquals([r.pedido, r.coincidencia], ["#5101", "nro"]);
+  assertEquals([log.recibidos, log.reservas], [[5101], ["987654321"]]);
+});
+
+Deno.test("sin pedido · titular = nombre y apellido de un solo pedido → se asocia; con un solo candidato también", async () => {
+  const cands = lista17([{ pedido: "#5201", shopify_order_id: 5201, nombresCliente: ["José Luis Fernández"] }]);
+  const a = doblesSin(cands);
+  const r = await procesarPago({ ...TRANSF_1164, nro_transaccion: "TX-55", titular: "FERNANDEZ JOSE LUIS" }, a.d);
+  assert(r.ok && !r.prueba && r.pedido === "#5201" && r.coincidencia === "nombre", JSON.stringify(r));
+  const b = doblesSin([cnd({ pedido: "#5202", shopify_order_id: 5202, nombresCliente: ["Rosa María Prueba"] })]);
+  const r2 = await procesarPago({ ...TRANSF_1164, nro_transaccion: "TX-56", titular: "ROSA PRUEBA" }, b.d);
+  assert(r2.ok && !r2.prueba && r2.pedido === "#5202", JSON.stringify(r2));
+  // Dos con el mismo nombre y apellido → ambiguo, no se marca.
+  const c = doblesSin(lista17([{ nombresCliente: ["Rosa Prueba"] }, { nombresCliente: ["Rosa Prueba Dos"] }]));
+  const r3 = await procesarPago({ ...TRANSF_1164, nro_transaccion: "TX-57", titular: "ROSA PRUEBA" }, c.d);
+  assertEquals(r3.ok ? null : r3.error, "ambiguo");
+  assertEquals(c.log.recibidos, []);
+});
+
+Deno.test("sin pedido · ambiguo → aviso a Enrique con los 3 más probables y botones Es este; nada marcado", async () => {
+  const { d, log, avisos } = doblesSin(lista17([]));
+  const r = await procesarPago(TRANSF_1164, d);
+  assert(!r.ok);
+  assertEquals([r.error, r.total, r.avisado, r.candidatos?.length], ["ambiguo", 17, true, 3]);
+  assertEquals(avisos.length, 1);
+  assertEquals(avisos[0].botones.length, 3);
+  const b = avisos[0].botones[0][0] as { texto: string; callback: string };
+  assert(/^Es este: #\d+$/.test(b.texto) && /^es_este:\d+:t2610291530$/.test(b.callback), JSON.stringify(b));
+  assertEquals(avisos[0].clave, "t2610291530:112000");
+  assert(avisos[0].texto.includes("hay 17 pedidos esperando ese monto"), avisos[0].texto);
+  assert(!/\+595|Cliente\d|Apellido/.test(avisos[0].texto)); // sin datos personales
+  assertEquals([log.reservas.length, log.recibidos.length], [0, 0]);
+});
+
+Deno.test("sin pedido · distinto monto → nunca se asocia (aunque el comprobante sea del celular del pedido)", async () => {
+  const cands = [cnd({ pedido: "#5301", telefono: "0981222444", comprobantes: [{ en: "2026-10-29T18:30:00Z", telefono: "0981222444" }] })];
+  const { d, log, avisos } = doblesSin(cands);
+  const r = await procesarPago({ ...TRANSF_1164, monto: 111000 }, d);
+  assertEquals(r.ok ? null : [r.error, r.avisado], ["sin_candidatos", true]);
+  assert(avisos[0].texto.includes("sin pedido que espere ese monto"));
+  assertEquals(log.recibidos, []);
+});
+
+Deno.test("sin pedido · interruptor apagado → no consulta, no avisa, no marca; prueba:true dice qué haría sin tocar nada", async () => {
+  const cands = lista17([{ pedido: "#1164", shopify_order_id: 1164, telefono: "0981222333", creado_en: "2026-10-29T18:24:04Z", comprobantes: [{ en: "2026-10-29T18:30:14Z", telefono: "0981222333" }] }]);
+  const a = doblesSin(cands, { activo: () => Promise.resolve(false) });
+  const r = await procesarPago(TRANSF_1164, a.d);
+  assertEquals(r.ok ? null : r.error, "apagado");
+  assertEquals([a.consultas.length, a.avisos.length, a.log.reservas.length, a.log.recibidos.length], [0, 0, 0, 0]);
+  const p = await procesarPago({ ...TRANSF_1164, prueba: true }, a.d);
+  assert(p.ok && p.prueba && p.pedido === "#1164", JSON.stringify(p));
+  const amb = await procesarPago({ ...TRANSF_1164, monto: 112000, prueba: true }, doblesSin(lista17([]), { activo: () => Promise.resolve(false) }).d);
+  assert(!amb.ok && amb.error === "ambiguo" && amb.avisado === true && !!amb.aviso);
+  assertEquals([a.avisos.length, a.log.reservas.length, a.log.recibidos.length], [0, 0, 0]);
+});
+
+Deno.test("sin pedido · rendición de Punto a Punto o Lucero del Este → se ignora, sin aviso ni consulta", async () => {
+  for (const titular of ["PUNTO A PUNTO S.A.", "Lucero del Este SRL"]) {
+    const { d, log, avisos, consultas } = doblesSin(lista17([]));
+    const r = await procesarPago({ monto: 1250000, fecha: "2026-10-29T11:00:00-03:00", nro_transaccion: "R-1", titular }, d);
+    assertEquals(r.ok ? null : [r.error, r.ignorar], ["rendicion_courier", true]);
+    assertEquals([consultas.length, avisos.length, log.recibidos.length], [0, 0, 0]);
+  }
+});
+
+Deno.test("sin pedido · transferencia ya asociada (automático o Es este) → nada; la misma clave no marca dos veces", async () => {
+  const cands = lista17([{ pedido: "#1164", shopify_order_id: 1164, telefono: "0981222333", creado_en: "2026-10-29T18:24:04Z", comprobantes: [{ en: "2026-10-29T18:30:14Z", telefono: "0981222333" }] }]);
+  const a = doblesSin(cands, { transferenciaYaAsociada: (_c, ref) => Promise.resolve(ref === "t2610291530") });
+  const r = await procesarPago(TRANSF_1164, a.d);
+  assertEquals(r.ok ? null : [r.error, r.ignorar], ["ya_asociada", true]);
+  assertEquals([a.consultas.length, a.avisos.length, a.log.recibidos.length], [0, 0, 0]);
+  // Sin el chequeo: la reserva por clave también frena la segunda vez.
+  const b = doblesSin(cands);
+  assert((await procesarPago(TRANSF_1164, b.d)).ok);
+  const r2 = await procesarPago(TRANSF_1164, b.d);
+  assertEquals(r2.ok ? null : r2.error, "transaccion_ya_usada");
+  assertEquals(b.log.recibidos, [1164]);
+});
+
+Deno.test("sin pedido · datos inválidos: sin fecha, monto con decimales, nro. con espacios", async () => {
+  const { d } = doblesSin(lista17([]));
+  for (const e of [{ monto: 112000 }, { monto: 10.5, fecha: "2026-10-29T15:30:00-03:00" }, { monto: 112000, fecha: "2026-10-29T15:30:00-03:00", nro_transaccion: "a b" }]) {
+    const r = await procesarPago(e, d);
+    assertEquals(r.ok ? null : r.error, "datos_invalidos");
+  }
+});
+
+Deno.test("decidir: acepta las señales del ranking (nro, telefono, titular); 'comprobante' de otro celular u 'hora' solas no", () => {
+  const p = ped({ tags: ["CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"] });
+  assertEquals(decidir(p, 158000, null, ["nro"]).ok && decidir(p, 158000, null, ["nro"]), { ok: true, motivo: "oferta_pago_anticipado", pendiente: 158000, coincidencia: "nro" });
+  assertEquals((decidir(p, 158000, null, ["telefono"]) as { coincidencia: string }).coincidencia, "telefono");
+  assertEquals((decidir(p, 158000, null, ["titular"]) as { coincidencia: string }).coincidencia, "nombre");
+  for (const s of [["comprobante"], ["hora"], []] as const) assertEquals(decidir(p, 158000, null, [...s]).ok, false);
+  assertEquals(decidir(p, 150000, null, ["nro"]).ok, false); // el monto manda siempre
+});

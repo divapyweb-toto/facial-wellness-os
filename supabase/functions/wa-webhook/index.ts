@@ -13,6 +13,9 @@ import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { descargarMedia, enviarBotones, enviarTexto, marcarLeidoYEscribiendo, verificarFirmaMeta } from "../_shared/wa.ts";
 import { transcribirAudio } from "../_shared/transcripcion.ts";
 import { resolverLinkMapas } from "../_shared/link_mapas.ts";
+import { clasificarComprobante } from "../_shared/comprobante.ts";
+import { llamarClaude } from "../_shared/claude.ts";
+import { cargarImagen } from "../_shared/vendedor/imagenes.ts";
 import { registrarBaja } from "../recompra/baja.ts";
 import { ofrecerCobroQR } from "../pago-qr-webhook/io.ts";
 import { cargarTarifasCourier, consultarCourierCiudad } from "../_shared/plazo_zona.ts";
@@ -218,6 +221,21 @@ export const depsReales: Deps = {
   },
 
   resolverLinkMapas: (url) => resolverLinkMapas(url),
+
+  // 29-10: ¿la imagen es un comprobante de pago? (Haiku, ~USD 0,002 por imagen). Si no se puede ver, es=null.
+  async clasificarComprobante(ruta, mime) {
+    const img = await cargarImagen({ ruta, mime }, async (r) => {
+      const { data, error } = await db().storage.from("wa-media").download(r);
+      if (error || !data) return { ok: false, error: `descarga: ${error?.message ?? "sin datos"}` };
+      return { ok: true, bytes: new Uint8Array(await data.arrayBuffer()), mime: data.type };
+    });
+    if (!img.ok) return { es: null, monto: null, motivo: `no_se_pudo_ver: ${img.error}` };
+    const r = await clasificarComprobante(img.bloque, llamarClaude);
+    console.log(`comprobante: clasificado ${JSON.stringify({ es: r.es, monto: r.monto, motivo: r.motivo, usd: r.costo_usd })}`);
+    // 29-10 (agente F): también nro., titular, banco y hora leídos (misma llamada); el log solo dice si se leyeron.
+    console.log(`comprobante: datos ${JSON.stringify({ nro: !!r.datos?.nro_transaccion, titular: !!r.datos?.titular, banco: !!r.datos?.banco, fecha: !!r.datos?.fecha })}`);
+    return { es: r.es, monto: r.monto, motivo: r.motivo, ...(r.datos ? { datos: r.datos } : {}) };
+  },
 
   async transcribirAudio(ruta, mime) {
     const { data, error } = await db().storage.from("wa-media").download(ruta);

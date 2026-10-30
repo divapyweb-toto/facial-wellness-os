@@ -4,6 +4,7 @@
 import { direccionUtilizable } from "../../pedidos-trabados/logica.ts";
 import { unirReferencia } from "./herramientas.ts";
 import { depsPedidosWebReales } from "./pedidos_web_io.ts";
+import { depsEmailFacturaReales } from "./email_factura_io.ts";
 import { db } from "../db.ts";
 import { cargarTarifasCourier, consultarCourierCiudad } from "../plazo_zona.ts";
 import { llamarClaude } from "../claude.ts";
@@ -71,6 +72,7 @@ let ultimaGeocodificacion = 0;
 
 export const depsHerramientasReales: DepsHerramientas = {
   pedidosWeb: depsPedidosWebReales,
+  emailFactura: depsEmailFacturaReales,
   consultarCourier: (ciudad) => consultarCourierCiudad(db(), ciudad),
   async catalogoShopify(estado) {
     const d = await gql<{ products: { nodes: NodoProducto[] } }>(QUERY_CATALOGO, { q: `status:${estado.toLowerCase()}` });
@@ -235,7 +237,7 @@ export const depsHerramientasReales: DepsHerramientas = {
     falla("pasar a humano", error);
   },
 
-  avisar: (texto, botones) => avisar(texto, botones),
+  avisar: (texto, botones, opts) => avisar(texto, botones, opts),
   enviarTexto: (to, texto, opts) => enviarTexto(to, texto, opts),
   enviarInteractivo: (to, interactive, opts) => enviarInteractivo(to, interactive, opts),
   enviarMedia: (to, tipo, link, caption, opts) => enviarMedia(to, tipo, link, caption, opts),

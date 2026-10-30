@@ -16,6 +16,7 @@ import {
   TAG_PRIORIDAD,
   textoOfertaPrioridad,
 } from "../_shared/pago_anticipado.ts";
+import { type DatosComprobante, ESPERA_MIN_DEFAULT, venceEspera } from "../_shared/comprobante.ts";
 import { deducirProductoAnuncio, marcaAnuncio, marcaTextoAnuncio, textoDelAnuncio, type ReferralMeta } from "../_shared/anuncios.ts";
 import { detectarLinkMapas, type LinkMapas, textoLinkMapas } from "../_shared/link_mapas.ts";
 import { enlaceWaMe, escaparHtml } from "../_shared/telegram_formato.ts";
@@ -211,6 +212,11 @@ export interface Deps {
   cerrarOfertaPrioridad?(orderId: string, r: ResultadoEnvio): Promise<void>;
   /** 12-10: ¿ya llegó un comprobante para este pedido? (wa_mensajes.contenido.comprobante_pago_anticipado) */
   comprobanteRecibido?(orderId: string): Promise<boolean>;
+  /**
+   * 29-10: ¿la imagen copiada en Storage (wa-media/ruta) es un comprobante de pago? es=null si no se pudo ver (se
+   * sigue como antes). Sin esto, toda imagen de un pedido con oferta es comprobante (comportamiento del 12-10).
+   */
+  clasificarComprobante?(ruta: string, mime: string): Promise<{ es: boolean | null; monto: number | null; motivo: string; datos?: DatosComprobante }>;
   /**
    * 12-10: aviso a Enrique por Telegram con el archivo (foto o PDF del comprobante) y botones. `texto` es plano (se
    * escapa en index.ts). `ruta`: copia en Storage wa-media (si no, se baja de Meta con el media id).
@@ -1805,9 +1811,12 @@ export { TAG_COMPROBANTE_PAGO, TAG_OFERTA_PAGO, TAG_PRIORIDAD };
 export const PAGO_ANTICIPADO_DEFAULT = {
   texto_recibido: "Recibido, gracias. Lo verificamos y tu pedido sale en el primer despacho.",
   dias_comprobante: 7,
+  // 29-10: la imagen se clasifica antes (no comprobante → vendedor) y el aviso espera el cruce automático con ueno.
+  clasificar: true,
+  espera_min: ESPERA_MIN_DEFAULT,
 };
 
-type CfgComprobante = { texto_recibido: string; dias_comprobante: number };
+type CfgComprobante = { texto_recibido: string; dias_comprobante: number; clasificar: boolean; espera_min: number };
 
 async function leerCfgComprobante(deps: Deps): Promise<CfgComprobante> {
   const c = await deps.config("pago_anticipado").catch(() => null) as Record<string, unknown> | null;
@@ -1816,6 +1825,9 @@ async function leerCfgComprobante(deps: Deps): Promise<CfgComprobante> {
   return {
     texto_recibido: txt(c?.texto_recibido, PAGO_ANTICIPADO_DEFAULT.texto_recibido),
     dias_comprobante: Number.isFinite(dias) && dias > 0 ? dias : PAGO_ANTICIPADO_DEFAULT.dias_comprobante,
+    clasificar: c?.clasificar === false ? false : PAGO_ANTICIPADO_DEFAULT.clasificar,
+    // 0 = aviso inmediato a Enrique (como hasta el 28-10).
+    espera_min: Number.isFinite(Number(c?.espera_min)) && Number(c?.espera_min) >= 0 ? Number(c?.espera_min) : PAGO_ANTICIPADO_DEFAULT.espera_min,
   };
 }
 
@@ -1904,10 +1916,28 @@ export async function aplicarComprobantePago(ctx: Ctx): Promise<boolean> {
     if (c.ok) ruta = c.ruta ?? destino;
     else fallas.push(`copia del comprobante: ${c.error}`);
   }
+  // 29-10: ¿es un comprobante? (#1162 mandó una captura del anuncio y #1125 una del chat con el repartidor, y los dos
+  // recibieron "Recibido, lo verificamos" y un aviso a Enrique). No → la imagen sigue al vendedor, sin aviso.
+  let clase: { es: boolean | null; monto: number | null; motivo: string; datos?: DatosComprobante } | null = null;
+  if (cfg.clasificar && ruta && deps.clasificarComprobante && media.mime.toLowerCase().startsWith("image/")) {
+    clase = await deps.clasificarComprobante(ruta, media.mime)
+      .catch((e) => ({ es: null, monto: null, motivo: `error: ${e instanceof Error ? e.message : String(e)}` }));
+    if (clase.es === false) {
+      await deps.completarContenidoMensaje(m.id, { comprobante_descartado: { pedido: orderId, motivo: clase.motivo }, storage_path: ruta })
+        .catch(() => {});
+      return false;
+    }
+  }
+  const esperar = cfg.espera_min > 0;
   // La marca del mensaje es el registro del comprobante (no se toca el pedido).
   await deps.completarContenidoMensaje(m.id, {
     comprobante_pago_anticipado: orderId,
     ...(ruta ? { storage_path: ruta } : {}),
+    ...(clase ? { comprobante_clasificado: { es: clase.es, monto: clase.monto, motivo: clase.motivo } } : {}),
+    // 29-10 (agente F): lo leído del comprobante (nro., titular, banco, hora) para el cruce con ueno (pago-verificado).
+    ...(clase && (clase.datos || clase.monto) ? { comprobante_datos: { monto: clase.monto, ...(clase.datos ?? {}) } } : {}),
+    // 29-10: seguimiento-chat avisa a Enrique solo si al vencer la espera el verificador de ueno no lo marcó pagado.
+    ...(esperar ? { aviso_comprobante_pendiente: { pedido: orderId, etiqueta, total, mime: media.mime, vence: venceEspera(deps.ahora(), cfg.espera_min).toISOString(), media_id: media.id } } : {}),
   });
 
   // 2) Respuesta al cliente, salvo que Enrique tenga el chat.
@@ -1917,6 +1947,12 @@ export async function aplicarComprobantePago(ctx: Ctx): Promise<boolean> {
     const texto = renderizar(cfg.texto_recibido, { nombre: primerNombre(nombreDePedido(p), ctx.nombreWa), pedido: etiqueta, total });
     const e = await deps.enviarTexto(ctx.destino, texto, { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
     if (!e.ok) fallas.push(`respuesta al cliente: ${e.error}`);
+  }
+
+  // 29-10: con espera, el aviso lo manda seguimiento-chat (comprobantes_espera.ts) si el cruce automático no aparece.
+  if (esperar) {
+    if (fallas.length) console.error(`comprobante ${etiqueta}: ${fallas.join(" · ")}`);
+    return true;
   }
 
   // 3) Aviso a Enrique con el archivo. pagado:<id> → telegram-webhook marca pagado en Shopify, tags PAGO_VERIFICADO +

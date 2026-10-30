@@ -1,7 +1,7 @@
 // Pruebas de pedidos_web.ts (buscar_pedido, modificar_pedido, guardar_factura). Datos inventados: repo público.
 import { assert, assertEquals, assertMatch, assertStringIncludes } from "@std/assert";
 import { _limpiarCacheCatalogo } from "./herramientas.ts";
-import { EDICION_DIRECTA_ACTIVA } from "./pedidos_web.ts";
+import { claveAvisoFactura, EDICION_DIRECTA_ACTIVA } from "./pedidos_web.ts";
 import { digitoVerificadorRuc } from "../facturacion.ts";
 import {
   buscarPedidoHerr,
@@ -578,4 +578,49 @@ Deno.test("validarFactura y mezclarAtributos", () => {
     mezclarAtributos([{ key: "a", value: "1" }, { key: "Factura", value: "vieja" }], [{ key: "factura", value: "nueva" }]),
     [{ key: "a", value: "1" }, { key: "factura", value: "nueva" }],
   );
+});
+
+// 29-10 (#1164): dos turnos seguidos guardaron la misma factura → salieron dos avisos iguales a Telegram.
+function armarConShopify(atributos = [{ key: "Ruc", value: "" }]) {
+  const p = pedido({ atributos });
+  const a = armar({ pedidos: [p] });
+  // Como Shopify: lo guardado se ve en la próxima lectura del pedido.
+  a.deps.pedidosWeb!.actualizarAtributos = (gid, nuevos) => {
+    a.regPw.atributos.push({ gid, nuevos });
+    p.atributos = mezclarAtributos(p.atributos, nuevos);
+    return Promise.resolve({ ok: true });
+  };
+  return a;
+}
+
+Deno.test("factura: dos guardados iguales seguidos → un solo aviso, con tipo y clave por pedido", async () => {
+  const { deps, reg, regPw } = armarConShopify();
+  const r1 = await guardarFacturaHerr.ejecutor({ factura: `${RUC_OK} Carlos Benítez`, pedido: "#1072" }, ctx(), deps);
+  const r2 = await guardarFacturaHerr.ejecutor({ factura: `${RUC_OK}  carlos benítez `, pedido: "#1072" }, ctx(), deps);
+  assertEquals(r1.resultado.ok, true);
+  assertEquals(r2.resultado.ok, true);
+  assertEquals(r2.resultado.ya_estaba, true);
+  assertEquals(reg.avisos.length, 1);
+  assertEquals(regPw.atributos.length, 1); // el segundo no reescribe Shopify
+  assertEquals(reg.avisos[0].opts, {
+    tipo: "factura_guardada_vendedor",
+    destino: "enrique",
+    pedido: "#1072",
+    unaVezPorDia: true,
+    clave: claveAvisoFactura(7000001, `${RUC_OK} Carlos Benítez`),
+  });
+  assert(!reg.avisos[0].texto.includes("Antes decía"));
+  assertMatch(claveAvisoFactura(7000001, "x"), /^factura:7000001:[0-9a-f]{8}$/);
+  assertEquals(claveAvisoFactura(1, "A  b"), claveAvisoFactura(1, "a b"));
+});
+
+Deno.test("factura: un cambio real → segundo aviso con 'Antes decía' y otra clave", async () => {
+  const { deps, reg } = armarConShopify();
+  await guardarFacturaHerr.ejecutor({ factura: `${RUC_OK} Carlos Benítez`, pedido: "#1072" }, ctx(), deps);
+  await guardarFacturaHerr.ejecutor({ factura: `${RUC_OK} Carlos Benítez SA`, pedido: "#1072" }, ctx(), deps);
+  assertEquals(reg.avisos.length, 2);
+  assertStringIncludes(reg.avisos[1].texto, `Antes decía: ${RUC_OK} Carlos Benítez.`);
+  assertStringIncludes(reg.avisos[1].texto, "Se factura recién cuando esté cobrado.");
+  const claves = reg.avisos.map((a) => (a.opts as { clave: string }).clave);
+  assert(claves[0] !== claves[1]);
 });

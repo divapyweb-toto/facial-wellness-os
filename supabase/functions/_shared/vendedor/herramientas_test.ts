@@ -27,7 +27,7 @@ import { configPrueba, ctxPrueba, depsPrueba } from "./prueba_utiles.ts";
 Deno.test("definiciones: las herramientas del contrato (19-10: + buscar_pedido, modificar_pedido, guardar_factura), con JSON Schema", () => {
   assertEquals(HERRAMIENTAS.map((h) => h.name).sort(), [
     "actualizar_direccion", "avisar_enrique", "buscar_pedido", "cierre_botones", "confirmar_ubicacion", "consultar_catalogo", "crear_pedido_cod", "datos_transferencia", "derivar_a_enrique", "enviar_formulario", "enviar_media",
-    "enviar_opciones", "estado_pedido", "guardar_factura", "modificar_pedido", "pedir_telefono", "pedir_ubicacion", "permiso_ofertas", "primer_turno", "programar_entrega", "registrar_perfil",
+    "enviar_opciones", "estado_pedido", "guardar_email_factura", "guardar_factura", "modificar_pedido", "pedir_telefono", "pedir_ubicacion", "permiso_ofertas", "primer_turno", "programar_entrega", "registrar_perfil",
   ]);
   for (const h of HERRAMIENTAS) assertEquals(h.input_schema.type, "object");
 });

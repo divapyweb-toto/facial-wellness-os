@@ -502,7 +502,7 @@ export function textoTelegramModificacion(o: {
 // ---------- resolución del pedido ----------
 
 /** Pedido de trabajo: el que nombra el modelo, o el último del chat (bot creado → vinculado → de la tienda). */
-async function resolverPedido(
+export async function resolverPedido(
   ref: unknown,
   ctx: CtxTurno,
   deps: DepsHerramientas,
@@ -941,6 +941,25 @@ export function atributosFactura(v: { texto: string; ruc: string | null; razon: 
   ];
 }
 
+/** Tipo del aviso de factura guardada (telegram_enviados / telegram_politica). */
+export const TIPO_AVISO_FACTURA = "factura_guardada_vendedor";
+/** Regla 29-10: contado por adelantado → se factura al pagarse; contra entrega → al entregarse. */
+export const TEXTO_CUANDO_SE_FACTURA = "Se factura recién cuando esté cobrado.";
+
+const normalizarFactura = (t: string) => String(t ?? "").normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
+
+/** Mismo dato de factura (sin importar espacios ni mayúsculas). */
+export function mismaFactura(a: string, b: string): boolean {
+  return normalizarFactura(a) === normalizarFactura(b);
+}
+
+/** Clave del aviso: pedido + huella del texto (FNV-1a), así telegram_enviados no guarda el RUC ni la razón social. */
+export function claveAvisoFactura(orderId: number, texto: string): string {
+  let h = 0x811c9dc5;
+  for (const c of new TextEncoder().encode(normalizarFactura(texto))) h = Math.imul(h ^ c, 0x01000193) >>> 0;
+  return `factura:${orderId}:${h.toString(16).padStart(8, "0")}`;
+}
+
 async function guardarFactura(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
   const p = pw(deps);
   if (!p) return error("no_disponible: anotá el RUC en tu respuesta y avisá a Enrique con derivar_a_enrique motivo falla_herramienta.");
@@ -954,13 +973,36 @@ async function guardarFactura(input: Record<string, unknown>, ctx: CtxTurno, dep
   if (pedido.cancelado) return error("pedido_cancelado: ese pedido está cancelado; la factura va en el pedido vigente.");
   // Si ya tenía otra factura cargada, se pisa y se avisa (la factura se emite recién al cobrar).
   const previa = pedido.atributos.find((a) => a.key.trim().toLowerCase() === "factura")?.value ?? null;
+  // 29-10 (#1164): el modelo volvió a llamar guardar_factura en el turno siguiente con el mismo dato y salieron dos
+  // avisos iguales. Si ya decía eso, no se reescribe ni se avisa.
+  if (previa !== null && mismaFactura(previa, v.texto)) {
+    await p.vincular(ctx.conversacionId, pedido.shopify_order_id, "factura").catch(() => {});
+    return {
+      resultado: {
+        ok: true,
+        guardado: true,
+        ya_estaba: true,
+        pedido: pedido.nombre,
+        factura: v.texto,
+        nota: "Ya estaba guardada así en el pedido; no hace falta volver a guardarla. Si ya se lo confirmaste, no lo repitas.",
+      },
+    };
+  }
   const u = await p.actualizarAtributos(pedido.gid, atributosFactura(v)).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
   if (!u.ok) return error(`no_se_pudo_guardar: ${u.error}. Decile que lo anotaste y avisá a Enrique con derivar_a_enrique motivo falla_herramienta.`);
   await p.vincular(ctx.conversacionId, pedido.shopify_order_id, "factura").catch(() => {});
   const aviso = v.invalida
     ? `🧾 ${escaparHtml(pedido.nombre)} pide factura pero el RUC no es válido ("${escaparHtml(v.texto)}"). Pedile el dato correcto antes de facturar.`
-    : `🧾 ${escaparHtml(pedido.nombre)}: factura a ${escaparHtml(v.texto)} (guardada por el vendedor).${previa && previa !== v.texto ? ` Antes decía: ${escaparHtml(previa)}.` : ""} Se factura recién cuando esté cobrado.`;
-  await deps.avisar(aviso).catch(() => {});
+    : `🧾 ${escaparHtml(pedido.nombre)}: factura a ${escaparHtml(v.texto)} (guardada por el vendedor).${previa ? ` Antes decía: ${escaparHtml(previa)}.` : ""} ${TEXTO_CUANDO_SE_FACTURA}`;
+  // Tipo + clave por pedido y texto: si dos turnos guardan lo mismo casi juntos, la política no lo repite en el día;
+  // un cambio real (otra clave) sí sale.
+  await deps.avisar(aviso, undefined, {
+    tipo: TIPO_AVISO_FACTURA,
+    destino: "enrique",
+    pedido: pedido.nombre,
+    unaVezPorDia: true,
+    clave: claveAvisoFactura(pedido.shopify_order_id, v.texto),
+  }).catch(() => {});
   return {
     resultado: {
       ok: true,
@@ -969,7 +1011,7 @@ async function guardarFactura(input: Record<string, unknown>, ctx: CtxTurno, dep
       factura: v.texto,
       nota: v.invalida
         ? "Quedó anotado; Enrique revisa el RUC antes de facturar. Confirmale corto que lo anotaste."
-        : "Listo, quedó en el pedido. Confirmale corto que la factura sale a ese nombre cuando reciba el pedido.",
+        : "Listo, quedó en el pedido. Confirmale corto que la factura sale a ese nombre cuando el pedido quede pagado (por adelantado o al recibirlo).",
     },
   };
 }

@@ -63,7 +63,7 @@ export type Registro = {
   textos: { to: string; texto: string }[];
   interactivos: { to: string; interactive: Record<string, unknown> }[];
   medias: { tipo: string; link: string; caption: string | null }[];
-  avisos: { texto: string; botones?: unknown }[];
+  avisos: { texto: string; botones?: unknown; opts?: unknown }[];
   pedidosChat: PedidoChat[];
   ordenes: Record<string, unknown>[];
   releasit: Record<string, unknown>[];
@@ -103,7 +103,7 @@ export function depsPrueba(over: Partial<DepsHerramientas> = {}, pedidos: Pedido
     },
     registrarComoReleasit: (nodo) => (reg.releasit.push(nodo), Promise.resolve()),
     pasarAHumano: (id) => (reg.humano.push(id), Promise.resolve()),
-    avisar: (texto, botones) => (reg.avisos.push({ texto, botones }), Promise.resolve({ ok: true })),
+    avisar: (texto, botones, opts) => (reg.avisos.push({ texto, botones, ...(opts ? { opts } : {}) }), Promise.resolve({ ok: true })),
     enviarTexto: (to, texto) => (reg.textos.push({ to, texto }), Promise.resolve({ ok: true, wa_message_id: `wamid.OUT${reg.textos.length}` })),
     enviarInteractivo: (to, interactive) => (reg.interactivos.push({ to, interactive }), Promise.resolve({ ok: true, wa_message_id: "wamid.INT" })),
     enviarMedia: (_to, tipo, link, caption) => (reg.medias.push({ tipo, link, caption }), Promise.resolve({ ok: true })),

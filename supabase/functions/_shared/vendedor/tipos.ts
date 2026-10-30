@@ -1,6 +1,7 @@
 // _shared/vendedor/tipos.ts · Dueño: G1 (ola 2)
 // Tipos compartidos del vendedor con IA (configuración, contexto del turno y filas de datos).
 import type { BotonTelegram } from "../telegram_formato.ts";
+import type { OpcionesAviso } from "../telegram_politica.ts";
 import type { OpcionesEnvio, ResultadoEnvio } from "../wa.ts";
 import type { EntradaGlosario, FichaCfg } from "./prompt.ts";
 import type { CfgRitmo } from "./ritmo.ts";
@@ -202,6 +203,8 @@ export type DepsHerramientas = {
   consultarCourier?(ciudad: string): Promise<unknown>;
   /** 19-10 (paquete 1): buscar, modificar pedidos y guardar factura (pedidos_web.ts). */
   pedidosWeb?: import("./pedidos_web.ts").DepsPedidosWeb;
+  /** 29-10: factura por correo (email_factura.ts): guarda el email del pedido y reenvía el KuDE si ya salió. */
+  emailFactura?: import("./email_factura.ts").DepsEmailFactura;
   catalogoShopify(estado: string): Promise<ProductoShopify[]>;
   pedidosDeCliente(clienteId: string, telefono: string | null): Promise<PedidoCliente[]>;
   guardarPedidoChat(fila: Omit<PedidoChat, "id" | "creado_en"> & { id?: string }): Promise<PedidoChat>;
@@ -220,7 +223,8 @@ export type DepsHerramientas = {
   /** Mismo camino que un pedido de Releasit: upsert en shopify_pedidos + confirmación programada. */
   registrarComoReleasit(nodo: Record<string, unknown>): Promise<void>;
   pasarAHumano(conversacionId: string): Promise<void>;
-  avisar(textoHtml: string, botones?: BotonTelegram[][]): Promise<{ ok: boolean; error?: string }>;
+  /** 29-10: `opts` (tipo/clave/unaVezPorDia) para que telegram_politica deduplique; sin opts sale como siempre. */
+  avisar(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<{ ok: boolean; error?: string }>;
   enviarTexto(to: string, texto: string, opts: OpcionesEnvio): Promise<ResultadoEnvio>;
   enviarInteractivo(to: string, interactive: Record<string, unknown>, opts: OpcionesEnvio): Promise<ResultadoEnvio>;
   /** 12-10: último consentimiento de marketing del cliente (null = nunca respondió). Ausente en pruebas viejas. */

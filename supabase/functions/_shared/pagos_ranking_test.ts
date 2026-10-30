@@ -6,6 +6,8 @@ import {
   type CandidatoPago,
   haceCuanto,
   palabrasEnComun,
+  esRendicionCourier,
+  mismoNro,
   rankearCandidatos,
   refTransferencia,
   type TransferenciaRecibida,
@@ -26,7 +28,7 @@ function cand(o: Partial<CandidatoPago> = {}): CandidatoPago {
     tags: ["CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"],
     telefono: `+59598100${String(1000 + n).slice(-4)}`,
     nombresCliente: [`Cliente${n} Apellido${n}`],
-    comprobanteChatEn: null,
+    comprobantes: [],
     ...o,
   };
 }
@@ -37,18 +39,86 @@ function diecisiete(extra: Partial<CandidatoPago>[] = []): CandidatoPago[] {
   return [...extra.map((e) => cand(e)), ...l];
 }
 
-Deno.test("ranking: caso #1164 (sin titular ni nro.) → el pedido cuyo chat mandó el comprobante ese minuto", () => {
+const TEL_1164 = "0981 222 333";
+
+Deno.test("ranking: caso #1164 (aviso solo con monto y hora) → el pedido cuyo celular mandó el comprobante ese minuto", () => {
   const lista = diecisiete([
-    { pedido: "#1164", shopify_order_id: 91164, creado_en: "2026-10-29T18:24:04Z", comprobanteChatEn: "2026-10-29T18:30:14Z" },
-    // Otro comprobante, pero de 3 h antes: fuera de la ventana.
-    { pedido: "#1125", shopify_order_id: 91125, creado_en: "2026-10-25T17:12:00Z", comprobanteChatEn: "2026-10-29T15:25:59Z" },
+    { pedido: "#1164", shopify_order_id: 91164, creado_en: "2026-10-29T18:24:04Z", telefono: TEL_1164, comprobantes: [{ en: "2026-10-29T18:30:14Z", telefono: "+595981222333", monto: 112000 }] },
+    // Otro comprobante desde su celular, pero de 3 h antes: fuera de la ventana.
+    { pedido: "#1125", shopify_order_id: 91125, creado_en: "2026-10-25T17:12:00Z", telefono: "0981777888", comprobantes: [{ en: "2026-10-29T15:25:59Z", telefono: "0981777888" }] },
   ]);
   const r = rankearCandidatos(TRANSF, lista);
   assertEquals(r.tipo, "unico");
   if (r.tipo !== "unico") return;
   assertEquals(r.candidato.pedido, "#1164");
-  assertEquals(r.senales, ["comprobante"]);
+  assertEquals(r.senales, ["telefono"]);
   assertEquals(r.total, 17);
+});
+
+Deno.test("ranking: comprobante desde el celular del pedido pero con OTRO monto leído → no cuenta", () => {
+  const lista = diecisiete([{ pedido: "#1164", telefono: TEL_1164, comprobantes: [{ en: "2026-10-29T18:30:14Z", telefono: TEL_1164, monto: 60000 }] }]);
+  assertEquals(rankearCandidatos(TRANSF, lista).tipo, "ambiguo");
+});
+
+Deno.test("ranking: comprobante marcado para el pedido pero desde otro celular → no alcanza solo", () => {
+  const lista = diecisiete([{ pedido: "#3010", telefono: "0981000111", comprobantes: [{ en: "2026-10-29T18:31:00Z", telefono: "0985999888" }] }]);
+  const r = rankearCandidatos(TRANSF, lista);
+  assertEquals(r.tipo, "ambiguo");
+  if (r.tipo === "ambiguo") {
+    assertEquals(r.top[0].candidato.pedido, "#3010"); // pero queda primero en el aviso
+    assertEquals(r.top[0].senales, ["comprobante"]);
+  }
+});
+
+Deno.test("ranking: la hora leída del comprobante cuenta aunque el mensaje llegue tarde", () => {
+  const lista = diecisiete([{ pedido: "#3011", telefono: "0981000222", comprobantes: [{ en: "2026-10-29T22:00:00Z", telefono: "0981000222", fecha: "2026-10-29T18:29:00Z" }] }]);
+  const r = rankearCandidatos(TRANSF, lista);
+  assertEquals(r.tipo === "unico" && r.candidato.pedido, "#3011");
+  // Sin hora leída, 3,5 h después ya no cuenta.
+  const l2 = diecisiete([{ pedido: "#3012", telefono: "0981000333", comprobantes: [{ en: "2026-10-29T22:00:00Z", telefono: "0981000333" }] }]);
+  assertEquals(rankearCandidatos(TRANSF, l2).tipo, "ambiguo");
+});
+
+Deno.test("ranking: nro. de transacción del comprobante = el del aviso → ese, aunque el titular sea un familiar", () => {
+  const lista = diecisiete([
+    { pedido: "#3020", telefono: "0981000444", nombresCliente: ["Ana Prueba Uno"], comprobantes: [{ en: "2026-10-28T10:00:00Z", telefono: "0981000444", nro_transaccion: "000123456789" }] },
+    // Otro con comprobante desde su celular ese minuto: pierde contra el nro.
+    { pedido: "#3021", telefono: "0981000555", comprobantes: [{ en: "2026-10-29T18:31:00Z", telefono: "0981000555" }] },
+    // El titular apunta a otro pedido: pierde contra el nro.
+    { pedido: "#3022", nombresCliente: ["Carlos Familiar Prueba"] },
+  ]);
+  const r = rankearCandidatos({ ...TRANSF, nro_transaccion: "123456789", titular: "CARLOS FAMILIAR" }, lista);
+  assertEquals(r.tipo, "unico");
+  if (r.tipo === "unico") {
+    assertEquals(r.candidato.pedido, "#3020");
+    assertEquals(r.senales[0], "nro");
+  }
+  // Referencias extra del comprobante también sirven (prefijo del banco).
+  const l2 = diecisiete([{ pedido: "#3023", comprobantes: [{ en: "2026-10-28T10:00:00Z", referencias: ["SIPAP-77889900"] }] }]);
+  assertEquals(rankearCandidatos({ ...TRANSF, nro_transaccion: "77889900" }, l2).tipo === "unico", true);
+  assert(mismoNro("0001234567", "1234567"));
+  assert(mismoNro("SIPAP 99887766", "99887766"));
+  assert(!mismoNro("12345", "912345"));
+  assert(!mismoNro("123456", "654321"));
+});
+
+Deno.test("ranking: dos con comprobante desde su celular → desempata la hora solo si uno está claramente más cerca", () => {
+  const dos = (enB: string) => diecisiete([
+    { pedido: "#3030", telefono: "0981000666", comprobantes: [{ en: "2026-10-29T18:31:00Z", telefono: "0981000666" }] },
+    { pedido: "#3031", telefono: "0981000777", comprobantes: [{ en: enB, telefono: "0981000777" }] },
+  ]);
+  const r = rankearCandidatos(TRANSF, dos("2026-10-29T17:20:00Z")); // 1 min vs 70 min
+  assertEquals(r.tipo === "unico" && [r.candidato.pedido, r.senales], ["#3030", ["telefono", "hora"]]);
+  assertEquals(rankearCandidatos(TRANSF, dos("2026-10-29T18:40:00Z")).tipo, "ambiguo"); // 1 min vs 10 min
+});
+
+Deno.test("rendiciones de courier: Punto a Punto y Lucero del Este; una clienta llamada Lucero no", () => {
+  assert(esRendicionCourier("PUNTO A PUNTO S.A."));
+  assert(esRendicionCourier("Puntoapunto SRL"));
+  assert(esRendicionCourier("LUCERO DEL ESTE S.R.L."));
+  assert(esRendicionCourier("TRANSPORTADORA EJEMPLO SA", ["transportadora ejemplo"]));
+  assert(!esRendicionCourier("LUCERO GOMEZ"));
+  assert(!esRendicionCourier(null));
 });
 
 Deno.test("ranking: por teléfono del chat que mandó el comprobante (formatos distintos)", () => {
@@ -80,14 +150,14 @@ Deno.test("ranking: por titular (tildes, mayúsculas y orden distinto, 2+ palabr
   assertEquals(palabrasEnComun("ÁVALOS, Ana-María", ["ana maria avalos"]), 3);
 });
 
-Deno.test("ranking: dos con comprobante → desempata el titular", () => {
+Deno.test("ranking: dos con comprobante desde su celular → desempata el titular", () => {
   const lista = diecisiete([
-    { pedido: "#3004", comprobanteChatEn: "2026-10-29T18:20:00Z", nombresCliente: ["Pedro Prueba Uno"] },
-    { pedido: "#3005", comprobanteChatEn: "2026-10-29T18:35:00Z", nombresCliente: ["Rosa Prueba Dos"] },
+    { pedido: "#3004", telefono: "0981000888", comprobantes: [{ en: "2026-10-29T18:20:00Z", telefono: "0981000888" }], nombresCliente: ["Pedro Prueba Uno"] },
+    { pedido: "#3005", telefono: "0981000999", comprobantes: [{ en: "2026-10-29T18:35:00Z", telefono: "0981000999" }], nombresCliente: ["Rosa Prueba Dos"] },
   ]);
   const r = rankearCandidatos({ ...TRANSF, titular: "ROSA DOS" }, lista);
   assertEquals(r.tipo === "unico" && r.candidato.pedido, "#3005");
-  assertEquals(r.tipo === "unico" && r.senales, ["comprobante", "titular"]);
+  assertEquals(r.tipo === "unico" && r.senales, ["telefono", "titular"]);
 });
 
 Deno.test("ranking: ambiguo → 3 candidatos con botón Es este, el más reciente con oferta primero", () => {

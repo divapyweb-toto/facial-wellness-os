@@ -110,6 +110,8 @@ function crearMock(over: Partial<Estado> = {}): { deps: Deps; st: Estado } {
       plazos_courier: { lucero: "1 a 3 días hábiles", pap: "2 a 5 días hábiles; interior, hasta 10" },
       confirmacion: { recordatorio_h: 4, retener_h: 48, cancelar_h: 72 },
       palabras_prohibidas: ["garantía"],
+      // 29-10: las pruebas del aviso inmediato (como hasta el 28-10); la espera del cruce con ueno tiene las suyas.
+      pago_anticipado: { espera_min: 0 },
     },
     ...over,
   };
@@ -912,6 +914,77 @@ Deno.test("comprobante: imagen tras la oferta → el pedido NO cambia; copia a S
   assertEquals(vendedor.length, 1);
 });
 
+Deno.test("29-10 comprobante: una imagen que NO es comprobante (captura del anuncio o del chat) va al vendedor, sin 'Recibido' ni aviso", async () => {
+  const { deps, st } = crearMock();
+  const vendedor: string[] = [], archivos: unknown[] = [];
+  deps.pasarAlVendedor = (d) => (vendedor.push(d.texto), Promise.resolve());
+  deps.copiarMedia = (_id, ruta) => Promise.resolve({ ok: true, ruta, mime: "image/jpeg" });
+  deps.avisarConArchivo = (t) => (archivos.push(t), Promise.resolve({ ok: true }));
+  deps.clasificarComprobante = () => Promise.resolve({ es: false, monto: null, motivo: "captura de un anuncio" });
+  st.pedidos.set(ORDER, pedidoConOferta());
+  await correr(deps, payloadMensajes([imagen()]));
+  const c = st.mensajes.get("wamid.IMG1")!.contenido as Record<string, unknown>;
+  assertEquals(c.comprobante_pago_anticipado, undefined);
+  assertEquals((c.comprobante_descartado as Record<string, unknown>).motivo, "captura de un anuncio");
+  assertEquals(st.enviados.map((e) => e.texto).includes(PAGO_ANTICIPADO_DEFAULT.texto_recibido), false);
+  assertEquals([archivos.length, st.avisos.length, vendedor.length], [0, 0, 1]);
+});
+
+Deno.test("29-10 comprobante: con espera (default 40 min) → 'Recibido' al cliente, SIN Telegram, y queda pendiente con vencimiento", async () => {
+  const { deps, st } = crearMock();
+  const archivos: unknown[] = [];
+  st.config.pago_anticipado = {}; // defaults: clasificar y espera 40
+  deps.copiarMedia = (_id, ruta) => Promise.resolve({ ok: true, ruta, mime: "image/jpeg" });
+  deps.avisarConArchivo = (t) => (archivos.push(t), Promise.resolve({ ok: true }));
+  deps.clasificarComprobante = () => Promise.resolve({ es: true, monto: 112000, motivo: "transferencia ueno" });
+  st.pedidos.set(ORDER, pedidoConOferta());
+  await correr(deps, payloadMensajes([imagen()]));
+  const c = st.mensajes.get("wamid.IMG1")!.contenido as Record<string, unknown>;
+  assertEquals(c.comprobante_pago_anticipado, ORDER);
+  const pend = c.aviso_comprobante_pendiente as Record<string, unknown>;
+  assertEquals([pend.pedido, pend.vence], [ORDER, "2026-10-06T15:40:00.000Z"]); // ahora 12:00 PY + 40 min
+  assertEquals(st.enviados.map((e) => e.texto), [PAGO_ANTICIPADO_DEFAULT.texto_recibido]);
+  assertEquals([archivos.length, st.avisos.length], [0, 0]);
+});
+
+Deno.test("29-10 comprobante: lo leído (nro., titular, banco, hora) queda en contenido.comprobante_datos; el cliente recibe lo mismo", async () => {
+  const { deps, st } = crearMock();
+  st.config.pago_anticipado = {};
+  deps.copiarMedia = (_id, ruta) => Promise.resolve({ ok: true, ruta, mime: "image/jpeg" });
+  deps.clasificarComprobante = () => Promise.resolve({
+    es: true, monto: 112000, motivo: "transferencia",
+    datos: { nro_transaccion: "123456789", referencias: [], titular: "PERSONA PRUEBA", banco: "Banco Prueba", fecha: "2026-10-29T18:30:00.000Z" },
+  });
+  st.pedidos.set(ORDER, pedidoConOferta());
+  await correr(deps, payloadMensajes([imagen()]));
+  const c = st.mensajes.get("wamid.IMG1")!.contenido as Record<string, unknown>;
+  assertEquals(c.comprobante_pago_anticipado, ORDER);
+  assertEquals(c.comprobante_datos, { monto: 112000, nro_transaccion: "123456789", referencias: [], titular: "PERSONA PRUEBA", banco: "Banco Prueba", fecha: "2026-10-29T18:30:00.000Z" });
+  assertEquals(st.enviados.map((e) => e.texto), [PAGO_ANTICIPADO_DEFAULT.texto_recibido]);
+  // Sin datos leídos (falla): no hay comprobante_datos y el cliente recibe la respuesta igual.
+  const b = crearMock();
+  b.st.config.pago_anticipado = {};
+  b.deps.copiarMedia = (_id, ruta) => Promise.resolve({ ok: true, ruta, mime: "image/jpeg" });
+  b.deps.clasificarComprobante = () => Promise.reject(new Error("529"));
+  b.st.pedidos.set(ORDER, pedidoConOferta());
+  await correr(b.deps, payloadMensajes([imagen()]));
+  const c2 = b.st.mensajes.get("wamid.IMG1")!.contenido as Record<string, unknown>;
+  assertEquals([c2.comprobante_pago_anticipado, c2.comprobante_datos], [ORDER, undefined]);
+  assertEquals(b.st.enviados.map((e) => e.texto), [PAGO_ANTICIPADO_DEFAULT.texto_recibido]);
+});
+
+Deno.test("29-10 comprobante: si el clasificador no puede ver la imagen (null), se trata como comprobante (como antes)", async () => {
+  const { deps, st } = crearMock();
+  const archivos: unknown[] = [];
+  deps.copiarMedia = (_id, ruta) => Promise.resolve({ ok: true, ruta, mime: "image/jpeg" });
+  deps.avisarConArchivo = (t) => (archivos.push(t), Promise.resolve({ ok: true }));
+  deps.clasificarComprobante = () => Promise.resolve({ es: null, monto: null, motivo: "error_clasificador" });
+  st.pedidos.set(ORDER, pedidoConOferta());
+  await correr(deps, payloadMensajes([imagen()]));
+  assertEquals((st.mensajes.get("wamid.IMG1")!.contenido as Record<string, unknown>).comprobante_pago_anticipado, ORDER);
+  assertEquals(archivos.length, 1); // espera_min 0 en el mock: aviso inmediato
+});
+
 Deno.test("comprobante: si no se puede mandar el archivo a Telegram, va el aviso de texto con la ruta y la falla", async () => {
   const { deps, st } = crearMock();
   deps.copiarMedia = (_id, ruta) => Promise.resolve({ ok: true, ruta, mime: "image/jpeg" });
@@ -933,7 +1006,7 @@ Deno.test("comprobante: PDF sin copiarMedia → el archivo sale de Meta (media i
   const { deps, st } = crearMock();
   const archivos: Record<string, unknown>[] = [];
   deps.avisarConArchivo = (_t, _b, a) => (archivos.push(a), Promise.resolve({ ok: true }));
-  st.config.pago_anticipado = { texto_recibido: "Gracias {nombre}, recibimos el de {pedido}." };
+  st.config.pago_anticipado = { texto_recibido: "Gracias {nombre}, recibimos el de {pedido}.", espera_min: 0 };
   st.pedidos.set(ORDER, pedidoConOferta());
   await correr(deps, payloadMensajes([imagen("wamid.PDF1", { type: "document", image: undefined, document: { id: "MEDIA_PDF", mime_type: "application/pdf", filename: "comprobante.pdf" } })]));
   assertEquals(st.enviados[0].texto, "Gracias Ana, recibimos el de #1001.");
@@ -987,7 +1060,7 @@ Deno.test("mediaDeComprobante: imagen y PDF sí; audio y documento de otro tipo 
 });
 
 Deno.test("sin datos de la cuenta en el código: el texto por defecto no trae banco, cuenta ni RUC", async () => {
-  assertEquals(Object.keys(PAGO_ANTICIPADO_DEFAULT).sort(), ["dias_comprobante", "texto_recibido"]);
+  assertEquals(Object.keys(PAGO_ANTICIPADO_DEFAULT).sort(), ["clasificar", "dias_comprobante", "espera_min", "texto_recibido"]);
   const fuente = await Deno.readTextFile(new URL("./procesar.ts", import.meta.url));
   assertFalse(/caja de ahorro|RUC \d|UNIPERSONAL|\b\d{10}\b/i.test(fuente));
 });

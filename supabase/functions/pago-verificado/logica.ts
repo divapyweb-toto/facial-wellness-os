@@ -6,6 +6,9 @@
 //   - el monto es EXACTO a lo pendiente (saldo = SALDO_<monto>; si no, el total del pedido);
 //   - y además hay coincidencia: comprobante en el chat (PAGO_ANTICIPADO_COMPROBANTE) o el titular que debita
 //     coincide con el nombre del cliente. Si no, no se marca nada (administración se lo pasa a Enrique).
+// 29-10 (modo sin pedido): las señales del ranking (_shared/pagos_ranking.ts) también son coincidencia, en este orden:
+//   nro (nro. de transacción del comprobante = el del aviso), telefono (comprobante desde el celular del pedido),
+//   titular (nombre y apellido). "comprobante" (otro celular) y "hora" solas no alcanzan.
 
 export interface PedidoPago {
   shopify_order_id: number;
@@ -18,11 +21,15 @@ export interface PedidoPago {
   nombresCliente: string[];
 }
 
+import type { SenalPago } from "../_shared/pagos_ranking.ts";
+
 export type Motivo = "oferta_pago_anticipado" | "sin_cobertura" | "saldo_pendiente";
 
 export type Decision =
-  | { ok: true; motivo: Motivo; pendiente: number; coincidencia: "comprobante" | "nombre" }
+  | { ok: true; motivo: Motivo; pendiente: number; coincidencia: Coincidencia }
   | { ok: false; error: "pedido_cancelado" | "ya_pagado" | "no_espera_pago" | "sin_monto_pendiente" | "monto_distinto" | "sin_coincidencia"; pendiente?: number; detalle: string };
+
+export type Coincidencia = "nro" | "telefono" | "comprobante" | "nombre";
 
 const T = (tags: string[] | null) => (tags ?? []).map((t) => t.trim().toUpperCase());
 export const ETIQUETAS_PAGADO = ["PAGADO", "PAGO_VERIFICADO", "PAGADO_QR"];
@@ -52,7 +59,7 @@ export function coincideNombre(titular: string | null | undefined, nombres: stri
   return nombres.some((n) => palabras(n).filter((w) => a.has(w)).length >= 2);
 }
 
-export function decidir(p: PedidoPago, monto: number, titular?: string | null): Decision {
+export function decidir(p: PedidoPago, monto: number, titular?: string | null, senales: SenalPago[] = []): Decision {
   const tags = T(p.tags);
   if (p.cancelado || String(p.estado_envio ?? "").toUpperCase() === "CANCELADO" || tags.some((t) => t.includes("CANCELADO") || t.startsWith("REEMPLAZADO_POR_"))) {
     return { ok: false, error: "pedido_cancelado", detalle: "el pedido está cancelado o reemplazado" };
@@ -65,7 +72,9 @@ export function decidir(p: PedidoPago, monto: number, titular?: string | null): 
   const pendiente = motivo === "saldo_pendiente" ? montoSaldo(p.tags) : (p.total ?? null);
   if (!pendiente || pendiente <= 0) return { ok: false, error: "sin_monto_pendiente", detalle: motivo === "saldo_pendiente" ? "falta la etiqueta SALDO_<monto>" : "el pedido no tiene total" };
   if (Math.round(monto) !== Math.round(pendiente)) return { ok: false, error: "monto_distinto", pendiente, detalle: `transferencia Gs ${monto} y el pedido espera Gs ${pendiente}` };
+  if (senales.includes("nro")) return { ok: true, motivo, pendiente, coincidencia: "nro" };
+  if (senales.includes("telefono")) return { ok: true, motivo, pendiente, coincidencia: "telefono" };
   if (tags.includes("PAGO_ANTICIPADO_COMPROBANTE")) return { ok: true, motivo, pendiente, coincidencia: "comprobante" };
-  if (coincideNombre(titular, p.nombresCliente)) return { ok: true, motivo, pendiente, coincidencia: "nombre" };
+  if (senales.includes("titular") || coincideNombre(titular, p.nombresCliente)) return { ok: true, motivo, pendiente, coincidencia: "nombre" };
   return { ok: false, error: "sin_coincidencia", pendiente, detalle: "el monto coincide pero no hay comprobante en el chat ni el titular coincide con el cliente" };
 }

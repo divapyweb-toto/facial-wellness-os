@@ -166,7 +166,8 @@ Deno.test("conf_si con el descuento y la oferta vieja prendidos en config: ni de
 
 Deno.test("comprobante de un pedido con el tag viejo PAGO_ANTICIPADO_ELEGIDO: el monto a verificar es el total (sin descuento)", async () => {
   const { deps, st } = mock({
-    config: { pago_anticipado_descuento: DESCUENTO_ON, pago_anticipado: BANCO },
+    // 29-10: espera_min 0 = aviso inmediato (esta prueba mira el monto del aviso).
+    config: { pago_anticipado_descuento: DESCUENTO_ON, pago_anticipado: { ...BANCO, espera_min: 0 } },
     pedidos: [pedido({ tags: ["CONFIRMADO", "PAGO_ANTICIPADO_ELEGIDO", "OFERTA_PAGO_ANTICIPADO"] })],
   });
   await procesarMensaje({ from: TEL, id: "wamid.IMG", timestamp: "1791800000", type: "image", image: { id: "MEDIA1", mime_type: "image/jpeg" } }, contacto, deps);

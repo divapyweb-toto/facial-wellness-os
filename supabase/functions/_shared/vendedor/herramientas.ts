@@ -13,6 +13,7 @@ import { quitarPromesaRecontacto } from "./filtro_salida.ts";
 import { extrasVendedor } from "./config.ts";
 import { productoPorPalabras } from "../anuncios.ts";
 import { herramientasPedidosWeb } from "./pedidos_web.ts";
+import { ejecutoresEmailFactura, herramientasEmailFactura } from "./email_factura.ts";
 import { digitoVerificadorRuc, normalizarRuc } from "../facturacion.ts";
 import type { Herramienta } from "../claude.ts";
 import {
@@ -198,6 +199,8 @@ const RE_ALERTA_SALUD = /apnea|deja(?:s|r)? de respirar|pausas? al respirar|ahog
 export const HERRAMIENTAS: Herramienta[] = [
   // 19-10 (paquete 1): buscar_pedido, modificar_pedido y guardar_factura (pedidos_web.ts).
   ...herramientasPedidosWeb().map((h) => h.definicion),
+  // 29-10: guardar_email_factura (email_factura.ts).
+  ...herramientasEmailFactura().map((h) => h.definicion),
   {
     name: "consultar_catalogo",
     description:
@@ -959,7 +962,7 @@ async function crearPedidoCod(input: Record<string, unknown>, ctx: CtxTurno, dep
     // 10-10: el RUC ya viene validado (facturaRuc); si el cliente insistió con uno que no da, va a revisar.
     const ruc = d.facturaRuc ?? (d.facturaInvalida ? null : normalizarRuc((/([\d.]{3,12}\s*-\s*\d)/.exec(d.factura) ?? [])[1]));
     avisos.push(ruc
-      ? `🧾 Pide factura electrónica: ${d.factura}. Se factura recién cuando esté cobrado (entregado o transferencia verificada), nunca antes. Si la automática está apagada, emitila a mano en ese momento.`
+      ? `🧾 Pide factura electrónica: ${d.factura}. Se factura recién cuando esté cobrado (pagado completo por adelantado o, si paga al recibir, entregado), nunca antes. Si la automática está apagada, emitila a mano en ese momento.`
       : `🧾 Pide factura pero el RUC no es válido ("${d.factura}"). Pedile el dato correcto antes de facturar.`);
   }
   if (d.retiro) avisos.push("🏠 Retira en la oficina de CDE: escribile para coordinar día y hora. No va al courier.");
@@ -1498,6 +1501,8 @@ export type Ejecutor = (input: Record<string, unknown>, ctx: CtxTurno, deps: Dep
 
 export const EJECUTORES: Record<string, Ejecutor> = {
   ...Object.fromEntries(herramientasPedidosWeb().map((h) => [h.definicion.name, h.ejecutor])),
+  // 29-10: guardar_email_factura + guardar_factura con la pregunta del mail (una sola vez). Va después: pisa guardar_factura.
+  ...ejecutoresEmailFactura(),
   consultar_catalogo: consultarCatalogo,
   estado_pedido: estadoPedido,
   crear_pedido_cod: crearPedidoCod,
