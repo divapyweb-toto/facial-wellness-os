@@ -16,6 +16,9 @@ verify_jwt = false
 [functions.pago-qr-webhook]
 verify_jwt = false
 
+[functions.pago-ueno-email]
+verify_jwt = false
+
 # SIFEN (08-10-2026): los XSD (validar_xsd.ts) y las fuentes Inter del KuDE (kude.ts) viven fuera de
 # functions/ y se leen con import.meta.url → hay que empaquetarlos. Rutas relativas a supabase/. [VERIFICAR
 # en el primer deploy que el glob se respete; si no, kude.ts cae a Helvetica y el XSD se saltea con aviso en el log]
