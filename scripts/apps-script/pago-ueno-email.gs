@@ -45,8 +45,9 @@ function desinstalar() {
 }
 
 function probarConexion() {
-  // Manda un texto que no es un aviso: Voltra OS responde 200 (ignorado) si el secreto coincide, 401 si no.
+  // Aviso inventado en modo prueba: recorre Google → pago-ueno-email → pago-verificado sin tocar pedidos ni avisar.
   const secreto = PropertiesService.getScriptProperties().getProperty('UENO_SECRET');
-  const r = UrlFetchApp.fetch(URL_VOLTRA, { method: 'post', contentType: 'application/json', headers: { 'x-voltra-secret': secreto || '' }, payload: JSON.stringify({ id: 'prueba', cuerpo: 'prueba de conexion' }), muteHttpExceptions: true });
+  const cuerpo = 'Recibiste una transferencia\nMonto Gs. 1.234\nEntidad pagadora BANCO DE PRUEBA\nFecha y hora transferencia 30/10/2026 10:00:00 h';
+  const r = UrlFetchApp.fetch(URL_VOLTRA, { method: 'post', contentType: 'application/json', headers: { 'x-voltra-secret': secreto || '' }, payload: JSON.stringify({ id: 'prueba', cuerpo: cuerpo, prueba: true }), muteHttpExceptions: true });
   Logger.log('HTTP ' + r.getResponseCode() + ' ' + r.getContentText());
 }

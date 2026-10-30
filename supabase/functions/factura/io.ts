@@ -7,14 +7,15 @@
 // La lógica vieja (facturar.ts, FacturaSend directo) queda como LEGADO y ya no se llama desde acá.
 
 import { db } from "../_shared/db.ts";
+import { invocarFuncion } from "../_shared/invocar.ts";
 import { armarSeguimientoConFactura } from "../_shared/facturacion.ts";
 
 // Se invoca la Edge Function sifen-cola (y no su código) para que la emisión corra con su bundle: XSD y fuentes
 // del KuDE van como static_files solo en sifen-cola (config.toml). El cliente db() manda la service role.
 async function invocarCola(cuerpo: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const { data, error } = await db().functions.invoke("sifen-cola", { body: cuerpo });
-  if (error) throw new Error(`sifen-cola: ${error.message}`);
-  return (data ?? {}) as Record<string, unknown>;
+  const r = await invocarFuncion("sifen-cola", cuerpo);
+  if (!r.llego) throw new Error(r.error ?? "sifen-cola: sin respuesta");
+  return r.datos;
 }
 
 async function sifenActivo(): Promise<boolean> {
