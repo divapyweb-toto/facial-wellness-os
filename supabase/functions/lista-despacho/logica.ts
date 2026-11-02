@@ -114,6 +114,8 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
     const cob = coberturas?.get(p.ciudad.trim());
     // La lista vieja no encontró courier pero la tabla sí (ciudad mal escrita que la tabla reconoce por alias o fonética).
     if (!p.courier && !p.pagado && cob?.ciudad_reconocida && !cob.sin_cobertura && cob.sugerido) p.courier = cob.sugerido;
+    // 02-11 (#1176): la lista vieja no da cobranza que la tabla no da. Lo ya cargado en Ventas se respeta.
+    if (!venta && !p.pagado && cob && (!cob.ciudad_reconocida || cob.sin_cobertura)) p.courier = null;
     const r = decidirSalida({
       cancelado: false,
       retiro: tiene(tags, "retiro_en_casa"),
@@ -149,8 +151,12 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
 }
 
 /** 29-10: ciudades de los "no despachar" por cobertura o ciudad, para consultar la tabla de tarifas (rpc). */
+// 02-11 (#1176): también lo que iba a salir contra entrega: la lista vieja puede darle courier a una ciudad sin cobranza.
 export const ciudadesAConsultar = (l: ListaDespacho) =>
-  [...new Set(l.noDespachar.filter((x) => x.clave === "sin_cobertura" || x.clave === "ciudad").map((x) => x.p.ciudad.trim()).filter(Boolean))];
+  [...new Set([
+    ...l.noDespachar.filter((x) => x.clave === "sin_cobertura" || x.clave === "ciudad").map((x) => x.p.ciudad.trim()),
+    ...[...l.porCourier.values()].flat().filter((p) => !p.pagado).map((p) => p.ciudad.trim()),
+  ].filter(Boolean))];
 
 const NOMBRE_COURIER: Record<string, string> = { lucero: "Lucero del Este", pap: "Punto a Punto", libre: "Courier libre (ya pagado)" };
 const gs = (n: number) => `Gs ${n.toLocaleString("es-PY")}`;

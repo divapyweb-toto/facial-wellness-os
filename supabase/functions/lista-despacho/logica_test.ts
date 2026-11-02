@@ -127,7 +127,7 @@ Deno.test("29-10: 'Mbocayaty' sale por Lucero con cobranza; 'Casa' es faltan dat
   const t74 = textoLista(l0, AHORA)!;
   assert(t74.includes("Cobrar Gs 188.000"));
   assertEquals(l0.noDespachar.map((x) => [x.p.nombre, x.clave]), [["#75", "ciudad"]]);
-  assertEquals(ciudadesAConsultar(l0), ["Casa"]);
+  assertEquals(ciudadesAConsultar(l0), ["Casa", "Mbocayaty"]); // 02-11: también lo que sale contra entrega
   // Con la tabla: "Casa" no reconocida → sigue siendo ciudad; una ciudad reconocida sin courier con cobranza → sin cobertura.
   const l1 = armarLista([ped(75, "CONFIRMADO", [["Raspador", 1]], {}, null, "Casa"), ped(76, "CONFIRMADO", [["Raspador", 1]], {}, null, "Pueblo Reconocido")],
     [], new Set(), AHORA, new Map([["Casa", { ciudad_reconocida: false, sin_cobertura: true, sugerido: null }], ["Pueblo Reconocido", { ciudad_reconocida: true, sin_cobertura: true, sugerido: null }]]));
@@ -138,4 +138,22 @@ Deno.test("29-10: 'Mbocayaty' sale por Lucero con cobranza; 'Casa' es faltan dat
   const l2 = armarLista([ped(77, "CONFIRMADO", [["Raspador", 1]], {}, null, "Pueblo Con Alias")], [], new Set(), AHORA,
     new Map([["Pueblo Con Alias", { ciudad_reconocida: true, sin_cobertura: false, sugerido: "lucero" }]]));
   assertEquals(l2.porCourier.get("lucero")?.map((p) => p.nombre), ["#77"]);
+});
+
+Deno.test("02-11: contra entrega sin cobranza en la tabla no sale, aunque la lista vieja diga PaP; pagado y ya en Ventas sí", () => {
+  const cob = new Map([["Filadelfia", { ciudad_reconocida: true, sin_cobertura: true, sugerido: null }]]);
+  const cod = armarLista([ped(1, "CONFIRMADO", [["Raspador de Lengua", 1]], {}, null, "Filadelfia")], [], new Set(), AHORA, cob);
+  assertEquals([...cod.porCourier.values()].flat().length, 0);
+  const pagado = armarLista([ped(2, "CONFIRMADO, PAGADO", [["Raspador de Lengua", 1]], { financial_status: "paid" }, null, "Filadelfia")], [], new Set(), AHORA, cob);
+  assertEquals([...pagado.porCourier.values()].flat().map((p) => p.nombre), ["#2"]);
+});
+
+Deno.test("02-11 #1176: la pasada sin tabla pide consultar Filadelfia y con la tabla sale de la lista y no dice Cobrar", () => {
+  const f = [ped(1176, "CONFIRMADO, OFERTA_PAGO_ANTICIPADO, SIN_PIN", [["Raspador de Lengua", 1]], {}, null, "Filadelfia")];
+  const primera = armarLista(f, [], new Set(), AHORA);
+  assertEquals(ciudadesAConsultar(primera), ["Filadelfia"]);
+  const segunda = armarLista(f, [], new Set(), AHORA, new Map([["Filadelfia", { ciudad_reconocida: true, sin_cobertura: true, sugerido: null }]]));
+  assertEquals([...segunda.porCourier.values()].flat().length, 0);
+  assertEquals(segunda.noDespachar.map((x) => x.clave), ["sin_cobertura"]);
+  assert(!(textoLista(segunda, AHORA, false) ?? "").includes("Cobrar"));
 });

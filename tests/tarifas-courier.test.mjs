@@ -169,8 +169,9 @@ test('transportadoras.js con la tabla: flete real, estimado y bloqueo de PaP sin
     assert.equal(cubre('pap', c, { cod: false }), true, c)
   }
   assert.equal(cubre('pap', 'Itaguá'), true)
-  // Fuera de la tabla → lista vieja de respaldo…
-  assert.equal(cubre('pap', 'Guayaibi'), true)
+  // 02-11 (#1176): fuera de la tabla no hay cobranza por defecto; pagado, alcanza con que la lista la conozca.
+  assert.equal(cubre('pap', 'Guayaibi'), false)
+  assert.equal(cubre('pap', 'Guayaibi', { cod: false }), true)
   assert.equal(cubre('pap', 'Pueblo Inventado'), false)
   // …pero nunca true si la ciudad que reconoce la lista vieja está en la tabla sin cobranza (typo de SJN).
   assert.equal(cubre('pap', 'San Juan Nepomuseno'), false)
@@ -196,9 +197,8 @@ test('sugerirTransportadora nunca preasigna PaP contra entrega donde PaP no cobr
   // Villarrica (lista oficial PaP): ahora con el flete de su ciudad, no el plano.
   const vr = sugerirTransportadora('Villarrica', prod)
   assert.deepEqual([vr.transportadora, vr.tarifa, vr.fleteEstimado], ['pap', 31000, false])
-  // Ciudad desconocida que la lista vieja cubre: PaP con flete estimado por zona.
-  const gy = sugerirTransportadora('Guayaibi', prod)
-  assert.deepEqual([gy.transportadora, gy.tarifa, gy.fleteEstimado], ['pap', 36000, true])
+  // 02-11: fuera de la tabla, contra entrega no sale por la lista vieja.
+  assert.equal(sugerirTransportadora('Guayaibi', prod).transportadora, null)
   // Lucero por lista oficial: tarifa de la tabla.
   const cde = sugerirTransportadora('cde', prod)
   assert.deepEqual([cde.transportadora, cde.tarifa], ['lucero', 24000])
@@ -269,4 +269,26 @@ test('29-10: "Mbocayaty" → Lucero con cobranza; "Villa Rica" = Villarrica; "As
   // la fonética nunca gana a una coincidencia exacta o parcial
   assert.equal(filaTarifa('pap', 'Asunción, barrio Inventado')?.ciudad, 'asuncion')
   fijarTarifasCourier(FIXTURE)
+})
+
+// 02-11 (#1176): la cobranza sale solo de la tabla; el departamento no confunde la ciudad.
+test('02-11: departamento después de la ciudad no se toma por otra ciudad', async () => {
+  const { ciudadSinDepartamento } = await import('../supabase/functions/_shared/sale_hoy.js')
+  assert.equal(ciudadSinDepartamento('Filadelfia, Chaco'), 'filadelfia')
+  assert.equal(ciudadSinDepartamento('Vallemí, Concepción'), 'vallemi')
+  assert.equal(ciudadSinDepartamento('Encarnación - Itapúa, Paraguay'), 'encarnacion')
+  assert.equal(ciudadSinDepartamento('Filadelfia, Departamento de Boquerón'), 'filadelfia')
+  assert.equal(ciudadSinDepartamento('Santa Rosa Misiones'), 'santa rosa misiones')
+  assert.equal(ciudadSinDepartamento('Concepción'), 'concepcion')
+  assert.equal(ciudadSinDepartamento('Asunción, barrio Sajonia'), 'asuncion, barrio sajonia')
+})
+
+test('02-11: PaP no llega (Filadelfia): ni contra entrega ni pagado, y sigue siendo ciudad reconocida', () => {
+  fijarTarifasCourier({ ...FIXTURE, tarifas: [...FIXTURE.tarifas, fila('pap', 'filadelfia', 'Filadelfia', 36000, { aplica_cobranza: false, llega: false })] })
+  assert.equal(cubre('pap', 'Filadelfia'), false)
+  assert.equal(cubre('pap', 'Filadelfia', { cod: false }), false)
+  assert.equal(cubre('pap', 'Filadelfia, Chaco'), false)
+  assert.deepEqual(transportadorasDisponibles('Filadelfia', { cod: false }), ['otra'])
+  assert.equal(tarifaCourier('pap', 'Filadelfia, Chaco').ciudad, 'Filadelfia')
+  fijarTarifasCourier(null)
 })

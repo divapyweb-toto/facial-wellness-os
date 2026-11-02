@@ -3,7 +3,7 @@ import { db } from "../_shared/db.ts";
 import { gql } from "../_shared/shopify.ts";
 import { enviarTexto } from "../_shared/wa.ts";
 import { avisar } from "../_shared/telegram.ts";
-import { type Accion, claveCobertura, type Cobertura, coordenadasPin, direccionDesdeNota, type EstadoSinCobertura, type PedidoAbierto } from "./logica.ts";
+import { type Accion, claveCobertura, type Cobertura, coordenadasPin, direccionDesdeNota, type EstadoSinCobertura, type PedidoAbierto, trasAvisoSinCobertura } from "./logica.ts";
 
 type Obj = Record<string, unknown>;
 const txt = (v: unknown) => (typeof v === "string" ? v : "");
@@ -249,7 +249,10 @@ const gs = (n: number) => n.toLocaleString("es-PY").replace(/,/g, ".");
 
 /**
  * 15-10 (Enrique, #1056): ciudad sin cobertura contra entrega → al cliente, si la ventana de 24 h está abierta, se le
- * ofrece pagar por adelantado y mandarlo por una transportadora que llegue. Siempre: etiqueta SIN_COBERTURA y Telegram.
+ * ofrece pagar por adelantado y mandarlo por una transportadora que llegue.
+ * 02-11 (#1176): SIN_COBERTURA y las 48 h arrancan solo si el aviso salió. Si no salió (ventana cerrada, sin teléfono, sin
+ * alias, error de WhatsApp) no se etiqueta, se suelta el candado para reintentar en la próxima corrida y se avisa a
+ * Enrique una vez por día. Mientras tanto la cobertura frena el despacho (lista-despacho y Despacho miran la tabla).
  */
 async function avisarSinCobertura(orderId: number): Promise<string | null> {
   const sb = db();
@@ -278,7 +281,9 @@ async function avisarSinCobertura(orderId: number): Promise<string | null> {
     enviado = r.ok;
     if (!r.ok) motivo = `WhatsApp: ${r.error ?? "falló"}`;
   }
-  const e = await etiqueta(orderId, "SIN_COBERTURA", true);
+  const { etiquetar, soltarCandado } = trasAvisoSinCobertura(enviado);
+  const e = etiquetar ? await etiqueta(orderId, "SIN_COBERTURA", true) : null;
+  if (soltarCandado) await sb.from("eventos_crudos").delete().eq("fuente", "shopify").eq("id_externo", idCandadoAuto("avisar_sin_cobertura", orderId));
   const tel = String(ped.telefono ?? "").replace(/\D/g, "");
   await avisar(
     `📍 <b>${ped.nombre}</b>: ${ciudad} no tiene cobertura contra entrega (ni PaP ni Lucero).\n` +
@@ -287,7 +292,7 @@ async function avisarSinCobertura(orderId: number): Promise<string | null> {
     undefined,
     // 27-10: si el sistema ya le escribió al cliente es informativo (admin); si no pudo, Enrique tiene que escribirle.
     enviado ? { tipo: "sin_cobertura_avisado", destino: "admin", pedido: ped.nombre }
-      : { tipo: "sin_cobertura_escribile", destino: "enrique", pedido: ped.nombre },
+      : { tipo: "sin_cobertura_escribile", destino: "enrique", pedido: ped.nombre, unaVezPorDia: true, clave: String(orderId) },
   ).catch(() => null);
   return e ?? (enviado || motivo === "ventana de 24 h cerrada" ? null : motivo);
 }

@@ -75,6 +75,17 @@ export function claveFonetica(t) {
   return normCiudad(t).replace(/[yvz]/g, (c) => ({ y: 'j', v: 'b', z: 's' })[c]).replace(/ /g, '').replace(/(.)\1+/g, '$1')
 }
 
+/**
+ * 02-11: "Filadelfia, Chaco" → "filadelfia" (= public.ciudad_sin_depto). Saca el departamento o el país que vienen
+ * después de un separador. Sin separador no toca nada: "Santa Rosa Misiones" es una ciudad de la tabla.
+ */
+const FIN_DEPARTAMENTO = /^(.+?)\s*[,;/-]\s*(?:(?:departamento|depto|dpto|dep)\.?\s+(?:del?\s+)?)?(?:concepcion|san pedro|cordillera|guaira|caaguazu|caazapa|itapua|misiones|paraguari|alto parana|central|neembucu|amambay|canindeyu|presidente hayes|boqueron|alto paraguay|chaco|paraguay|py)\.?\s*$/
+export function ciudadSinDepartamento(t) {
+  let s = String(t ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  for (let m = s.match(FIN_DEPARTAMENTO); m; m = s.match(FIN_DEPARTAMENTO)) s = m[1]
+  return s
+}
+
 // ── La regla ──
 /** Motivo (pocas palabras) + quién lo resuelve + qué pasa, para la sección "No sale hoy". */
 export const MOTIVOS = {

@@ -18,14 +18,15 @@
 //      20-10: la cobertura sale de la rpc sugerir_courier (tabla tarifas_courier: solo cuenta donde el courier COBRA
 //      contra entrega). La lista vieja de transportadoras.js daba a PaP como "con cobranza" en Ayolas, Choré, San José
 //      de los Arroyos y San Juan Nepomuceno (se perdió un pedido contra entrega). Si la tabla no reconoce la ciudad
-//      (typo, pueblo chico) o la rpc falló, se usa la lista vieja como respaldo. io.ts arma el mapa antes de decidir.
+//      (typo, pueblo chico) o la rpc falló, no se decide con ella. io.ts arma el mapa antes de decidir.
 //      29-10 (#1150 ciudad "Casa", #1159 "Mbocayaty"): SIN_COBERTURA SOLO con la ciudad reconocida por la tabla y
 //      ningún courier que cobre ahí. Ciudad que no está en la tabla (ni la lista vieja la conoce con un courier que
 //      cobre) → NUNCA sin cobertura: primero la ciudad del pin (ciudad_desde_pin, una vez) y, si no hay pin o no
 //      alcanzó, se le pide al cliente (pedir_ciudad) y queda FALTAN_DATOS. Sin dato de la rpc (falló) → no se decide.
+//      02-11 (#1176 Filadelfia): la cobranza sale solo de la tabla; la lista vieja ya no es respaldo. Las ciudades reales
+//      sin cobranza están en la tabla con aplica_cobranza=false, así que dan ciudad reconocida y SIN_COBERTURA.
 // Cada acción se hace una sola vez por pedido (candado en eventos_crudos): si Enrique la deshace a mano, se respeta.
 
-import { transportadorasDisponibles } from "../_shared/transportadoras.js";
 import { direccionUtilizable as direccionUtilizableRegla, tienePin as tienePinRegla } from "../_shared/sale_hoy.js";
 
 export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura" | "avisar_jawflex_pap" | "pedir_ciudad";
@@ -99,9 +100,6 @@ export type Cobertura = { sin_cobertura: boolean; ciudad_reconocida: boolean; /*
 export type MapaCobertura = ReadonlyMap<string, Cobertura>;
 export const claveCobertura = (ciudad: string) => ciudad.trim();
 
-/** La lista vieja (transportadoras.js, con tolerancia a typos) conoce la ciudad con un courier que cobra contra entrega. */
-export const conCobranzaLista = (ciudad: string) => transportadorasDisponibles(ciudad).some((t: string) => t === "pap" || t === "lucero");
-
 /**
  * ¿Ningún courier con cobro contra entrega (PaP o Lucero) llega a esa ciudad? 29-10: SOLO si la tabla (rpc
  * sugerir_courier) reconoce la ciudad. Ciudad no reconocida o sin dato de la rpc → false (nunca "sin cobertura").
@@ -111,14 +109,15 @@ export function sinCobertura(_ciudad: string, cobertura?: Cobertura | null): boo
 }
 
 /**
- * 29-10: la ciudad no se sabe cuál es: la tabla no la reconoce y la lista vieja tampoco la conoce con un courier que
- * cobre ("Casa", "Central", un pueblo que no figura). Sin dato de la rpc → false (no se decide nada hasta tenerlo).
- * Si la lista vieja sí la conoce (p. ej. un typo que tolera), se sigue como antes: no se pide nada.
+ * 29-10: la ciudad no se sabe cuál es: la tabla no la reconoce ("Casa", "Central", un pueblo que no figura). Sin dato de
+ * la rpc → false (no se decide nada hasta tenerlo). 02-11 (#1176): la lista vieja ya no cuenta como cobertura.
  */
-export function ciudadDesconocida(ciudad: string, cobertura?: Cobertura | null): boolean {
-  if (!cobertura || cobertura.ciudad_reconocida) return false;
-  return !conCobranzaLista(ciudad);
+export function ciudadDesconocida(_ciudad: string, cobertura?: Cobertura | null): boolean {
+  return !!cobertura && !cobertura.ciudad_reconocida;
 }
+
+/** 02-11 (#1176): la etiqueta y las 48 h solo cuentan si el aviso salió; si no, se reintenta en la próxima corrida. */
+export const trasAvisoSinCobertura = (enviado: boolean) => ({ etiquetar: enviado, soltarCandado: !enviado });
 
 export const ciudadPendiente = (ciudad: string) => !ciudad.trim() || /^ver mapa$/i.test(ciudad.trim());
 

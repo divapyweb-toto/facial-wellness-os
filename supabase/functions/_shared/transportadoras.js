@@ -323,11 +323,13 @@ export function ciudadLucero(ciudad) {
 function cubrePaP(ciudad, cod) {
   if (!tarifasCourierCargadas()) return tieneCobranzaPaP(ciudad)
   const t = tarifaCourier('pap', ciudad)
-  if (t && !t.estimado) return cod ? t.cobranza === true : true
+  if (t && !t.estimado) return t.llega !== false && (cod ? t.cobranza === true : true)
+  // 02-11 (#1176): fuera de la tabla no hay cobranza por defecto. Una grafía que la lista vieja reconoce vale si la
+  // ciudad que reconoce figura en la tabla; pagado por adelantado, alcanza con que la lista la conozca.
   const vieja = emparejarCiudad(ciudad, CIUDADES_PAP_LISTA)
   if (!vieja) return false
   const tv = tarifaCourier('pap', vieja)
-  return tv && !tv.estimado ? (cod ? tv.cobranza === true : true) : true
+  return tv && !tv.estimado ? tv.llega !== false && (cod ? tv.cobranza === true : true) : !cod
 }
 
 // ¿La transportadora puede llevar el pedido a esta ciudad?
@@ -338,9 +340,10 @@ function cubrePaP(ciudad, cod) {
 export function cubre(transportadora, ciudad, { cod = true } = {}) {
   if (transportadora === 'otra') return true
   if (transportadora === 'lucero') {
-    if (ciudadLucero(ciudad) != null) return true
-    const t = tarifasCourierCargadas() ? tarifaCourier('lucero', ciudad) : null
-    return t != null && (!cod || t.cobranza === true)
+    // 02-11: con la tabla cargada manda la tabla; la lista vieja queda solo para cuando no cargó.
+    if (!tarifasCourierCargadas()) return ciudadLucero(ciudad) != null
+    const t = tarifaCourier('lucero', ciudad)
+    return t != null && t.llega !== false && (!cod || t.cobranza === true)
   }
   return cubrePaP(ciudad, cod)
 }
