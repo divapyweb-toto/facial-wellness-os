@@ -16,7 +16,7 @@
 // ═══════════════════════════════════════════════════════════
 import { supabase } from './supabase'
 // 29-10: la misma clave fonética que public.ciudad_fonetica (migración 20261029000002): "Mbocayaty" = "Mbocajaty".
-import { claveFonetica } from '../../supabase/functions/_shared/sale_hoy.js'
+import { claveFonetica, ciudadSinDepartamento } from '../../supabase/functions/_shared/sale_hoy.js'
 
 // Tasa de entrega de respaldo (la misma que usa la vista con menos de 10 pedidos resueltos).
 export const TASA_RESPALDO = { lucero: 85, pap: 75 }
@@ -50,6 +50,7 @@ function limpiarFila(f) {
     ciudad,
     ciudad_nombre: f.ciudad_nombre || ciudad,
     alias: (Array.isArray(f.alias) ? f.alias : []).map(normCiudad).filter(Boolean),
+    llega: f.llega !== false,   // 02-11: false = el courier no llega, ni con pago anticipado
     zona: f.zona ?? null,
     precio,
     tiempo: f.tiempo ?? null,
@@ -105,7 +106,7 @@ export async function cargarTarifasCourier() {
     try {
       const [rt, rs, rz, rp] = await Promise.all([
         supabase.from('tarifas_courier_vigente')
-          .select('courier, ciudad, ciudad_nombre, alias, zona, precio, tiempo, dias_min, dias_max, aplica_cobranza, tiene_agencia'),
+          .select('courier, ciudad, ciudad_nombre, alias, zona, precio, tiempo, dias_min, dias_max, aplica_cobranza, tiene_agencia, llega'),
         supabase.from('tasa_entrega_courier').select('courier, entregados, resueltos, tasa_medida, pocos_datos, tasa_usada'),
         supabase.from('config').select('valor').eq('clave', 'tarifas_zona_pap').maybeSingle(),
         supabase.from('config').select('valor').eq('clave', 'courier_preferir_lucero').maybeSingle(),
@@ -142,13 +143,16 @@ const contiene = (texto, palabra) => (' ' + texto + ' ').includes(' ' + palabra 
 
 export function filaTarifa(courier, ciudad, d = datos) {
   if (!d) return null
-  const k = normCiudad(ciudad)
+  // 02-11: sin departamento ("Vallemí, Concepción" no es Concepción); k0 mantiene el exacto ("Santa Rosa, Misiones").
+  const k0 = normCiudad(ciudad)
+  const limpia = ciudadSinDepartamento(ciudad)
+  const k = normCiudad(limpia)
   if (!k) return null
-  const f = claveFonetica(ciudad)
+  const f = claveFonetica(limpia)
   let mejor = null, mejorOrden = 9, mejorLargo = -1
   for (const v of d.tarifas) {
     if (v.courier !== courier) continue
-    const exacta = v.ciudad === k || v.alias.includes(k)
+    const exacta = v.ciudad === k || v.ciudad === k0 || v.alias.includes(k) || v.alias.includes(k0)
     const parcial = !exacta && (contiene(k, v.ciudad) || v.alias.some((a) => contiene(k, a)))
     // 29-10: último intento (orden 2), la clave fonética ENTERA de la ciudad o de un alias (= public.tarifa_courier).
     const fonetica = !exacta && !parcial && (claveFonetica(v.ciudad) === f || v.alias.some((a) => claveFonetica(a) === f))
@@ -169,7 +173,7 @@ export function tarifaCourier(courier, ciudad, d = datos) {
   if (v) {
     return {
       courier, ciudad: v.ciudad_nombre, precio: v.precio, zona: v.zona, tiempo: v.tiempo,
-      dias_min: v.dias_min, dias_max: v.dias_max, cobranza: v.aplica_cobranza, agencia: v.tiene_agencia, estimado: false,
+      dias_min: v.dias_min, dias_max: v.dias_max, cobranza: v.aplica_cobranza, agencia: v.tiene_agencia, estimado: false, llega: v.llega,
     }
   }
   const zona = d.zonasPaP?.['INTERIOR 2']
@@ -188,7 +192,7 @@ export function sugerirCourier(ciudad, { cod = true } = {}, d = datos) {
     const t = tarifaCourier(courier, ciudad, d)
     const te = d.tasas?.[courier] || {}
     const tasa = te.tasa_usada ?? null
-    const valido = t != null && !t.estimado && (!cod || t.cobranza === true)
+    const valido = t != null && !t.estimado && t.llega !== false && (!cod || t.cobranza === true)
     const costo = t && tasa ? Math.round(t.precio / (tasa / 100)) : null
     return { courier, t, tasa, pocos_datos: te.pocos_datos ?? null, resueltos: te.resueltos ?? null, valido, costo }
   })
