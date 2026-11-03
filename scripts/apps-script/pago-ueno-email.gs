@@ -41,7 +41,10 @@ function instalar() {
 }
 
 function desinstalar() {
-  ScriptApp.getProjectTriggers().forEach((t) => ScriptApp.deleteTrigger(t));
+  // 03-11: solo el disparador de transferencias; el de facturas-recibidas.gs vive en el mismo proyecto.
+  ScriptApp.getProjectTriggers()
+    .filter((t) => t.getHandlerFunction() === 'revisarTransferencias')
+    .forEach((t) => ScriptApp.deleteTrigger(t));
 }
 
 function probarConexion() {
