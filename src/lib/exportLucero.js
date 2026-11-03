@@ -243,7 +243,8 @@ export function exportLuceroAEntregas(items) {
     ...(it.rendido ? { rendido: true, fecha_rendido: it.fechaRendicion } : {}),
     // 14-10: Lucero deposita NETO (cobrado − tarifa − multa; en prepagos da negativo). El export trae los dos datos
     // cuando ya rindió: se guarda lo que cayó al banco y los días de la entrega al depósito.
-    ...(it.rendido && it.tarifa != null ? { neto_depositado: (it.total || 0) - it.tarifa - (it.multa || 0) } : {}),
+    // 03-11: devuelto o cancelado no cobra: el neto es solo el descuento (antes quedaba total − tarifa, positivo).
+    ...(it.rendido && it.tarifa != null ? { neto_depositado: (it.categoria === 'entregado' ? (it.total || 0) : 0) - it.tarifa - (it.multa || 0) } : {}),
     ...(it.rendido && it.categoria === 'entregado' && diasEntre(it.fechaUltimoEstado, it.fechaRendicion) != null
       ? { dias_rendicion: diasEntre(it.fechaUltimoEstado, it.fechaRendicion) } : {}),
     mensajero: it.transportador || '',
