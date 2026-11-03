@@ -212,8 +212,14 @@ const decodificador = new TextDecoder("utf-8");
  * - Sin XML de SIFEN legible: es_de_voltra = null y no se descarta (lo decide una persona con el PDF).
  * - XML con receptor 80177762: es_de_voltra = true.
  * - XML con otro receptor o sin RUC receptor (consumidor final): es_de_voltra = false y descartada = true.
+ * - 03-11: sin XML de SIFEN, si ni el asunto ni el nombre de un archivo hablan de factura/recibo, se guarda descartada
+ *   (la primera pasada trajo una aprobación del MIC y papeles del banco).
  * PDF: si hay varios, el que lleva el CDC en el nombre; si no, el primero.
  */
+const PARECE_FACTURA = /factura|invoice|receipt|recibo|comprobante|kude|billing/i;
+export const pareceFactura = (asunto: string | null, nombres: string[]) =>
+  PARECE_FACTURA.test(asunto ?? "") || nombres.some((n) => PARECE_FACTURA.test(n));
+
 export function armarFila(c: CuerpoValido, listos: AdjuntoListo[]): FilaRecibida {
   let sifen: DatosSifen | null = null;
   let xmlPath: string | null = null;
@@ -225,6 +231,7 @@ export function armarFila(c: CuerpoValido, listos: AdjuntoListo[]): FilaRecibida
   const pdfs = listos.filter((l) => l.clase === "pdf");
   const pdf = (sifen?.cdc ? pdfs.find((p) => p.nombre.includes(sifen!.cdc!)) : undefined) ?? pdfs[0];
   const esDeVoltra = sifen ? sifen.receptor_ruc === RUC_VOLTRA : null;
+  const descartar = esDeVoltra === false || (esDeVoltra === null && !pareceFactura(c.asunto, listos.map((l) => l.nombre)));
   return {
     gmail_id: c.id,
     recibida_en: c.fecha,
@@ -240,6 +247,6 @@ export function armarFila(c: CuerpoValido, listos: AdjuntoListo[]): FilaRecibida
     pdf_path: pdf?.ruta ?? null,
     xml_path: xmlPath,
     es_de_voltra: esDeVoltra,
-    ...(esDeVoltra === false ? { descartada: true as const } : {}),
+    ...(descartar ? { descartada: true as const } : {}),
   };
 }

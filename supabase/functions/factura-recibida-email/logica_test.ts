@@ -9,8 +9,7 @@ import {
   prepararAdjuntos,
   rucSinDv,
   sanearNombre,
-  validarCuerpo,
-} from "./logica.ts";
+  validarCuerpo, pareceFactura } from "./logica.ts";
 
 // XML INVENTADO con la estructura de un DE de SIFEN v150 (emisor y CDC ficticios; receptor = RUC de Voltra).
 const CDC = "01800000001001001000012322026103011234567890";
@@ -201,4 +200,11 @@ Deno.test("armarFila: con varios PDF elige el que lleva el CDC en el nombre", ()
     { nombre: "de.xml", tipo: "text/xml", base64: b64(xmlDe("80177762")) },
   ]);
   assertEquals(f.pdf_path, `recibidas/18f2a3b4c5d6e7f8/${CDC}.pdf`);
+});
+
+Deno.test("03-11: sin XML, solo entra si el asunto o un archivo dicen factura/recibo", () => {
+  assertEquals(pareceFactura("Your receipt from Anthropic", []), true);
+  assertEquals(pareceFactura("Factura de Oct 27", []), true);
+  assertEquals(pareceFactura("NOTIFICACION: APROBACION REGISTRO MIPYMES", ["certificado.pdf"]), false);
+  assertEquals(pareceFactura("Documentos", ["KUDE_001.pdf"]), true);
 });
