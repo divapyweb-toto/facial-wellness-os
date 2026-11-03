@@ -202,7 +202,7 @@ function mapearGrupoAPedidos(grupoRows) {
   const prioridad = tienePrioridad(primero('Tags'))
   const comprobanteSinVerificar = !pagadoShopify && tagsTxt.includes('pago_anticipado_comprobante')
   const cfg = estado === 'confirmado' && comprobanteSinVerificar
-    ? { ...ESTADO_CONFIG.pending, label: '💳 Mandó comprobante: verificá el pago en ueno antes de despachar', color: 'var(--purple)' }
+    ? { ...ESTADO_CONFIG.pending, label: '💳 Mandó comprobante: verificá el pago en el banco antes de despachar', color: 'var(--purple)' }
     : estado === 'pending' && tagsTxt.includes('retiro_en_casa')
     ? { ...ESTADO_CONFIG.pending, label: '🏠 Retira en persona — no despachar', color: 'var(--purple)' }
     : estado === 'pending' && tagsTxt.includes('faltan_datos')

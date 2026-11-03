@@ -32,7 +32,7 @@ function formInicial() {
   }
 }
 
-const COBRO_TXT = { transferencia_anticipada: 'Transferencia anticipada (ueno)', contra_entrega: 'Contra entrega (cobra el courier)' }
+const COBRO_TXT = { transferencia_anticipada: 'Transferencia anticipada', contra_entrega: 'Contra entrega (cobra el courier)' }
 
 function Campo({ label, error, hint, hintOk, children, full }) {
   return (
@@ -268,7 +268,7 @@ export default function PedidoMayoristaPage() {
             </div>
           </Campo>
           {form.cobro === 'transferencia_anticipada' && (
-            <Campo label="Comprobante de la transferencia" error={errores.comprobante_ref} hint="Número o referencia de la transferencia a ueno Empresas">
+            <Campo label="Comprobante de la transferencia" error={errores.comprobante_ref} hint="Número o referencia de la transferencia">
               <input className="form-input" value={form.comprobante_ref} onChange={e => set('comprobante_ref', e.target.value)} />
             </Campo>
           )}

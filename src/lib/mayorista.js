@@ -171,7 +171,7 @@ export function validarPedidoMayorista(form = {}, ctx = {}) {
   }
 
   if (cobro === 'transferencia_anticipada' && !form.anterior_al_corte && String(form.comprobante_ref ?? '').trim().length < 3) {
-    errores.comprobante_ref = 'Transferencia anticipada: anotá la referencia del comprobante (ueno)'
+    errores.comprobante_ref = 'Transferencia anticipada: anotá la referencia del comprobante'
   }
 
   if (form.anterior_al_corte) {
