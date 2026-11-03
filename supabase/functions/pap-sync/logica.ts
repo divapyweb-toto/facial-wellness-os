@@ -235,6 +235,34 @@ export function combinarAFilas(paquetes: Fila[], gestion: Fila[]): FilaCourier[]
   return out
 }
 
+// ─── Tabla entregas (03-11) ──
+// El importador común solo escribe eventos: entregas quedaba con lo del último Excel subido a mano ("Borrador",
+// "Asignado a ruta") aunque PaP ya dijera otra cosa. Misma regla que categorizarPaP de src/lib/estadosPaP.js.
+const MOTIVOS_DEVOLUCION = ['rechaz', 'inubicable', 'fuera de cobertura', 'fin de custodia', 'problema de direccion', 'no desea', 'cancelad', 'no ingreso', 'rehus']
+
+export function categoriaPaP(estado: string, motivo: string): string {
+  const e = estado.toLowerCase(), m = motivo.toLowerCase()
+  if (e.includes('borrador') || e.includes('no ingreso')) return 'no_despachado'
+  if (e.includes('entregado')) return 'entregado'
+  if (e.includes('devuelto')) return 'devuelto'
+  if (MOTIVOS_DEVOLUCION.some((k) => m.includes(k))) return 'devuelto'
+  if (e.includes('devolucion') || m.includes('devolucion')) return 'devuelto'
+  return 'en_proceso'
+}
+
+/** Qué actualizar en entregas por una fila de PaP. Sin estado: nada. `rendido` solo se escribe en true: nunca se borra un cobro. */
+export function cambiosEntrega(f: FilaCourier): Record<string, unknown> | null {
+  const estado = f.estado_crudo?.trim()
+  if (!estado) return null
+  const motivo = String(f.extra?.motivo ?? '')
+  const categoria = categoriaPaP(estado, motivo)
+  return {
+    estado_pap: estado, motivo, categoria,
+    ...(categoria === 'entregado' && f.fecha ? { fecha_entrega: f.fecha } : {}),
+    ...(f.extra?.rendido ? { rendido: true, ...(f.extra.fecha_rendido ? { fecha_rendido: f.extra.fecha_rendido } : {}) } : {}),
+  }
+}
+
 // ─── Estado del sincronizador (tabla pap_sync_estado, una fila) ──
 export interface EstadoSync {
   activo: boolean

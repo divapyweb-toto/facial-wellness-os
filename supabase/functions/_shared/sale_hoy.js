@@ -119,7 +119,8 @@ export function decidirSalida(p = {}) {
   if (!p.courier && !p.pagado) {
     // 29-10 (#1150 "Casa"): una ciudad que no está en las tablas NUNCA es "sin cobertura": primero hay que saber cuál es.
     if (p.ciudadReconocida === false && !p.sinCoberturaTag) return noSale('ciudad')
-    return noSale('sin_cobertura')
+    // 02-11: la etiqueta se pone solo si el aviso salió; sin ella, todavía no se le ofreció nada al cliente.
+    return p.sinCoberturaTag ? noSale('sin_cobertura') : { ...noSale('sin_cobertura'), detalle: 'aviso pendiente' }
   }
   if (p.bloqueadoRiesgo) return noSale('no_recibe')
   if (p.bloqueadoCiudad) return noSale('ciudad_riesgo')

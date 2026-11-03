@@ -30,6 +30,8 @@ export interface DepsSync {
     contarEventos(tipo: TipoEvento, desdeISO: string): Promise<number>
   }
   procesar: (filas: FilaCourier[]) => Promise<Resumen>
+  /** 03-11: lleva a entregas lo que dice PaP. Un error acá no frena la corrida. */
+  actualizarEntregas?: (filas: FilaCourier[]) => Promise<unknown>
   avisar: (texto: string, opts?: OpcionesAviso) => Promise<unknown>
   pausa: (ms: number) => Promise<void>
   dias?: number
@@ -144,6 +146,7 @@ export async function ejecutarSync(d: DepsSync): Promise<ResultadoSync> {
     try { resumen = await d.procesar(filas) } catch (e) {
       return await fallar(`procesar: ${(e as Error)?.message ?? e}`)
     }
+    await d.actualizarEntregas?.(filas).catch((e) => console.warn('pap-sync entregas:', (e as Error)?.message ?? e))
   }
 
   estado = trasExito(estado, d.ahora())

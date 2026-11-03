@@ -33,3 +33,9 @@ test('sanearEntrega: Lucero sin neto guardado → bruto − tarifa; PaP sigue en
   assert.equal(sanearEntrega({ transportadora: 'pap', estado_pap: 'Entregado', importe: 112000, costo_envio: 29000 }).depositoReal, 112000)
   assert.equal(sanearEntrega({ transportadora: 'lucero', categoria: 'entregado', importe: 158000, costo_envio: 30000, neto_depositado: 120000 }).depositoReal, 120000)
 })
+
+test('03-11: devuelto rendido no cobró nada: el neto es solo el descuento de la tarifa', () => {
+  const [r] = exportLuceroAEntregas([{ ...base, estado: 'Devuelto', categoria: 'devuelto', total: 112000, tarifa: 40000 }])
+  assert.equal(r.neto_depositado, -40000)
+  assert.equal(r.cobrado, 0)
+})

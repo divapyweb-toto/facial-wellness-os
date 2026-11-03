@@ -16,7 +16,7 @@ import { escaparHtml } from '../_shared/telegram_formato.ts'
 import { normalizarTelefonoPY } from '../_shared/telefono.ts'
 import { procesarFilas } from '../importar-courier/procesar.ts'
 import { crearClientePaP } from './cliente_pap.ts'
-import { estadoSupabase, leerConfigCourier, repoCourier } from './repo.ts'
+import { estadoSupabase, leerConfigCourier, repoCourier, actualizarEntregas } from './repo.ts'
 import { ejecutarSync } from './sync.ts'
 import { leerXlsx } from './xlsx.ts'
 
@@ -49,6 +49,7 @@ Deno.serve(conServiceRole(async () => {
           .eq('fuente', 'courier').eq('id_externo', id)
         return resumen
       },
+      actualizarEntregas,
       avisar: (texto, opts) => avisar(escaparHtml(texto), undefined, opts),
       pausa: (ms) => new Promise((ok) => setTimeout(ok, ms + Math.floor(Math.random() * 2000))),
       dias: Number(Deno.env.get('PAP_DIAS')) || undefined,

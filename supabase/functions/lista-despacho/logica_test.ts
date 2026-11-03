@@ -157,3 +157,12 @@ Deno.test("02-11 #1176: la pasada sin tabla pide consultar Filadelfia y con la t
   assertEquals(segunda.noDespachar.map((x) => x.clave), ["sin_cobertura"]);
   assert(!(textoLista(segunda, AHORA, false) ?? "").includes("Cobrar"));
 });
+
+Deno.test("02-11: sin la etiqueta el motivo dice aviso pendiente; con la etiqueta, que espera el pago", () => {
+  const cob = new Map([["Filadelfia", { ciudad_reconocida: true, sin_cobertura: true, sugerido: null }]]);
+  const sinAviso = armarLista([ped(1, "CONFIRMADO", [["Raspador", 1]], {}, null, "Filadelfia")], [], new Set(), AHORA, cob);
+  assertEquals(sinAviso.noDespachar[0].motivo.includes("aviso pendiente"), true);
+  assertEquals(sinAviso.noDespachar[0].motivo.includes("ofrecido"), false);
+  const conAviso = armarLista([ped(2, "CONFIRMADO, SIN_COBERTURA", [["Raspador", 1]], {}, null, "Filadelfia")], [], new Set(), AHORA, cob);
+  assertEquals(conAviso.noDespachar[0].motivo.includes("ofrecido"), true);
+});

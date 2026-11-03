@@ -1,6 +1,7 @@
 // Datos 100 % inventados (repo público): referencias VT-9xxx, teléfonos 0981000000.
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import {
+  cambiosEntrega,
   aFechaISO, cambioDeFormato, clasificarDescarga, clasificarLogin, columnasFaltantes, combinarAFilas,
   cuerpoGestion, cuerpoPaquetes, ESTADO_INICIAL, esXlsx, fechaAsuncion, rangoFechas, refVoltra, trasError,
   trasExito, trasLogin,
@@ -117,4 +118,15 @@ Deno.test('cookiesDe: solo las del balanceador', () => {
   h.append('set-cookie', 'AWSELBCORS=def;PATH=/;SECURE')
   h.append('set-cookie', 'otra=1; Path=/')
   assertEquals(cookiesDe(new Response('', { headers: h })), 'AWSELB=abc; AWSELBCORS=def')
+})
+
+Deno.test('03-11: cambiosEntrega lleva a entregas lo que dice PaP y nunca borra un rendido', () => {
+  const fila = (estado_crudo: string, extra: Record<string, unknown> = {}, fecha: string | null = null) =>
+    ({ referencia: 'VT-1', estado_crudo, telefono: null, fecha, extra: { nro_guia: '1', rendido: false, motivo: '', ...extra } }) as never
+  assertEquals(cambiosEntrega(fila('Asignado a ruta')), { estado_pap: 'Asignado a ruta', motivo: '', categoria: 'en_proceso' })
+  assertEquals(cambiosEntrega(fila('Entregado', {}, '2026-11-01'))?.fecha_entrega, '2026-11-01')
+  assertEquals(cambiosEntrega(fila('Custodio', { motivo: 'Inubicable' }))?.categoria, 'devuelto')
+  assertEquals(cambiosEntrega(fila('Entregado', { rendido: true, fecha_rendido: '2026-11-02' }))?.fecha_rendido, '2026-11-02')
+  assertEquals('rendido' in (cambiosEntrega(fila('Entregado')) ?? {}), false)
+  assertEquals(cambiosEntrega(fila('   ')), null)
 })

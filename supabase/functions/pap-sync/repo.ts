@@ -4,10 +4,22 @@
 // 13-10: repoCourier() y leerConfigCourier() ya no son copias: viven en importar-courier/repo.ts (un solo
 // lugar para los tres caminos: pantalla Entregas, pap-sync y lucero-seguimiento) y acá se reexportan.
 import { db } from '../_shared/db.ts'
-import { ESTADO_INICIAL, type EstadoSync } from './logica.ts'
+import { cambiosEntrega, ESTADO_INICIAL, type EstadoSync } from './logica.ts'
+import type { FilaCourier } from '../importar-courier/procesar.ts'
 import type { TipoEvento } from './sync.ts'
 
 export { leerConfigCourier, repoCourier } from '../importar-courier/repo.ts'
+
+// 03-11: entregas sigue a PaP. Un pedido ya entregado no se pisa con un estado viejo de otra hoja, salvo el rendido.
+export async function actualizarEntregas(filas: FilaCourier[]): Promise<void> {
+  for (const f of filas) {
+    const c = cambiosEntrega(f)
+    if (!c) continue
+    const base = () => db().from('entregas').update(c).eq('n_referencia', f.referencia).eq('transportadora', 'pap')
+    const { error } = c.categoria === 'entregado' ? await base() : await base().neq('categoria', 'entregado')
+    if (error) throw new Error(`entregas: ${error.message}`)
+  }
+}
 
 // ─── Estado del sincronizador (migración 20261009000003_pap_sync.sql) ──
 const CAMPOS_ESTADO = Object.keys(ESTADO_INICIAL) as (keyof EstadoSync)[]
