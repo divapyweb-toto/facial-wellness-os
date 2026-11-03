@@ -65,7 +65,7 @@ export async function procesarComprobantesEspera(filas: Pendiente[], d: DepsEspe
 export function textoAvisoComprobante(a: Pendiente["aviso"]): string {
   const et = escaparHtml(a.etiqueta ?? `#${a.pedido}`);
   return [
-    `💸 <b>${et}</b>: el cliente mandó un comprobante y en 40 min no apareció la transferencia en el banco.`,
+    `💸 <b>${et}</b>: el cliente mandó un comprobante y la verificación automática no lo encontró.`,
     `Monto a verificar: Gs ${escaparHtml(a.total ?? "?")} (total del pedido).`,
     "Verificalo y tocá Recibido. Hasta que lo toques, el pedido no cambia.",
   ].join("\n");

@@ -61,7 +61,8 @@ export const claveOfertaPrioridad = (shopifyOrderId: number | string) => `prio:$
 export function textoOfertaPrioridad(cfg: Pick<CfgPagoPrioridad, "alias" | "titular">): string {
   return "📦 ¡Tu pedido quedó confirmado!\n" +
     "Si querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n" +
-    `💳 Alias: ${cfg.alias} — ${cfg.titular}\n` +
+    // 03-11 (ueno intervenido por el BCP): la cuenta es de Continental; "Transferí a" sirve para alias o cuenta.
+    `💳 Transferí a: ${cfg.alias} — ${cfg.titular}\n` +
     "Si preferís, pagás al recibir como siempre 👍";
 }
 

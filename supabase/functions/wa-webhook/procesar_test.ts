@@ -678,7 +678,7 @@ function pedidoConOferta(extra: Partial<Pedido> = {}): Pedido {
 
 const textosCliente = (st: Estado) => [...st.enviados.map((e) => e.texto), ...st.botones.map((b) => b.texto)];
 
-const TEXTO_OFERTA = "📦 ¡Tu pedido quedó confirmado!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Alias: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍";
+const TEXTO_OFERTA = "📦 ¡Tu pedido quedó confirmado!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Transferí a: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍";
 
 /** Orden real de lo que le llega al cliente (texto y botones) + reservas de prio:<id>. */
 function conOrden(deps: Deps) {

@@ -399,7 +399,7 @@ export function motivoParaNoDespachar(ped: PedidoNormalizado, estadoConfirmacion
   const t = ped.tags.map((x) => x.toUpperCase());
   if (t.includes("FALTAN_DATOS")) return "le faltan datos de la dirección";
   if (estadoConfirmacion !== "confirmado" && !t.includes("CONFIRMADO")) return "el cliente todavía no confirmó";
-  if (t.includes("PAGO_ANTICIPADO_COMPROBANTE") && !estaPagado(ped)) return "mandó comprobante de pago y todavía no lo verificaste en ueno";
+  if (t.includes("PAGO_ANTICIPADO_COMPROBANTE") && !estaPagado(ped)) return "mandó comprobante de pago y todavía no lo verificaste en la cuenta";
   return null;
 }
 

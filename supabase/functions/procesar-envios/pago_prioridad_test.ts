@@ -60,7 +60,7 @@ const ABIERTA = new Date("2026-10-12T10:00:00Z");
 Deno.test("prio: ventana abierta → texto libre con el alias (palabras del dueño: 'quedó confirmado')", () => {
   const d = decidir(prio(), ctx({}, { ultimaEntrada: ABIERTA }), cfg(), AHORA, horario);
   assert(d.accion === "texto");
-  assertEquals(d.texto, "📦 ¡Tu pedido quedó confirmado!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Alias: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍");
+  assertEquals(d.texto, "📦 ¡Tu pedido quedó confirmado!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Transferí a: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍");
   assertFalse(/descuento|menos|%|QR|listo para salir/.test(d.texto));
 });
 

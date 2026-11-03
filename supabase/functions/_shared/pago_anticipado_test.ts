@@ -16,7 +16,7 @@ Deno.test("textoOfertaPrioridad: palabras del dueño, sin QR, sin descuento ni d
   const t = textoOfertaPrioridad(ON);
   assertEquals(
     t,
-    "📦 ¡Tu pedido quedó confirmado!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Alias: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍",
+    "📦 ¡Tu pedido quedó confirmado!\nSi querés recibirlo antes, podés pagarlo ahora por transferencia y sale con prioridad en el primer despacho.\n💳 Transferí a: alias@ejemplo.com — Voltra E.A.S.\nSi preferís, pagás al recibir como siempre 👍",
   );
   assertFalse(/QR|descuento|menos|%|alta demanda|d[ií]as|garant|listo para salir/i.test(t));
   assertEquals(claveOfertaPrioridad(5550001), "prio:5550001");

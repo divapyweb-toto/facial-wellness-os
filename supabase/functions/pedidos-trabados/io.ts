@@ -275,7 +275,7 @@ async function avisarSinCobertura(orderId: number): Promise<string | null> {
     const texto = `${primer ? `${primer}, te` : "Te"} escribo por tu pedido ${ped.nombre} 🙌\n` +
       `Nuestras transportadoras con pago al recibir no llegan a ${ciudad}.\n` +
       `Si lo pagás por adelantado, te lo mandamos por una transportadora que sí llega a tu ciudad, por el mismo total de Gs ${gs(total)}.\n` +
-      `💳 Alias: ${pago.alias}${pago.titular ? ` — ${pago.titular}` : ""}\n` +
+      `💳 Transferí a: ${pago.alias}${pago.titular ? ` — ${pago.titular}` : ""}\n` +
       "Mandame el comprobante por acá y lo despachamos.";
     const r = await enviarTexto(String(ped.telefono).replace(/\D/g, ""), texto, { clienteId: ped.cliente_id, conversacionId: conv?.id ?? null });
     enviado = r.ok;
