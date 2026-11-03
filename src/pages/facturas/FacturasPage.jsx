@@ -7,6 +7,7 @@ import { supabase } from '../../lib/supabase'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import FacturasVista from './FacturasVista'
+import ImprimirContadora from './ImprimirContadora'
 import {
   mesAsuncion, rangoMes, esTablaInexistente, motivoErrorReenvio,
   filasExportacion, filasResumen, aCsv, COLUMNAS_EXPORT, nombreArchivo,
@@ -214,6 +215,7 @@ export default function FacturasPage() {
       reenviando={reenviando} exportando={exportando}
       retenidos={retenidos} cargandoRetenidos={cargandoRet} errorRetenidos={errorRet}
       onLiberar={liberar} liberando={liberando} onExportarRetenidos={exportarRetenidos}
+      panelImprimir={<ImprimirContadora />}
     />
   )
 }

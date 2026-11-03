@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react'
 import {
   FileText, FileSpreadsheet, Download, Copy, MessageCircle, Eye, AlertTriangle,
-  Clock, XCircle, Ban, Receipt, CalendarDays, Loader2, FlaskConical, Unlock, X, Scale,
+  Clock, XCircle, Ban, Receipt, CalendarDays, Loader2, FlaskConical, Unlock, X, Scale, Printer,
 } from 'lucide-react'
 import { formatGs } from '../../lib/supabase'
 import { etiquetaMes, mesesRecientes } from '../../lib/fechas'
@@ -182,6 +182,9 @@ export default function FacturasVista({
   mes, onCambiarMes, facturas, nombresPedido = {}, cargando, noActivada, errorCarga,
   onVerKude, onCopiarCdc, onReenviar, onExportar, reenviando, exportando, ahora,
   retenidos = [], cargandoRetenidos = false, errorRetenidos = null, onLiberar, liberando, onExportarRetenidos,
+  // Pestaña "Imprimir para la contadora": la página pasa el componente ya armado
+  // (lee la base por su cuenta), así esta vista sigue sin Supabase.
+  panelImprimir = null,
 }) {
   const [pestana, setPestana] = useState('todas')
   const meses = useMemo(() => mesesRecientes(12, ahora), [ahora])
@@ -285,10 +288,17 @@ export default function FacturasVista({
                   <button role="tab" aria-selected={pestana === 'retenidos'} className={`tab${pestana === 'retenidos' ? ' active' : ''}`} onClick={() => setPestana('retenidos')}>
                     Pendientes de criterio contable <span className={`fac-tab-n${retenidos.length ? ' fac-tab-n-alerta' : ''}`}>{cargandoRetenidos ? '…' : retenidos.length}</span>
                   </button>
+                  {panelImprimir && (
+                    <button role="tab" aria-selected={pestana === 'imprimir'} className={`tab${pestana === 'imprimir' ? ' active' : ''}`} onClick={() => setPestana('imprimir')}>
+                      <Printer size={13} className="fac-tab-icono" />Imprimir para la contadora
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {pestana === 'retenidos' ? (
+              {pestana === 'imprimir' && panelImprimir ? (
+                panelImprimir
+              ) : pestana === 'retenidos' ? (
                 <Retenidos filas={retenidos} cargando={cargandoRetenidos} error={errorRetenidos}
                   onLiberar={onLiberar} liberando={liberando} onExportar={onExportarRetenidos} />
               ) : visibles.length === 0 ? (
