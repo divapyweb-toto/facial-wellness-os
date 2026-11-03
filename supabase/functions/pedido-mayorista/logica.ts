@@ -100,7 +100,7 @@ export function notaDelPedido(p: PedidoMayorista): string {
   const l = ["Pedido MAYORISTA cargado a mano desde Voltra OS (venta por WhatsApp)."];
   l.push(`Factura a: ${p.fiscal.razon_social} · RUC ${p.fiscal.ruc}-${p.fiscal.dv}`);
   l.push(p.condicion === "credito" ? `CRÉDITO a ${p.plazo_dias} días: NO COBRAR EN LA ENTREGA.` : "Contado.");
-  if (p.cobro === "transferencia_anticipada") l.push(`Pagado por transferencia anticipada (ueno)${p.comprobante_ref ? ` · comprobante ${p.comprobante_ref}` : ""}.`);
+  if (p.cobro === "transferencia_anticipada") l.push(`Pagado por transferencia anticipada${p.comprobante_ref ? ` · comprobante ${p.comprobante_ref}` : ""}.`);
   else l.push("Cobro contra entrega.");
   if (p.anterior_al_corte) l.push(`ANTERIOR AL CORTE: ya entregado y cobrado el ${p.fecha_entrega}. NO DESPACHAR. Factura retenida para la contadora.`);
   if (p.nota) l.push(`Nota: ${p.nota}`);

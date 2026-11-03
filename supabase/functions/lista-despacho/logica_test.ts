@@ -57,7 +57,7 @@ Deno.test("pagado = cobrar 0 y va primero; factura, retiro y total distinto sale
     ped(21, "CONFIRMADO, PAGADO, PAGO_VERIFICADO, PRIORIDAD", [["Raspador de Lengua", 1]], { financial_status: "paid" }),
     ped(22, "CONFIRMADO, RETIRO_EN_CASA", [["Parches Bucales", 1]]),
     ped(23, "CONFIRMADO, TOTAL_DISTINTO", [["Parches Bucales", 1]], { note: "Total distinto: el cliente dijo 79.000" }),
-  ], [], new Set());
+  ], [], new Set(), AHORA); // 03-11: con la fecha real el retiro del 27-10 ya pasa los 7 días
   const lista = [...l.porCourier.values()].flat();
   const pagado = lista.find((p) => p.nombre === "#21")!;
   assert(pagado.pagado && pagado.prioridad);
