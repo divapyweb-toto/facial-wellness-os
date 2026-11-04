@@ -3,7 +3,7 @@
 // Seguimiento automático de Lucero del Este para pedidos de Voltra (VT-…).
 // Lógica pura: todo el I/O entra por `Deps` (io.ts), así se prueba con dobles.
 //
-// Fuente: la página PÚBLICA https://www.luceroexpress.com.py/envio.php?id=<EnvioID>
+// Fuente: la página PÚBLICA https://luceroexpress.com.py/envio.php?id=<EnvioID>
 // (sin login; verificada el 09-10-2026). Muestra Referencia (nuestro código, p. ej.
 // VT-1003), Empresa, Estado (badge: 'entregado', 'en_camino'…) y un historial con la
 // fecha de cada estado ('2026-10-07 13:05'). La búsqueda pública por NUESTRA

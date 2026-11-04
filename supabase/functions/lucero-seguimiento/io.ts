@@ -13,7 +13,8 @@ import { CATEGORIAS_TERMINALES, type ConfigSeguimiento, type Deps, type GuiaAbie
 
 export { repoCourier }
 
-export const URL_ENVIO = 'https://www.luceroexpress.com.py/envio.php?id='
+// 04-11: Lucero pasó de www.luceroexpress.com.py a luceroexpress.com.py (301); con redirect manual eso contaba como falla.
+export const URL_ENVIO = 'https://luceroexpress.com.py/envio.php?id='
 export const USER_AGENT = 'VoltraOS/1.0 (seguimiento de envios propios; contacto voltraparaguay@gmail.com)'
 const TIMEOUT_MS = 15_000
 
