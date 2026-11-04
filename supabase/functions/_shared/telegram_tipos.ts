@@ -31,6 +31,9 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   pago_courier_no_cobrar: { titulo: "Pagado: texto para el courier", ruta: "inmediato", inventario: "#56" },
   whatsapp_canal_sordo: { titulo: "WhatsApp caído / calidad del número", ruta: "inmediato", inventario: "#67 (máx. 1 cada 6 h)" },
   mejora_mensual_propuesta: { titulo: "Mejora mensual: propuesta", ruta: "inmediato", inventario: "#80 (se aprueba solo con los botones)" },
+  // 04-11: casos de envíos ya despachados, listos para pegar en el WhatsApp del courier (pedidos-trabados/casos_courier_envio.ts).
+  casos_courier: { titulo: "Casos para el courier (08:30 y 14:00)", ruta: "inmediato", inventario: "nuevo 04-11 (reemplaza derivar el chat)" },
+  casos_courier_urgente: { titulo: "Caso urgente para el courier", ruta: "inmediato", inventario: "nuevo 04-11" },
 
   // ENRIQUE en el resumen de 09:00 y 15:00
   plazo_pap: { titulo: "Plazo PaP vencido", ruta: "resumen", inventario: "#44" },

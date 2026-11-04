@@ -12,6 +12,7 @@ import { sincronizarCancelaciones } from "./cancelaciones_ventas.ts";
 import { activarPlantillaReprogramar, depsReales as depsPlantilla } from "./plantilla_reprogramar.ts";
 import { entregasParaActuar } from "./entregas_actuar_io.ts";
 import { alertaPlazoPap } from "./plazo_pap_io.ts";
+import { casosParaCourier, sembrarYaAvisados } from "./casos_courier_envio_io.ts";
 
 type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean; preparar?: boolean };
 
@@ -50,7 +51,9 @@ async function automatico(simular: boolean) {
   const plantilla = await activarPlantillaReprogramar(depsPlantilla, simular).catch((e) => ({ resultado: `error: ${e instanceof Error ? e.message : String(e)}` }));
   // 26-10: PaP con más de 5 días hábiles en oficina / ruta / borrador → Telegram una vez por pedido (plazo_pap.ts).
   const plazoPap = await alertaPlazoPap(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
-  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, plantilla_reprogramar: plantilla, cancelaciones, que_nada_quede_parado: actuar, plazo_pap: plazoPap };
+  // 04-11: casos para el courier (casos_courier_envio.ts): un Telegram por courier lun–sáb 08:30 y 14:00; urgentes ya.
+  const casos = await casosParaCourier(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, plantilla_reprogramar: plantilla, cancelaciones, que_nada_quede_parado: actuar, plazo_pap: plazoPap, casos_courier: casos };
 }
 
 async function manual(acciones: AccionManual[]) {
@@ -78,8 +81,9 @@ async function manual(acciones: AccionManual[]) {
 
 Deno.serve(conServiceRole(async (req: Request) => {
   try {
-    const b = await req.json().catch(() => ({})) as { origen?: string; modo?: string; acciones?: AccionManual[] };
-    const r = b.acciones?.length ? await manual(b.acciones) : await automatico(b.origen !== "pg_cron" && b.modo !== "aplicar");
+    const b = await req.json().catch(() => ({})) as { origen?: string; modo?: string; acciones?: AccionManual[]; sembrar_casos_avisados?: boolean };
+    // 04-11: siembra única de los casos que Enrique mandó a mano (casos_courier_envio_io.ts); sin modo "aplicar" solo simula.
+    const r = b.sembrar_casos_avisados ? await sembrarYaAvisados(b.modo !== "aplicar") : b.acciones?.length ? await manual(b.acciones) : await automatico(b.origen !== "pg_cron" && b.modo !== "aplicar");
     console.log("pedidos-trabados", JSON.stringify(r));
     return Response.json({ ok: true, ...r });
   } catch (e) {

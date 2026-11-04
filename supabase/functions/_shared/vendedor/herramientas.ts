@@ -31,7 +31,9 @@ import { botonEnlace } from "./interactivos.ts";
 import { NECESIDADES, normalizarPerfil, PERFILES } from "./perfil.ts";
 import { pausaBurbujaMs } from "./ritmo.ts";
 import { diaEntrega } from "../plazo_zona.ts";
-import type { CtxTurno, DatosPedidoChat, DepsHerramientas, LineaPedido, PedidoChat, ProductoShopify } from "./tipos.ts";
+import { type CourierCaso, NOMBRE_COURIER, respuestaCaso } from "../casos_courier.ts";
+import { esCancelado } from "../sale_hoy.js";
+import type { CtxTurno, DatosPedidoChat, DepsHerramientas, LineaPedido, NuevoCasoCourier, PedidoChat, ProductoShopify } from "./tipos.ts";
 
 // ---------- utilidades puras ----------
 
@@ -271,6 +273,11 @@ export const HERRAMIENTAS: Herramienta[] = [
         quiere: { type: "string", description: "Qué quiere el cliente, en pocas palabras (opcional)." },
         datos: { type: "string", description: "Qué datos ya dio: producto, cantidad, ciudad… sin teléfono (opcional)." },
         falta: { type: "string", description: "Qué falta para resolverlo (opcional)." },
+        // 04-11: con un pedido ya despachado, reclamo/otro/sin_avance van por caso_courier salvo que no sea por la entrega.
+        no_es_entrega: {
+          type: "boolean",
+          description: "true solo si el cliente tiene un pedido ya despachado pero el tema NO es la entrega (producto roto, devolución de plata, ya no lo quiere, enojo fuerte).",
+        },
       },
       required: ["motivo", "resumen"],
     },
@@ -324,6 +331,31 @@ export const HERRAMIENTAS: Herramienta[] = [
         resumen: { type: "string", description: "1 oración: pedido, qué pide el cliente y para cuándo (\"#1004: si hoy no llega, cancela\")." },
       },
       required: ["motivo", "resumen"],
+    },
+  },
+  {
+    // 04-11 (Enrique: "el bot puede coordinar y/o tomar reclamo y luego por telegram ya se me manda mensaje para lucero y/o pap").
+    name: "caso_courier",
+    description:
+      "Pedido YA DESPACHADO (está con Lucero o Punto a Punto) y el cliente reclama la entrega (\"no me llegó\", \"nadie me llamó\", \"el repartidor no contesta\", \"¿cuándo llega?\") " +
+      "o quiere coordinarla (en qué horario está, otra dirección o referencia, quién recibe, un local): guarda el caso y se lo pasamos al courier. Usala EN VEZ de derivar_a_enrique. " +
+      "Antes, si falta, preguntá en 1 o 2 preguntas como mucho lo que sirve (en qué horario está, una referencia, quién recibe); si ya lo dio, llamala de una. Nunca prometas una hora exacta. " +
+      "El sistema le manda al cliente la respuesta fija (texto_respuesta): en este turno no escribas nada más. Si devuelve no_despachado, no es un caso del courier: atendelo normal.",
+    input_schema: {
+      type: "object",
+      properties: {
+        tipo: { type: "string", enum: ["reclamo", "coordinar"], description: "reclamo: no le llegó o nadie lo contactó; coordinar: horario, lugar o quién recibe." },
+        pide: {
+          type: "string",
+          description: "Lo que pide o cuenta el cliente, con sus palabras resumidas en 1 frase (ej. \"Esperó el martes 03/11 y no le llegó; llamó al repartidor y no contesta\", \"Pide entrega al mediodía\"). Nunca datos de pago ni de cuenta bancaria.",
+        },
+        horario: { type: "string", description: "Cuándo puede recibir, como lo dijo (\"de 12 a 15\", \"después de las 19\"). Opcional." },
+        referencia: { type: "string", description: "Dirección nueva, local o referencia para encontrarlo. Opcional." },
+        recibe: { type: "string", description: "Quién recibe si no es el cliente (\"su hermana\", \"el encargado del local\"). Opcional." },
+        hoy: { type: "boolean", description: "true si dice que lo necesita hoy." },
+        pedido: { type: "string", description: "Número de pedido si lo dijo (\"#1172\"). Opcional." },
+      },
+      required: ["tipo", "pide"],
     },
   },
   {
@@ -1488,6 +1520,127 @@ async function avisarEnrique(input: Record<string, unknown>, ctx: CtxTurno, deps
   return { resultado: { ok: r.ok, nota: "Enrique ya está avisado. Respondele al cliente sin prometer otro día ni ofrecer cancelar." } };
 }
 
+// ---------- casos del courier (04-11) ----------
+
+/** 04-11: pedido ya en manos del courier (mismo criterio que lista-despacho YA_PROCESADO, sin los cerrados). */
+export const ESTADOS_EN_COURIER: ReadonlySet<string> = new Set(["EN_PREPARACION", "DESPACHADO", "INTENTO_FALLIDO", "NO_ENTREGADO_RESCATABLE"]);
+/** Turnos en que ya se guardó un caso del courier (el guardia de derivar_a_enrique no lo vuelve a frenar). */
+const CASO_EN_TURNO = new WeakSet<CtxTurno>();
+
+type PedidoEnCourier =
+  | { ok: true; shopify_order_id: number; nombre: string; ref: string; courier: CourierCaso }
+  | { ok: false; motivo: "no_despachado"; estados: string[] }
+  | { ok: false; motivo: "courier_desconocido"; nombre: string; courier: string | null };
+
+const digitos = (s: unknown) => String(s ?? "").replace(/\D/g, "");
+
+/**
+ * Pedido del cliente que está con el courier (el que nombró, o el más nuevo) y su courier según ventas.transportadora
+ * (pedidoParaCourier). Se saltean los cancelados o anulados (misma regla que Despacho).
+ */
+async function pedidoEnCourier(ctx: CtxTurno, deps: DepsHerramientas, pedido?: string | null): Promise<PedidoEnCourier> {
+  const pedidos = await deps.pedidosDeCliente(ctx.clienteId, ctx.telefono);
+  const n = digitos(pedido);
+  const nombrado = n ? pedidos.filter((p) => digitos(p.nombre) === n || String(p.shopify_order_id) === n) : [];
+  const base = nombrado.length ? nombrado : pedidos;
+  const enCourier = base.filter((p) => ESTADOS_EN_COURIER.has(String(p.estado_envio ?? "")));
+  let sinCourier: { nombre: string; courier: string | null } | null = null;
+  for (const p of enCourier) {
+    const pc = deps.pedidoParaCourier ? await deps.pedidoParaCourier(p.shopify_order_id).catch(() => null) : null;
+    const raw = (pc?.raw ?? {}) as Record<string, unknown>;
+    if (esCancelado({ tags: raw.tags, cancelledAt: raw.cancelled_at, financialStatus: raw.financial_status })) continue;
+    const nombre = p.nombre ?? pc?.nombre ?? `#${p.shopify_order_id}`;
+    const courier = String(pc?.courier ?? "").trim().toLowerCase();
+    if (courier === "lucero" || courier === "pap") {
+      return { ok: true, shopify_order_id: p.shopify_order_id, nombre, ref: `VT-${digitos(nombre) || p.shopify_order_id}`, courier };
+    }
+    sinCourier ??= { nombre, courier: pc?.courier ?? null };
+  }
+  if (sinCourier) return { ok: false, motivo: "courier_desconocido", ...sinCourier };
+  return { ok: false, motivo: "no_despachado", estados: base.map((p) => `${p.nombre ?? p.shopify_order_id}: ${p.estado_envio ?? "sin datos"}`) };
+}
+
+/** Texto corto para el caso: sin números largos (cuentas, cédulas), sin espacios de más. */
+function textoCaso(v: unknown, max: number): string | null {
+  const t = String(v ?? "").replace(/\d(?:[.-]?\d){7,}/g, "[dato quitado]").replace(/\s+/g, " ").trim().slice(0, max);
+  return t || null;
+}
+
+/**
+ * 04-11: un solo caso pendiente del bot por pedido. Lo nuevo pisa lo viejo solo si trae algo; lo vacío no borra.
+ * urgente se suma (una vez urgente, queda urgente); reclamo pesa más que coordinar; el pide nuevo se agrega si es otro.
+ */
+export function fusionarCasoCourier(
+  previo: Partial<Pick<NuevoCasoCourier, "tipo" | "pide" | "horario" | "referencia" | "recibe" | "urgente">> | null,
+  nuevo: NuevoCasoCourier,
+): NuevoCasoCourier {
+  if (!previo) return nuevo;
+  const elegir = (a: string | null | undefined, b: string | null | undefined) => (b?.trim() ? b.trim() : a?.trim() ? a.trim() : null);
+  const viejo = (previo.pide ?? "").trim();
+  const yaEsta = viejo && normalizar(viejo).includes(normalizar(nuevo.pide));
+  const pide = !viejo ? nuevo.pide : yaEsta ? viejo : `${viejo.replace(/[.\s]+$/, "")}. ${nuevo.pide}`.slice(-300);
+  return {
+    ...nuevo,
+    tipo: previo.tipo === "reclamo" || nuevo.tipo === "reclamo" ? "reclamo" : "coordinar",
+    pide,
+    horario: elegir(previo.horario, nuevo.horario),
+    referencia: elegir(previo.referencia, nuevo.referencia),
+    recibe: elegir(previo.recibe, nuevo.recibe),
+    urgente: !!previo.urgente || nuevo.urgente,
+  };
+}
+
+/** caso_courier: reclamo o coordinación de un envío ya despachado → casos_courier + respuesta fija (no pasa a Enrique). */
+async function casoCourier(input: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta> {
+  const tipo = input.tipo === "reclamo" || input.tipo === "coordinar" ? input.tipo : null;
+  const pide = textoCaso(input.pide, 200);
+  if (!tipo || !pide) return error("caso_invalido: tipo (reclamo o coordinar) y pide (1 frase con lo que pide el cliente).");
+  if (!deps.guardarCasoCourier) return error("no_disponible: derivá a Enrique con motivo reclamo y no_es_entrega=true.");
+  const p = await pedidoEnCourier(ctx, deps, typeof input.pedido === "string" ? input.pedido : null);
+  if (!p.ok && p.motivo === "no_despachado") {
+    return error(
+      `no_despachado: no hay un pedido de este cliente en camino con el courier (${p.estados.join(", ") || "sin pedidos"}). No es un caso del courier: atendelo normal ` +
+        "(si todavía no salió, el plazo; si figura entregado y dice que no le llegó, derivá a Enrique con motivo reclamo y no_es_entrega=true).",
+    );
+  }
+  if (!p.ok) {
+    return error(`courier_desconocido: el pedido ${p.nombre} no tiene Lucero ni Punto a Punto asignado (${p.courier ?? "sin courier"}). Derivá a Enrique con motivo reclamo y no_es_entrega=true.`);
+  }
+  const urgente = input.hoy === true;
+  let guardado: { id: string; nuevo: boolean };
+  try {
+    guardado = await deps.guardarCasoCourier({
+      shopify_order_id: p.shopify_order_id, ref: p.ref, courier: p.courier, tipo, pide,
+      horario: textoCaso(input.horario, 120), referencia: textoCaso(input.referencia, 160), recibe: textoCaso(input.recibe, 120),
+      urgente, cliente_id: ctx.clienteId, conversacion_id: ctx.conversacionId,
+    });
+  } catch (e) {
+    return error(`no_se_pudo_guardar: ${e instanceof Error ? e.message : e}. Derivá a Enrique con motivo falla_herramienta.`);
+  }
+  CASO_EN_TURNO.add(ctx);
+  const texto_respuesta = respuestaCaso(p.courier, urgente);
+  const base = { ok: true, caso_id: guardado.id, caso_nuevo: guardado.nuevo, courier: p.courier, pedido: p.nombre, texto_respuesta };
+  // La respuesta la escribe el sistema (contrato casos_courier). Si no salió, el modelo la manda tal cual.
+  const r = await deps.enviarTexto(ctx.destino, texto_respuesta, opts(ctx));
+  if (!r.ok) return { resultado: { ...base, enviado: false, nota: "El caso quedó guardado pero no salió la respuesta: respondé exactamente con texto_respuesta." } };
+  return { resultado: { ...base, enviado: true, nota: "Ya se le respondió al cliente. No escribas nada más." }, terminal: true };
+}
+
+/**
+ * 04-11: guardia de derivar_a_enrique. Con un pedido ya despachado por Lucero o PaP, un reclamo (u otro / sin avance) va
+ * por caso_courier, salvo que no sea por la entrega (no_es_entrega=true) o que el caso ya se guardó en este turno.
+ * null = se deriva como siempre (también si no se pudo consultar el pedido).
+ */
+async function guardiaDerivarCourier(i: Record<string, unknown>, ctx: CtxTurno, deps: DepsHerramientas): Promise<ResultadoHerramienta | null> {
+  if (!["reclamo", "otro", "sin_avance"].includes(String(i.motivo ?? "")) || i.no_es_entrega === true || CASO_EN_TURNO.has(ctx)) return null;
+  const p = await pedidoEnCourier(ctx, deps).catch(() => null);
+  if (!p?.ok) return null;
+  return error(
+    `es_caso_courier: el pedido ${p.nombre} ya está con ${NOMBRE_COURIER[p.courier]}. Si es por la entrega (no llegó, nadie llamó, horario, dirección, quién recibe, un local) usá caso_courier; ` +
+      "si es producto roto, devolución de plata, ya no lo quiere o enojo fuerte, derivá con motivo devolucion o enojo, o con no_es_entrega=true.",
+  );
+}
+
 /** "2026-10-16" → "viernes 16/10". */
 export function textoFechaCorta(fecha: string): string {
   const [y, m, d] = fecha.split("-").map(Number);
@@ -1541,13 +1694,15 @@ export const EJECUTORES: Record<string, Ejecutor> = {
   consultar_catalogo: consultarCatalogo,
   estado_pedido: estadoPedido,
   crear_pedido_cod: crearPedidoCod,
-  derivar_a_enrique: (i, c, d, x) =>
-    derivarAEnrique({
-      motivo: String(i.motivo ?? "otro"),
-      resumen: String(i.resumen ?? ""),
-      shopify_order_id: i.shopify_order_id as number | undefined,
-      texto_previo: x?.textoModelo ?? null,
-    }, c, d),
+  derivar_a_enrique: async (i, c, d, x) =>
+    await guardiaDerivarCourier(i, c, d) ??
+      derivarAEnrique({
+        motivo: String(i.motivo ?? "otro"),
+        resumen: String(i.resumen ?? ""),
+        shopify_order_id: i.shopify_order_id as number | undefined,
+        texto_previo: x?.textoModelo ?? null,
+      }, c, d),
+  caso_courier: casoCourier,
   enviar_media: enviarMediaHerr,
   // El orquestador guarda el perfil en la conversación (wa_conversaciones.perfil_vendedor); acá solo se valida.
   registrar_perfil: registrarPerfil,

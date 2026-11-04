@@ -2,7 +2,7 @@
 // I/O real del vendedor (Supabase, Shopify, WhatsApp, Telegram, Claude). La lógica está en orquestador.ts y
 // herramientas.ts; acá solo se conectan las dependencias.
 import { direccionUtilizable } from "../../pedidos-trabados/logica.ts";
-import { ciudadDeTarifas, unirReferencia } from "./herramientas.ts";
+import { ciudadDeTarifas, fusionarCasoCourier, unirReferencia } from "./herramientas.ts";
 import { depsPedidosWebReales } from "./pedidos_web_io.ts";
 import { depsEmailFacturaReales } from "./email_factura_io.ts";
 import { db } from "../db.ts";
@@ -188,6 +188,28 @@ export const depsHerramientasReales: DepsHerramientas = {
       courier: (v?.data?.transportadora as string | undefined) ?? null,
       despachado: String(raw?.fulfillment_status ?? raw?.displayFulfillmentStatus ?? "").toLowerCase() === "fulfilled",
     };
+  },
+
+  // 04-11 (Enrique): un caso pendiente del bot por pedido (índice único parcial); lo nuevo se le suma. No se pisa uno que
+  // pedidos-trabados acaba de mandar (update solo si sigue 'pendiente'); si otro turno lo creó recién (23505), se reintenta.
+  async guardarCasoCourier(c) {
+    for (let intento = 0; intento < 3; intento++) {
+      const { data: previo, error: e1 } = await db().from("casos_courier").select("id,tipo,pide,horario,referencia,recibe,urgente")
+        .eq("shopify_order_id", c.shopify_order_id).eq("origen", "bot").eq("estado", "pendiente").maybeSingle();
+      falla("caso courier pendiente", e1);
+      const f = fusionarCasoCourier(previo, c);
+      if (previo) {
+        const { data, error } = await db().from("casos_courier").update(f).eq("id", previo.id).eq("estado", "pendiente").select("id");
+        falla("actualizar caso courier", error);
+        if (data?.length) return { id: String(previo.id), nuevo: false };
+        continue; // ya salió en un Telegram: va uno nuevo
+      }
+      const { data, error } = await db().from("casos_courier").insert({ ...f, origen: "bot", estado: "pendiente" }).select("id").single();
+      if (error?.code === "23505") continue;
+      falla("guardar caso courier", error);
+      return { id: String(data!.id), nuevo: true };
+    }
+    throw new Error("casos_courier: no se pudo guardar el caso (3 intentos)");
   },
 
   async actualizarDireccionOrden(orderId, d) {

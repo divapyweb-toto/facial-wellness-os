@@ -1,6 +1,7 @@
 // _shared/vendedor/tipos.ts · Dueño: G1 (ola 2)
 // Tipos compartidos del vendedor con IA (configuración, contexto del turno y filas de datos).
 import type { BotonTelegram } from "../telegram_formato.ts";
+import type { CasoCourier } from "../casos_courier.ts";
 import type { OpcionesAviso } from "../telegram_politica.ts";
 import type { OpcionesEnvio, ResultadoEnvio } from "../wa.ts";
 import type { EntradaGlosario, FichaCfg } from "./prompt.ts";
@@ -188,6 +189,12 @@ export type DatosPedidoChat = {
   retiro?: boolean;
 };
 
+/** 04-11: lo que el vendedor guarda en casos_courier (origen 'bot', estado 'pendiente'; el resto lo pone la base). */
+export type NuevoCasoCourier = Pick<
+  CasoCourier,
+  "shopify_order_id" | "ref" | "courier" | "pide" | "horario" | "referencia" | "recibe" | "urgente" | "cliente_id" | "conversacion_id"
+> & { tipo: "reclamo" | "coordinar" };
+
 export type ResultadoOrden = {
   ok: boolean;
   shopify_order_id?: number;
@@ -225,6 +232,11 @@ export type DepsHerramientas = {
   /** 13-10: guarda la entrega programada en Shopify (tag ENTREGA_PROGRAMADA + atributos entrega_programada / entrega_franja). */
   programarEntregaOrden?(orderId: number, fecha: string, franja: string | null): Promise<{ ok: boolean; error?: string }>;
   pedidoParaCourier?(orderId: number): Promise<{ nombre: string; telefono: string | null; raw: Record<string, unknown> | null; courier: string | null; despachado: boolean } | null>;
+  /**
+   * 04-11 (Enrique): guarda el caso del bot (reclamo o coordinación de un envío ya despachado) en public.casos_courier.
+   * Si ya hay uno pendiente del bot para ese pedido, le suma lo nuevo (fusionarCasoCourier). Lanza si la base falla.
+   */
+  guardarCasoCourier?(c: NuevoCasoCourier): Promise<{ id: string; nuevo: boolean }>;
   crearOrdenShopify(input: Record<string, unknown>): Promise<ResultadoOrden>;
   /** Mismo camino que un pedido de Releasit: upsert en shopify_pedidos + confirmación programada. */
   registrarComoReleasit(nodo: Record<string, unknown>): Promise<void>;
