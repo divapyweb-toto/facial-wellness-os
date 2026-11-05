@@ -24,11 +24,15 @@ async function automatico(simular: boolean) {
   const coberturas = await coberturaCiudades(pedidos.filter(necesitaCobertura).map((p) => p.ciudad));
   const sinCob = await estadoSinCobertura(pedidos).catch((e) => (console.warn("pedidos-trabados sin cobertura:", e instanceof Error ? e.message : e), new Map()));
   const hechos: Array<{ pedido: string; accion: string; ok: boolean; error?: string }> = [];
+  let pinsEstaCorrida = 0;
   for (const p of pedidos) {
     const puse = tomados.has(idCandadoAuto("agregar_faltan_datos", p.shopifyOrderId));
     // 29-10: si ya se buscó la ciudad del pin una vez y sigue sin reconocerse, se le pide al cliente (pedir_ciudad).
     const pinIntentado = tomados.has(idCandadoAuto("ciudad_desde_pin", p.shopifyOrderId));
-    for (const a of accionesPara(p, ahora, puse, coberturas, sinCob, pinIntentado)) {
+    // 05-11: la ciudad se corrobora con el pin una vez por pedido (máx. 5 por corrida: cada una consulta Photon).
+    const pinCorroborado = tomados.has(idCandadoAuto("corroborar_ciudad_pin", p.shopifyOrderId)) || pinsEstaCorrida >= 5;
+    for (const a of accionesPara(p, ahora, puse, coberturas, sinCob, pinIntentado, pinCorroborado)) {
+      if (a === "corroborar_ciudad_pin") pinsEstaCorrida++;
       const id = idCandadoAuto(a, p.shopifyOrderId);
       if (tomados.has(id)) continue; // ya se hizo una vez: si alguien lo deshizo a mano, se respeta
       if (simular) {
@@ -36,7 +40,7 @@ async function automatico(simular: boolean) {
         continue;
       }
       if (!(await tomarCandado(id, { pedido: p.nombre, accion: a }))) continue;
-      const e = await ejecutar(a, p.shopifyOrderId, p.notas, p.direccion).catch((x) => String(x));
+      const e = await ejecutar(a, p.shopifyOrderId, p.notas, p.direccion, p.ciudad).catch((x) => String(x));
       if (e) await registrarError(id, e);
       hechos.push({ pedido: p.nombre, accion: a, ok: !e, ...(e ? { error: e } : {}) });
     }

@@ -93,6 +93,7 @@ export const MOTIVOS = {
   comprobante: { motivo: 'Comprobante', quien: 'Enrique', detalle: 'mandó comprobante: verificá el pago antes de despachar' },
   faltan_datos: { motivo: 'Faltan datos', quien: 'bot', detalle: 'falta la dirección: sin pin ni calle o zona con ciudad (se le pide al cliente)' },
   ciudad: { motivo: 'Faltan datos', quien: 'sistema', detalle: 'ciudad no reconocida: se busca por el pin o se le pide al cliente' },
+  pago_requerido: { motivo: 'Espera pago anticipado', quien: 'sistema', detalle: 'cliente con devoluciones: se le pidió pagar por adelantado (sin pago a las 48 h se cancela)' },
   sin_cobertura: { motivo: 'Sin cobertura', quien: 'sistema', detalle: 'ningún courier cobra ahí: espera el pago anticipado (ofrecido; sin pago a las 48 h se cancela)' },
   no_recibe: { motivo: 'No recibe', quien: 'Enrique', detalle: 'historial de no recepción: habilitalo o pedí pago anticipado' },
   ciudad_riesgo: { motivo: 'Ciudad riesgosa', quien: 'Enrique', detalle: 'esa ciudad casi no recibe con ese courier: forzalo o cambiá de courier' },
@@ -115,6 +116,8 @@ export function decidirSalida(p = {}) {
   if (p.retiro) return { retiro: true, ...noSale('retiro') }
   if (!p.confirmado) return noSale('sin_confirmar')
   if (p.comprobante && !p.pagado) return noSale('comprobante')
+  // 05-11: cliente con devoluciones previas: el bot le pidió pagar por adelantado (PAGO_ANTICIPADO_REQUERIDO).
+  if (p.pagoRequeridoTag && !p.pagado) return noSale('pago_requerido')
   if (p.faltanDatos || p.direccionOk === false) return noSale(p.ciudadReconocida === false && !p.courier ? 'ciudad' : 'faltan_datos')
   if (!p.courier && !p.pagado) {
     // 29-10 (#1150 "Casa"): una ciudad que no está en las tablas NUNCA es "sin cobertura": primero hay que saber cuál es.

@@ -166,3 +166,23 @@ Deno.test("02-11: sin la etiqueta el motivo dice aviso pendiente; con la etiquet
   const conAviso = armarLista([ped(2, "CONFIRMADO, SIN_COBERTURA", [["Raspador", 1]], {}, null, "Filadelfia")], [], new Set(), AHORA, cob);
   assertEquals(conAviso.noDespachar[0].motivo.includes("ofrecido"), true);
 });
+
+Deno.test("05-11: atributo Ciudad no reconocido y Shipping City sí → sale con el Shipping City; CIUDAD_POR_PIN manda el Shipping City", () => {
+  const conAttr = (n: number, tags: string, attr: string, ciudad: string) =>
+    ped(n, tags, [["Raspador de Lengua", 1]], { note_attributes: [{ name: "Ciudad", value: attr }] }, null, ciudad);
+  const f = [conAttr(91, "CONFIRMADO", "Casa", "Asunción")];
+  const primera = armarLista(f, [], new Set(), AHORA);
+  assertEquals(ciudadesAConsultar(primera).includes("Asunción"), true);
+  const cob = new Map([["Casa", { ciudad_reconocida: false, sin_cobertura: true, sugerido: null }], ["Asunción", { ciudad_reconocida: true, sin_cobertura: false, sugerido: "lucero" }]]);
+  const segunda = armarLista(f, [], new Set(), AHORA, cob);
+  assertEquals([...segunda.porCourier.values()].flat().map((p) => [p.nombre, p.ciudad]), [["#91", "Asunción"]]);
+  const pin = armarLista([conAttr(92, "CONFIRMADO, CIUDAD_POR_PIN", "Luque", "Asunción")], [], new Set(), AHORA, cob);
+  assertEquals([...pin.porCourier.values()].flat().map((p) => p.ciudad), ["Asunción"]);
+});
+
+Deno.test("05-11: PAGO_ANTICIPADO_REQUERIDO sin pago no sale (espera pago anticipado); pagado sí", () => {
+  const l = armarLista([ped(95, "CONFIRMADO, PAGO_ANTICIPADO_REQUERIDO", [["Raspador", 1]])], [], new Set(), AHORA);
+  assertEquals(l.noDespachar.map((x) => x.clave), ["pago_requerido"]);
+  const pagado = armarLista([ped(96, "CONFIRMADO, PAGO_ANTICIPADO_REQUERIDO, PAGADO", [["Raspador", 1]], { financial_status: "paid" })], [], new Set(), AHORA);
+  assertEquals([...pagado.porCourier.values()].flat().map((p) => p.nombre), ["#96"]);
+});

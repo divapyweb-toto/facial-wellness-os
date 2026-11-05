@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { accionesPara, trasAvisoSinCobertura, ciudadDesconocida, ciudadPendiente, type Cobertura, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, necesitaCobertura, type PedidoAbierto } from "./logica.ts";
+import { accionesPara, accionSinCobertura, decidirCiudadPin, trasAvisoSinCobertura, ciudadDesconocida, ciudadPendiente, type Cobertura, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, necesitaCobertura, type PedidoAbierto } from "./logica.ts";
 
 const AHORA = new Date("2026-10-12T18:00:00Z");
 const base = (o: Partial<PedidoAbierto> = {}): PedidoAbierto => ({
@@ -214,4 +214,32 @@ Deno.test("02-11: sin aviso entregado no hay SIN_COBERTURA ni 48 h, y se reinten
   const p = base({ nombre: "#1176", ciudad: "Filadelfia", direccion: "Calle Inventada 123" });
   const acciones = accionesPara(p, new Date("2026-11-10T12:00:00Z"), false, new Map([["Filadelfia", { sin_cobertura: true, ciudad_reconocida: true }]]));
   assertEquals(acciones.includes("cancelar_sin_cobertura"), false);
+});
+
+Deno.test("05-11: con pin y ciudad escrita, primero se corrobora (y nada más en esa corrida); después sigue normal", () => {
+  const p = base({ nombre: "#9300", ciudad: "Central", direccion: "Calle Inventada 1", notas: "Mapa: https://maps.google.com/?q=-25.3000000,-57.6000000" });
+  assertEquals(accionesPara(p, AHORA, false, undefined, undefined, false, false), ["corroborar_ciudad_pin"]);
+  assertEquals(accionesPara(p, AHORA, false, undefined, undefined, false, true).includes("corroborar_ciudad_pin"), false);
+  const sinPin = base({ nombre: "#9301", ciudad: "Asunción", direccion: "Calle Inventada 1" });
+  assertEquals(accionesPara(sinPin, AHORA, false, undefined, undefined, false, false).includes("corroborar_ciudad_pin"), false);
+});
+
+Deno.test("05-11: decidirCiudadPin manda el pin salvo que el pin no dé una ciudad de la tabla y la escrita sí", () => {
+  assertEquals(decidirCiudadPin({ escrita: "Central", pin: "Asunción", canonEscrita: null, canonPin: "Asunción" }).cambiar, true);
+  assertEquals(decidirCiudadPin({ escrita: "Luque", pin: "Asunción", canonEscrita: "Luque", canonPin: "Asunción" }), { cambiar: true, nueva: "Asunción", motivo: "otra ciudad" });
+  assertEquals(decidirCiudadPin({ escrita: "asuncion", pin: "Asunción", canonEscrita: "Asunción", canonPin: "Asunción" }).cambiar, false);
+  assertEquals(decidirCiudadPin({ escrita: "Luque", pin: "Barrio Raro", canonEscrita: "Luque", canonPin: null }).cambiar, false);
+  assertEquals(decidirCiudadPin({ escrita: "Casa", pin: null, canonEscrita: null, canonPin: null }).cambiar, false);
+});
+
+Deno.test("05-11: PAGO_ANTICIPADO_REQUERIDO: 48 h sin pago → cancelar; con foto → revisar; pagado o antes de 48 h → nada", () => {
+  const p = base({ nombre: "#9400", tags: ["CONFIRMADO", "PAGO_ANTICIPADO_REQUERIDO", "OFERTA_PAGO_ANTICIPADO"] });
+  const hace49 = new Date(AHORA.getTime() - 49 * 3_600_000).toISOString();
+  const hace10 = new Date(AHORA.getTime() - 10 * 3_600_000).toISOString();
+  assertEquals(accionSinCobertura(p, AHORA, { avisoEn: hace49, adjuntoDespues: false }), "cancelar_pago_requerido");
+  assertEquals(accionSinCobertura(p, AHORA, { avisoEn: hace49, adjuntoDespues: true }), "revisar_comprobante_pago_requerido");
+  assertEquals(accionSinCobertura(p, AHORA, { avisoEn: hace10, adjuntoDespues: false }), null);
+  assertEquals(accionSinCobertura({ ...p, tags: [...p.tags, "PAGADO"] }, AHORA, { avisoEn: hace49, adjuntoDespues: false }), null);
+  assertEquals(accionSinCobertura(p, AHORA, undefined), null); // sin candado (el bot no llegó a pedirlo): no se cancela
+  assertEquals(accionesPara(p, AHORA, false, undefined, new Map([[1, { avisoEn: hace49, adjuntoDespues: false }]])), ["cancelar_pago_requerido"]);
 });

@@ -37,7 +37,8 @@ export function esKit(nombre: string): boolean {
 
 interface Linea { nombre: string; cantidad: number }
 export interface PedidoLista {
-  nombre: string; ref: string; ciudad: string; lineas: Linea[]; total: number; pagado: boolean; prioridad: boolean;
+  nombre: string; ref: string; ciudad: string; /** 05-11: Shipping City de Shopify (el que corrige el pin). */ ciudadEnvio?: string;
+  lineas: Linea[]; total: number; pagado: boolean; prioridad: boolean;
   factura: string | null; programado: boolean; reemplaza: string | null; totalDistinto: string | null; sinPin: boolean;
   courier: string | null; armado: string[]; creado_en: string;
 }
@@ -67,13 +68,16 @@ export function pagadoAntes(raw: Record<string, unknown>, tags: string[]): boole
   return ff === "" || ff === "unfulfilled" || ff === "null";
 }
 
-function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined): PedidoLista & { tags: string[]; direccionOk: boolean } {
+function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined, ciudadElegida?: string): PedidoLista & { tags: string[]; direccionOk: boolean; ciudadEnvio: string } {
   const raw = f.raw ?? {};
   const tags = tagsDe(raw);
   const dir = (raw.shipping_address ?? raw.billing_address ?? {}) as Record<string, unknown>;
   const lineas = (Array.isArray(raw.line_items) ? raw.line_items : []).map((li: Record<string, unknown>) => ({ nombre: String(li.name ?? li.title ?? ""), cantidad: Number(li.quantity ?? 1) || 1 }));
   const nota = String(raw.note ?? "");
-  const ciudad = atributo(raw, /^ciudad$/i) ?? String(dir.city ?? "").trim();
+  // 05-11: el atributo "Ciudad" de Releasit es lo que escribió el cliente; el Shipping City lo corrige el sistema con el
+  // pin (CIUDAD_POR_PIN manda). Si el atributo no es una ciudad conocida, armarLista cambia al Shipping City (#1150, #1205).
+  const ciudadEnvio = String(dir.city ?? "").trim();
+  const ciudad = ciudadElegida ?? (tiene(tags, "ciudad_por_pin") && ciudadEnvio ? ciudadEnvio : (atributo(raw, /^ciudad$/i) ?? ciudadEnvio));
   const pagado = pagadoAntes(raw, tags);
   const armado = [...new Set(lineas.flatMap((l) => [esKit(l.nombre) ? NOTA_ARMADO_KIT : "", notaArmado(l.nombre, l.cantidad)]).filter(Boolean))];
   const forzado = lineas.find((l) => /jaw|mand[ií]bula|ejercitador/i.test(l.nombre))?.nombre ?? lineas[0]?.nombre ?? "";
@@ -83,7 +87,7 @@ function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined): PedidoList
     .map((a: Record<string, unknown>) => `${a?.name ?? a?.key ?? ""}: ${a?.value ?? ""}`)].join("\n");
   return {
     direccionOk: direccionUtilizable({ direccion, notas, ciudad }),
-    nombre: String(raw.name ?? f.nombre ?? ""), ref: refVoltra(String(raw.name ?? f.nombre ?? "")), ciudad, lineas,
+    nombre: String(raw.name ?? f.nombre ?? ""), ref: refVoltra(String(raw.name ?? f.nombre ?? "")), ciudad, ciudadEnvio, lineas,
     total: Math.round(Number(raw.total_price ?? 0)) || 0, pagado, prioridad: tiene(tags, "prioridad") || pagado,
     factura: lineaDe(nota, /^\s*factura\s*:\s*/i) ?? atributo(raw, /facturar/i), programado: tiene(tags, "entrega_programada"),
     reemplaza: conPrefijo(tags, "reemplaza_a_")?.replace("reemplaza_a_", "").toUpperCase() ?? null,
@@ -110,7 +114,10 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
     const ref = refVoltra(String(raw.name ?? f.nombre ?? ""));
     const venta = ventaPorRef.get(ref);
     if (venta?.despachado_at || refsEnCourier.has(ref)) continue;
-    const p = aPedido(f, venta);
+    let p = aPedido(f, venta);
+    // 05-11: ciudad escrita que la tabla no reconoce y Shipping City que sí → se usa el Shipping City.
+    if (p.ciudadEnvio && p.ciudadEnvio !== p.ciudad && coberturas?.get(p.ciudad.trim())?.ciudad_reconocida === false
+      && coberturas?.get(p.ciudadEnvio)?.ciudad_reconocida === true) p = aPedido(f, venta, p.ciudadEnvio);
     const cob = coberturas?.get(p.ciudad.trim());
     // La lista vieja no encontró courier pero la tabla sí (ciudad mal escrita que la tabla reconoce por alias o fonética).
     if (!p.courier && !p.pagado && cob?.ciudad_reconocida && !cob.sin_cobertura && cob.sugerido) p.courier = cob.sugerido;
@@ -128,6 +135,7 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
       direccionOk: p.direccionOk,
       courier: tiene(tags, "sin_cobertura") && !p.pagado ? null : p.courier,
       sinCoberturaTag: tiene(tags, "sin_cobertura"),
+      pagoRequeridoTag: tiene(tags, "pago_anticipado_requerido"),
       // Sin dato de la tabla y sin SIN_COBERTURA: la lista vieja tampoco la conoce → ciudad por confirmar, no "sin cobertura".
       ciudadReconocida: cob ? cob.ciudad_reconocida : tiene(tags, "sin_cobertura"),
     });
@@ -154,7 +162,7 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
 // 02-11 (#1176): también lo que iba a salir contra entrega: la lista vieja puede darle courier a una ciudad sin cobranza.
 export const ciudadesAConsultar = (l: ListaDespacho) =>
   [...new Set([
-    ...l.noDespachar.filter((x) => x.clave === "sin_cobertura" || x.clave === "ciudad").map((x) => x.p.ciudad.trim()),
+    ...l.noDespachar.filter((x) => x.clave === "sin_cobertura" || x.clave === "ciudad").flatMap((x) => [x.p.ciudad.trim(), String(x.p.ciudadEnvio ?? "").trim()]),
     ...[...l.porCourier.values()].flat().filter((p) => !p.pagado).map((p) => p.ciudad.trim()),
   ].filter(Boolean))];
 

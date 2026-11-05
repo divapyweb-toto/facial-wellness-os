@@ -25,6 +25,7 @@ import { useToast } from '../../lib/toast'
 import { prepararEnShopify } from '../../lib/prepararShopify'
 import { esPrioridad, ordenarGuias, ordenarPorPrioridad, pagadoPorTags, tienePrioridad } from './prioridad'
 import { asegurarTarifasCourier, sugerirCourier } from '../../lib/tarifasCourier'
+import { elegirCiudad } from '../../lib/ciudadPedido'
 // 29-10 (Enrique: "si no da para despachar es mejor que no se muestre"): la regla "sale hoy / no sale hoy" es UNA sola,
 // la misma que usa la lista de despacho de Telegram (supabase/functions/_shared/sale_hoy.js).
 import { decidirSalida, direccionUtilizable, esCancelado, esConfirmado } from '../../../supabase/functions/_shared/sale_hoy.js'
@@ -218,7 +219,12 @@ function mapearGrupoAPedidos(grupoRows) {
   // 12-10: retira en persona y está confirmado → es venta, pero sin courier.
   const retiroConfirmado = esRetiroConfirmado(primero('Tags'), primero('Cancelled at'))
   const nombre = (extraerNota(notas, 'Nombre y apellido') || primero('Billing Name') || primero('Shipping Name') || '').replace(/\s*-\s*$/, '').trim()
-  const ciudad = extraerNota(notas, 'ciudad') || primero('Shipping City') || ''
+  // 05-11 (#1205 "Central", #1150 "Casa"): lo que escribió el cliente solo si es una ciudad que algún courier conoce;
+  // si no, el Shipping City de Shopify (que pedidos-trabados corrige con el pin).
+  // CIUDAD_POR_PIN: pedidos-trabados ya corroboró la ciudad con el pin y la dejó en el Shipping City: manda esa.
+  const ciudad = /(^|[\s,])ciudad_por_pin($|[\s,])/i.test(String(primero('Tags') || '')) && primero('Shipping City')
+    ? String(primero('Shipping City')).trim()
+    : elegirCiudad(extraerNota(notas, 'ciudad'), primero('Shipping City'))
   const departamento = extraerNota(notas, 'departamento') || ''
   // 15-10 (VT-1047): el CSV de Shopify trae la referencia y el link del mapa en
   // 'Shipping Address2'; antes se leía solo Address1 y al courier le llegaba
@@ -313,6 +319,7 @@ function mapearGrupoAPedidos(grupoRows) {
     comprobanteSinVerificar,
     faltanDatosTag: tagsTxt.includes('faltan_datos'),
     sinCoberturaTag: /(^|[\s,])sin_cobertura($|[\s,])/.test(tagsTxt),
+    pagoRequeridoTag: tagsTxt.includes('pago_anticipado_requerido'),
     retiroTag: tagsTxt.includes('retiro_en_casa'),
     direccionOk: direccionUtilizable({ direccion, notas: [notas, primero('Notes')].filter(Boolean).join('\n'), ciudad }),
   }
@@ -1194,6 +1201,7 @@ function salidaDePedido(p, o = {}) {
     direccionOk: p.direccionOk,
     courier: cubierto ? (o.transportadora ?? p.transportadora ?? 'otra') : null,
     sinCoberturaTag: !!p.sinCoberturaTag,
+    pagoRequeridoTag: !!p.pagoRequeridoTag,
     // Sin la tabla cargada: con SIN_COBERTURA (lo pone pedidos-trabados solo a ciudades reconocidas) es sin cobertura;
     // si no, la ciudad está por confirmar (nunca "sin cobertura" a una ciudad que nadie reconoce).
     ciudadReconocida: tabla ? tabla.ciudad_reconocida : !!p.sinCoberturaTag,
@@ -1206,19 +1214,20 @@ function salidaDePedido(p, o = {}) {
 
 // 29-10: "No sale hoy" de los pedidos de Voltra que no pasan a Ventas: uno por referencia, de los últimos `dias` días,
 // sin los cancelados (en ningún lado), sin los que ya salieron y sin los que ya están en Ventas.
-function noSaleVoltra(pedidos, { envioPorRef = new Map(), enVentas = new Set(), hoy = hoyParaguay(), dias = 14 } = {}) {
+function noSaleVoltra(pedidos, { envioPorRef = new Map(), enVentas = new Set(), forzados = new Set(), hoy = hoyParaguay(), dias = 14 } = {}) {
   const desde = new Date(Date.parse(hoy) - dias * 86400000).toISOString().slice(0, 10)
   const vistos = new Set(), out = []
   for (const p of pedidos || []) {
     const ref = String(p.n_referencia)
     if (vistos.has(ref)) continue
     vistos.add(ref)
-    if (enVentas.has(ref) || String(p.fecha || '').slice(0, 10) < desde) continue
+    if (enVentas.has(ref) || forzados.has(ref) || String(p.fecha || '').slice(0, 10) < desde) continue
     const envio = envioPorRef.get(ref)?.estado_envio
     if (ENVIO_YA_SALIO.includes(envio) || envio === 'EN_PREPARACION' || envio === 'CANCELADO') continue
     const r = salidaDePedido(p, { cubierto: !!p.transportadora && !!p.cfg?.despachar })
     if (r.sale || r.oculto || r.retiro) continue
-    out.push({ ref, ciudad: p.ciudad, total: p.totalOrden ?? p.total, fecha: p.fecha, clave: r.clave, motivo: r.motivo, quien: r.quien, detalle: r.detalle,
+    // 05-11: el pedido viaja con la fila para poder corregirlo (lápiz) o forzar la salida desde "No sale hoy".
+    out.push({ ref, pedido: p, ciudad: p.ciudad, total: p.totalOrden ?? p.total, fecha: p.fecha, clave: r.clave, motivo: r.motivo, quien: r.quien, detalle: r.detalle,
       dias: Math.max(0, Math.round((Date.parse(hoy) - Date.parse(String(p.fecha || hoy).slice(0, 10))) / 86400000)) })
   }
   return out
@@ -1249,6 +1258,7 @@ function clasificarVentasPendientes(ventas, filasShopify) {
     const r = decidirSalida({
       confirmado: true, pagado, faltanDatos: tags.includes('faltan_datos'),
       courier: tags.includes('sin_cobertura') && !pagado ? null : (v.transportadora || 'pap'), sinCoberturaTag: tags.includes('sin_cobertura'),
+      pagoRequeridoTag: tags.includes('pago_anticipado_requerido'),
     })
     if (r.sale) sale.push(v)
     else noSale.push({ ref: v.n_referencia, ciudad: v.ciudad, total: v.total, fecha: v.fecha, clave: r.clave, motivo: r.motivo, quien: r.quien, detalle: r.detalle,
@@ -1269,6 +1279,25 @@ async function separarVentasPorShopify(ventas) {
     console.warn('Despacho: no se pudo cruzar Ventas con Shopify (se muestran todas):', e?.message || e)
     return { sale: ventas || [], noSale: [] }
   }
+}
+
+// 05-11 ("NO ME SALE EL DESPACHAR IGUAL"): correcciones y salida forzada desde "No sale hoy" de Desde Ventas.
+// Corregir la ciudad recalcula el courier; forzar lo manda igual: con el courier que tenga, o el primero que llegue
+// a la ciudad aunque no cobre ahí, o "otra". La decisión es de Enrique: lo elegido queda como manual (el motor no lo toca).
+function ajustarPedidoVoltra(p, edit, forzado) {
+  let q = edit ? { ...p, ...edit } : p
+  if (edit?.ciudad && edit.ciudad !== p.ciudad) {
+    const sug = sugerirTransportadora(q.ciudad, q.productoRuteo || q.producto_nombre, { cod: q.codRuteo !== false })
+    const transportadora = sug.transportadora ?? (q.pagadoShopify ? 'otra' : null)
+    q = { ...q, transportadora, cobranzaOk: transportadora != null, motivoTransportadora: sug.motivo,
+      costo_envio: q.lineaPrincipal === false ? 0 : sug.tarifa }
+  }
+  if (forzado) {
+    const t = q.transportadora || transportadorasDisponibles(q.ciudad, { cod: false }).find(x => x !== 'otra') || 'otra'
+    q = { ...q, forzado: true, transpManual: true, transportadora: t, cobranzaOk: true, cfg: { ...(q.cfg || {}), despachar: true },
+      costo_envio: q.lineaPrincipal === false ? 0 : (q.costo_envio ?? tarifaDe(t, q.ciudad)) }
+  }
+  return q
 }
 
 function separarPedidosVoltra(pedidos, envioPorRef = new Map()) {
@@ -1362,6 +1391,10 @@ export default function DespachoPagina() {
   // 12-10: pedidos de Voltra confirmados sin transportadora que cubra: no se pasan a Ventas.
   // 29-10: ahora es todo lo que "No sale hoy" (con motivo y quién lo resuelve), de Shopify y de Ventas.
   const [voltraNoSale, setVoltraNoSale] = useState([])
+  // 05-11: correcciones y salidas forzadas de "No sale hoy" (Desde Ventas). En refs: traerPedidosVoltra las lee al correr.
+  const forzadosVoltraRef = useRef(new Set())
+  const edicionesVoltraRef = useRef({})
+  const [editandoVoltra, setEditandoVoltra] = useState(null)
   const [ventasNoSale, setVentasNoSale] = useState([])
   // 28-10 (caso #1089: se retiró y cobró en la oficina y nunca se registró): retiros en persona confirmados sin cerrar.
   const [retirosAbiertos, setRetirosAbiertos] = useState([])
@@ -2179,9 +2212,11 @@ export default function DespachoPagina() {
       // 12-10: estado del envío por referencia (retiro en persona ya entregado).
       const envioPorRef = new Map((filas || []).map(f => [refVoltra(f.raw?.name || f.nombre), f]))
 
+      const forzadosV = forzadosVoltraRef.current
       const pedidos = (filas || []).filter(esPedidoImportable)
         .flatMap(f => agruparFilasPorReferencia(filasCsvDesdePedidoShopify(f)).flatMap(mapearGrupoAPedidos))
         .filter(p => p.producto_nombre)
+        .map(p => ajustarPedidoVoltra(p, edicionesVoltraRef.current[p.n_referencia], forzadosV.has(p.n_referencia)))
       // Solo los confirmados (o con ayuda): igual que Despacho, un pedido sin
       // confirmar no se despacha, así que tampoco entra a Ventas todavía.
       // 12-10: los retiros en persona confirmados entran SIN courier, y los
@@ -2191,7 +2226,7 @@ export default function DespachoPagina() {
       let listos = [...conCourier, ...retiros]
       const sinConfirmar = new Set(pedidos.filter(p => !p.cfg?.despachar && !p.retiroConfirmado && p.estado_releasit !== 'cancelado').map(p => p.n_referencia)).size
       // 29-10: lo que no sale hoy (sin confirmar, faltan datos, ciudad, sin cobertura…), con motivo y quién lo resuelve.
-      const candidatosNoSale = noSaleVoltra(pedidos, { envioPorRef })
+      const candidatosNoSale = noSaleVoltra(pedidos, { envioPorRef, forzados: forzadosV })
       if (!listos.length && !sinCobertura.length && !candidatosNoSale.length) {
         setVoltraNoSale([])
         if (!silencioso) toast(sinConfirmar ? `Hay ${sinConfirmar} pedido(s) de Voltra sin confirmar todavía` : 'No hay pedidos de Voltra para traer', 'info')
@@ -2220,7 +2255,7 @@ export default function DespachoPagina() {
         }
       }
       // 12-10 / 29-10: sin cobertura (o ciudad no reconocida) y todavía fuera de Ventas → "No sale hoy" con el motivo.
-      const noSale = noSaleVoltra(pedidos.map(p => conMotorDe.get(p) || p), { envioPorRef, enVentas: new Set(cuenta.keys()) })
+      const noSale = noSaleVoltra(pedidos.map(p => conMotorDe.get(p) || p), { envioPorRef, enVentas: new Set(cuenta.keys()), forzados: forzadosV })
       setVoltraNoSale(noSale)
       const decidir = noSale.filter(x => x.clave === 'sin_cobertura' || x.clave === 'ciudad').length
       if (decidir && !silencioso) {
@@ -2886,7 +2921,7 @@ export default function DespachoPagina() {
               <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)' }}>
                 <table className="tabla-responsive">
                   <thead>
-                    <tr><th>Ref.</th><th>Ciudad</th><th>Total</th><th>Motivo</th><th>Resuelve</th><th>Qué pasa</th><th>Días</th></tr>
+                    <tr><th>Ref.</th><th>Ciudad</th><th>Total</th><th>Motivo</th><th>Resuelve</th><th>Qué pasa</th><th>Días</th><th></th></tr>
                   </thead>
                   <tbody>
                     {noSaleVentas.map(x => (
@@ -2898,6 +2933,22 @@ export default function DespachoPagina() {
                         <td data-label="Resuelve" style={{ whiteSpace: 'nowrap' }}>{x.quien === 'Enrique' ? 'vos' : x.quien}</td>
                         <td data-label="Qué pasa" className="muted" style={{ fontSize: 11, whiteSpace: 'normal', maxWidth: 320 }}>{x.detalle}</td>
                         <td data-label="Días" className="muted">{x.dias ?? '—'}</td>
+                        <td data-label="" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          {x.pedido && (
+                            <>
+                              <button className="btn btn-ghost btn-sm" onClick={() => setEditandoVoltra(x.pedido)}
+                                title="Corregir ciudad, dirección o teléfono y volver a calcular" style={{ padding: '3px 7px' }}>
+                                <Edit2 size={13} />
+                              </button>
+                              <button className="btn btn-ghost btn-sm" disabled={trayendoVoltra}
+                                onClick={() => { forzadosVoltraRef.current.add(x.ref); traerPedidosVoltra(); toast(`#${String(x.ref).replace(/^#/, '')}: sale igual, se pasa a Ventas`, 'info') }}
+                                title="Despacharlo igual: pasa a Ventas con su courier (o el que llegue a la ciudad)"
+                                style={{ padding: '3px 9px', marginLeft: 4, color: 'var(--yellow)', border: '1px solid var(--yellow)', borderRadius: 20, fontSize: 11 }}>
+                                Despachar igual
+                              </button>
+                            </>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -3243,6 +3294,19 @@ export default function DespachoPagina() {
             setEdiciones(prev => ({ ...prev, [editando.n_referencia]: campos }))
             setEditando(null)
             toast('Pedido corregido — se recalculó la transportadora', 'success')
+          }}
+        />
+      )}
+
+      {editandoVoltra && (
+        <ModalEditarPedido
+          pedido={editandoVoltra}
+          onCerrar={() => setEditandoVoltra(null)}
+          onGuardar={(campos) => {
+            edicionesVoltraRef.current = { ...edicionesVoltraRef.current, [editandoVoltra.n_referencia]: campos }
+            setEditandoVoltra(null)
+            traerPedidosVoltra()
+            toast('Pedido corregido: se volvió a calcular', 'success')
           }}
         />
       )}

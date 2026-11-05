@@ -29,7 +29,7 @@
 
 import { direccionUtilizable as direccionUtilizableRegla, tienePin as tienePinRegla } from "../_shared/sale_hoy.js";
 
-export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura" | "avisar_jawflex_pap" | "pedir_ciudad";
+export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura" | "avisar_jawflex_pap" | "pedir_ciudad" | "corroborar_ciudad_pin" | "cancelar_pago_requerido" | "revisar_comprobante_pago_requerido";
 
 export interface PedidoAbierto {
   shopifyOrderId: number;
@@ -116,6 +116,23 @@ export function ciudadDesconocida(_ciudad: string, cobertura?: Cobertura | null)
   return !!cobertura && !cobertura.ciudad_reconocida;
 }
 
+/**
+ * 05-11: ¿se corrige la ciudad escrita con la del pin? `canonEscrita` / `canonPin` = nombre de la ciudad según la tabla de
+ * tarifas (null si ningún courier la tiene). Manda el pin, salvo que el pin no dé una ciudad conocida y la escrita sí.
+ */
+export function decidirCiudadPin(d: { escrita: string; pin: string | null; canonEscrita: string | null; canonPin: string | null }):
+  { cambiar: false; motivo: string } | { cambiar: true; nueva: string; motivo: string } {
+  if (!d.pin) return { cambiar: false, motivo: "el pin no dio ciudad" };
+  if (d.canonPin && d.canonEscrita && d.canonPin === d.canonEscrita) return { cambiar: false, motivo: "coincide" };
+  if (d.canonPin) return { cambiar: true, nueva: d.canonPin, motivo: d.canonEscrita ? "otra ciudad" : "ciudad escrita no reconocida" };
+  if (d.canonEscrita) return { cambiar: false, motivo: "el pin no da una ciudad de la tabla; queda la escrita" };
+  return { cambiar: true, nueva: d.pin, motivo: "ninguna reconocida; manda el pin" };
+}
+
+/** Nota que queda en el pedido de Shopify al corregir. */
+export const notaCiudadPin = (escrita: string, nueva: string) => `Ciudad corregida por pin: ${escrita || "(vacía)"} → ${nueva}`;
+export const TAG_CIUDAD_POR_PIN = "CIUDAD_POR_PIN";
+
 /** 02-11 (#1176): la etiqueta y las 48 h solo cuentan si el aviso salió; si no, se reintenta en la próxima corrida. */
 export const trasAvisoSinCobertura = (enviado: boolean) => ({ etiquetar: enviado, soltarCandado: !enviado });
 
@@ -125,7 +142,7 @@ const sinDireccion = (p: Pick<PedidoAbierto, "direccion" | "ciudad">) => !p.dire
 
 const tiene = (p: PedidoAbierto, t: string) => p.tags.some((x) => x.toUpperCase() === t);
 
-const ETIQUETAS_SIN_AVISO = ["PAGADO", "RETIRO_EN_CASA", "SIN_COBERTURA"];
+const ETIQUETAS_SIN_AVISO = ["PAGADO", "RETIRO_EN_CASA", "SIN_COBERTURA", "PAGO_ANTICIPADO_REQUERIDO"];
 const cancelado = (p: PedidoAbierto) =>
   p.estado === "cancelado_cliente" || p.estado === "cancelado_sin_respuesta" || tiene(p, "CANCELADO_CLIENTE");
 
@@ -157,19 +174,25 @@ export type EstadoSinCobertura = { avisoEn: string | null; adjuntoDespues: boole
 export type MapaSinCobertura = ReadonlyMap<number, EstadoSinCobertura>;
 
 export function accionSinCobertura(p: PedidoAbierto, ahora: Date, s?: EstadoSinCobertura): Accion | null {
-  if (!tiene(p, "SIN_COBERTURA") || tiene(p, "SIN_COBERTURA_CANCELADO") || tiene(p, "RETIRO_EN_CASA")) return null;
+  // 05-11: PAGO_ANTICIPADO_REQUERIDO (cliente con devoluciones, se lo pide el bot) sigue el mismo plazo de 48 h.
+  const requerido = !tiene(p, "SIN_COBERTURA") && tiene(p, TAG_PAGO_REQUERIDO);
+  if (!(tiene(p, "SIN_COBERTURA") || requerido) || tiene(p, "SIN_COBERTURA_CANCELADO") || tiene(p, "PAGO_REQUERIDO_CANCELADO") || tiene(p, "RETIRO_EN_CASA")) return null;
   if (ETIQUETAS_PAGO.some((t) => tiene(p, t)) || !s?.avisoEn) return null;
   const t = Date.parse(s.avisoEn);
   if (!Number.isFinite(t) || ahora.getTime() - t < PLAZO_PAGO_SIN_COBERTURA_MS) return null;
+  if (requerido) return s.adjuntoDespues ? "revisar_comprobante_pago_requerido" : "cancelar_pago_requerido";
   return s.adjuntoDespues ? "revisar_comprobante_sin_cobertura" : "cancelar_sin_cobertura";
 }
+
+/** 05-11: etiqueta que pone el bot (WhatsApp API) al pedir pago anticipado a un cliente con devoluciones; candado auto_pago_requerido. */
+export const TAG_PAGO_REQUERIDO = "PAGO_ANTICIPADO_REQUERIDO";
 
 /**
  * Acciones para un pedido. `puseFaltanDatos` = el sistema puso la etiqueta (candado). `coberturas` = rpc
  * sugerir_courier por ciudad (claveCobertura). `pinIntentado` = ya se buscó una vez la ciudad del pin (candado
  * auto_ciudad_desde_pin): si la ciudad sigue sin reconocerse, se le pide al cliente.
  */
-export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boolean, coberturas?: MapaCobertura, sinCob?: MapaSinCobertura, pinIntentado = false): Accion[] {
+export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boolean, coberturas?: MapaCobertura, sinCob?: MapaSinCobertura, pinIntentado = false, pinCorroborado = true): Accion[] {
   const a: Accion[] = [];
   if (p.estado === "cancelado_cliente" || (tiene(p, "CANCELADO_CLIENTE") && p.estado !== "confirmado")) {
     const t = p.actualizadoEn ? Date.parse(p.actualizadoEn) : NaN;
@@ -178,7 +201,7 @@ export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boo
   }
   if (cancelado(p)) return a;
   const sc = accionSinCobertura(p, ahora, sinCob?.get(p.shopifyOrderId));
-  if (sc === "cancelar_sin_cobertura") return [sc]; // se cancela: nada más que hacer
+  if (sc === "cancelar_sin_cobertura" || sc === "cancelar_pago_requerido") return [sc]; // se cancela: nada más que hacer
   if (sc) a.push(sc);
   if (p.estado === "confirmado" && !tiene(p, "CONFIRMADO")) a.push("agregar_confirmado");
   // 15-10: sin dirección en Shopify pero con los datos en la nota (pedido del bot) → se completa, no se marca.
@@ -188,6 +211,13 @@ export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boo
     return a;
   }
   if (ciudadPendiente(p.ciudad) && p.direccion.trim() && coordenadasPin(p)) a.push("ciudad_desde_pin");
+  // 05-11 (Enrique: "ESO DEBE ESTAR AUTOMATIZADO YA PARA CORROBORAR"): con pin y ciudad escrita, primero se compara la
+  // ciudad con la del pin (una vez por pedido). Cobertura, FALTAN_DATOS y avisos esperan a la corrida siguiente, con la
+  // ciudad ya corregida: así no sale un aviso de "sin cobertura" por una ciudad mal escrita.
+  else if (!pinCorroborado && coordenadasPin(p) && !ciudadPendiente(p.ciudad)) {
+    a.push("corroborar_ciudad_pin");
+    return a;
+  }
   const cob = coberturas?.get(claveCobertura(p.ciudad));
   // 29-10: ciudad que no está en las tablas → nunca SIN_COBERTURA: primero el pin (una vez), si no, preguntarle al cliente.
   const desconocida = necesitaCobertura(p) && ciudadDesconocida(p.ciudad, cob);
