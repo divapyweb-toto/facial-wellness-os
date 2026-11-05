@@ -19,6 +19,8 @@
 // Además (26-10): guardia de las ofertas extra post-compra (guardia_extra_io.ts): una vez por día; si (a) conversión,
 // (b) cancelaciones tras la oferta o (c) entrega empeoran 5+ puntos (con muestra y sin azar), la apaga y avisa.
 // Además (29-10): comprobantes en espera (comprobantes_espera.ts): aviso a Enrique solo si el cruce con ueno no aparece.
+// Además (05-11): pedidos confirmados hace +48 h que no salen (pedidos_48h.ts): al cliente UNA vez si falta un dato suyo;
+// a Enrique UN Telegram si el motivo no lo resuelve el cliente. Interruptor config_wa.pedidos_48h (apagado por defecto).
 import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
@@ -30,6 +32,7 @@ import { db } from "../_shared/db.ts";
 import { cancelarPedido } from "../_shared/shopify.ts";
 import { correrGuardiaExtra } from "./guardia_extra_io.ts";
 import { correrComprobantesEspera } from "./comprobantes_espera.ts";
+import { correrPedidos48hReal } from "./pedidos_48h_io.ts";
 
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
 
@@ -84,6 +87,15 @@ Deno.serve(conServiceRole(async () => {
         { tipo: "seguimiento_corrida_falla", destino: "admin", unaVezPorDia: true, clave: "comprobantes_espera" }).catch(() => {});
     });
   if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(comprobantes);
+  // 05-11: red de seguridad de los pedidos confirmados que a las 48 h siguen sin salir.
+  const pedidos48h = correrPedidos48hReal()
+    .then((r) => r.hechos.length && console.log("seguimiento-chat pedidos_48h", JSON.stringify(r)))
+    .catch(async (e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      await avisar(`<b>Pedidos +48 h: la corrida falló</b>\n${escaparHtml(msg.slice(0, 500))}`, undefined,
+        { tipo: "seguimiento_corrida_falla", destino: "admin", unaVezPorDia: true, clave: "pedidos_48h" }).catch(() => {});
+    });
+  if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(pedidos48h);
   const tarea = correrSeguimientos(depsReales)
     .then((r) => console.log("seguimiento-chat", JSON.stringify(r)))
     .catch(async (e) => {

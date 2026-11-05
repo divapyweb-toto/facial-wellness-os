@@ -21,21 +21,32 @@
 //     que nace confirmado): oferta de pagar antes y salir con prioridad, sin descuento. Solo con config_wa.pago_prioridad
 //     activo + alias y la ventana de 24 h abierta (texto libre; la plantilla ya no se usa). Ya preparado, con el courier
 //     o entregado → se cancela (no se repite). Si salió: tag OFERTA_PAGO_ANTICIPADO (marcarOfertaPrioridad).
+//   - 05-11: con config_wa.pago_anticipado.requerido y un cliente con devoluciones previas (Voltra + FW), en lugar de
+//     esa oferta sale el pago anticipado OBLIGATORIO (_shared/pago_anticipado.ts). Si salió: marcarPagoRequerido
+//     (candado auto_pago_requerido:<id> + tags PAGO_ANTICIPADO_REQUERIDO y OFERTA_PAGO_ANTICIPADO). Si falla el
+//     envío: ni tag ni candado, y sale la oferta normal.
 //   - 12-10: pedido ya pagado → los avisos de entrega ("Tené Gs …") salen como texto sin monto dentro de la ventana;
 //     con la ventana cerrada no salen (mejor nada que pedirle plata a quien ya pagó).
 
 import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
 import { alas8DeFecha, fechaLocal, leerEntregaProgramada, textoEntregaProgramada, textoFecha } from "../_shared/plazo_zona.ts";
 import {
+  CLAVE_CONFIG_PAGO_ANTICIPADO,
   CLAVE_CONFIG_PRIORIDAD,
   type CfgPagoPrioridad,
+  type CfgPagoRequerido,
+  exigePagoRequerido,
   leerConfigPagoPrioridad,
+  leerConfigPagoRequerido,
+  montoGs,
   motivoSinOfertaPrioridad,
   pagoParcial,
   pedidoPagado,
   PLANTILLA_PAGO_PRIORIDAD,
   TAG_OFERTA_PAGO,
+  TAG_PAGO_REQUERIDO,
   textoOfertaPrioridad,
+  textoPagoRequerido,
 } from "../_shared/pago_anticipado.ts";
 import { PLANTILLAS_RECOMPRA } from "../recompra/calendario.ts";
 import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
@@ -85,6 +96,8 @@ export interface Contexto {
   /** wa_conversaciones.ultima_entrada_en más reciente del cliente. */
   ultimaEntrada: Date | null;
   conversacionId: string | null;
+  /** 05-11: pedidos anteriores devueltos / no entregados del cliente (solo para prio:, con el pago obligatorio prendido). */
+  devolucionesPrevias?: number | null;
 }
 
 export interface Config {
@@ -104,6 +117,8 @@ export interface Config {
   facturaActiva: boolean;
   /** 12-10: config_wa.pago_prioridad (activo + alias; el alias vive solo en la base). */
   pagoPrioridad: CfgPagoPrioridad;
+  /** 05-11: config_wa.pago_anticipado.requerido (pago obligatorio con devoluciones previas). */
+  pagoRequerido: CfgPagoRequerido;
 }
 
 export const CONFIG_DEFECTO: Config = {
@@ -118,6 +133,7 @@ export const CONFIG_DEFECTO: Config = {
   reintento131049H: 24,
   facturaActiva: false,
   pagoPrioridad: { activo: false, alias: null, titular: "Voltra E.A.S." },
+  pagoRequerido: { activo: false, min_devoluciones: 1 },
 };
 
 export const IDIOMA = "es"; // Meta no tiene es_PY; "es" es el español genérico
@@ -521,7 +537,7 @@ export function rellenarTexto(plantillaTexto: string, valores: string[]): string
 
 export type Decision =
   | { accion: "plantilla"; to: string; nombre: string; idioma: string; componentes: unknown[]; valores?: string[] }
-  | { accion: "texto"; to: string; texto: string }
+  | { accion: "texto"; to: string; texto: string; /** 05-11: es el pago obligatorio (prio:). */ pagoRequerido?: { devoluciones: number } }
   | { accion: "botones"; to: string; texto: string; botones: { id: string; titulo: string }[] }
   | { accion: "reprogramar"; enviar_desde: Date; motivo: string }
   | { accion: "cancelar"; motivo: string }
@@ -718,6 +734,12 @@ function decidirOfertaPrioridad(ctx: Contexto, cfg: Config, ahora: Date): Decisi
   const to = ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? null;
   if (!to) return { accion: "fallar", motivo: "cliente_sin_telefono" };
   if (!ventanaAbierta(ctx.ultimaEntrada, ahora)) return { accion: "cancelar", motivo: "ventana_cerrada" };
+  // 05-11: cliente con devoluciones previas (procesarUno las cuenta solo con el interruptor prendido) → pago obligatorio.
+  const n = ctx.devolucionesPrevias;
+  if (n != null && exigePagoRequerido(cfg.pagoRequerido, n, ctx.pedido)) {
+    const texto = textoPagoRequerido(pp, { pedido: ctx.pedido.nombre ?? `#${ctx.pedido.shopify_order_id}`, total: montoGs(ctx.pedido.total)! });
+    return { accion: "texto", to, texto, pagoRequerido: { devoluciones: n } };
+  }
   return { accion: "texto", to, texto: textoOfertaPrioridad(pp) };
 }
 
@@ -803,6 +825,13 @@ export interface Deps {
   programarEnvio?(fila: FilaNueva): Promise<void>;
   /** 12-10: salió la oferta de pago con prioridad → tag OFERTA_PAGO_ANTICIPADO en Shopify y en shopify_pedidos. */
   marcarOfertaPrioridad?(orderId: number): Promise<Resultado>;
+  /** 05-11: devoluciones previas del cliente (Voltra + FW, sin el pedido actual). Sin esto no se exige el pago. */
+  devolucionesPrevias?(e: Envio, ctx: Contexto): Promise<number>;
+  /**
+   * 05-11: salió el pago obligatorio → candado eventos_crudos auto_pago_requerido:<id> (48 h) + tags
+   * PAGO_ANTICIPADO_REQUERIDO y OFERTA_PAGO_ANTICIPADO (Shopify y shopify_pedidos). Sin esto no se exige el pago.
+   */
+  marcarPagoRequerido?(orderId: number, payload: Record<string, unknown>): Promise<Resultado>;
 }
 
 export type FilaNueva = {
@@ -860,7 +889,17 @@ export async function procesarLote(d: Deps): Promise<Resumen> {
 async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
   const ahora = d.ahora();
   const ctx = await d.contexto(e);
-  const dec = decidir(e, ctx, d.cfg, ahora, d.horario);
+  let dec = decidir(e, ctx, d.cfg, ahora, d.horario);
+  // 05-11: la oferta de prioridad va a salir → con el pago obligatorio prendido se cuentan las devoluciones previas y
+  // se vuelve a decidir (si no se pudo contar, sale la oferta normal).
+  const esPrio = nombrePlantilla(e.plantilla) === PLANTILLA_PAGO_PRIORIDAD;
+  if (esPrio && dec.accion === "texto" && d.cfg.pagoRequerido.activo && d.devolucionesPrevias && d.marcarPagoRequerido) {
+    ctx.devolucionesPrevias = await d.devolucionesPrevias(e, ctx).catch((err) => {
+      console.error("pago anticipado obligatorio: no pude contar devoluciones:", err instanceof Error ? err.message : err);
+      return null;
+    });
+    dec = decidir(e, ctx, d.cfg, ahora, d.horario);
+  }
   const pedidoTxt = d.escapar(ctx.pedido?.nombre ?? `#${e.shopify_order_id ?? "?"}`);
   const op: Opciones = { clienteId: e.cliente_id, conversacionId: ctx.conversacionId };
 
@@ -954,17 +993,39 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
           Object.assign(dec, { nombre: conFactura.plantilla, idioma: conFactura.idioma, componentes: conFactura.componentes });
         }
       }
-      const res = dec.accion === "plantilla"
+      let res = dec.accion === "plantilla"
         ? await d.enviarPlantilla(dec.to, dec.nombre, dec.idioma, dec.componentes, op)
         : dec.accion === "botones"
         ? await d.enviarBotones(dec.to, dec.texto, dec.botones, op)
         : await d.enviarTexto(dec.to, dec.texto, op);
+      // 05-11: el pago obligatorio no salió → ni tag ni candado; sale la oferta normal (comportamiento de siempre).
+      let requerido = dec.accion === "texto" ? dec.pagoRequerido ?? null : null;
+      if (!res.ok && requerido && dec.accion === "texto") {
+        console.error(`pago anticipado obligatorio ${e.id}: ${res.error}; sale la oferta normal`);
+        requerido = null;
+        res = await d.enviarTexto(dec.to, textoOfertaPrioridad(d.cfg.pagoPrioridad), op);
+      }
       if (!res.ok) return aplicarError(e, res.error ?? "error_desconocido", d, r, pedidoTxt);
       r.enviados++;
       // 12-10: oferta de pago con prioridad → primero se marca enviada (no se repite) y después el tag del pedido,
       // que es lo que hace que wa-webhook reconozca el comprobante.
-      if (nombrePlantilla(e.plantilla) === PLANTILLA_PAGO_PRIORIDAD && e.shopify_order_id != null) {
+      if (esPrio && e.shopify_order_id != null) {
         await marcarEnviado(e, res.wa_message_id, d, pedidoTxt);
+        if (requerido && d.marcarPagoRequerido) {
+          const t = await d.marcarPagoRequerido(e.shopify_order_id, {
+            pedido: ctx.pedido?.nombre ?? null, shopify_order_id: e.shopify_order_id, devoluciones: requerido.devoluciones,
+            total: Math.round(Number(ctx.pedido?.total)), canal: "procesar-envios", wa_message_id: res.wa_message_id ?? null,
+          }).catch((err) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
+          if (!t.ok) {
+            await d.avisar(
+              `Salió el pedido de pago anticipado OBLIGATORIO del ${pedidoTxt} pero no se pudo registrar ` +
+                `(${d.escapar(t.error ?? "error")}). Revisá los tags ${TAG_PAGO_REQUERIDO} y ${TAG_OFERTA_PAGO} en Shopify.`,
+              undefined,
+              { tipo: "pago_requerido_sin_marca", destino: "admin", pedido: pedidoNombre(ctx, e), unaVezPorDia: true, clave: String(e.shopify_order_id) },
+            ).catch(() => {});
+          }
+          return;
+        }
         if (d.marcarOfertaPrioridad) {
           const t = await d.marcarOfertaPrioridad(e.shopify_order_id)
             .catch((err) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }));
@@ -1089,6 +1150,8 @@ export function configDesdeFilas(filas: { clave: string; valor: unknown }[]): Co
   cfg.facturaActiva = obj(m.get("ola4.factura")).activo === true;
   // 12-10: oferta de pago con prioridad (activo + alias).
   cfg.pagoPrioridad = leerConfigPagoPrioridad(m.get(CLAVE_CONFIG_PRIORIDAD));
+  // 05-11: pago anticipado obligatorio con devoluciones previas (config_wa.pago_anticipado.requerido).
+  cfg.pagoRequerido = leerConfigPagoRequerido(m.get(CLAVE_CONFIG_PAGO_ANTICIPADO));
   if (Array.isArray(pe.esperas_min) && pe.esperas_min.every((x) => typeof x === "number")) {
     cfg.esperasMin = pe.esperas_min as number[];
   }

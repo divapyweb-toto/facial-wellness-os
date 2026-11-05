@@ -41,6 +41,8 @@ export interface PedidoLista {
   lineas: Linea[]; total: number; pagado: boolean; prioridad: boolean;
   factura: string | null; programado: boolean; reemplaza: string | null; totalDistinto: string | null; sinPin: boolean;
   courier: string | null; armado: string[]; creado_en: string;
+  /** 05-11: dirección utilizable (pin, o calle/zona + ciudad); la lee seguimiento-chat/pedidos_48h para saber qué pedir. */
+  direccionOk?: boolean;
 }
 export interface NoDespachar { p: PedidoLista; motivo: string; clave: string; quien: string }
 export interface ListaDespacho { porCourier: Map<string, PedidoLista[]>; retiros: PedidoLista[]; noDespachar: NoDespachar[]; sinConfirmar: number }

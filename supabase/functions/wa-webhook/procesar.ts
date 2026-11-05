@@ -6,16 +6,24 @@ import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier
 import { esAceptacion as esAceptacionVendedor } from "../_shared/vendedor/herramientas.ts";
 import { diaEntrega, leerEntregaProgramada, plazoParaEnDesdeHoy, textoEntregaProgramada } from "../_shared/plazo_zona.ts";
 import {
+  CLAVE_CONFIG_PAGO_ANTICIPADO,
   CLAVE_CONFIG_PRIORIDAD,
   type CfgPagoPrioridad,
+  exigePagoRequerido,
   leerConfigPagoPrioridad,
+  leerConfigPagoRequerido,
+  montoGs,
   motivoSinOfertaPrioridad,
+  motivoSinPagoRequerido,
   pedidoPagado,
   TAG_COMPROBANTE_PAGO,
   TAG_OFERTA_PAGO,
+  TAG_PAGO_REQUERIDO,
   TAG_PRIORIDAD,
   textoOfertaPrioridad,
+  textoPagoRequerido,
 } from "../_shared/pago_anticipado.ts";
+import { telefonosDeRaw } from "../_shared/devoluciones_cliente.ts";
 import { type DatosComprobante, ESPERA_MIN_DEFAULT, venceEspera } from "../_shared/comprobante.ts";
 import { deducirProductoAnuncio, marcaAnuncio, marcaTextoAnuncio, textoDelAnuncio, type ReferralMeta } from "../_shared/anuncios.ts";
 import { detectarLinkMapas, type LinkMapas, textoLinkMapas } from "../_shared/link_mapas.ts";
@@ -210,6 +218,13 @@ export interface Deps {
   reservarOfertaPrioridad?(orderId: string, clienteId: string): Promise<boolean>;
   /** 12-10: resultado del envío de la oferta reservada (guarda el wa_message_id, o 'fallido' con el error). */
   cerrarOfertaPrioridad?(orderId: string, r: ResultadoEnvio): Promise<void>;
+  /**
+   * 05-11: pedidos ANTERIORES del cliente devueltos / no entregados, Voltra + FW (_shared/devoluciones_cliente.ts),
+   * sin el actual. Sin esto no se exige el pago anticipado.
+   */
+  devolucionesPrevias?(q: { clienteId: string; telefonos: string[]; pedidoActual: { nombre: string | null; shopifyOrderId: string } }): Promise<number>;
+  /** 05-11: candado eventos_crudos auto_pago_requerido:<id> (reloj de 48 h de pedidos-trabados). Solo tras un envío OK. */
+  registrarCandadoPagoRequerido?(orderId: string, payload: Record<string, unknown>): Promise<void>;
   /** 12-10: ¿ya llegó un comprobante para este pedido? (wa_mensajes.contenido.comprobante_pago_anticipado) */
   comprobanteRecibido?(orderId: string): Promise<boolean>;
   /**
@@ -1498,7 +1513,11 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
   if (cfgPrioridad?.activo && envio.ok) {
     const r = await ofrecerPagoPrioridad(ctx, pedido, orderId, objetivo, tags, cfgPrioridad);
     if (r.falla) fallas.push(r.falla);
-    if (r.enviada) lineasPago.push(`💸 Se le ofreció pagar antes por transferencia, con prioridad${totalGs(pedido) ? ` (Gs ${totalGs(pedido)})` : ""}.`);
+    // 05-11: pago anticipado obligatorio (cliente con devoluciones previas).
+    if (r.enviada && r.requerido != null) {
+      lineasPago.push(`🔒 Se le pidió pagar POR ADELANTADO por transferencia${totalGs(pedido) ? ` (Gs ${totalGs(pedido)})` : ""}: ` +
+        `${r.requerido} ${r.requerido === 1 ? "pedido anterior devuelto / no entregado" : "pedidos anteriores devueltos / no entregados"}. Sin pago en 48 h se cancela.`);
+    } else if (r.enviada) lineasPago.push(`💸 Se le ofreció pagar antes por transferencia, con prioridad${totalGs(pedido) ? ` (Gs ${totalGs(pedido)})` : ""}.`);
   }
 
   // Ola 4: oferta de pago por QR después de confirmar, solo con config_wa['ola4.qr'].activo.
@@ -1547,6 +1566,8 @@ export async function aplicarRespuestaConfirmacion(ctx: Ctx, accion: AccionConf,
  * corresponde (pagado, retiro, prueba, mayorista, cancelado, ya preparado o con el courier, oferta ya enviada).
  * Reserva `prio:<id>` antes de mandar (si ya existe, otra vía la mandó: no se repite) y, si salió, deja el tag
  * OFERTA_PAGO_ANTICIPADO (DB + Shopify) para reconocer el comprobante.
+ * 05-11: con config_wa.pago_anticipado.requerido y devoluciones previas, en su lugar sale el pago obligatorio
+ * (_shared/pago_anticipado.ts): + tag PAGO_ANTICIPADO_REQUERIDO y candado auto_pago_requerido:<id>, solo si salió.
  */
 async function ofrecerPagoPrioridad(
   ctx: Ctx,
@@ -1555,7 +1576,7 @@ async function ofrecerPagoPrioridad(
   estado: string,
   tags: string[],
   cfg: CfgPagoPrioridad,
-): Promise<{ enviada: boolean; falla?: string }> {
+): Promise<{ enviada: boolean; falla?: string; requerido?: number }> {
   const { deps } = ctx;
   if (motivoSinOfertaPrioridad({ tags, raw: pedido.raw, estado_confirmacion: estado, estado_envio: pedido.estado_envio })) return { enviada: false };
   const ts = Number(ctx.m.timestamp) * 1000;
@@ -1567,19 +1588,58 @@ async function ofrecerPagoPrioridad(
     });
     if (!ok) return { enviada: false };
   }
-  const e = await deps.enviarTexto(ctx.destino, textoOfertaPrioridad(cfg), { clienteId: ctx.clienteId, conversacionId: ctx.conv.id });
-  await deps.cerrarOfertaPrioridad?.(orderId, e).catch((err) => console.error("oferta prioridad: cerrar prio:", err instanceof Error ? err.message : err));
-  if (!e.ok) return { enviada: false, falla: `oferta de pago con prioridad: ${e.error}` };
-  if (!tags.includes(TAG_OFERTA_PAGO)) {
-    await deps.actualizarPedido(orderId, { estado_confirmacion: estado, tags: [...tags, TAG_OFERTA_PAGO] });
-    try {
-      const r = await deps.agregarTags(`gid://shopify/Order/${orderId}`, [TAG_OFERTA_PAGO]) as { ok?: boolean; error?: string } | undefined;
-      if (r?.ok === false) return { enviada: true, falla: `tag ${TAG_OFERTA_PAGO} en Shopify: ${r.error}` };
-    } catch (err) {
-      return { enviada: true, falla: `tag ${TAG_OFERTA_PAGO} en Shopify: ${err instanceof Error ? err.message : err}` };
+  const op = { clienteId: ctx.clienteId, conversacionId: ctx.conv.id };
+  const fallas: string[] = [];
+  // 05-11: cliente con devoluciones previas → en lugar de la oferta, el texto de pago obligatorio. Si ese envío falla,
+  // ni tag ni candado: sale la oferta normal (comportamiento de siempre).
+  const devoluciones = await devolucionesParaExigir(ctx, pedido, orderId, tags);
+  let e: ResultadoEnvio | null = null;
+  if (devoluciones != null) {
+    e = await deps.enviarTexto(ctx.destino, textoPagoRequerido(cfg, { pedido: pedido.nombre ?? `#${orderId}`, total: montoGs(pedido.total)! }), op);
+    if (e.ok) {
+      // En el mismo momento del envío OK: candado (48 h) y después los tags.
+      await deps.registrarCandadoPagoRequerido!(orderId, {
+        pedido: pedido.nombre ?? null, shopify_order_id: orderId, devoluciones, total: Math.round(Number(pedido.total)),
+        canal: "wa-webhook", wa_message_id: e.wa_message_id ?? null,
+      }).catch((err) => fallas.push(`candado de pago anticipado obligatorio: ${err instanceof Error ? err.message : err}`));
+    } else {
+      fallas.push(`pago anticipado obligatorio: ${e.error} (salió la oferta normal)`);
+      e = null;
     }
   }
-  return { enviada: true };
+  const requerido = e?.ok ? devoluciones! : undefined;
+  if (!e) e = await deps.enviarTexto(ctx.destino, textoOfertaPrioridad(cfg), op);
+  await deps.cerrarOfertaPrioridad?.(orderId, e).catch((err) => console.error("oferta prioridad: cerrar prio:", err instanceof Error ? err.message : err));
+  if (!e.ok) return { enviada: false, falla: [...fallas, `oferta de pago con prioridad: ${e.error}`].join(" · ") };
+  const nuevos = (requerido != null ? [TAG_OFERTA_PAGO, TAG_PAGO_REQUERIDO] : [TAG_OFERTA_PAGO]).filter((t) => !tags.includes(t));
+  if (nuevos.length) {
+    await deps.actualizarPedido(orderId, { estado_confirmacion: estado, tags: [...tags, ...nuevos] });
+    try {
+      const r = await deps.agregarTags(`gid://shopify/Order/${orderId}`, nuevos) as { ok?: boolean; error?: string } | undefined;
+      if (r?.ok === false) fallas.push(`tag ${nuevos.join(" + ")} en Shopify: ${r.error}`);
+    } catch (err) {
+      fallas.push(`tag ${nuevos.join(" + ")} en Shopify: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  return { enviada: true, requerido, ...(fallas.length ? { falla: fallas.join(" · ") } : {}) };
+}
+
+/**
+ * 05-11: devoluciones previas si corresponde exigir el pago anticipado; null = oferta normal (interruptor apagado,
+ * SIN_COBERTURA, retiro, sin total, sin las deps, por debajo del mínimo o no se pudo contar).
+ */
+async function devolucionesParaExigir(ctx: Ctx, pedido: Pedido, orderId: string, tags: string[]): Promise<number | null> {
+  const { deps } = ctx;
+  if (!deps.devolucionesPrevias || !deps.registrarCandadoPagoRequerido) return null;
+  const cfg = leerConfigPagoRequerido(await deps.config(CLAVE_CONFIG_PAGO_ANTICIPADO).catch(() => null));
+  if (!cfg.activo || motivoSinPagoRequerido({ tags }) || !montoGs(pedido.total)) return null;
+  const telefonos = [ctx.destino, ctx.telefono, pedido.telefono, ...telefonosDeRaw(pedido.raw)].filter((x): x is string => !!x);
+  const n = await deps.devolucionesPrevias({ clienteId: ctx.clienteId, telefonos, pedidoActual: { nombre: pedido.nombre ?? null, shopifyOrderId: orderId } })
+    .catch((err) => {
+      console.error("pago anticipado obligatorio: no pude contar devoluciones:", err instanceof Error ? err.message : err);
+      return null; // ante la duda, la oferta normal
+    });
+  return exigePagoRequerido(cfg, n, { tags, total: pedido.total }) ? n : null;
 }
 
 /**

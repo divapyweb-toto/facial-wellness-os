@@ -34,6 +34,8 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   // 04-11: casos de envíos ya despachados, listos para pegar en el WhatsApp del courier (pedidos-trabados/casos_courier_envio.ts).
   casos_courier: { titulo: "Casos para el courier (08:30 y 14:00)", ruta: "inmediato", inventario: "nuevo 04-11 (reemplaza derivar el chat)" },
   casos_courier_urgente: { titulo: "Caso urgente para el courier", ruta: "inmediato", inventario: "nuevo 04-11" },
+  // 05-11: pedido confirmado que a las 48 h no sale por un motivo que el cliente no puede resolver (seguimiento-chat/pedidos_48h.ts).
+  pedido_48h: { titulo: "Pedido confirmado hace +48 h que no sale", ruta: "inmediato", inventario: "nuevo 05-11 (uno por pedido)" },
 
   // ENRIQUE en el resumen de 09:00 y 15:00
   plazo_pap: { titulo: "Plazo PaP vencido", ruta: "resumen", inventario: "#44" },
@@ -49,6 +51,7 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   envio_no_marcado: { titulo: "Envío no marcado", ruta: "admin", inventario: "#70" },
   aviso_baja_no_programado: { titulo: "Aviso de baja no programado", ruta: "admin", inventario: "#70" },
   oferta_prioridad_sin_tag: { titulo: "Oferta prioridad sin etiqueta", ruta: "admin", inventario: "#70" },
+  pago_requerido_sin_marca: { titulo: "Pago obligatorio sin etiqueta/candado", ruta: "admin", inventario: "nuevo 05-11" },
   post_entrega_fallo: { titulo: "Post-entrega falló", ruta: "admin", inventario: "#73" },
   lucero_seguimiento_consultas: { titulo: "Seguimiento Lucero: consultas fallidas", ruta: "admin", inventario: "#76" },
   lucero_seguimiento_corrida: { titulo: "Seguimiento Lucero: corrida falló", ruta: "admin", inventario: "#76" },

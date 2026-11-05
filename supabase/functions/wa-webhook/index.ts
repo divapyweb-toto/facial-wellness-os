@@ -8,7 +8,8 @@ import { normalizarTelefonoPY } from "../_shared/telefono.ts";
 import { agregarTags, quitarTags } from "../_shared/shopify.ts";
 import { avisar, avisarConArchivo } from "../_shared/telegram.ts";
 import { enviarInteractivo } from "../_shared/wa_interactivos.ts";
-import { claveOfertaPrioridad, PLANTILLA_PAGO_PRIORIDAD } from "../_shared/pago_anticipado.ts";
+import { claveOfertaPrioridad, idCandadoPagoRequerido, PLANTILLA_PAGO_PRIORIDAD } from "../_shared/pago_anticipado.ts";
+import { devolucionesPrevias, fuentesSupabase } from "../_shared/devoluciones_cliente.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { descargarMedia, enviarBotones, enviarTexto, marcarLeidoYEscribiendo, verificarFirmaMeta } from "../_shared/wa.ts";
 import { transcribirAudio } from "../_shared/transcripcion.ts";
@@ -422,6 +423,19 @@ export const depsReales: Deps = {
       ({ error } = await db().from("envios_programados").update({ ultimo_error: null }).eq("clave_unica", claveOfertaPrioridad(orderId)));
     }
     falla("cerrar oferta de pago con prioridad", error);
+  },
+
+  // 05-11: pago anticipado obligatorio. Devoluciones previas del cliente (Voltra + FW, sin el pedido actual).
+  async devolucionesPrevias(q) {
+    return (await devolucionesPrevias(fuentesSupabase(db()), q)).total;
+  },
+
+  // 05-11: candado del pago obligatorio (el reloj de 48 h de pedidos-trabados). Si ya existía, queda el primero.
+  async registrarCandadoPagoRequerido(orderId, payload) {
+    const { error } = await db().from("eventos_crudos").insert({
+      fuente: "shopify", id_externo: idCandadoPagoRequerido(orderId), payload, procesado_en: new Date().toISOString(),
+    });
+    if (error && error.code !== "23505") throw new Error(`eventos_crudos: ${error.message}`);
   },
 
   // 12-10: comprobante ya recibido para el pedido (marca que deja aplicarComprobantePago en el mensaje entrante).

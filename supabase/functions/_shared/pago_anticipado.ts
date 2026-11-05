@@ -140,3 +140,71 @@ export function motivoSinOfertaPrioridad(p: PedidoParaOferta): string | null {
   if (t.includes(TAG_OFERTA_PAGO) && !t.includes("ORIGEN_WHATSAPP")) return "oferta_ya_enviada";
   return null;
 }
+
+// ─── 05-11 (Enrique): pago anticipado OBLIGATORIO para clientes con devoluciones previas ───
+// En el momento en que saldría la oferta de prioridad (wa-webhook al confirmar un pedido web; procesar-envios con el
+// prio:<id> de un pedido del bot), si config_wa.pago_anticipado.requerido.activo y el cliente tiene
+// >= min_devoluciones pedidos devueltos / no entregados (en Voltra o en FW: _shared/devoluciones_cliente.ts), sale EN
+// LUGAR de la oferta el texto de pago obligatorio. Solo con la ventana de 24 h abierta (si no, nada cambia).
+// Si el mensaje salió (y solo entonces, en ese momento): tags PAGO_ANTICIPADO_REQUERIDO + OFERTA_PAGO_ANTICIPADO (este
+// último para que wa-webhook tome la foto como comprobante) y el candado eventos_crudos auto_pago_requerido:<id>, que
+// es el reloj de 48 h con el que pedidos-trabados cancela si no pagó (igual que SIN_COBERTURA). Si el envío falla: ni
+// tag ni candado, y sale la oferta de prioridad normal. Apagado (default): exactamente como antes.
+// Nunca se le mencionan las devoluciones al cliente. Texto fijo del sistema (nunca IA).
+
+/** Pedido al que se le exigió pagar por adelantado (lo lee pedidos-trabados con el candado). */
+export const TAG_PAGO_REQUERIDO = "PAGO_ANTICIPADO_REQUERIDO";
+/** config_wa['pago_anticipado'] (la misma fila que usa el comprobante); el interruptor va en `.requerido`. */
+export const CLAVE_CONFIG_PAGO_ANTICIPADO = "pago_anticipado";
+
+export type CfgPagoRequerido = { activo: boolean; min_devoluciones: number };
+export const PAGO_REQUERIDO_DEFAULT: CfgPagoRequerido = { activo: false, min_devoluciones: 1 };
+
+/** config_wa['pago_anticipado'] completo → `.requerido`. Sin clave o algo raro: apagado. */
+export function leerConfigPagoRequerido(v: unknown): CfgPagoRequerido {
+  const r = esObj(v) && esObj(v.requerido) ? v.requerido : null;
+  if (!r) return { ...PAGO_REQUERIDO_DEFAULT };
+  const min = Number(r.min_devoluciones);
+  return {
+    activo: r.activo === true,
+    min_devoluciones: Number.isFinite(min) && min >= 1 ? Math.floor(min) : PAGO_REQUERIDO_DEFAULT.min_devoluciones,
+  };
+}
+
+/** Candado en eventos_crudos (fuente 'shopify'): se inserta cuando el mensaje SALIÓ; arranca las 48 h. */
+export const idCandadoPagoRequerido = (shopifyOrderId: number | string) => `auto_pago_requerido:${shopifyOrderId}`;
+
+/** 125000 / "125000" → "125.000"; sin monto válido → null (sin total no se exige: el texto quedaría roto). */
+export function montoGs(x: unknown): string | null {
+  const n = Math.round(Number(x));
+  return Number.isFinite(n) && n > 0 ? String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".") : null;
+}
+
+/** Texto del pago obligatorio (palabras del dueño, 05-11). No menciona devoluciones. */
+export function textoPagoRequerido(cfg: Pick<CfgPagoPrioridad, "alias" | "titular">, p: { pedido: string; total: string }): string {
+  return `📦 ¡Tu pedido ${p.pedido} quedó confirmado! Esta vez te pedimos pagarlo por adelantado por transferencia (Gs ${p.total}) y sale en el primer despacho.\n` +
+    `💳 Transferí a: ${cfg.alias} — ${cfg.titular}\n` +
+    "Mandanos la foto del comprobante por acá 🙌";
+}
+
+/**
+ * Por qué NO se exige (null = se puede exigir), además de motivoSinOfertaPrioridad (pagado, retiro, cancelado…, que
+ * ya cortan antes). SIN_COBERTURA tiene su propio flujo de pago anticipado; retiro en oficina paga al retirar.
+ */
+export function motivoSinPagoRequerido(p: { tags?: unknown }): string | null {
+  const t = tagsMayus(p.tags);
+  if (t.includes("SIN_COBERTURA")) return "sin_cobertura";
+  if (t.includes("RETIRO_EN_CASA")) return "retiro_en_casa";
+  if (t.includes(TAG_PAGO_REQUERIDO)) return "ya_requerido";
+  return null;
+}
+
+/**
+ * ¿Se exige pagar por adelantado? Interruptor prendido, pedido que corresponde, total conocido y devoluciones previas
+ * >= mínimo. `devoluciones` null (no se pudo contar) → no se exige (ante la duda, la oferta normal).
+ */
+export function exigePagoRequerido(cfg: CfgPagoRequerido, devoluciones: number | null | undefined, p: { tags?: unknown; total?: unknown }): boolean {
+  if (!cfg.activo || devoluciones == null || !Number.isFinite(devoluciones)) return false;
+  if (motivoSinPagoRequerido(p) || !montoGs(p.total)) return false;
+  return devoluciones >= cfg.min_devoluciones;
+}

@@ -15,7 +15,8 @@ import { avisar } from "../_shared/telegram.ts";
 import { escaparHtml } from "../_shared/telegram_formato.ts";
 import { registrarBaja } from "../recompra/baja.ts";
 import { envioSeguimientoParaPedido } from "../factura/io.ts";
-import { TAG_OFERTA_PAGO } from "../_shared/pago_anticipado.ts";
+import { idCandadoPagoRequerido, TAG_OFERTA_PAGO, TAG_PAGO_REQUERIDO } from "../_shared/pago_anticipado.ts";
+import { devolucionesPrevias, fuentesSupabase, telefonosDeRaw } from "../_shared/devoluciones_cliente.ts";
 import { type CambioEnvio, configDesdeFilas, type Contexto, type Deps, type Envio, procesarLote } from "./procesar.ts";
 
 const CLAVES_CONFIG = [
@@ -27,6 +28,8 @@ const CLAVES_CONFIG = [
   "ola4.factura",
   // 12-10: oferta de pago con prioridad (activo + alias).
   "pago_prioridad",
+  // 05-11: pago anticipado obligatorio con devoluciones previas (.requerido).
+  "pago_anticipado",
 ];
 const COLUMNAS =
   "id,cliente_id,shopify_order_id,plantilla,variables,categoria,enviar_desde,estado,clave_unica,intentos,ultimo_error";
@@ -145,6 +148,35 @@ const deps = (cfg: Deps["cfg"]): Deps => ({
     const { error: e2 } = await db().from("shopify_pedidos").update({ tags: [...tags] }).eq("shopify_order_id", id);
     if (e2) return { ok: false, error: `shopify_pedidos: ${e2.message}` };
     return r.ok ? { ok: true } : { ok: false, error: `Shopify: ${r.error}` };
+  },
+  // 05-11: pago anticipado obligatorio. Teléfono del cliente de WhatsApp + los del pedido (no el wa_user_id: no es un
+  // teléfono). Sin el pedido actual.
+  devolucionesPrevias: async (e, ctx) => {
+    const telefonos = [ctx.cliente?.telefono, ...telefonosDeRaw(ctx.pedido?.raw)].filter((x): x is string => !!x);
+    const r = await devolucionesPrevias(fuentesSupabase(db()), {
+      clienteId: e.cliente_id, telefonos, pedidoActual: { nombre: ctx.pedido?.nombre ?? null, shopifyOrderId: e.shopify_order_id },
+    });
+    return r.total;
+  },
+  // 05-11: salió el pago obligatorio → candado (48 h; si ya existía queda el primero) y tags en Shopify y en la base.
+  marcarPagoRequerido: async (id, payload) => {
+    const { error: e0 } = await db().from("eventos_crudos").insert({
+      fuente: "shopify", id_externo: idCandadoPagoRequerido(id), payload, procesado_en: new Date().toISOString(),
+    });
+    const errores: string[] = [];
+    if (e0 && e0.code !== "23505") errores.push(`candado: ${e0.message}`);
+    const r = await agregarTags(orderGid(id), [TAG_PAGO_REQUERIDO, TAG_OFERTA_PAGO]);
+    if (!r.ok) errores.push(`Shopify: ${r.error}`);
+    const { data, error: e1 } = await db().from("shopify_pedidos").select("tags").eq("shopify_order_id", id).maybeSingle();
+    if (e1) errores.push(`shopify_pedidos: ${e1.message}`);
+    else {
+      const tags = new Set<string>((data?.tags as string[] | null) ?? []);
+      tags.add(TAG_PAGO_REQUERIDO);
+      tags.add(TAG_OFERTA_PAGO);
+      const { error: e2 } = await db().from("shopify_pedidos").update({ tags: [...tags] }).eq("shopify_order_id", id);
+      if (e2) errores.push(`shopify_pedidos: ${e2.message}`);
+    }
+    return errores.length ? { ok: false, error: errores.join(" · ") } : { ok: true };
   },
   // 10-10: cmsg:<id> tras cancelar sin respuesta. Idempotente por clave_unica.
   programarEnvio: async (fila) => {

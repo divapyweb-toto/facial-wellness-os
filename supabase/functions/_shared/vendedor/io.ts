@@ -1,6 +1,7 @@
 // _shared/vendedor/io.ts · Dueño: G1 (ola 2)
 // I/O real del vendedor (Supabase, Shopify, WhatsApp, Telegram, Claude). La lógica está en orquestador.ts y
 // herramientas.ts; acá solo se conectan las dependencias.
+import { corregirCiudadPedido } from "../ciudad_pedido.ts";
 import { direccionUtilizable } from "../../pedidos-trabados/logica.ts";
 import { ciudadDeTarifas, fusionarCasoCourier, unirReferencia } from "./herramientas.ts";
 import { depsPedidosWebReales } from "./pedidos_web_io.ts";
@@ -232,6 +233,11 @@ export const depsHerramientasReales: DepsHerramientas = {
       );
       const errores = r.orderUpdate.userErrors ?? [];
       if (errores.length) return { ok: false, error: errores.map((e) => e.message).join("; ") };
+      // 05-11 (#1150, #1205): la ciudad también va al atributo "Ciudad" del formulario, que es lo que lee Despacho.
+      if (d.ciudad) {
+        const e = await corregirCiudadPedido(orderId, d.ciudad).catch((x) => String(x));
+        if (e) console.warn(`actualizarDireccionOrden ${orderId}: atributo Ciudad: ${e}`);
+      }
       // 12-10: la etiqueta FALTAN_DATOS la saca pedidos-trabados en su próxima corrida (contrato). Acá solo se saca
       // si la dirección ya quedó utilizable con la MISMA regla (cubre las etiquetas puestas a mano, que pedidos-trabados no toca).
       const fin = await gql<{ order: { shippingAddress: { address1: string | null; address2: string | null; city: string | null } | null; note: string | null } | null }>(
