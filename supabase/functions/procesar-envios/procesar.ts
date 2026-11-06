@@ -536,7 +536,7 @@ export function rellenarTexto(plantillaTexto: string, valores: string[]): string
 // ─── Decisión ───
 
 export type Decision =
-  | { accion: "plantilla"; to: string; nombre: string; idioma: string; componentes: unknown[]; valores?: string[] }
+  | { accion: "plantilla"; to: string; nombre: string; idioma: string; componentes: unknown[]; valores?: string[]; /** 06-11: pago obligatorio con la ventana cerrada. */ pagoRequerido?: { devoluciones: number } }
   | { accion: "texto"; to: string; texto: string; /** 05-11: es el pago obligatorio (prio:). */ pagoRequerido?: { devoluciones: number } }
   | { accion: "botones"; to: string; texto: string; botones: { id: string; titulo: string }[] }
   | { accion: "reprogramar"; enviar_desde: Date; motivo: string }
@@ -606,7 +606,7 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
   let nombre = nombrePlantilla(e.plantilla);
   let def = PLANTILLAS[nombre];
   if (!def) return { accion: "fallar", motivo: `plantilla_desconocida:${nombre}` };
-  if (nombre === PLANTILLA_PAGO_PRIORIDAD) return decidirOfertaPrioridad(ctx, cfg, ahora);
+  if (nombre === PLANTILLA_PAGO_PRIORIDAD) return decidirOfertaPrioridad(ctx, cfg, ahora, horario);
 
   // 10-10: "dimos de baja tu pedido" solo si lo canceló la acción canc (cancelado_sin_respuesta).
   if (nombre === PLANTILLA_CANCELADO_SIN_RESPUESTA && estadoPedido !== "cancelado_sin_respuesta") {
@@ -725,7 +725,11 @@ export function decidir(e: Envio, ctx: Contexto, cfg: Config, ahora: Date, horar
  * ventana de 24 h cerrada → se cancela: no se repite nunca. Sin horario: va pegada a la confirmación, que el cliente
  * acaba de hacer chateando. Solo texto libre (la plantilla voltra_pago_prioridad no se usa).
  */
-function decidirOfertaPrioridad(ctx: Contexto, cfg: Config, ahora: Date): Decision {
+/** 06-11: plantilla aprobada para pedir el pago obligatorio con la ventana cerrada; sale solo de 08:00 a 20:00. */
+export const PLANTILLA_PAGO_REQUERIDO = "voltra_pago_anticipado_requerido";
+export const HORARIO_PAGO_REQUERIDO = { desde: 8, hasta: 20 };
+
+function decidirOfertaPrioridad(ctx: Contexto, cfg: Config, ahora: Date, horario?: Horario): Decision {
   const pp = cfg.pagoPrioridad;
   if (!pp.activo) return { accion: "cancelar", motivo: pp.alias ? "pago_prioridad_apagado" : "pago_prioridad_sin_alias_o_apagado" };
   if (!ctx.pedido) return { accion: "cancelar", motivo: "pedido_no_encontrado" };
@@ -733,7 +737,21 @@ function decidirOfertaPrioridad(ctx: Contexto, cfg: Config, ahora: Date): Decisi
   if (motivo) return { accion: "cancelar", motivo: `sin_oferta:${motivo}` };
   const to = ctx.cliente?.telefono ?? ctx.cliente?.wa_user_id ?? null;
   if (!to) return { accion: "fallar", motivo: "cliente_sin_telefono" };
-  if (!ventanaAbierta(ctx.ultimaEntrada, ahora)) return { accion: "cancelar", motivo: "ventana_cerrada" };
+  if (!ventanaAbierta(ctx.ultimaEntrada, ahora)) {
+    // 06-11 (Enrique, "Frenar y crear"): con la ventana cerrada la oferta opcional no sale, pero el pago OBLIGATORIO sí,
+    // con la plantilla aprobada y de 08:00 a 20:00. Las 48 h arrancan recién cuando sale (marcarPagoRequerido).
+    const n0 = ctx.devolucionesPrevias;
+    if (n0 == null || !exigePagoRequerido(cfg.pagoRequerido, n0, ctx.pedido)) return { accion: "cancelar", motivo: "ventana_cerrada" };
+    if (horario && !horario.dentro(ahora, HORARIO_PAGO_REQUERIDO)) {
+      return { accion: "reprogramar", enviar_desde: horario.proxima(ahora, HORARIO_PAGO_REQUERIDO), motivo: "pago_requerido_fuera_de_horario" };
+    }
+    const nombre = (ctx.cliente?.nombre ?? "").trim().split(/\s+/)[0] || "Hola";
+    const valores = [nombre, ctx.pedido.nombre ?? `#${ctx.pedido.shopify_order_id}`, montoGs(ctx.pedido.total)!, `${pp.alias} — ${pp.titular}`];
+    return {
+      accion: "plantilla", to, nombre: PLANTILLA_PAGO_REQUERIDO, idioma: "es", valores, pagoRequerido: { devoluciones: n0 },
+      componentes: [{ type: "body", parameters: valores.map((text) => ({ type: "text", text })) }],
+    };
+  }
   // 05-11: cliente con devoluciones previas (procesarUno las cuenta solo con el interruptor prendido) → pago obligatorio.
   const n = ctx.devolucionesPrevias;
   if (n != null && exigePagoRequerido(cfg.pagoRequerido, n, ctx.pedido)) {
@@ -893,7 +911,9 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
   // 05-11: la oferta de prioridad va a salir → con el pago obligatorio prendido se cuentan las devoluciones previas y
   // se vuelve a decidir (si no se pudo contar, sale la oferta normal).
   const esPrio = nombrePlantilla(e.plantilla) === PLANTILLA_PAGO_PRIORIDAD;
-  if (esPrio && dec.accion === "texto" && d.cfg.pagoRequerido.activo && d.devolucionesPrevias && d.marcarPagoRequerido) {
+  // 06-11: también con la ventana cerrada (dec = cancelar ventana_cerrada): puede salir la plantilla del pago obligatorio.
+  const ventanaCerrada = dec.accion === "cancelar" && dec.motivo === "ventana_cerrada";
+  if (esPrio && (dec.accion === "texto" || ventanaCerrada) && d.cfg.pagoRequerido.activo && d.devolucionesPrevias && d.marcarPagoRequerido) {
     ctx.devolucionesPrevias = await d.devolucionesPrevias(e, ctx).catch((err) => {
       console.error("pago anticipado obligatorio: no pude contar devoluciones:", err instanceof Error ? err.message : err);
       return null;
@@ -999,7 +1019,7 @@ async function procesarUno(e: Envio, d: Deps, r: Resumen): Promise<void> {
         ? await d.enviarBotones(dec.to, dec.texto, dec.botones, op)
         : await d.enviarTexto(dec.to, dec.texto, op);
       // 05-11: el pago obligatorio no salió → ni tag ni candado; sale la oferta normal (comportamiento de siempre).
-      let requerido = dec.accion === "texto" ? dec.pagoRequerido ?? null : null;
+      let requerido = dec.accion === "texto" || dec.accion === "plantilla" ? dec.pagoRequerido ?? null : null;
       if (!res.ok && requerido && dec.accion === "texto") {
         console.error(`pago anticipado obligatorio ${e.id}: ${res.error}; sale la oferta normal`);
         requerido = null;

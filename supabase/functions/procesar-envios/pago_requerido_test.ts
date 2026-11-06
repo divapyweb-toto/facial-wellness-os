@@ -26,20 +26,25 @@ const ctx = (tags: string[] = ["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANT
   ...x,
 });
 
-type Op = { config?: Config; contexto?: Contexto; devoluciones?: number | Error; falla?: (t: string) => boolean };
+type Op = { config?: Config; contexto?: Contexto; devoluciones?: number | Error; falla?: (t: string) => boolean; fallaPlantilla?: boolean; horario?: Horario };
 async function correr(op: Op = {}) {
   const log = {
     textos: [] as string[], cambios: [] as unknown[], oferta: [] as number[], requerido: [] as [number, Record<string, unknown>][],
-    conteos: 0, avisos: [] as string[], orden: [] as string[],
+    conteos: 0, avisos: [] as string[], orden: [] as string[], plantillas: [] as [string, unknown][],
   };
   const d: Deps = {
     ahora: () => AHORA,
     cfg: op.config ?? cfg(),
-    horario,
+    horario: op.horario ?? horario,
     reclamar: () => Promise.resolve([prio()]),
     contexto: () => Promise.resolve(op.contexto ?? ctx()),
     actualizarEnvio: (_id, c) => (log.cambios.push(c), Promise.resolve()),
-    enviarPlantilla: () => Promise.resolve({ ok: true }),
+    enviarPlantilla: (_to, nombre, _i, comps) => {
+      log.orden.push(`plantilla:${nombre}`);
+      if (op.fallaPlantilla) return Promise.resolve({ ok: false, error: "131026: undeliverable" });
+      log.plantillas.push([nombre, comps]);
+      return Promise.resolve({ ok: true, wa_message_id: "wamid.T" });
+    },
     enviarTexto: (_to, t) => {
       log.orden.push(t.startsWith("📦 ¡Tu pedido #") ? "envio:requerido" : "envio:oferta");
       if (op.falla?.(t)) return Promise.resolve({ ok: false, error: "131026: undeliverable" });
@@ -98,11 +103,10 @@ Deno.test("requerido: 0 devoluciones, por debajo del mínimo o no se pudo contar
   }
 });
 
-Deno.test("requerido: ventana cerrada → no sale nada (como siempre), ni se cuenta ni se marca", async () => {
-  const { r, log } = await correr({ devoluciones: 3, contexto: ctx(undefined, { ultimaEntrada: null }) });
-  assertEquals(r.cancelados, 1);
+Deno.test("requerido: ventana cerrada → la oferta opcional no sale; desde el 06-11 se cuentan las devoluciones (plantilla aparte)", async () => {
+  const { log } = await correr({ devoluciones: 0, contexto: ctx(undefined, { ultimaEntrada: null }) });
   assertEquals(log.textos, []);
-  assertEquals(log.conteos, 0);
+  assertEquals(log.conteos, 1);
   assertEquals(log.requerido, []);
 });
 
@@ -149,4 +153,36 @@ Deno.test("requerido: si no se pudo registrar candado/tags, aviso al admin (el m
   })();
   assertEquals(r2.avisos.length, 1);
   assert(r2.avisos[0].includes("PAGO_ANTICIPADO_REQUERIDO") && r2.avisos[0].includes("sin permiso"));
+});
+
+// 06-11: con la ventana cerrada el pago obligatorio sale con la plantilla aprobada (08:00-20:00); la oferta opcional no.
+const CERRADA = new Date("2026-10-10T10:00:00Z");
+
+Deno.test("requerido con ventana cerrada: plantilla con nombre, pedido, total y cuenta; candado recién después", async () => {
+  const { r, log } = await correr({ contexto: ctx(undefined, { ultimaEntrada: CERRADA }), devoluciones: 2 });
+  assertEquals(r.enviados, 1);
+  assertEquals(log.textos, []);
+  assertEquals(log.orden, ["plantilla:voltra_pago_anticipado_requerido", "candado+tags:requerido"]);
+  const params = (log.plantillas[0][1] as Array<{ parameters: Array<{ text: string }> }>)[0].parameters.map((x) => x.text);
+  assertEquals(params, ["Ana", "#9001", "129.000", "alias@ejemplo.com — Voltra E.A.S."]);
+  assertEquals(log.requerido.length, 1);
+});
+
+Deno.test("ventana cerrada sin devoluciones (o apagado) → se cancela como siempre, sin plantilla", async () => {
+  const a = await correr({ contexto: ctx(undefined, { ultimaEntrada: CERRADA }), devoluciones: 0 });
+  assertEquals([a.log.plantillas.length, a.log.textos.length, a.log.requerido.length], [0, 0, 0]);
+  const b = await correr({ config: cfg({ pagoRequerido: { activo: false, min_devoluciones: 1 } }), contexto: ctx(undefined, { ultimaEntrada: CERRADA }), devoluciones: 3 });
+  assertEquals([b.log.plantillas.length, b.log.conteos], [0, 0]);
+});
+
+Deno.test("ventana cerrada fuera de horario → se reprograma, no sale ni marca", async () => {
+  const fuera: Horario = { dentro: () => false, proxima: () => new Date("2026-10-13T11:00:00Z") };
+  const { log } = await correr({ contexto: ctx(undefined, { ultimaEntrada: CERRADA }), devoluciones: 1, horario: fuera });
+  assertEquals([log.plantillas.length, log.requerido.length], [0, 0]);
+  assert(JSON.stringify(log.cambios).includes("pago_requerido_fuera_de_horario"), JSON.stringify(log.cambios));
+});
+
+Deno.test("ventana cerrada y la plantilla falla → ni candado ni etiquetas", async () => {
+  const { log } = await correr({ contexto: ctx(undefined, { ultimaEntrada: CERRADA }), devoluciones: 1, fallaPlantilla: true });
+  assertEquals(log.requerido, []);
 });
