@@ -1429,7 +1429,11 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
   if (!prod) return error(`producto_desconocido:${input.handle}. Usá consultar_catalogo y el handle exacto.`);
   // 26-10: primer mensaje por producto (JawFlex: qué es + para qué sirve fijo, foto, precio de 1; Botella: sin el 2).
   const pt = primerTurnoDe(ctx, prod.handle);
-  const g = pt.texto ? { ok: true as const, texto: pt.texto } : textoRevisado({ texto: input.gancho }, ctx);
+  // 07-11: el texto fijo de config pasa por el mismo filtro; si choca (ej. "plegable" prohibida), sale el gancho del
+  // modelo en su lugar en vez de perder el mensaje (antes el envío quedaba "fallido" y el cliente no recibía nada).
+  const fijo = pt.texto ? textoRevisado({ texto: pt.texto }, ctx) : null;
+  if (fijo && !fijo.ok) console.warn(`primer_turno: texto fijo de ${prod.handle} bloqueado por el filtro; sale el gancho del modelo`);
+  const g = fijo?.ok ? fijo : textoRevisado({ texto: input.gancho }, ctx);
   if (!g.ok) return g.r;
   const linea = lineaPrecioProducto(prod, pt.linea_precio);
   // 27-10 (JawFlex = 1 PAR): con cuerpo_precio, el precio entero sale de config (montos del catálogo).

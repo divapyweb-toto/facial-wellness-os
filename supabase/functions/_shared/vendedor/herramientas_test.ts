@@ -985,3 +985,22 @@ Deno.test("29-10 contrato con pedidos-trabados: guardada la ciudad reconocida, l
   const despues = accionesPara({ ...base, ciudad: "Luque" }, ahora, true, new Map([["Luque", { sin_cobertura: false, ciudad_reconocida: true, pap: true, lucero: true }]]), undefined, true);
   assert(despues.includes("quitar_faltan_datos") && !despues.includes("pedir_ciudad"), JSON.stringify(despues));
 });
+
+Deno.test("primer_turno 07-11: texto fijo de config con palabra prohibida → sale el gancho del modelo, nunca queda sin enviar", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba();
+  const base = configPrueba();
+  const conFijo = (texto: string) => ({ ...base, vendedor: { ...base.vendedor, primer_turno_producto: { "tiras-prueba": { texto } } } });
+  const r = await ejecutarHerramienta("primer_turno", { handle: "tiras-prueba", gancho: "Te pegás la tira y respirás mejor" }, ctxPrueba({ cfg: conFijo("Tiene garantía de por vida") }), deps);
+  assert(r.terminal);
+  assertEquals(reg.textos.map((t) => t.texto), ["Te pegás la tira y respirás mejor"]);
+  // Texto fijo limpio: sale el fijo, no el gancho.
+  const ok = await ejecutarHerramienta("primer_turno", { handle: "tiras-prueba", gancho: "Otro gancho" }, ctxPrueba({ cfg: conFijo("Es una tira nasal que se pega por fuera") }), deps);
+  assert(ok.terminal);
+  assertEquals(reg.textos[1].texto, "Es una tira nasal que se pega por fuera");
+  // Fijo y gancho bloqueados: error para que el modelo reescriba, sin mandar nada.
+  const n = reg.textos.length;
+  const b = await ejecutarHerramienta("primer_turno", { handle: "tiras-prueba", gancho: "Con garantía" }, ctxPrueba({ cfg: conFijo("Tiene garantía") }), deps);
+  assert(b.esError);
+  assertEquals(reg.textos.length, n);
+});
