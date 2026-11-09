@@ -199,7 +199,7 @@ export const ESCENARIOS: Escenario[] = [
     cliente: { nombre: "Ana Prueba", telefono: "+595981000178" },
     pasos: ["Hola! quiero la botella y el inhalador de menta, 1 de cada uno. Cuánto sale?", "Dale, Ana Prueba, Luque, calle Palma 123", "Si"],
     checks: [
-      { tipo: "texto", regex: /158\.000/, negar: true, desc: "no ofrece el kit de 158.000" },
+      { tipo: "texto", regex: /inhalador[^.\n]*158\.000|158\.000[^.\n]*inhalador/i, negar: true, desc: "no ofrece kit botella + inhalador a 158.000 (el 2 por 158.000 de botellas sí vale)" },
       { tipo: "escritura", regex: /178000|178\.000/, desc: "pedido de 178.000" },
       { tipo: "texto", regex: /plegable/i, negar: true },
       { tipo: "montos_catalogo" },
