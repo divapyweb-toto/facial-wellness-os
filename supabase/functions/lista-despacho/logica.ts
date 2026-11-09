@@ -32,6 +32,7 @@ export const refVoltra = (nombre: string | null) => `VT-${String(nombre ?? "").r
 
 export function esKit(nombre: string): boolean {
   const t = nombre.toLowerCase();
+  if (/inhalador|wakeful|gtrc/.test(t)) return false; // 09-11: "Botella + Inhalador nasal" no es el Kit Deporte
   return /kit ?deporte/.test(t) || (/botella/.test(t) && /tira|nasal/.test(t));
 }
 

@@ -26,7 +26,7 @@ const SALUDO = String.raw`(?:hola+|holis|buenas|buen dia|buenos dias|buenas tard
 const VERBO = String.raw`(?:(?:yo )?(?:si )?(?:lo |la |los |las )?(?:quiero|quisiera|kiero|qiero|quero)(?: (?:pedir|comprar|encargar|pedirlo|pedirla|comprarlo|comprarla|llevar|llevarlo))?|me interesa|me interesan|como hago(?: para (?:pedir|comprar|pedirlo|comprarlo|encargar))?|como (?:lo )?pido|como (?:lo )?compro|mandame(?:lo|la|los|las)?|mandamelo|enviame(?:lo|la)?|(?:lo |te )?pido|me (?:lo |la )?llevo|lo compro|lo encargo)`;
 const CANT = String.raw`(?:un|uno|una|1|2|dos|3|tres|4|cuatro|5|cinco)`;
 const RELLENO = String.raw`(?:unidad|unidades|nomas|por favor|porfa|porfavor|pls|si|ya|ahora|de una|eso|ese|esa|esos|esas|el|la|los|las|de|del|pack|combo|oferta|promo|con|envio|gratis|entonces|che|nde|amigo|amiga|hermano|para|mi|casa|manana|hoy|y|o|pero|bueno|dale)`;
-const PRODUCTO = String.raw`(?:raspador|raspadores|lengua|tiras?|nasal|nasales|parches?|bucal|bucales|botella|botellas|flexible|ejercitador|ejercitadores|mandibula|jawflex|jaw|flex)`;
+const PRODUCTO = String.raw`(?:inhalador|inhaladores|raspador|raspadores|lengua|tiras?|nasal|nasales|parches?|bucal|bucales|botella|botellas|flexible|ejercitador|ejercitadores|mandibula|jawflex|jaw|flex)`;
 
 const RE_SIN_PRODUCTO = new RegExp(`^(?:${SALUDO} )*${VERBO}(?: (?:${CANT}|${RELLENO}))*$`);
 const RE_CON_PRODUCTO = new RegExp(`^(?:${SALUDO} )*${VERBO}(?: (?:${CANT}|${RELLENO}|${PRODUCTO}))*$`);

@@ -30,6 +30,8 @@ import { tieneCobranzaPaP, emparejarCiudad, normalizarCiudadPaP, CIUDADES_PAP_LI
 function familiaProducto(nombre) {
   const n = (nombre || '').toLowerCase()
   if (!n) return null
+  // 09-11: inhalador de menta GTRC antes que todo: "inhalador nasal" caía en tiras ('nasal').
+  if (n.includes('inhalador') || n.includes('wakeful') || n.includes('gtrc')) return 'inhalador'
   // 26-10: Kit Deporte (botella + tiras) antes que tiras y botella: su nombre menciona a los dos. "deport" solo no
   // alcanza: la botella sola pasa a llamarse "Botella Deportiva Flexible".
   if (n.includes('kit deporte') || n.includes('kitdeporte') || (n.includes('botella') && (n.includes('tira') || n.includes('nasal')))) return 'kit'
