@@ -153,6 +153,7 @@ export const ESCENARIOS: Escenario[] = [
     checks: [
       { paso: 0, tipo: "boton", regex: /vend_p1:q3:inhalador/, desc: "botón de 3" },
       { paso: 0, tipo: "texto", regex: /149\.000/, desc: "3 por 149.000 en el primer mensaje" },
+      { tipo: "texto", regex: /env[ií]o gratis/i, negar: true, desc: "nunca envío gratis" },
       { tipo: "texto", regex: /vape|vapor|fumar|descongest|energ|natural|cafe[ií]na/i, negar: true, desc: "nada prohibido ni dudoso" },
       { tipo: "montos_catalogo" },
     ],
