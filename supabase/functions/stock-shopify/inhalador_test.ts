@@ -1,6 +1,6 @@
 // 09-11-2026 · Inhalador de menta GTRC: familia propia, evaluada antes que Tiras ("inhalador nasal" caía en Tiras).
 // Datos inventados. La copia de familiaProducto (ruteo) se prueba en tests/inhalador.test.mjs. Cubre stock-shopify, resumen-diario, lista-despacho, anuncios, vendedor y sync-meta-ads.
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 import { familia, stockReal, type Producto } from "./logica.ts";
 import { familia as familiaResumen } from "../resumen-diario/logica.ts";
 import { esKit } from "../lista-despacho/logica.ts";
@@ -58,7 +58,8 @@ Deno.test("lista de despacho: Botella + Inhalador nasal no es el Kit Deporte; el
 });
 
 Deno.test("bot: el inhalador no cae en tiras ni en la línea sueño; 'quiero 3 inhaladores' es intención de compra", () => {
-  assertEquals(productoPorPalabras("vi el inhalador nasal"), null); // no se asigna hasta que WHATSAPP API lo cargue
+  // WHATSAPP API lo pasa al handle del inhalador (rama inhalador-bot): acá solo se exige que no caiga en tiras.
+  assertNotEquals(productoPorPalabras("vi el inhalador nasal"), "tiras-nasales-gudair-30-unidades");
   assertEquals(productoPorPalabras("quiero las tiras nasales"), "tiras-nasales-gudair-30-unidades");
   assertEquals(lineaProducto("Inhalador nasal de menta"), "otros");
   assertEquals(lineaProducto(TIRAS), "sueño");
