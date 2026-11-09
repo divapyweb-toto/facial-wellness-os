@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
-import { esOferta2Distintos, horasHastaFecha, mensajeSinStock, NOTA_INHALADOR, TEXTO_SALUD_SEGURO } from "./herramientas.ts";
+import { esOferta2Distintos, horasHastaFecha, itemsCatalogo, mensajeSinStock, NOTA_INHALADOR, oferta2DistintosInfo, PAREJA_2_DISTINTOS, TEXTO_SALUD_SEGURO } from "./herramientas.ts";
 import { productoPorPalabras } from "../anuncios.ts";
 import {
   botonesPrimerTurno,
@@ -749,7 +749,8 @@ Deno.test("19-10 inhalador: el catálogo no lo ofrece y el anuncio no cae en tir
   assertEquals(r.resultado.nota, NOTA_INHALADOR);
   const porMensaje = await ejecutarHerramienta("consultar_catalogo", { busqueda: "nasal" }, ctxPrueba({ textoEntrada: "¿Tienen inhalador nasal?" }), deps);
   assertEquals(porMensaje.resultado.nota, NOTA_INHALADOR);
-  assertEquals(productoPorPalabras("Inhalador nasal de mentol"), null);
+  // 09-11: el anuncio del inhalador va al producto propio, nunca a tiras.
+  assertEquals(productoPorPalabras("Inhalador nasal de mentol"), "inhalador-de-menta-wakeful");
   assertEquals(productoPorPalabras("Tiras nasales para dormir"), "tiras-nasales-gudair-30-unidades");
 });
 
@@ -1003,4 +1004,36 @@ Deno.test("primer_turno 07-11: texto fijo de config con palabra prohibida → sa
   const b = await ejecutarHerramienta("primer_turno", { handle: "tiras-prueba", gancho: "Con garantía" }, ctxPrueba({ cfg: conFijo("Tiene garantía") }), deps);
   assert(b.esError);
   assertEquals(reg.textos.length, n);
+});
+
+const INH = "inhalador-de-menta-wakeful", BOT = "botella-flexible-gudair-500-ml";
+const CATALOGO_INH = [
+  { id: "gid://shopify/Product/31", handle: BOT, title: "Botella de prueba", imagen: "https://cdn.example.com/b.jpg", variantes: [{ id: "gid://shopify/ProductVariant/311", title: "Default Title", price: 79000, disponible: true }] },
+  { id: "gid://shopify/Product/32", handle: INH, title: "Inhalador de Menta de prueba", imagen: "https://cdn.example.com/i.jpg", variantes: [{ id: "gid://shopify/ProductVariant/321", title: "Default Title", price: 66000, disponible: true }] },
+];
+
+Deno.test("09-11 inhalador publicado: el catálogo lo muestra con 2 por 129.000 y 3 por 149.000 (envío incluido)", async () => {
+  _limpiarCacheCatalogo();
+  const { deps } = depsPrueba({ catalogoShopify: () => Promise.resolve(CATALOGO_INH) });
+  const cfg = configPrueba({ vendedor_ofertas: { [INH]: { "2": 96000, "3": 116000 } } });
+  const r = await ejecutarHerramienta("consultar_catalogo", { busqueda: "inhalador" }, ctxPrueba({ cfg, textoEntrada: "¿cuánto el inhalador?" }), deps);
+  assertEquals(r.resultado.nota === NOTA_INHALADOR, false);
+  const p = (r.resultado.productos as Array<{ handle: string; total: number; ofertas: Array<{ cantidad: number; total: number }> }>).find((x) => x.handle === INH)!;
+  assertEquals(p.total, 99000);
+  assertEquals(p.ofertas.map((o) => [o.cantidad, o.total]), [[2, 129000], [3, 149000]]);
+});
+
+Deno.test("09-11 kit Botella + Inhalador: 158.000 con envío gratis (la diferencia va al inhalador); el texto del kit sigue en 158.000", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba({ catalogoShopify: () => Promise.resolve(CATALOGO_INH) });
+  const cfg = configPrueba({ vendedor: { modelo: "claude-haiku-4-5-20251001", espera_agrupar_s: 0, whatsapp_enrique: "595990000000", oferta_2_distintos: true } });
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", direccion: "Barrio San Antonio", items: [{ handle: BOT, cantidad: 1 }, { handle: INH, cantidad: 1 }] }, ctxPrueba({ cfg }), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  const d = reg.pedidosChat.at(-1)!.datos;
+  assertEquals(d.envio, 0);
+  assertEquals(d.total, 158000);
+  assertEquals(d.lineas.find((l) => l.handle === INH)!.total, 79000);
+  assertEquals(d.lineas.find((l) => l.handle === BOT)!.total, 79000);
+  assertEquals(oferta2DistintosInfo(itemsCatalogo(CATALOGO_INH, ctxPrueba({ cfg }))).total, 158000);
+  assertEquals(PAREJA_2_DISTINTOS[BOT], INH);
 });

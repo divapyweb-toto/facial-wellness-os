@@ -39,7 +39,8 @@ Deno.test("anuncios: palabras clave → handle (pack primero, acentos y mayúscu
 });
 
 Deno.test("anuncios: nombre legible de cada handle", () => {
-  assertEquals(Object.keys(PRODUCTOS_ANUNCIO).length, 6);
+  assertEquals(Object.keys(PRODUCTOS_ANUNCIO).length, 7);
+  assertEquals(nombreDeHandle("inhalador-de-menta-wakeful"), "inhalador de menta");
   assertEquals(nombreDeHandle(TIRAS), "tiras nasales");
   assertEquals(nombreDeHandle(EJERCITADOR), "ejercitador de mandíbula");
   assertEquals(nombreDeHandle("cepillo-nuevo-gudair"), "cepillo nuevo");

@@ -14,6 +14,7 @@ export const PRODUCTOS_ANUNCIO: Record<string, string> = {
   "raspador-de-lengua-de-acero-inoxidable": "raspador de lengua",
   "botella-flexible-gudair-500-ml": "botella flexible",
   "ejercitador-de-mandibula-3-niveles": "ejercitador de mandíbula",
+  "inhalador-de-menta-wakeful": "inhalador de menta",
 };
 
 export type ReferralMeta = {
@@ -41,9 +42,9 @@ function normalizar(s: string): string {
 export function productoPorPalabras(texto: string): string | null {
   const t = normalizar(texto);
   if (!t.trim()) return null;
-  // 19-10 (informe 02 §2b): "inhalador nasal" caía en tiras por la palabra "nasal". El inhalador todavía no se vende
-  // por el bot (falta DINAVISA y precio): no se asigna a ningún producto.
-  if (/inhalador/.test(t)) return null;
+  // 19-10 (informe 02 §2b): "inhalador nasal" caía en tiras por la palabra "nasal". 09-11: el inhalador de menta GTRC
+  // es producto propio y va ANTES que tiras.
+  if (/inhalador|wakeful|gtrc/.test(t)) return "inhalador-de-menta-wakeful";
   const tiras = /\btiras?\b|nasal/.test(t);
   const parches = /parche|bucal/.test(t);
   if (/\bpack\b/.test(t) || (tiras && parches)) return "pack-gudair-tiras-nasales-parches-bucales";

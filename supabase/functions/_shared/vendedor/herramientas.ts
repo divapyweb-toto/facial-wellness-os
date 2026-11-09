@@ -145,25 +145,30 @@ const MENSAJE_CLIENTE_DEFAULT = "Quiero hacer una consulta.";
 /** 21-10 (Enrique, 19-10): productos que entran en la oferta de 2 distintos. El pack queda afuera (ya es un combo). */
 export const HANDLES_2_DISTINTOS = new Set([
   "raspador-de-lengua-de-acero-inoxidable", "tiras-nasales-gudair-30-unidades", "parches-bucales-gudair-30-unidades",
-  "ejercitador-de-mandibula-3-niveles", "botella-flexible-gudair-500-ml",
+  "ejercitador-de-mandibula-3-niveles", "botella-flexible-gudair-500-ml", "inhalador-de-menta-wakeful",
 ]);
+/** 09-11 (lanzamiento inhalador): el kit de 2 distintos vale 158.000 aunque uno sea más barato (inhalador 66.000). */
+export const KIT_2_DISTINTOS_GS = 158000;
 /** Pareja sugerida por línea: sueño (tiras ↔ parches), boca (raspador), gym (ejercitador ↔ botella). */
 export const PAREJA_2_DISTINTOS: Record<string, string> = {
   "tiras-nasales-gudair-30-unidades": "parches-bucales-gudair-30-unidades",
   "parches-bucales-gudair-30-unidades": "tiras-nasales-gudair-30-unidades",
   "ejercitador-de-mandibula-3-niveles": "botella-flexible-gudair-500-ml",
-  "botella-flexible-gudair-500-ml": "ejercitador-de-mandibula-3-niveles",
-  "raspador-de-lengua-de-acero-inoxidable": "tiras-nasales-gudair-30-unidades",
+  // 09-11 (administración): Botella + Inhalador mueve stock de Botella; Raspador + Inhalador solo si pide Raspador.
+  "botella-flexible-gudair-500-ml": "inhalador-de-menta-wakeful",
+  "inhalador-de-menta-wakeful": "botella-flexible-gudair-500-ml",
+  "raspador-de-lengua-de-acero-inoxidable": "inhalador-de-menta-wakeful",
 };
 /** Texto y total de la oferta de 2 distintos para consultar_catalogo (total = 2 productos de la lista a su precio, envío 0). */
 export function oferta2DistintosInfo(items: ItemCatalogo[]) {
   const disp = items.filter((i) => familia2Distintos(i.handle) && i.disponible);
   const precio = disp.length ? Math.min(...disp.map((i) => i.precio)) : 0;
+  const total = disp.length ? Math.max(precio * 2, KIT_2_DISTINTOS_GS) : 0;
   return {
     productos: disp.map((i) => i.handle),
-    total: precio * 2,
-    total_texto: gs(precio * 2),
-    texto: `Llevando 2 productos distintos te salen ${gs(precio * 2)} los 2, con envío gratis`,
+    total,
+    total_texto: gs(total),
+    texto: `Llevando 2 productos distintos te salen ${gs(total)} los 2, con envío gratis`,
     pareja_sugerida: PAREJA_2_DISTINTOS,
     nota: "Solo 1 de cada uno de 2 productos distintos (el pack no entra). Ofrecelo UNA vez: cuando pide 1 unidad o pregunta por otro producto. Armalo con crear_pedido_cod con los 2 items (cantidad 1 cada uno): el sistema pone el precio y el envío gratis.",
   };
@@ -592,9 +597,10 @@ async function consultarCatalogo(input: Record<string, unknown>, ctx: CtxTurno, 
     return error(`catalogo_no_disponible: ${e instanceof Error ? e.message : e}. Derivá a Enrique si el cliente necesita el precio.`);
   }
   const busqueda = typeof input.busqueda === "string" ? input.busqueda : undefined;
-  // 19-10: el inhalador no se ofrece hasta que Enrique confirme DINAVISA y el precio.
-  // 19-10: también si lo nombró el cliente (el modelo suele buscar "nasal" y la nota no llegaba: simulador).
-  if (/inhalador/i.test(normalizar(`${busqueda ?? ""} ${ctx.textoEntrada ?? ""}`))) {
+  // 19-10: el inhalador no se ofrece mientras no esté a la venta (también si lo nombró el cliente: el modelo suele buscar
+  // "nasal"). 09-11: "a la venta" = publicado en Shopify con stock; mientras siga en borrador, la nota de siempre.
+  if (/inhalador/i.test(normalizar(`${busqueda ?? ""} ${ctx.textoEntrada ?? ""}`)) &&
+    !itemsCatalogo(productos, ctx).some((p) => /inhalador/.test(p.handle) && p.disponible)) {
     return { resultado: { ok: true, productos: [], nota: NOTA_INHALADOR } };
   }
   const items = buscar(itemsCatalogo(productos, ctx), busqueda);
@@ -743,6 +749,14 @@ export function armarPedido(
   // 21-10: 2 distintos → cada uno a su precio de lista (catálogo) y envío 0. Nunca un monto escrito por la IA.
   const oferta2 = !retiro && esOferta2Distintos(lineas, extrasVendedor(ctx.cfg.vendedor).oferta_2_distintos);
   const envio = retiro || oferta2 ? 0 : ctx.cfg.envio.costo_gs;
+  // 09-11: el kit nunca baja de KIT_2_DISTINTOS_GS (Botella 79.000 + Inhalador 66.000 → 158.000); la diferencia va en la línea más barata.
+  if (oferta2) {
+    const suma = lineas.reduce((a, l) => a + l.total, 0);
+    if (suma < KIT_2_DISTINTOS_GS) {
+      const i = lineas.reduce((m, l, k) => (l.total < lineas[m].total ? k : m), 0);
+      lineas[i] = { ...lineas[i], total: lineas[i].total + (KIT_2_DISTINTOS_GS - suma) };
+    }
+  }
   const subtotal = lineas.reduce((a, l) => a + l.total, 0);
   return {
     ok: true,
@@ -1762,8 +1776,9 @@ export type { PedidoChat };
 // misma línea (sueño/respiración, cuidado diario, entrenamiento) y, si no hay, cualquiera disponible.
 export function lineaProducto(titulo: string): string {
   const t = titulo.toLowerCase();
+  if (/inhalador|wakeful|gtrc/.test(t)) return "cuidado"; // 09-11: antes que "nasal" (tiras)
   if (/tira|nasal|parche|bucal|pack|gudair/.test(t)) return "sueño";
-  if (/raspador|lengua|botella/.test(t)) return "cuidado";
+  if (/raspador|lengua|botella|inhalador/.test(t)) return "cuidado";
   if (/jaw|mand[ií]bula|ejercitador/.test(t)) return "entrenamiento";
   return "otros";
 }
