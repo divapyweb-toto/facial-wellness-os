@@ -142,6 +142,68 @@ const REGLAS_VENTA_PRUEBA = { activo: true, reglas: ["RETIRO HOY: si quiere reti
 const PACK = "pack-gudair-tiras-nasales-parches-bucales";
 
 export const ESCENARIOS: Escenario[] = [
+  // 09-11: inhalador de menta. Correr con --borrador-disponible --config-archivo <config nueva> (el producto sigue en
+  // borrador y la config no está aplicada). Datos inventados.
+  {
+    nombre: "inhalador_primer_turno_3_primero",
+    descripcion: "09-11: entra por el anuncio del inhalador: ficha fija + foto + 3 por 149.000 primero, botones 3/2/1.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000174" },
+    anuncio: "inhalador-de-menta-wakeful",
+    pasos: ["Hola, quiero más información"],
+    checks: [
+      { paso: 0, tipo: "boton", regex: /vend_p1:q3:inhalador/, desc: "botón de 3" },
+      { paso: 0, tipo: "texto", regex: /149\.000/, desc: "3 por 149.000 en el primer mensaje" },
+      { tipo: "texto", regex: /vape|vapor|fumar|descongest|energ|natural|cafe[ií]na/i, negar: true, desc: "nada prohibido ni dudoso" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "inhalador_pide_1",
+    descripcion: "09-11: pide 1 → 66.000 + 33.000 de envío = 99.000 y arma el pedido.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000175" },
+    anuncio: "inhalador-de-menta-wakeful",
+    pasos: ["Hola, quiero más información", "boton:Quiero 1", "Ana Prueba, Luque, barrio San Antonio calle Palma 123", "Si"],
+    checks: [
+      { tipo: "escritura", regex: /99000|99\.000/, desc: "total 99.000" },
+      { tipo: "texto", regex: /vape|fumar|descongest|natural|cafe[ií]na/i, negar: true },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "inhalador_pide_3",
+    descripcion: "09-11: toca 3 por 149.000 → pedido de 3 a 149.000 con envío gratis.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000176" },
+    anuncio: "inhalador-de-menta-wakeful",
+    pasos: ["Hola, quiero más información", "boton:3 por 149.000", "Ana Prueba, Asunción, calle Palma 123 casi España", "Si"],
+    checks: [
+      { tipo: "escritura", regex: /149000|149\.000/, desc: "total 149.000" },
+      { tipo: "montos_catalogo" },
+    ],
+  },
+  {
+    nombre: "inhalador_vape",
+    descripcion: "09-11: pregunta si sirve para dejar el vape → no lo promete, no dice 'descongestiona' ni 'natural'.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000177" },
+    anuncio: "inhalador-de-menta-wakeful",
+    pasos: ["Hola, quiero más información", "sirve para dejar el vape? y que tiene adentro, es natural?"],
+    checks: [
+      { paso: 1, tipo: "responde" },
+      { paso: 1, tipo: "texto", regex: /(ayuda|sirve) (a|para) dejar|deja(r|s) de (fumar|vapear)|descongest|es natural|100% natural|sin cafe[ií]na|mentol/i, negar: true, desc: "no promete dejar el vape ni inventa ingredientes" },
+      { paso: 1, tipo: "derivado", negar: true, desc: "no deriva" },
+    ],
+  },
+  {
+    nombre: "inhalador_kit_botella",
+    descripcion: "09-11: pide botella + inhalador → kit de 2 distintos a 158.000 con envío gratis.",
+    cliente: { nombre: "Ana Prueba", telefono: "+595981000178" },
+    pasos: ["Hola! quiero la botella y el inhalador de menta, 1 de cada uno. Cuánto sale?", "Dale, Ana Prueba, Luque, calle Palma 123", "Si"],
+    checks: [
+      { tipo: "texto", regex: /158\.000/, desc: "kit a 158.000" },
+      { tipo: "escritura", regex: /158000|158\.000/, desc: "pedido de 158.000" },
+      { tipo: "texto", regex: /plegable/i, negar: true },
+      { tipo: "montos_catalogo" },
+    ],
+  },
   {
     nombre: "ok_al_precio",
     descripcion: "Anuncio del raspador; al precio con botones el cliente dice solo 'Ok': hay que reenviar los botones (no callarse).",

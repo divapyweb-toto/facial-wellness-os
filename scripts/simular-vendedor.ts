@@ -42,6 +42,7 @@ import { textosVisibles } from "../supabase/functions/_shared/wa_interactivos.ts
 import { marcaAnuncio, marcaTextoAnuncio, nombreDeHandle, productoDeMarca, textoDelAnuncio } from "../supabase/functions/_shared/anuncios.ts";
 import { conPedidoAbierto, textoDeMensaje, textoParaVendedor } from "../supabase/functions/wa-webhook/procesar.ts";
 import { db } from "../supabase/functions/_shared/db.ts";
+import { armarConfigTurno, CLAVES_CONFIG_VENDEDOR } from "../supabase/functions/_shared/vendedor/config.ts";
 import { decidirSeguimiento, hayDatosPedidoParciales, leerCfgSeguimiento } from "../supabase/functions/seguimiento-chat/logica.ts";
 import { type Check, type Escenario, ESCENARIOS, type Paso, type PedidoEscenario } from "./escenarios-vendedor.ts";
 
@@ -100,7 +101,14 @@ type ResultadoPaso = {
 
 let catalogoReal: ProductoShopify[] | null = null;
 async function catalogo(estado: string): Promise<ProductoShopify[]> {
-  if (!catalogoReal) catalogoReal = await depsHerramientasReales.catalogoShopify(estado);
+  if (!catalogoReal) {
+    // 09-11: --borrador-disponible = también los productos en BORRADOR, como si ya estuvieran publicados (producto nuevo
+    // antes de salir a la venta). Solo el simulador: nada se escribe en Shopify.
+    if (flag("borrador-disponible")) {
+      const todos = await depsHerramientasReales.catalogoShopify("active,draft");
+      catalogoReal = todos.map((p) => p.status === "DRAFT" ? { ...p, variantes: p.variantes.map((v) => ({ ...v, disponible: true })) } : p);
+    } else catalogoReal = await depsHerramientasReales.catalogoShopify(estado);
+  }
   return catalogoReal;
 }
 
@@ -776,7 +784,18 @@ const elegidos = filtro ? ESCENARIOS.filter((e) => filtro.split(",").includes(e.
 if (!elegidos.length) throw new Error(`no hay escenarios con ese nombre: ${filtro} (usá --listar)`);
 
 const { plantilla, etiqueta } = await plantillaElegida();
-const baseCfg = structuredClone(await depsOrquestadorReales.config());
+let baseCfg = structuredClone(await depsOrquestadorReales.config());
+// 09-11: --config-archivo <json> = config_wa con estas claves reemplazadas (config nueva sin aplicar en producción).
+const archivoCfg = arg("config-archivo");
+if (archivoCfg) {
+  const { data, error } = await db().from("config_wa").select("clave,valor").in("clave", [...CLAVES_CONFIG_VENDEDOR]);
+  if (error) throw new Error(`config_wa: ${error.message}`);
+  const filas: Record<string, unknown> = { ...Object.fromEntries((data ?? []).map((f) => [f.clave, f.valor])), ...JSON.parse(await Deno.readTextFile(archivoCfg)) };
+  const prompt = baseCfg.plantillaPrompt;
+  baseCfg = armarConfigTurno(filas).cfg;
+  baseCfg.plantillaPrompt = prompt;
+  console.log(`config: config_wa + ${archivoCfg} (${Object.keys(JSON.parse(await Deno.readTextFile(archivoCfg))).join(", ")})`);
+}
 if (plantilla) baseCfg.plantillaPrompt = plantilla;
 const modeloArg = arg("modelo") || null;
 const modelo = modeloArg ?? baseCfg.vendedor.modelo;
