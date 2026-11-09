@@ -4,9 +4,11 @@
 // Voltra OS manda: la sincronización reescribe en Shopify este número (nunca menos de 0).
 import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 
-export type Familia = "Kit Deporte" | "Raspador" | "Tiras" | "Parches" | "Pack" | "JawFlex" | "Botella" | "Bebird" | "Otros";
+export type Familia = "Inhalador" | "Kit Deporte" | "Raspador" | "Tiras" | "Parches" | "Pack" | "JawFlex" | "Botella" | "Bebird" | "Otros";
 export function familia(texto: string): Familia {
   const t = texto.toLowerCase();
+  // 09-11: inhalador de menta GTRC primero: "inhalador nasal" caía en Tiras por "nasal" (stock y web en el de Tiras).
+  if (/inhalador|wakeful|gtrc/.test(t)) return "Inhalador";
   // 26-10: el kit menciona a sus componentes ("Botella + Tiras"): va antes que tiras. "deport" solo no (la botella es "Deportiva").
   if (/kit ?deporte/.test(t) || (/botella/.test(t) && /tira|nasal/.test(t))) return "Kit Deporte";
   if (/pack|gudair/.test(t)) return "Pack";

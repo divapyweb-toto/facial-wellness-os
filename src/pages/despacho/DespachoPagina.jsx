@@ -118,6 +118,7 @@ const ESTADO_CONFIG = {
 function getTipo(nombre) {
   const n = (nombre || '').toLowerCase()
   // 26-10: el Kit Deporte menciona botella y tiras: va primero (si no, la guía decía solo "Tiras nasales").
+  if (familiaProducto(nombre) === 'inhalador') return 'Inhalador de menta' // 09-11: antes que tiras ("nasal")
   if (familiaProducto(nombre) === 'kit') return 'Kit Deporte'
   if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return 'Pack Gudair'
   if (n.includes('bebird')) return 'Bebird Pro' // FIX bebird antes de lengua: "Limpiador de Oídos" contiene "limpiador"
@@ -132,6 +133,7 @@ function getTipo(nombre) {
 function getDesc(nombre, cantidad) {
   const n = (nombre || '').toLowerCase()
   const u = parseInt(cantidad) || 1
+  if (familiaProducto(nombre) === 'inhalador') return `Inhalador de menta (${u} unidad${u > 1 ? 'es' : ''})` // 09-11
   if (familiaProducto(nombre) === 'kit') return `Kit Deporte: Botella Flexible + Tiras nasales (${u} kit${u > 1 ? 's' : ''})`
   if (n.includes('gudair') || (n.includes('tira') && n.includes('parche'))) return `Pack Gudair (${u} unidad${u > 1 ? 'es' : ''})`
   if (n.includes('bebird')) return 'Bebird Pro - Limpiador de Oídos' // FIX bebird antes de lengua: "Limpiador de Oídos" contiene "limpiador"

@@ -220,6 +220,7 @@ export const ALIAS: { producto: string; claves: string[] }[] = [
   { producto: "limpiador de oido", claves: ["limpiador de oido", "bebird", "oido"] },
   { producto: "botella flexible", claves: ["botella"] },
   { producto: "gudair", claves: ["gudair"] },
+  { producto: "inhalador", claves: ["inhalador", "wakeful", "gtrc"] }, // 09-11
 ];
 
 function contieneFrase(texto: string, frase: string): boolean {

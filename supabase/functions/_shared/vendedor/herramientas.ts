@@ -1779,9 +1779,9 @@ export type { PedidoChat };
 // misma línea (sueño/respiración, cuidado diario, entrenamiento) y, si no hay, cualquiera disponible.
 export function lineaProducto(titulo: string): string {
   const t = titulo.toLowerCase();
-  if (/inhalador|wakeful|gtrc/.test(t)) return "cuidado"; // 09-11: antes que "nasal" (tiras)
+  if (/inhalador|wakeful|gtrc/.test(t)) return "otros"; // 09-11: "inhalador nasal" no es de la línea sueño
   if (/tira|nasal|parche|bucal|pack|gudair/.test(t)) return "sueño";
-  if (/raspador|lengua|botella|inhalador/.test(t)) return "cuidado";
+  if (/raspador|lengua|botella/.test(t)) return "cuidado";
   if (/jaw|mand[ií]bula|ejercitador/.test(t)) return "entrenamiento";
   return "otros";
 }
