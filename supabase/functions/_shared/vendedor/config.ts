@@ -85,6 +85,8 @@ export type PrimerTurnoProducto = {
   cuerpo_precio?: string;
   /** 27-10: títulos de los botones del primer turno ("Quiero 1 par", "2 pares envío gratis"; máx. 20 caracteres). */
   botones?: { q1?: string; q2?: string; q3?: string };
+  /** 09-11: las ofertas por cantidad dicen "con el envío incluido" (nunca "envío gratis"). */
+  envio_incluido?: boolean;
 };
 
 /** 26-10: una oferta extra post-compra. Los montos y textos viven en config_wa.vendedor.ofertas_extra (nunca la IA). */
@@ -113,6 +115,7 @@ function primerTurnoDe(v: unknown): Record<string, PrimerTurnoProducto> {
     const o = x as Record<string, unknown>;
     out[h] = {
       ...(o.sin_oferta_2 === true ? { sin_oferta_2: true } : {}),
+      ...(o.envio_incluido === true ? { envio_incluido: true } : {}),
       ...(typeof o.texto === "string" && o.texto.trim() ? { texto: o.texto.trim() } : {}),
       ...(typeof o.media === "string" && /^[a-z0-9_]{1,30}$/.test(o.media) ? { media: o.media } : {}),
       ...(typeof o.linea_precio === "string" && o.linea_precio.trim() ? { linea_precio: o.linea_precio.trim() } : {}),

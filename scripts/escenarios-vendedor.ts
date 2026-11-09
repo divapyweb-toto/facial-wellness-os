@@ -193,13 +193,13 @@ export const ESCENARIOS: Escenario[] = [
     ],
   },
   {
-    nombre: "inhalador_kit_botella",
-    descripcion: "09-11: pide botella + inhalador → kit de 2 distintos a 158.000 con envío gratis.",
+    nombre: "inhalador_con_botella",
+    descripcion: "09-11 (corrección): pide botella + inhalador → NO es kit de 2 distintos: precios de catálogo + envío (178.000).",
     cliente: { nombre: "Ana Prueba", telefono: "+595981000178" },
     pasos: ["Hola! quiero la botella y el inhalador de menta, 1 de cada uno. Cuánto sale?", "Dale, Ana Prueba, Luque, calle Palma 123", "Si"],
     checks: [
-      { tipo: "texto", regex: /158\.000/, desc: "kit a 158.000" },
-      { tipo: "escritura", regex: /158000|158\.000/, desc: "pedido de 158.000" },
+      { tipo: "texto", regex: /158\.000/, negar: true, desc: "no ofrece el kit de 158.000" },
+      { tipo: "escritura", regex: /178000|178\.000/, desc: "pedido de 178.000" },
       { tipo: "texto", regex: /plegable/i, negar: true },
       { tipo: "montos_catalogo" },
     ],

@@ -73,6 +73,7 @@ function texto(t: Record<string, string>, clave: string, porDefecto: string, var
 export const TEXTOS_DEFAULT: Record<string, string> = {
   resumen: "Te resumo: {lineas}. Envío Gs {envio}. Total Gs {total}, pagás al recibir. Lo entregamos en {direccion}, {ciudad}.",
   resumen_envio_gratis: "Te resumo: {lineas}, envío gratis. Total Gs {total}, pagás al recibir. Lo entregamos en {direccion}, {ciudad}.",
+  resumen_envio_incluido: "Te resumo: {lineas}, con el envío incluido. Total Gs {total}, pagás al recibir. Lo entregamos en {direccion}, {ciudad}.",
   resumen_retiro: "Te resumo: {lineas}. Sin costo de envío: lo retirás en nuestra oficina en Ciudad del Este (coordinamos día y hora por acá). Total Gs {total}, pagás al retirar.",
   boton_confirmar: "Confirmo",
   boton_corregir: "Corregir",
@@ -145,30 +146,26 @@ const MENSAJE_CLIENTE_DEFAULT = "Quiero hacer una consulta.";
 /** 21-10 (Enrique, 19-10): productos que entran en la oferta de 2 distintos. El pack queda afuera (ya es un combo). */
 export const HANDLES_2_DISTINTOS = new Set([
   "raspador-de-lengua-de-acero-inoxidable", "tiras-nasales-gudair-30-unidades", "parches-bucales-gudair-30-unidades",
-  "ejercitador-de-mandibula-3-niveles", "botella-flexible-gudair-500-ml", "inhalador-de-menta-wakeful",
+  "ejercitador-de-mandibula-3-niveles", "botella-flexible-gudair-500-ml",
 ]);
-/** 09-11 (lanzamiento inhalador): el kit de 2 distintos vale 158.000 aunque uno sea más barato (inhalador 66.000). */
-export const KIT_2_DISTINTOS_GS = 158000;
+// 09-11 (administración, corrección): el inhalador NO entra en 2 distintos; se suma solo como oferta post-compra (+29.000).
 /** Pareja sugerida por línea: sueño (tiras ↔ parches), boca (raspador), gym (ejercitador ↔ botella). */
 export const PAREJA_2_DISTINTOS: Record<string, string> = {
   "tiras-nasales-gudair-30-unidades": "parches-bucales-gudair-30-unidades",
   "parches-bucales-gudair-30-unidades": "tiras-nasales-gudair-30-unidades",
   "ejercitador-de-mandibula-3-niveles": "botella-flexible-gudair-500-ml",
-  // 09-11 (administración): Botella + Inhalador mueve stock de Botella; Raspador + Inhalador solo si pide Raspador.
-  "botella-flexible-gudair-500-ml": "inhalador-de-menta-wakeful",
-  "inhalador-de-menta-wakeful": "botella-flexible-gudair-500-ml",
-  "raspador-de-lengua-de-acero-inoxidable": "inhalador-de-menta-wakeful",
+  "botella-flexible-gudair-500-ml": "ejercitador-de-mandibula-3-niveles",
+  "raspador-de-lengua-de-acero-inoxidable": "tiras-nasales-gudair-30-unidades",
 };
 /** Texto y total de la oferta de 2 distintos para consultar_catalogo (total = 2 productos de la lista a su precio, envío 0). */
 export function oferta2DistintosInfo(items: ItemCatalogo[]) {
   const disp = items.filter((i) => familia2Distintos(i.handle) && i.disponible);
   const precio = disp.length ? Math.min(...disp.map((i) => i.precio)) : 0;
-  const total = disp.length ? Math.max(precio * 2, KIT_2_DISTINTOS_GS) : 0;
   return {
     productos: disp.map((i) => i.handle),
-    total,
-    total_texto: gs(total),
-    texto: `Llevando 2 productos distintos te salen ${gs(total)} los 2, con envío gratis`,
+    total: precio * 2,
+    total_texto: gs(precio * 2),
+    texto: `Llevando 2 productos distintos te salen ${gs(precio * 2)} los 2, con envío gratis`,
     pareja_sugerida: PAREJA_2_DISTINTOS,
     nota: "Solo 1 de cada uno de 2 productos distintos (el pack no entra). Ofrecelo UNA vez: cuando pide 1 unidad o pregunta por otro producto. Armalo con crear_pedido_cod con los 2 items (cantidad 1 cada uno): el sistema pone el precio y el envío gratis.",
   };
@@ -527,16 +524,18 @@ export const frasePrecio = (precio: number, envio: number) => `${gs(precio)} + $
  * ×2 → "158.000 en total: es como pagar 2 × 79.000, el envío te sale gratis"; ×3 → "188.000 en total: envío gratis
  * + 49.000 menos". Si la oferta no llega a cubrir el envío, solo el total (no se promete envío gratis).
  */
-export function fraseCantidad(cantidad: number, precioUnidad: number, precioOferta: number, envio: number): string {
+export function fraseCantidad(cantidad: number, precioUnidad: number, precioOferta: number, envio: number, envioIncluido = false): string {
   const total = precioOferta + envio;
+  // 09-11 (inhalador): "con el envío incluido", nunca "envío gratis" (el umbral de envío gratis de la tienda es 158.000).
+  if (envioIncluido) return `${gs(total)} en total, con el envío incluido`;
   const menos = cantidad * precioUnidad - total;
   if (menos > 0) return `${gs(total)} en total: envío gratis + ${gs(menos)} menos`;
   if (menos === 0) return `${gs(total)} en total: es como pagar ${cantidad} × ${gs(precioUnidad)}, el envío te sale gratis`;
   return `${gs(total)} en total`;
 }
 /** 09-10: 2 o más del mismo producto → "envío gratis" (mismo total de siempre: oferta + envío). */
-export const frasePrecioOferta = (cantidad: number, precio: number, envio: number, precioUnidad: number) =>
-  `${cantidad} por ${fraseCantidad(cantidad, precioUnidad, precio, envio)}`;
+export const frasePrecioOferta = (cantidad: number, precio: number, envio: number, precioUnidad: number, envioIncluido = false) =>
+  `${cantidad} por ${fraseCantidad(cantidad, precioUnidad, precio, envio, envioIncluido)}`;
 
 /** Precio total de `cantidad` unidades: la oferta por cantidad si existe; si no, lista × cantidad. */
 export function precioPorCantidad(precio: number, cantidad: number, ofertas: Record<string, number> | undefined): number {
@@ -549,6 +548,7 @@ export function itemsCatalogo(productos: ProductoShopify[], ctx: CtxTurno): Item
   return productos.map((p) => {
     const v = p.variantes.find((x) => x.disponible) ?? p.variantes[0];
     if (!v) return null;
+    const envioIncluido = extrasVendedor(ctx.cfg.vendedor).primer_turno_producto[p.handle]?.envio_incluido === true; // 09-11
     const ofertas = Object.entries(ctx.cfg.ofertas[p.handle] ?? {})
       .map(([c, precio]) => ({ cantidad: Number(c), precio }))
       .filter((o) => Number.isInteger(o.cantidad) && o.cantidad > 1 && o.precio > 0)
@@ -557,7 +557,7 @@ export function itemsCatalogo(productos: ProductoShopify[], ctx: CtxTurno): Item
         const ahorro = Math.max(0, v.price * o.cantidad - o.precio);
         return {
           ...o, precio_texto: gs(o.precio), total: o.precio + envio, total_texto: gs(o.precio + envio), ahorro, ahorro_texto: gs(ahorro),
-          frase_precio: frasePrecioOferta(o.cantidad, o.precio, envio, v.price),
+          frase_precio: frasePrecioOferta(o.cantidad, o.precio, envio, v.price, envioIncluido),
         };
       });
     return {
@@ -749,14 +749,6 @@ export function armarPedido(
   // 21-10: 2 distintos → cada uno a su precio de lista (catálogo) y envío 0. Nunca un monto escrito por la IA.
   const oferta2 = !retiro && esOferta2Distintos(lineas, extrasVendedor(ctx.cfg.vendedor).oferta_2_distintos);
   const envio = retiro || oferta2 ? 0 : ctx.cfg.envio.costo_gs;
-  // 09-11: el kit nunca baja de KIT_2_DISTINTOS_GS (Botella 79.000 + Inhalador 66.000 → 158.000); la diferencia va en la línea más barata.
-  if (oferta2) {
-    const suma = lineas.reduce((a, l) => a + l.total, 0);
-    if (suma < KIT_2_DISTINTOS_GS) {
-      const i = lineas.reduce((m, l, k) => (l.total < lineas[m].total ? k : m), 0);
-      lineas[i] = { ...lineas[i], total: lineas[i].total + (KIT_2_DISTINTOS_GS - suma) };
-    }
-  }
   const subtotal = lineas.reduce((a, l) => a + l.total, 0);
   return {
     ok: true,
@@ -883,7 +875,9 @@ export function textoResumen(d: DatosPedidoChat, ctx: CtxTurno): string {
     : gratis
     ? `${d.lineas[0].titulo} x${d.lineas[0].cantidad}`
     : d.lineas.map((l) => `${l.titulo} x${l.cantidad} (Gs ${gs(l.total)})`).join(", ");
-  const clave = d.retiro ? "resumen_retiro" : gratis ? "resumen_envio_gratis" : "resumen";
+  // 09-11 (inhalador): producto con envio_incluido → "con el envío incluido", nunca "envío gratis".
+  const incluido = gratis && !d.oferta2Distintos && extrasVendedor(ctx.cfg.vendedor).primer_turno_producto[d.lineas[0].handle]?.envio_incluido === true;
+  const clave = d.retiro ? "resumen_retiro" : incluido ? "resumen_envio_incluido" : gratis ? "resumen_envio_gratis" : "resumen";
   const lineaFactura = d.facturaRuc ? `\n🧾 Factura a nombre de: ${d.facturaRazon} · RUC ${d.facturaRuc}` : "";
   // 12-10 (fase 3): el día de entrega según la ciudad, en el mismo resumen que se confirma.
   const lineaEntrega = d.retiro || !d.ciudad ? "" : d.entregaProgramada
@@ -1417,12 +1411,18 @@ export function cuerpoPrimerTurno(prod: ItemCatalogo, sinOferta2 = false): strin
 const ctxEnvio = (prod: ItemCatalogo) => prod.total - prod.precio;
 
 /** Frases que el vendedor usa después del toque (montos permitidos por el filtro porque quedan en el resultado). */
-export function frasesCantidad(prod: ItemCatalogo, sinOferta2 = false): Record<string, string> {
+export function frasesCantidad(prod: ItemCatalogo, sinOferta2 = false, envioIncluido = false): Record<string, string> {
   const x2 = prod.ofertas.find((o) => o.cantidad === 2);
   const x3 = prod.ofertas.find((o) => o.cantidad === 3);
   const f: Record<string, string> = {};
   // 26-10: el 2 solo si lo pide (los precios por cantidad siguen en `ofertas` para cuando pregunte).
   if (sinOferta2) return f;
+  // 09-11 (inhalador): "con el envío incluido", nunca "envío gratis".
+  if (envioIncluido) {
+    if (x3) f.subir_a_3 = `3 por ${gs(x3.total)} en total, con el envío incluido (el mejor precio)`;
+    if (x2) f.pasar_a_2 = `2 por ${gs(x2.total)} en total, con el envío incluido`;
+    return f;
+  }
   if (x2 && x2.total <= 2 * prod.precio) f.pasar_a_2 = `Ojo: llevando 2 el envío te sale GRATIS (${gs(x2.total)} los 2)`;
   const menos3 = x3 ? 3 * prod.precio - x3.total : 0;
   if (x2 && x3 && x3.total > x2.total) {
@@ -1483,7 +1483,7 @@ async function primerTurno(input: Record<string, unknown>, ctx: CtxTurno, deps: 
       // Quedan en vendedor_turnos: el filtro de los turnos siguientes permite estos montos (×2 / ×3 al pedir los datos).
       frase_precio: prod.frase_precio,
       ofertas: prod.ofertas.map((o) => o.frase_precio),
-      ...frasesCantidad(prod, pt.sin_oferta_2),
+      ...frasesCantidad(prod, pt.sin_oferta_2, pt.envio_incluido),
       ...(pt.sin_oferta_2 ? { nota_cantidad: "De este producto ofrecé 1. El precio de 2 decilo solo si el cliente pide más de uno." } : {}),
       nota: "Ya se le mandaron el gancho y los precios con botones. No escribas nada más.",
     },
@@ -1505,7 +1505,7 @@ async function cierreBotones(input: Record<string, unknown>, ctx: CtxTurno, deps
   const sin2 = pt.sin_oferta_2;
   return await enviarInteractivoRevisado(input, ctx, deps, (t) =>
     botonesRespuesta(t, botonesPrimerTurno(prod, sin2, pt.botones)),
-    { ofertas: prod.ofertas.map((o) => o.frase_precio), ...frasesCantidad(prod, sin2) });
+    { ofertas: prod.ofertas.map((o) => o.frase_precio), ...frasesCantidad(prod, sin2, pt.envio_incluido) });
 }
 
 /** 12-10: permiso para ofertas (opt-in de Meta) al final, cuando el cliente posterga. Una vez por cliente. */

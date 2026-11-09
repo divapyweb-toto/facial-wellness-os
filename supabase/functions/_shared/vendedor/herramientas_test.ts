@@ -1023,19 +1023,34 @@ Deno.test("09-11 inhalador publicado: el catálogo lo muestra con 2 por 129.000 
   assertEquals(p.ofertas.map((o) => [o.cantidad, o.total]), [[2, 129000], [3, 149000]]);
 });
 
-Deno.test("09-11 kit Botella + Inhalador: 158.000 con envío gratis (la diferencia va al inhalador); el texto del kit sigue en 158.000", async () => {
+Deno.test("09-11 (corrección) Botella + Inhalador NO es kit de 2 distintos: cada uno a su precio + envío; el inhalador no está en la lista", async () => {
   _limpiarCacheCatalogo();
   const { deps, reg } = depsPrueba({ catalogoShopify: () => Promise.resolve(CATALOGO_INH) });
   const cfg = configPrueba({ vendedor: { modelo: "claude-haiku-4-5-20251001", espera_agrupar_s: 0, whatsapp_enrique: "595990000000", oferta_2_distintos: true } });
   const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", direccion: "Barrio San Antonio", items: [{ handle: BOT, cantidad: 1 }, { handle: INH, cantidad: 1 }] }, ctxPrueba({ cfg }), deps);
   assertFalse(r.esError, JSON.stringify(r.resultado));
   const d = reg.pedidosChat.at(-1)!.datos;
-  assertEquals(d.envio, 0);
-  assertEquals(d.total, 158000);
-  assertEquals(d.lineas.find((l) => l.handle === INH)!.total, 79000);
-  assertEquals(d.lineas.find((l) => l.handle === BOT)!.total, 79000);
-  assertEquals(oferta2DistintosInfo(itemsCatalogo(CATALOGO_INH, ctxPrueba({ cfg }))).total, 158000);
-  assertEquals(PAREJA_2_DISTINTOS[BOT], INH);
+  assertEquals(d.envio, 33000);
+  assertEquals(d.total, 79000 + 66000 + 33000);
+  assertEquals(oferta2DistintosInfo(itemsCatalogo(CATALOGO_INH, ctxPrueba({ cfg }))).productos, [BOT]);
+  assertEquals(PAREJA_2_DISTINTOS[BOT], "ejercitador-de-mandibula-3-niveles");
+});
+
+Deno.test("09-11 inhalador con envio_incluido: frases y resumen dicen 'con el envío incluido', nunca 'envío gratis'", async () => {
+  _limpiarCacheCatalogo();
+  const { deps, reg } = depsPrueba({ catalogoShopify: () => Promise.resolve(CATALOGO_INH) });
+  const cfg = configPrueba({
+    vendedor: { modelo: "claude-haiku-4-5-20251001", espera_agrupar_s: 0, whatsapp_enrique: "595990000000", primer_turno_producto: { [INH]: { envio_incluido: true } } },
+    vendedor_ofertas: { [INH]: { "2": 96000, "3": 116000 } },
+  });
+  const it = itemsCatalogo(CATALOGO_INH, ctxPrueba({ cfg })).find((x) => x.handle === INH)!;
+  assertEquals(it.ofertas.map((o) => o.frase_precio), ["2 por 129.000 en total, con el envío incluido", "3 por 149.000 en total, con el envío incluido"]);
+  const r = await ejecutarHerramienta("crear_pedido_cod", { confirmar: false, nombre: "Ana Prueba", ciudad: "Luque", direccion: "Barrio San Antonio", items: [{ handle: INH, cantidad: 3 }] }, ctxPrueba({ cfg }), deps);
+  assertFalse(r.esError, JSON.stringify(r.resultado));
+  assertEquals(reg.pedidosChat.at(-1)!.datos.total, 149000);
+  const textos = JSON.stringify([r.resultado, reg.textos, reg.interactivos]);
+  assert(/envío incluido/.test(textos), textos);
+  assertFalse(/envío gratis/i.test(textos), textos);
 });
 
 Deno.test("09-11 primer turno con q3: botones 3, 2 y 1 (sin 'Tengo una duda'); sin q3 queda como siempre", () => {

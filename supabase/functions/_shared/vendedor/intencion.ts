@@ -76,6 +76,8 @@ export function yaPidioDatos(textoNuestro: string | null | undefined): boolean {
 export function lineaPrecioIntencion(prod: ItemCatalogo, cantidad: number | null, sinOferta2 = false, lineaExtra = "", cuerpoFijo = ""): string {
   const oferta = cantidad && cantidad > 1 ? prod.ofertas.find((o) => o.cantidad === cantidad) : undefined;
   if (oferta) {
+    // 09-11 (inhalador): la oferta marcada "con el envío incluido" nunca se presenta como "envío gratis".
+    if (/envío incluido/.test(oferta.frase_precio)) return `Los ${cantidad} te salen ${gs(oferta.total)} con el envío incluido, pagás al recibir.`;
     const gratis = oferta.total <= cantidad! * prod.precio;
     return `Los ${cantidad} te salen ${gs(oferta.total)}${gratis ? " con envío gratis" : " en total"}, pagás al recibir.`;
   }
