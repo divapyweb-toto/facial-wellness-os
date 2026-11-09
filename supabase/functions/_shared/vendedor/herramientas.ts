@@ -1388,13 +1388,16 @@ export function cuerpoPrecioProducto(prod: ItemCatalogo, plantilla: string | und
   return falta ? "" : t;
 }
 
-export function botonesPrimerTurno(prod: ItemCatalogo, sinOferta2 = false, titulos: { q1?: string; q2?: string } = {}): { id: string; titulo: string }[] {
+export function botonesPrimerTurno(prod: ItemCatalogo, sinOferta2 = false, titulos: { q1?: string; q2?: string; q3?: string } = {}): { id: string; titulo: string }[] {
   const b = (clave: string, titulo: string) => ({ id: `vend_p1:${clave}:${prod.handle}`, titulo });
   const q1 = titulos.q1 ?? "Quiero 1", q2 = titulos.q2 ?? "2 con envío gratis";
   if (esPack(prod.handle)) return [b("pack", "Quiero el pack"), b("duda", "Tengo una duda")];
   // 26-10: JawFlex (el 2 solo si lo pide) y Botella ("¿para qué quiero 2?"): sin el botón de 2.
   if (sinOferta2) return [b("q1", q1), b("duda", "Tengo una duda")];
   const x2 = prod.ofertas.find((o) => o.cantidad === 2);
+  // 09-11 (inhalador): con botón de 3 configurado, el 3 va primero (WhatsApp admite 3 botones: 3, 2 y 1; "Tengo una duda" sale).
+  const x3 = prod.ofertas.find((o) => o.cantidad === 3);
+  if (titulos.q3 && x3 && x2) return [b("q3", titulos.q3), b("q2", q2), b("q1", q1)];
   // 13-10 (Enrique): "envío gratis" vende más que "sin envío", y la mejor opción va primero.
   return x2 && x2.total <= 2 * prod.precio ? [b("q2", q2), b("q1", q1), b("duda", "Tengo una duda")] : [b("q1", q1), b("duda", "Tengo una duda")];
 }

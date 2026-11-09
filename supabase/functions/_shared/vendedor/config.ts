@@ -84,7 +84,7 @@ export type PrimerTurnoProducto = {
    */
   cuerpo_precio?: string;
   /** 27-10: títulos de los botones del primer turno ("Quiero 1 par", "2 pares envío gratis"; máx. 20 caracteres). */
-  botones?: { q1?: string; q2?: string };
+  botones?: { q1?: string; q2?: string; q3?: string };
 };
 
 /** 26-10: una oferta extra post-compra. Los montos y textos viven en config_wa.vendedor.ofertas_extra (nunca la IA). */
@@ -118,7 +118,7 @@ function primerTurnoDe(v: unknown): Record<string, PrimerTurnoProducto> {
       ...(typeof o.linea_precio === "string" && o.linea_precio.trim() ? { linea_precio: o.linea_precio.trim() } : {}),
       ...(typeof o.cuerpo_precio === "string" && o.cuerpo_precio.trim() ? { cuerpo_precio: o.cuerpo_precio.trim() } : {}),
       ...(o.botones && typeof o.botones === "object" && !Array.isArray(o.botones)
-        ? { botones: Object.fromEntries(["q1", "q2"].flatMap((k) => { const t = (o.botones as Record<string, unknown>)[k]; return typeof t === "string" && t.trim() && t.trim().length <= 20 ? [[k, t.trim()]] : []; })) }
+        ? { botones: Object.fromEntries(["q1", "q2", "q3"].flatMap((k) => { const t = (o.botones as Record<string, unknown>)[k]; return typeof t === "string" && t.trim() && t.trim().length <= 20 ? [[k, t.trim()]] : []; })) }
         : {}),
       ...(o.notas_cantidad && typeof o.notas_cantidad === "object" && !Array.isArray(o.notas_cantidad)
         ? { notas_cantidad: Object.fromEntries(Object.entries(o.notas_cantidad as Record<string, unknown>).filter(([k, t]) => /^\d+$/.test(k) && typeof t === "string" && t.trim()).map(([k, t]) => [k, (t as string).trim()])) }

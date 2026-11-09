@@ -1037,3 +1037,11 @@ Deno.test("09-11 kit Botella + Inhalador: 158.000 con envío gratis (la diferenc
   assertEquals(oferta2DistintosInfo(itemsCatalogo(CATALOGO_INH, ctxPrueba({ cfg }))).total, 158000);
   assertEquals(PAREJA_2_DISTINTOS[BOT], INH);
 });
+
+Deno.test("09-11 primer turno con q3: botones 3, 2 y 1 (sin 'Tengo una duda'); sin q3 queda como siempre", () => {
+  const cfg = configPrueba({ vendedor_ofertas: { [INH]: { "2": 96000, "3": 116000 } } });
+  const it = itemsCatalogo(CATALOGO_INH, ctxPrueba({ cfg })).find((x) => x.handle === INH)!;
+  const con = botonesPrimerTurno(it, false, { q1: "Quiero 1", q2: "2 envío gratis", q3: "3 x 149.000" });
+  assertEquals(con.map((b) => b.id), [`vend_p1:q3:${INH}`, `vend_p1:q2:${INH}`, `vend_p1:q1:${INH}`]);
+  assertEquals(botonesPrimerTurno(it).map((b) => b.id.split(":")[1]), ["q2", "q1", "duda"]);
+});

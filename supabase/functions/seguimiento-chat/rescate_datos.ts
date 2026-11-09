@@ -70,7 +70,7 @@ export function leerCfgRescateDatos(v: unknown): CfgRescateDatos {
 }
 
 /** Botones "Quiero …": primer turno 13-10 (q1, q2, pack) y el viejo "Quiero pedirlo" (pedir, también del toque 3). */
-const RE_QUIERO = /^vend_p1:(?:q1|q2|pack|pedir):/;
+const RE_QUIERO = /^vend_p1:(?:q1|q2|q3|pack|pedir):/; // 09-11: q3 (inhalador)
 
 /** true si el id (button_reply.id o payload de plantilla) es de un botón "Quiero …". "duda" no cuenta. */
 export function esBotonQuiero(id: string | null | undefined): boolean {
