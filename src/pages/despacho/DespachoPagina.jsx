@@ -234,8 +234,11 @@ function mapearGrupoAPedidos(grupoRows) {
   const a1 = String(primero('Shipping Address1') || '').trim()
   const a2 = String(primero('Shipping Address2') || '').trim()
   const dir = extraerNota(notas, 'Dirección principal') || (a2 && !a1.includes(a2) ? [a1, a2].filter(Boolean).join(', ') : a1)
-  const refDir = extraerNota(notas, 'Referencia') || ''
-  const direccion = dir ? (refDir ? `${dir} (${refDir})` : dir) : refDir
+  // 11-11 (VT-1226/1227): la referencia del bot viene en la nota del pedido (Notes) y en Address2, no en Note Attributes:
+  // REFERENCIA de Lucero salía "N/A". Orden: atributo → nota → Address2 (si no es un link o un pin).
+  const a2EsRef = a2 && !/https?:\/\/|maps\.|goo\.gl|\bpin\b|-\d{1,2}\.\d{3,}/i.test(a2)
+  const refDir = extraerNota(notas, 'Referencia') || extraerNota(primero('Notes'), 'Referencia') || (a2EsRef ? a2 : '')
+  const direccion = dir ? (refDir && !dir.includes(refDir) ? `${dir} (${refDir})` : dir) : refDir
   // El primer candidato que dé un número real (los pedidos del vendedor IA lo traen en Phone / Shipping Phone).
   const telefono = [extraerNota(notas, 'Teléfono'), extraerNota(notas, 'whatsapp'), primero('Phone'), primero('Shipping Phone'), primero('Billing Phone')]
     .map(limpiarTel).find(t => t.replace(/\D/g, '').length >= 9) || ''
@@ -630,8 +633,14 @@ function notasLucero(p) {
 
 // DESCRIPCION de la cabecera de Punto a Punto: el producto y, 13-10, el día de
 // la entrega programada (la planilla de PaP no tiene columna de observaciones).
+// 11-11 (VT-1224/1225): con 1 solo producto y más de 1 unidad, Raspador y Parches salían sin la cantidad (la columna
+// CANTIDAD es bultos = 1). Ahora siempre "xN", igual que en el pedido mixto.
+function descProductoCourier(p) {
+  return p.esMultiProducto ? p.descripcionCombinada : `${getDesc(p.producto_nombre, p.cantidad)} x${parseInt(p.cantidad) || 1}`
+}
+
 function descripcionPaP(p) {
-  const desc = p.esMultiProducto ? p.descripcionCombinada : getDesc(p.producto_nombre, p.cantidad)
+  const desc = descProductoCourier(p)
   return textoEntrega(p) ? `${desc} · ${textoEntrega(p)}` : desc
 }
 
@@ -649,7 +658,7 @@ function descargarCabeceraLuceroXLSX(pedidos) {
       'N/A',                                           // BARRIO (Shopify no lo pide)
       oNA(p.referencia_dir),                           // REFERENCIA (punto de referencia)
       1,                                               // CANTIDAD (siempre 1: es bultos, no unidades)
-      oNA(p.esMultiProducto ? p.descripcionCombinada : getDesc(p.producto_nombre, p.cantidad)),     // PRODUCTO
+      oNA(descProductoCourier(p)),                    // PRODUCTO (siempre con "xN")
       p.prepago ? 0 : (p.total || 0),                  // IMPORTE a cobrar
       oNA(p.fecha),                                    // FECHA
       'N/A',                                           // UBICACIÓN (no hay link de maps en Shopify)
@@ -901,7 +910,7 @@ function ventaAPedido(v) {
     ciudad: v.ciudad || '',
     departamento: '',
     direccion: v.cliente_direccion || '',
-    referencia_dir: '',
+    referencia_dir: extraerNota(v.notas, 'Referencia'), // 11-11: la guarda Despacho al cargar la venta
     telefono: v.cliente_telefono || '',
     producto_nombre: v.producto_nombre || '',
     cantidad: v.cantidad || 1,
@@ -930,7 +939,7 @@ function ventaAPedido(v) {
 // Columnas de "Desde Ventas". Las extra (prepago, transportadora, flete,
 // tienda) van aparte: si alguna no existiera en la base, se reintenta sin
 // ellas en vez de dejar la pantalla vacía.
-const COLS_VENTAS_PEND_BASE = 'id, n_referencia, fecha, cliente_nombre, cliente_telefono, cliente_direccion, ciudad, producto_nombre, cantidad, total, estado_releasit'
+const COLS_VENTAS_PEND_BASE = 'id, n_referencia, fecha, cliente_nombre, cliente_telefono, cliente_direccion, ciudad, producto_nombre, cantidad, total, estado_releasit, notas'
 const COLS_VENTAS_PEND_EXTRA = 'pago_anticipado, transportadora, costo_envio, tienda'
 // 12-10: marca de retiro en persona (no sale por courier).
 const COLS_VENTAS_PEND_RETIRO = 'metodo_envio_nombre'
@@ -1132,7 +1141,7 @@ function filaVentaDePedido(p, catalogo) {
     pago_anticipado: !!p.prepago,  // pagó por adelantado (transferencia verificada)
     estado_releasit: p.estado_releasit,
     // CI/RUC del pedido manual (columna opcional — ver nota de guardado tolerante abajo).
-    notas: p.notas || null,
+    notas: [p.notas, p.referencia_dir ? `Referencia: ${p.referencia_dir}` : ''].filter(Boolean).join('\n') || null,
   }
   // 21-10: lo que decidió el motor de courier (aunque esté apagado: queda para medir). Columnas opcionales: si no
   // existieran, el insert tolerante las saca y reintenta.

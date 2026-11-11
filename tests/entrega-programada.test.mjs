@@ -146,8 +146,8 @@ try {
   assert.equal(D.notasLucero(prog), texto)
   assert.equal(D.notasLucero({ ...prog, prepago: true }), `YA PAGADO - NO COBRAR · ${texto}`)
   assert.equal(D.notasLucero(normal), 'N/A')
-  assert.equal(D.descripcionPaP(prog), `Tiras nasales (30 unidades) · ${texto}`)
-  assert.equal(D.descripcionPaP(normal), 'Tiras nasales (30 unidades)')
+  assert.equal(D.descripcionPaP(prog), `Tiras nasales (30 unidades) x1 · ${texto}`) // 11-11: siempre con "xN"
+  assert.equal(D.descripcionPaP(normal), 'Tiras nasales (30 unidades) x1')
   // Multiproducto colapsado en un paquete: conserva el texto
   const multi = D.agruparFilasPorReferencia([
     fila('#9103', 'CONFIRMADO, ENTREGA_PROGRAMADA', { 'Note Attributes': `entrega_programada: ${FECHA}\nentrega_franja: antes de las 12` }),
