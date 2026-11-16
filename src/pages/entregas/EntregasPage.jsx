@@ -18,6 +18,7 @@ import { getPlantillaTrackingLucero } from '../../lib/config'
 import { fetchAll, fetchAllSafe } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { mandarAVoltraOS } from '../../lib/importarCourierWA'
+import { FUENTES, COLS_PREVIO_PROTECCION, protegerRendidas, conFuente, lotesUniformes } from '../../lib/rendicionLucero'
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { Upload, CheckCircle, X, TrendingUp, TrendingDown, Truck, PackageCheck, PackageX, Clock, MapPin, User, AlertTriangle, Search, Save, DollarSign, FileSpreadsheet, Calendar, ChevronRight, ChevronDown, ArrowRight, MessageCircle } from 'lucide-react'
 import { calcularPiramide, indexarCostos, indexarDespachos, historiaEntrega } from '../../lib/contribucion'
@@ -461,8 +462,8 @@ export default function EntregasPage() {
       if (!items.length) { toast('El archivo de Lucero no tiene filas', 'error'); return }
       const resumen = resumenExportLucero(items)
 
-      // 1) Tracking
-      const regs = exportLuceroAEntregas(items).map(soloColumnasEntregas)
+      // 1) Tracking. 16-11: con su fuente, para que el trigger sepa que es el export.
+      const regs = conFuente(exportLuceroAEntregas(items).map(soloColumnasEntregas), FUENTES.EXPORT_LUCERO)
 
       // PRECEDENCIA: el export es tracking EN VIVO, la rendición es el cierre
       // contable. Para 'fallido' el export devuelve 'en_proceso' a propósito
@@ -471,13 +472,21 @@ export default function EntregasPage() {
       // borraba el cierre — y con él `cobrado`, o sea la plata. Un estado no
       // terminal nunca degrada uno terminal.
       const TERMINALES = new Set(['entregado', 'devuelto', 'no_despachado'])
+      let conservadas = []
       try {
         const guias = regs.map(r => r.nro_guia_pap).filter(Boolean)
         const previo = new Map()
+        // 16-11: se lee también la plata guardada y de quién es. Si la migración del 16-11 todavía no corrió
+        // (faltan fuente_plata / corregido_manual), se lee como antes y no hay protección: igual que hoy.
+        let cols = COLS_PREVIO_PROTECCION.join(', ')
         for (let i = 0; i < guias.length; i += 200) {
-          const { data, error } = await supabase.from('entregas')
-            .select('nro_guia_pap, categoria, cobrado, fecha_entrega')
+          let { data, error } = await supabase.from('entregas')
+            .select(cols)
             .in('nro_guia_pap', guias.slice(i, i + 200))
+          if (error && /fuente_plata|corregido_manual/.test(error.message || '')) {
+            cols = 'nro_guia_pap, categoria, cobrado, fecha_entrega'
+            ;({ data, error } = await supabase.from('entregas').select(cols).in('nro_guia_pap', guias.slice(i, i + 200)))
+          }
           if (error) throw error
           for (const e of (data || [])) previo.set(String(e.nro_guia_pap), e)
         }
@@ -489,6 +498,9 @@ export default function EntregasPage() {
           r.cobrado = ant.cobrado ?? r.cobrado
           r.fecha_entrega = ant.fecha_entrega ?? r.fecha_entrega
         }
+        // 16-11: fila ya rendida por la rendición (o corregida a mano) → se conservan sus montos y fechas y se
+        // muestra la diferencia. Caso real: rendición con ₲0 a cobrar pisada por el export con el total de la guía.
+        conservadas = protegerRendidas(regs, previo)
       } catch (e) {
         // Sin el estado previo, guardar devolvería entregados a en_proceso y
         // borraría `cobrado`. Se corta y se avisa: no se guarda nada.
@@ -497,8 +509,10 @@ export default function EntregasPage() {
       }
 
       let guardados = 0, errorMsg = null
-      for (let i = 0; i < regs.length; i += 100) {
-        let chunk = regs.slice(i, i + 100)
+      // 16-11: lotes con las mismas claves. En un lote mezclado, la clave que falta en una fila se escribía NULL
+      // (así quedaron filas con rendido y costo_envio NULL aunque el export omitía la clave para no pisarlas).
+      for (const lote of lotesUniformes(regs, 100)) {
+        let chunk = lote
         for (let intento = 0; intento < 5; intento++) {
           const { error } = await supabase.from('entregas').upsert(chunk, { onConflict: 'nro_guia_pap' })
           if (!error) { guardados += chunk.length; break }
@@ -534,10 +548,11 @@ export default function EntregasPage() {
       }
 
       avisarVoltraOS('lucero', items)
-      setResumenLucero({ ...resumen, guardados, ventasAct })
+      setResumenLucero({ ...resumen, guardados, ventasAct, conservadas })
+      const avisoConservadas = conservadas.length ? ` · ${conservadas.length} ya rendida${conservadas.length !== 1 ? 's' : ''} con montos distintos: se conservó la rendición` : ''
       if (errorMsg) toast('Lucero: error al guardar — ' + errorMsg, 'error')
       else if (erroresVentas.length) toast(`Lucero: ${guardados} envíos guardados, pero las ventas no se actualizaron bien — ${[...new Set(erroresVentas)].join(' · ')}`, 'error')
-      else toast(`Lucero: ${guardados} envíos · ${ventasAct} ventas actualizadas`, 'success')
+      else toast(`Lucero: ${guardados} envíos · ${ventasAct} ventas actualizadas${avisoConservadas}`, conservadas.length ? 'info' : 'success')
       setRecargar(n => n + 1)
     } catch (err) {
       toast('Error procesando el archivo de Lucero: ' + err.message, 'error')
@@ -573,7 +588,7 @@ export default function EntregasPage() {
     setGuardando(true)
     try {
       // 1) Guardar las entregas nuevas en la tabla (solo columnas válidas)
-      const limpio = reportesNuevos.map(soloColumnasEntregas)
+      const limpio = conFuente(reportesNuevos.map(soloColumnasEntregas), FUENTES.EXCEL_PAP)   // 16-11: con su fuente
 
       // 1.5) REGLA "una vez rendido, queda rendido":
       //   Traigo las guías que YA están rendidas en la base (por el Excel del
@@ -1074,6 +1089,28 @@ export default function EntregasPage() {
                         : `${resumenLucero.montosCorruptos} envíos vinieron con montos imposibles y se descartaron esos valores (${resumenLucero.codigosCorruptos.join(', ')}) `}
                       — el resto del envío se guardó normalmente. Si esa tarifa o multa era real, cargala a mano.
                     </span>
+                  </div>
+                )}
+                {/* 16-11: filas ya rendidas que el export traía con otra plata. No se pisan en silencio. */}
+                {resumenLucero.conservadas?.length > 0 && (
+                  <div className="alert alert-warning" style={{ marginTop: 10 }}>
+                    <AlertTriangle size={15} />
+                    <div>
+                      <div>
+                        {resumenLucero.conservadas.length === 1 ? 'Esta fila ya rendida trae' : `Estas ${resumenLucero.conservadas.length} filas ya rendidas traen`} montos distintos en el export: se conservan los de la rendición
+                        {resumenLucero.conservadas.some(d => d.por === 'manual') ? ' (o de la corrección manual)' : ''}.
+                      </div>
+                      <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
+                        {resumenLucero.conservadas.map(d => (
+                          <li key={d.nro_guia_pap}>
+                            <b>{d.n_referencia}</b>{d.por === 'manual' ? ' (corregida a mano)' : ''}: {d.cambios.map(c => {
+                              const ver = (v) => v == null ? '—' : typeof v === 'boolean' ? (v ? 'sí' : 'no') : typeof v === 'number' ? v.toLocaleString('es-PY') : String(v)
+                              return `${c.campo.replace(/_/g, ' ')} export ${ver(c.archivo)} / guardado ${ver(c.guardado)}`
+                            }).join(' · ')}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </div>
                 )}
               </div>

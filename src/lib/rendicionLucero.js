@@ -236,7 +236,8 @@ export function rendicionLuceroAEntregas(parsed) {
       tienda: esRefVoltra(it.referencia) ? 'voltra' : 'fw',
       estado_pap: it.estadoFinal,
       categoria: cat,
-      motivo: '',
+      // 16-11: sin `motivo`. La rendición no trae motivo y mandaba '' → borraba el que había puesto el export
+      // (#1054, #1155). Sin la clave, el upsert conserva el motivo guardado.
       // Bruto REAL cobrado al cliente (dato de Lucero, pisa la estimación del despacho).
       importe: it.totalCobrar,
       cobrado: cat === 'entregado' ? it.totalCobrar : 0,
@@ -313,4 +314,103 @@ export function resumenRendicionLucero(parsed) {
     cuadra, detalle, diferencias, montoDevuelto,
     todoCuadra: diferencias.length === 0,
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 16-11 · PROTECCIÓN DE FILAS YA RENDIDAS (paquete d)
+// La misma fila de Lucero tiene dos fuentes: la rendición (cierre contable, lo que Lucero depositó) y el export
+// de seguimiento (monto de la guía). Ganaba la última que se subía: una rendición con ₲0 a cobrar y neto −tarifa
+// quedaba pisada por el export con el total de la guía. La base tiene un trigger (migración
+// 20261116000001_entregas_proteccion) que conserva la plata; esto hace lo mismo en la web ANTES de guardar, para
+// poder MOSTRAR la diferencia en vez de pisar en silencio.
+// ═══════════════════════════════════════════════════════════
+
+// Lo que cada pantalla manda en `fuente_ultima`. El trigger solo mira 'export_lucero' y 'rendicion_lucero'.
+export const FUENTES = {
+  EXPORT_LUCERO: 'export_lucero',
+  RENDICION_LUCERO: 'rendicion_lucero',
+  EXCEL_PAP: 'excel_pap',
+  MANUAL: 'manual',
+}
+
+// Plata y fechas que manda la rendición. Misma lista que el trigger.
+export const CAMPOS_PLATA = [
+  'importe', 'cobrado', 'neto_depositado', 'costo_envio',
+  'fecha_entrega', 'dias_entrega', 'rendido', 'fecha_rendido', 'dias_rendicion',
+]
+
+// Columnas que hay que leer de la fila guardada para decidir (las 2 últimas existen desde la migración del 16-11).
+export const COLS_PREVIO_PROTECCION = ['nro_guia_pap', 'categoria', ...CAMPOS_PLATA, 'fuente_plata', 'corregido_manual']
+
+// ¿La plata de esta fila ya no la puede pisar el export? Corregida a mano, o rendida por la rendición de Lucero.
+export function filaProtegida(prev) {
+  if (!prev) return false
+  if (prev.corregido_manual === true) return true
+  return prev.fuente_plata === FUENTES.RENDICION_LUCERO && prev.rendido === true
+}
+
+// Compara sin que "−40000" (numeric de Postgres) y -40000 o '2026-11-13' y '2026-11-13T00:00' parezcan distintos.
+const valorComparable = (v) => {
+  if (v == null || v === '') return null
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'number') return v
+  const s = String(v).trim()
+  if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s)
+  return s.slice(0, 10)
+}
+
+// Para cada fila del export que cae sobre una fila protegida: pone en el registro los valores GUARDADOS (no borra
+// la clave: en un upsert de varias filas una clave ausente se escribe NULL) y junta la diferencia para mostrarla.
+// Modifica `regs` en el lugar. Devuelve [{ nro_guia_pap, n_referencia, por: 'rendicion'|'manual', cambios: [{campo, archivo, guardado}] }].
+export function protegerRendidas(regs, previoPorGuia) {
+  const diferencias = []
+  for (const r of regs || []) {
+    const prev = previoPorGuia?.get(String(r.nro_guia_pap))
+    if (!filaProtegida(prev)) continue
+    const cambios = []
+    for (const campo of CAMPOS_PLATA) {
+      if (!(campo in r)) continue
+      if (valorComparable(r[campo]) !== valorComparable(prev[campo])) {
+        cambios.push({ campo, archivo: r[campo] ?? null, guardado: prev[campo] ?? null })
+      }
+      r[campo] = prev[campo] ?? null
+    }
+    if (cambios.length) {
+      diferencias.push({
+        nro_guia_pap: r.nro_guia_pap,
+        n_referencia: r.n_referencia || prev.n_referencia || r.nro_guia_pap,
+        por: prev.corregido_manual === true ? 'manual' : 'rendicion',
+        cambios,
+      })
+    }
+  }
+  return diferencias
+}
+
+// Agrega la fuente a cada registro (después de soloColumnasEntregas, que la sacaría).
+export function conFuente(regs, fuente) {
+  return (regs || []).map(r => ({ ...r, fuente_ultima: fuente }))
+}
+
+// Lotes para upsert donde TODAS las filas tienen las mismas claves. supabase-js arma `columns` con la unión de las
+// claves del lote y la clave que falta en una fila se escribe NULL: así quedaron 22 filas de Lucero con rendido y
+// costo_envio NULL (el export omite esas claves cuando no hay dato, justamente para no pisarlas).
+export function lotesUniformes(regs, tam = 100) {
+  const grupos = new Map()
+  for (const r of regs || []) {
+    const firma = Object.keys(r).sort().join(',')
+    if (!grupos.has(firma)) grupos.set(firma, [])
+    grupos.get(firma).push(r)
+  }
+  const lotes = []
+  for (const g of grupos.values()) for (let i = 0; i < g.length; i += tam) lotes.push(g.slice(i, i + tam))
+  return lotes
+}
+
+// id_externo del rastro de una carga de rendición en eventos_crudos (fuente 'courier'). Prefijo propio: post-entrega
+// lee 'lucero:%' esperando filas del export, y la rendición tiene otra forma.
+export async function idEventoRendicion(cuerpo) {
+  const bytes = new TextEncoder().encode(JSON.stringify(cuerpo))
+  const hash = await globalThis.crypto.subtle.digest('SHA-256', bytes)
+  return 'rendicion_lucero:' + Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('')
 }

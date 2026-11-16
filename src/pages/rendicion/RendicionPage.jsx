@@ -7,7 +7,7 @@ import { sanearEntrega } from '../../lib/estadosPaP'
 import { fetchAll } from '../../lib/fetchAll'
 import { useToast } from '../../lib/toast'
 import { parsearFilasRendicion, conciliarRendicion, combinarArchivosRendicion, esArchivoRendicion } from '../../lib/conciliacionRendicion'
-import { esRendicionLucero, parsearRendicionLucero, rendicionLuceroAEntregas, resumenRendicionLucero, categoriaLucero } from '../../lib/rendicionLucero'
+import { esRendicionLucero, parsearRendicionLucero, rendicionLuceroAEntregas, resumenRendicionLucero, categoriaLucero, FUENTES, conFuente, lotesUniformes, idEventoRendicion } from '../../lib/rendicionLucero'
 import { soloColumnasEntregas } from '../../lib/estadosPaP'
 import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarClock, Upload, FileCheck } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
@@ -334,7 +334,20 @@ export default function RendicionPage() {
         } catch (e) { /* si falla, se guarda sin dias_rendicion — no bloquea la importación */ }
 
         // Solo columnas reales de la tabla: una clave de más rechaza el insert entero.
-        const registros = registrosCrudos.map(soloColumnasEntregas)
+        // 16-11: + fuente_ultima, para que el trigger sepa que la plata es de la rendición (si la columna no
+        // existe todavía, el reintento de abajo la saca).
+        const registros = conFuente(registrosCrudos.map(soloColumnasEntregas), FUENTES.RENDICION_LUCERO)
+
+        // 16-11: rastro de la carga en eventos_crudos (como importar-courier), para saber después quién cambió
+        // qué fila y cuándo. Idempotente por hash; si falla, no frena la importación.
+        let idEvento = null
+        try {
+          const cuerpo = { courier: 'lucero', tipo: 'rendicion', archivos: deLucero.map(a => a.nombre), lotes }
+          idEvento = await idEventoRendicion(cuerpo)
+          const { error: errEv } = await supabase.from('eventos_crudos')
+            .upsert({ fuente: 'courier', id_externo: idEvento, payload: cuerpo }, { onConflict: 'fuente,id_externo', ignoreDuplicates: true })
+          if (errEv) { console.warn('eventos_crudos (rendición):', errEv.message); idEvento = null }
+        } catch (e) { console.warn('eventos_crudos (rendición):', e?.message); idEvento = null }
         const resumenes = lotes.map(l => ({ ...resumenRendicionLucero(l), lote: l.lote, fecha: l.fecha, estadoLote: l.estadoLote, pagado: l.pagado, totalPago: l.totalPago, tarifas: l.tarifas, bruto: l.bruto }))
         const noCuadra = resumenes.filter(r => !r.todoCuadra)
         // Guardado tolerante: si la base todavía no tiene alguna columna (ej.
@@ -342,8 +355,10 @@ export default function RendicionPage() {
         // reintenta en vez de perder toda la importación.
         let guardados = 0, errorLucero = null
         const omitidas = []
-        for (let i = 0; i < registros.length; i += 100) {
-          let chunk = registros.slice(i, i + 100)
+        // 16-11: lotes con las mismas claves (dias_rendicion viene solo en algunas filas: en un lote mezclado
+        // las demás lo escribían NULL).
+        for (const lote of lotesUniformes(registros, 100)) {
+          let chunk = lote
           for (let intento = 0; intento < 5; intento++) {
             const { error } = await supabase.from('entregas').upsert(chunk, { onConflict: 'nro_guia_pap' })
             if (!error) { guardados += chunk.length; break }
@@ -357,6 +372,12 @@ export default function RendicionPage() {
             if (!errorLucero) errorLucero = error.message
             break
           }
+        }
+        if (idEvento) {
+          await supabase.from('eventos_crudos')
+            .update({ procesado_en: new Date().toISOString(), error: errorLucero ? String(errorLucero).slice(0, 500) : null })
+            .eq('fuente', 'courier').eq('id_externo', idEvento)
+            .then(({ error }) => { if (error) console.warn('eventos_crudos (rendición):', error.message) })
         }
         // ── Actualizar el estado de las VENTAS ──
         // La rendición trae el EstadoFinal de cada envío, así que cierra la
