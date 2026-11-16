@@ -18,6 +18,7 @@ import { logAccion, logAccionLote } from '../../lib/audit'
 import { Plus, Search, X, Clock, Trash2, Edit2, Save, AlertTriangle, Receipt } from 'lucide-react'
 import DatosFactura from '../../components/DatosFactura'
 import { hoyLocal } from '../../lib/fechas'
+import { transportadoraDeMetodoEnvio } from '../../lib/transportadoras'
 import './ventas.css'
 
 const CANALES = ['Meta Ads', 'TikTok', 'Instagram', 'WhatsApp', 'Shopify Orgánico', 'Otro']
@@ -250,6 +251,10 @@ function NuevaVentaModal({ onClose, onSaved }) {
         metodo_pago_nombre: metodosPago.find(m => m.id === form.metodo_pago_id)?.nombre || '',
         metodo_envio_nombre: envSel?.nombre || '',
       }
+      // 16-11: el courier sale del método de envío (antes quedaba el default 'pap' de la columna aunque fuera Lucero).
+      // Método desconocido o vacío: no se manda y queda como antes.
+      const transpMetodo = transportadoraDeMetodoEnvio(envSel?.nombre)
+      if (transpMetodo) base.transportadora = transpMetodo
       let filas = filasDeVenta(base, conProducto, { envioCliente, costoEnvio })
 
       // Tolerante a que falte la migración 005: si la base todavía no tiene

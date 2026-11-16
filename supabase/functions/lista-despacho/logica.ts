@@ -44,11 +44,45 @@ export interface PedidoLista {
   courier: string | null; armado: string[]; creado_en: string;
   /** 05-11: dirección utilizable (pin, o calle/zona + ciudad); la lee seguimiento-chat/pedidos_48h para saber qué pedir. */
   direccionOk?: boolean;
+  /** 16-11: motor activo que no respondió: el courier es el de la lista de respaldo y la lista avisa "revisar courier". */
+  motorSinRespuesta?: boolean;
 }
 export interface NoDespachar { p: PedidoLista; motivo: string; clave: string; quien: string }
 export interface ListaDespacho { porCourier: Map<string, PedidoLista[]>; retiros: PedidoLista[]; noDespachar: NoDespachar[]; sinConfirmar: number }
 /** 29-10: cobertura de la tabla de tarifas (rpc sugerir_courier) por ciudad tal cual viene (sin espacios de los costados). */
 export interface CoberturaCiudad { ciudad_reconocida: boolean; sin_cobertura: boolean; sugerido: string | null }
+
+// ─── 16-11: motor de courier (misma rpc motor_courier que Despacho) ──────────────────────────────────────────────────
+// Para los pedidos que todavía no tienen courier en Ventas, el courier sale del motor y no de la lista vieja (la lista
+// decía PaP en 16 ciudades donde el motor asigna Lucero). Mapa clave → decisión; null = el motor no respondió.
+// Sin mapa (motor apagado) todo queda como antes.
+export interface DecisionMotor { ganador: string | null; sin_cobertura: boolean }
+export type DecisionesMotor = ReadonlyMap<string, DecisionMotor | null>;
+export interface ConsultaMotor { ciudad: string; producto: string; cobro: number; cod: boolean }
+const normMotor = (t: unknown) => String(t ?? "").trim().toLowerCase();
+/** Misma clave que la web (motorCourier.js claveDecision): ciudad + producto + cobro + cod. */
+export const claveMotor = (ciudad: string, producto: string, cobro: number, cod: boolean) =>
+  [normMotor(ciudad), normMotor(producto), Math.round(Number(cobro) || 0), cod === false ? 0 : 1].join("|");
+
+/** Respuesta de la rpc → decisión, o null si no tiene la forma esperada (como normalizarDecision de la web). */
+export function normalizarMotor(d: unknown): DecisionMotor | null {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return null;
+  const o = d as Record<string, unknown>;
+  const ganador = o.ganador === "pap" || o.ganador === "lucero" ? o.ganador : null;
+  const sinCob = o.sin_cobertura === true || o.regla === "sin_cobertura";
+  return ganador || sinCob ? { ganador, sin_cobertura: sinCob } : null;
+}
+
+/** Interruptor config.motor_courier (texto JSON): activo y, si hay "desde", ya llegó en hora de Paraguay. Raro = apagado. */
+export function motorRige(valor: unknown, ahora = new Date()): boolean {
+  try {
+    const o = typeof valor === "string" ? JSON.parse(valor) : valor;
+    if (!o || typeof o !== "object" || Array.isArray(o) || (o as Record<string, unknown>).activo !== true) return false;
+    const desde = (o as Record<string, unknown>).desde;
+    const hoy = new Date(ahora.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
+    return !(typeof desde === "string" && /^\d{4}-\d{2}-\d{2}/.test(desde.trim())) || hoy >= desde.trim().slice(0, 10);
+  } catch { return false; }
+}
 
 function lineaDe(nota: string, etiqueta: RegExp): string | null {
   const l = nota.split(/\n/).find((x) => etiqueta.test(x));
@@ -71,7 +105,12 @@ export function pagadoAntes(raw: Record<string, unknown>, tags: string[]): boole
   return ff === "" || ff === "unfulfilled" || ff === "null";
 }
 
-function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined, ciudadElegida?: string): PedidoLista & { tags: string[]; direccionOk: boolean; ciudadEnvio: string } {
+/** Producto que decide el ruteo (el de la regla de producto si hay: JawFlex rige para toda la caja; si no, el primero). */
+const productoRuteo = (lineas: Linea[]) => lineas.find((l) => /jaw|mand[ií]bula|ejercitador/i.test(l.nombre))?.nombre ?? lineas[0]?.nombre ?? "";
+/** Venta con courier propio (se respeta: el motor nunca reasigna lo cargado). */
+const courierDeVenta = (venta: VentaDespacho | undefined) => venta?.transportadora && venta.transportadora !== "otra" ? venta.transportadora : null;
+
+function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined, ciudadElegida?: string, motor?: DecisionesMotor): PedidoLista & { tags: string[]; direccionOk: boolean; ciudadEnvio: string } {
   const raw = f.raw ?? {};
   const tags = tagsDe(raw);
   const dir = (raw.shipping_address ?? raw.billing_address ?? {}) as Record<string, unknown>;
@@ -83,24 +122,57 @@ function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined, ciudadElegi
   const ciudad = ciudadElegida ?? (tiene(tags, "ciudad_por_pin") && ciudadEnvio ? ciudadEnvio : (atributo(raw, /^ciudad$/i) ?? ciudadEnvio));
   const pagado = pagadoAntes(raw, tags);
   const armado = [...new Set(lineas.flatMap((l) => [esKit(l.nombre) ? NOTA_ARMADO_KIT : "", notaArmado(l.nombre, l.cantidad)]).filter(Boolean))];
-  const forzado = lineas.find((l) => /jaw|mand[ií]bula|ejercitador/i.test(l.nombre))?.nombre ?? lineas[0]?.nombre ?? "";
-  const courier = venta?.transportadora && venta.transportadora !== "otra" ? venta.transportadora : (sugerirTransportadora(ciudad, forzado, { cod: !pagado }).transportadora ?? null);
+  const forzado = productoRuteo(lineas);
+  const total = Math.round(Number(raw.total_price ?? 0)) || 0;
+  // 16-11: sin courier en Ventas → el motor (si está activo). Sin respuesta del motor → lista de respaldo, marcado.
+  let courier = courierDeVenta(venta);
+  let motorSinRespuesta = false;
+  if (!courier) {
+    const dec = motor ? motor.get(claveMotor(ciudad, forzado, total, !pagado)) ?? null : undefined;
+    if (dec?.ganador) courier = dec.ganador;
+    else if (dec?.sin_cobertura) courier = null;
+    else {
+      courier = sugerirTransportadora(ciudad, forzado, { cod: !pagado }).transportadora ?? null;
+      motorSinRespuesta = motor !== undefined;
+    }
+  }
   const direccion = [dir.address1, dir.address2].map((x) => String(x ?? "").trim()).filter(Boolean).join(", ");
   const notas = [nota, ...[...(Array.isArray(raw.note_attributes) ? raw.note_attributes : []), ...(Array.isArray(raw.customAttributes) ? raw.customAttributes : [])]
     .map((a: Record<string, unknown>) => `${a?.name ?? a?.key ?? ""}: ${a?.value ?? ""}`)].join("\n");
   return {
     direccionOk: direccionUtilizable({ direccion, notas, ciudad }),
     nombre: String(raw.name ?? f.nombre ?? ""), ref: refVoltra(String(raw.name ?? f.nombre ?? "")), ciudad, ciudadEnvio, lineas,
-    total: Math.round(Number(raw.total_price ?? 0)) || 0, pagado, prioridad: tiene(tags, "prioridad") || pagado,
+    total, pagado, prioridad: tiene(tags, "prioridad") || pagado,
     factura: lineaDe(nota, /^\s*factura\s*:\s*/i) ?? atributo(raw, /facturar/i), programado: tiene(tags, "entrega_programada"),
     reemplaza: conPrefijo(tags, "reemplaza_a_")?.replace("reemplaza_a_", "").toUpperCase() ?? null,
     totalDistinto: tiene(tags, "total_distinto") ? (lineaDe(nota, /^\s*total distinto\s*:\s*/i) ?? "revisar el total") : null,
     sinPin: tiene(tags, "sin_pin"), courier, armado, creado_en: f.creado_en, tags,
+    ...(motorSinRespuesta ? { motorSinRespuesta: true } : {}),
   };
 }
 
+/** 16-11: qué preguntarle al motor: pedidos sin courier en Ventas (una consulta por clave; ciudad escrita y Shipping City). */
+export function consultasMotor(filas: PedidoShopify[], ventas: VentaDespacho[]): ConsultaMotor[] {
+  const ventaPorRef = new Map(ventas.map((v) => [v.n_referencia, v]));
+  const out = new Map<string, ConsultaMotor>();
+  for (const f of filas) {
+    const raw = f.raw ?? {};
+    if (f.es_borrador || raw.test === true || !Array.isArray(raw.line_items) || !raw.line_items.length) continue;
+    if (YA_PROCESADO.has(String(f.estado_envio ?? ""))) continue;
+    const venta = ventaPorRef.get(refVoltra(String(raw.name ?? f.nombre ?? "")));
+    if (courierDeVenta(venta) || venta?.despachado_at) continue;
+    const p = aPedido(f, venta);
+    const producto = productoRuteo(p.lineas);
+    for (const ciudad of new Set([p.ciudad, p.ciudadEnvio].map((c) => String(c ?? "").trim()).filter(Boolean))) {
+      const q = { ciudad, producto, cobro: p.total, cod: !p.pagado };
+      out.set(claveMotor(q.ciudad, q.producto, q.cobro, q.cod), q);
+    }
+  }
+  return [...out.values()];
+}
+
 /** Clasifica los pedidos de los últimos días en lo que hay que despachar hoy. `coberturas` (29-10): tabla de tarifas por ciudad. */
-export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refsEnCourier: Set<string>, ahora = new Date(), coberturas?: ReadonlyMap<string, CoberturaCiudad>): ListaDespacho {
+export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refsEnCourier: Set<string>, ahora = new Date(), coberturas?: ReadonlyMap<string, CoberturaCiudad>, motor?: DecisionesMotor): ListaDespacho {
   const limiteRetiro = new Date(ahora.getTime() - 7 * 86400_000).toISOString();
   const ventaPorRef = new Map(ventas.map((v) => [v.n_referencia, v]));
   const out: ListaDespacho = { porCourier: new Map(), retiros: [], noDespachar: [], sinConfirmar: 0 };
@@ -117,10 +189,10 @@ export function armarLista(filas: PedidoShopify[], ventas: VentaDespacho[], refs
     const ref = refVoltra(String(raw.name ?? f.nombre ?? ""));
     const venta = ventaPorRef.get(ref);
     if (venta?.despachado_at || refsEnCourier.has(ref)) continue;
-    let p = aPedido(f, venta);
+    let p = aPedido(f, venta, undefined, motor);
     // 05-11: ciudad escrita que la tabla no reconoce y Shipping City que sí → se usa el Shipping City.
     if (p.ciudadEnvio && p.ciudadEnvio !== p.ciudad && coberturas?.get(p.ciudad.trim())?.ciudad_reconocida === false
-      && coberturas?.get(p.ciudadEnvio)?.ciudad_reconocida === true) p = aPedido(f, venta, p.ciudadEnvio);
+      && coberturas?.get(p.ciudadEnvio)?.ciudad_reconocida === true) p = aPedido(f, venta, p.ciudadEnvio, motor);
     const cob = coberturas?.get(p.ciudad.trim());
     // La lista vieja no encontró courier pero la tabla sí (ciudad mal escrita que la tabla reconoce por alias o fonética).
     if (!p.courier && !p.pagado && cob?.ciudad_reconocida && !cob.sin_cobertura && cob.sugerido) p.courier = cob.sugerido;
@@ -185,6 +257,7 @@ function bloque(p: PedidoLista, hoyISO: string): string {
   if (p.reemplaza) extra.push(`reemplaza a ${escaparHtml(p.reemplaza)}`);
   if (p.totalDistinto) extra.push(`⚠ total distinto: ${escaparHtml(p.totalDistinto)}`);
   if (p.sinPin) extra.push("📍 sin pin");
+  if (p.motorSinRespuesta) extra.push("⚠ motor sin respuesta: revisar courier");
   if (p.creado_en.slice(0, 10) < hoyISO) extra.push(`desde ${diaCorto(p.creado_en)}`);
   if (extra.length) l.push(extra.join(" · "));
   return l.join("\n");

@@ -35,6 +35,7 @@ import LineaMotor from './LineaMotor'
 import {
   asegurarMotorConfig, motorActivo, decisionGuardada, limpiarCacheMotor, paramsMotorDePedido, paramsMotorDeVenta,
   infoPorReferencia, pedirDecisiones, aplicarMotorAPedido, filasCambioDePedidos, registrarCambiosCourier, resumenPedidosParados, insertarTolerante,
+  confirmacionCambioManual, estadoDecision,
 } from '../../lib/motorCourier'
 
 // Helpers locales para el cruce ventas ⋈ entregas del historial de riesgo
@@ -898,11 +899,20 @@ async function descargarGuiasDOCX(pedidos) {
   URL.revokeObjectURL(url)
 }
 
+// 16-11: destildar "ya pagado" en un pedido que Shopify da por pagado (etiqueta de pago) lo pasa a COBRAR: se pide
+// confirmación. Volver a tildarlo, o destildar uno marcado a mano sin etiqueta, no pregunta. → texto | null.
+function avisoDestildarPago(p) {
+  if (!p?.prepago || !p?.pagadoShopify) return null
+  return `#${p.n_referencia}: Shopify lo da por PAGADO (etiqueta de pago). Si lo pasás a contra entrega, el courier va a cobrar ${formatGs(p.totalOrden ?? p.total ?? 0)}\n¿Confirmás que NO está pagado?`
+}
+
 // ─── Map venta DB → formato pedido (para XLSX/DOCX) ─────
 function ventaAPedido(v) {
+  // 16-11: pagado = la venta (pago_anticipado) o las etiquetas de pago de Shopify (pagadoShopify, ver clasificarVentasPendientes).
+  const pagado = !!v.pago_anticipado || !!v.pagadoShopify
   // Si la venta ya tiene transportadora guardada (despachada antes), se respeta.
   // Si no, se sugiere por ciudad — así las ventas viejas también salen ruteadas.
-  const sug = sugerirTransportadora(v.ciudad || '', v.producto_nombre || '', { cod: !v.pago_anticipado })
+  const sug = sugerirTransportadora(v.ciudad || '', v.producto_nombre || '', { cod: !pagado })
   const transportadora = v.transportadora || sug.transportadora
   return {
     n_referencia: v.n_referencia || '',
@@ -927,9 +937,11 @@ function ventaAPedido(v) {
     costo_envio: v.costo_envio ?? sug.tarifa,
     // Sin esto, una venta ya pagada salía como "efectivo a cobrar" en la
     // cabecera y la guía, y el courier le cobraba de nuevo al cliente.
-    prepago: !!v.pago_anticipado,
+    // 16-11: también con etiqueta de pago en Shopify (PAGO_VERIFICADO, PAGADO, PAGADO_QR, CREDITO): importe ₲0 y
+    // "YA PAGADO - NO COBRAR" aunque la venta haya quedado en false (pago marcado por otro camino).
+    prepago: pagado,
     // 12-10: Ventas no guarda tags: lo pagado por adelantado (pago con prioridad) va primero.
-    prioridad: !!v.pago_anticipado,
+    prioridad: pagado,
     tienda: v.tienda || undefined,
     // 13-10: entrega programada leída de Shopify (ver programadasPorRef).
     entregaProgramada: v.entregaProgramada || null,
@@ -1175,7 +1187,8 @@ async function aplicarMotorLote(lista) {
       .map(p => paramsMotorDePedido(p, codDe(p))))
     return lista.map((p) => {
       const dec = decisionGuardada(paramsMotorDePedido(p, codDe(p)))
-      if (!dec) return p
+      // 16-11: motor activo sin respuesta (más de 4 s o error) → queda la lista de respaldo, pero MARCADO para avisar.
+      if (!dec) return activo && p.cfg?.despachar !== false && !p.retiroEnPersona && !p.retiroConfirmado && p.ciudad ? { ...p, motorSinRespuesta: true } : p
       return aplicarMotorAPedido(p, dec, {
         activo,
         manual: p.transpManual ? p.transportadora : null,
@@ -1265,13 +1278,16 @@ function clasificarVentasPendientes(ventas, filasShopify) {
     if (!f) { sale.push(v); continue }
     const tags = listaTagsVenta(f.tags)
     if (esCancelado({ tags, cancelledAt: f.cancelado, financialStatus: f.fin })) continue // en ningún lado
-    const pagado = !!v.pago_anticipado || pagadoPorTags(tags, '')
+    // 16-11: CREDITO (mayorista a plazo) tampoco se cobra en la puerta, igual que en "Traer pedidos de Voltra".
+    const pagadoTags = pagadoPorTags(tags, '') || tags.some(t => t.includes('credito'))
+    const pagado = !!v.pago_anticipado || pagadoTags
     const r = decidirSalida({
       confirmado: true, pagado, faltanDatos: tags.includes('faltan_datos'),
       courier: tags.includes('sin_cobertura') && !pagado ? null : (v.transportadora || 'pap'), sinCoberturaTag: tags.includes('sin_cobertura'),
       pagoRequeridoTag: tags.includes('pago_anticipado_requerido'),
     })
-    if (r.sale) sale.push(v)
+    // 16-11: la marca viaja con la venta (solo en memoria; la base no se toca) para que ventaAPedido ponga ₲0.
+    if (r.sale) sale.push(pagadoTags && !v.pago_anticipado ? { ...v, pagadoShopify: true } : v)
     else noSale.push({ ref: v.n_referencia, ciudad: v.ciudad, total: v.total, fecha: v.fecha, clave: r.clave, motivo: r.motivo, quien: r.quien, detalle: r.detalle,
       dias: Math.max(0, Math.round((Date.parse(hoyParaguay()) - Date.parse(String(v.fecha || hoyParaguay()).slice(0, 10))) / 86400000)) })
   }
@@ -1377,6 +1393,11 @@ function BadgeEntrega({ e }) {
 
 export default function DespachoPagina() {
   const { toast } = useToast()
+  // 16-11: el motor no respondió (4 s) para algún pedido que se carga: se avisa con las referencias (antes, en silencio).
+  const avisarMotorSinRespuesta = (lista) => {
+    const refs = [...new Set((lista || []).filter(p => p.motorSinRespuesta).map(p => `#${p.n_referencia}`))]
+    if (refs.length) toast(`⚠ Motor sin respuesta: revisar courier de ${refs.join(', ')} (quedó el de la lista de respaldo)`, 'error')
+  }
   const fileRef = useRef()
 
   // ── Estado CSV ─────────────────────────────────────────
@@ -1575,7 +1596,12 @@ export default function DespachoPagina() {
       p = { ...p, editado: !!edit }
       // 21-10: motor de courier. Apagado: solo anota la decisión (sugerencia + registro). Activo: asigna el ganador salvo
       // que Enrique haya elegido a mano (transpOverride gana siempre) o el courier no cubra la ciudad.
-      const decMotor = decisionGuardada(paramsMotorDePedido(p, cod))
+      const paramsMotor = paramsMotorDePedido(p, cod)
+      const decMotor = decisionGuardada(paramsMotor)
+      // 16-11: motor activo que no respondió (4 s o error) → aviso visible en la fila, no la lista vieja en silencio.
+      if (!decMotor && motorOn && p.cfg?.despachar !== false && !p.retiroConfirmado && p.ciudad && estadoDecision(paramsMotor) === 'fallo') {
+        p = { ...p, motorSinRespuesta: true }
+      }
       if (decMotor) {
         p = aplicarMotorAPedido(p, decMotor, {
           activo: motorOn,
@@ -1795,7 +1821,7 @@ export default function DespachoPagina() {
   }, [ventasNoSale, voltraNoSale])
   const ventasFiltradas = useMemo(() => {
     // 12-10: lo pagado por adelantado (pago con prioridad) primero.
-    const base = ordenarPorPrioridad(ventasPend.map(v => ({ ...v, prioridad: !!v.pago_anticipado })))
+    const base = ordenarPorPrioridad(ventasPend.map(v => ({ ...v, prioridad: !!v.pago_anticipado || !!v.pagadoShopify })))
     if (!busqVentas.trim()) return base
     const q = busqVentas.toLowerCase()
     return base.filter(v =>
@@ -2032,6 +2058,7 @@ export default function DespachoPagina() {
     // courier, NO se carga (no se lo manda por PaP sin cobranza): queda para decidir a mano.
     const nuevasAntes = nuevas
     const nuevasMotor = await aplicarMotorLote(nuevasAntes)
+    avisarMotorSinRespuesta(nuevasMotor)
     const sinCoberturaMotor = nuevasMotor.filter((p, i) => nuevasAntes[i].transportadora && !p.transportadora)
     if (sinCoberturaMotor.length) {
       nuevas = nuevasMotor.filter((p, i) => !(nuevasAntes[i].transportadora && !p.transportadora))
@@ -2258,6 +2285,7 @@ export default function DespachoPagina() {
         const frescos = [...conCourier, ...sinCobertura].filter(p => !cuenta.has(String(p.n_referencia)))
         if (frescos.length) {
           const conMotor = await aplicarMotorLote(frescos)
+          avisarMotorSinRespuesta(conMotor)
           frescos.forEach((p, i) => conMotorDe.set(p, conMotor[i]))
           const todosP = [...conCourier, ...sinCobertura].map(p => conMotorDe.get(p) || p)
           conCourier = todosP.filter(p => p.transportadora)
@@ -2471,6 +2499,9 @@ export default function DespachoPagina() {
                                 value={p.transportadora || ''}
                                 onChange={e => {
                                   const val = e.target.value
+                                  // 16-11: contra el motor, se confirma con lo que se gana o se pierde (no se bloquea).
+                                  const aviso = confirmacionCambioManual(p.motorDecision, val, { activo: motorOn })
+                                  if (aviso && !window.confirm(`#${p.n_referencia}: ${aviso}`)) return
                                   setTranspOverride(prev => ({ ...prev, [p.n_referencia]: val }))
                                   // Nudge: si se está pisando un bloqueo de producto a mano,
                                   // se sugiere pago anticipado (la razón de fondo del bloqueo
@@ -2500,6 +2531,7 @@ export default function DespachoPagina() {
                               {p.fallbackProducto && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--yellow)', whiteSpace: 'normal' }}>⚠ {p.motivoTransportadora}</div>}
                               <SugerenciaCosto ciudad={p.ciudad} cod={!p.prepago} asignada={p.transportadora} />
                               <LineaMotor decision={p.motorDecision} asignada={p.transportadora} activo={motorOn} />
+                              {p.motorSinRespuesta && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--red)', whiteSpace: 'normal' }}>⚠ motor sin respuesta: revisar courier</div>}
                               {p.transportadora === 'otra' && (
                                 <input
                                   type="number"
@@ -2602,7 +2634,12 @@ export default function DespachoPagina() {
                       <td data-label="Pago">
                         {p.despachar ? (
                           <button
-                            onClick={() => togglePrepago(p.n_referencia)}
+                            onClick={() => {
+                              // 16-11: con etiqueta de pago, pasarlo a cobrar pide confirmación.
+                              const aviso = avisoDestildarPago(p)
+                              if (aviso && !window.confirm(aviso)) return
+                              togglePrepago(p.n_referencia)
+                            }}
                             title={p.prepago ? 'Pagó por transferencia. Clic para volver a contra entrega.' : 'Marcar como pagado por adelantado (transferencia). El repartidor no cobra.'}
                             style={{
                               cursor: 'pointer', borderRadius: 20, padding: '3px 10px', fontSize: 10, fontWeight: 700,
@@ -2901,8 +2938,8 @@ export default function DespachoPagina() {
                         </td>
                         <td data-label="Ciudad" className="muted">
                           {v.ciudad || '—'}
-                          <NotaFallbackProducto ciudad={v.ciudad} producto={v.producto_nombre} cod={!v.pago_anticipado} transportadora={v.transportadora} />
-                          <SugerenciaCosto ciudad={v.ciudad} cod={!v.pago_anticipado} asignada={v.transportadora} />
+                          <NotaFallbackProducto ciudad={v.ciudad} producto={v.producto_nombre} cod={!(v.pago_anticipado || v.pagadoShopify)} transportadora={v.transportadora} />
+                          <SugerenciaCosto ciudad={v.ciudad} cod={!(v.pago_anticipado || v.pagadoShopify)} asignada={v.transportadora} />
                           <LineaMotor decision={decisionDeVenta(v)} asignada={v.transportadora} activo={motorOn} />
                         </td>
                         <td data-label="Dirección" className="muted" style={{ maxWidth: 200, whiteSpace: 'normal', fontSize: 11 }}>
@@ -2913,7 +2950,15 @@ export default function DespachoPagina() {
                         <td data-label="Teléfono" className="muted">{v.cliente_telefono || '—'}</td>
                         <td data-label="Producto" style={{ fontSize: 12 }}>{getTipo(v.producto_nombre)}{armadoDe(v) && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--purple)' }}>{armadoDe(v)}</div>}</td>
                         <td data-label="Cant.">{v.cantidad}</td>
-                        <td data-label="Total" style={{ fontWeight: 600 }}>{formatGs(v.total)}</td>
+                        <td data-label="Total" style={{ fontWeight: 600 }}>
+                          {formatGs(v.total)}
+                          {(v.pago_anticipado || v.pagadoShopify) && (
+                            <div title={v.pagadoShopify ? 'Etiqueta de pago en Shopify: la planilla y la guía van con ₲0' : 'Venta pagada por adelantado: la planilla y la guía van con ₲0'}
+                              style={{ fontSize: 10, fontWeight: 700, color: 'var(--green)', whiteSpace: 'nowrap' }}>
+                              YA PAGADO - NO COBRAR (₲0)
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

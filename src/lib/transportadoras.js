@@ -274,6 +274,8 @@ export const NOMBRE_OFICIAL_LUCERO = {
 //   3. PaP en todo lo demás.
 //   4. Si PaP no cubre, va Lucero aunque sea caro: mejor caro que no despachar.
 export const SOBREPRECIO_ACEPTABLE = 1000
+// 16-11: pagado por adelantado, diferencia de flete por debajo de esto → Lucero (config margen_desempate del motor).
+export const MARGEN_DESEMPATE_PAGADO = 3000
 
 // Tasa de entrega que Lucero necesita para EMPATAR a PaP según su tarifa,
 // con precio nuevo (112.000 Grupo A ×1), COGS ~13.600 y PaP 29.000 al 83%.
@@ -481,9 +483,9 @@ export function preferirLucero(fecha = hoyParaguay()) {
 }
 
 // ─── Sugerencia automática ──────────────────────────────────
-// Regla vigente: Lucero si cubre la ciudad Y su tarifa es ≤ 30.000
-// (más barato o +1.000 compensado por cobrar 6 días antes).
-// En las de 35.000 y en todo lo que Lucero no cubre, va PaP.
+// Regla vigente (16-11, decisión del 26-10): es el RESPALDO del motor de courier (Despacho y lista-despacho usan el motor
+// cuando responde). Regla de producto → lista oficial de Lucero → contra entrega: Lucero donde los dos cobran, PaP solo
+// donde Lucero no cobra → ya pagado: menor flete (diferencia < ₲3.000 → Lucero).
 // Devuelve { transportadora, motivo, tarifa, fleteEstimado } — el motivo se muestra en Despacho
 // para que la decisión sea auditable y no una caja negra.
 // 20-10: cod=false (pedido ya pagado) deja usar PaP donde llega sin cobranza; contra entrega, nunca.
@@ -549,14 +551,18 @@ export function sugerirTransportadora(ciudad, productoNombre = '', { cod = true 
   // ANTES de la comparación de costo: si vos ya definiste quién lleva esa
   // ciudad, no hay nada que comparar.
   const oficial = ruteoOficial(ciudad)
-  if (oficial === 'lucero' && hayLucero) {
+  // 16-11: ya pagado y los dos llegan → no manda la lista: abajo, el de menor flete (misma regla que el motor).
+  if (oficial === 'lucero' && hayLucero && (cod || !hayPaP)) {
     return conTarifa({
       transportadora: 'lucero',
       motivo: 'Asignada a Lucero en la lista oficial de ciudades',
       velocidad: velocidadLucero(cL),
     })
   }
-  if (oficial === 'pap' && hayPaP) {
+  // 16-11: la lista oficial manda PaP SOLO donde Lucero no llega. Decisión de Enrique del 26-10: "donde llegan los dos
+  // couriers con cobranza va Lucero; PaP solo donde Lucero no llega" (es lo que hace el motor desde el 03-11). Antes la
+  // lista daba PaP en 16 ciudades donde Lucero cobra (Villarrica, Capiatá, Ñemby…) y así salió VT-1174.
+  if (oficial === 'pap' && hayPaP && !hayLucero) {
     return conTarifa({ transportadora: 'pap', motivo: 'Asignada a PaP en la lista oficial de ciudades', velocidad: null })
   }
 
@@ -564,30 +570,20 @@ export function sugerirTransportadora(ciudad, productoNombre = '', { cod = true 
     const tarifa = tarifaDe('lucero', ciudad)
     const vel = velocidadLucero(cL)
     const dif = tarifa - flete
-    const rapida = vel === 'diaria' || vel === 'frecuente'
 
     if (!hayPaP) {
       return conTarifa({ transportadora: 'lucero', motivo: 'PaP no cubre esta ciudad', velocidad: vel })
     }
-    if (dif < 0) {
-      return conTarifa({
-        transportadora: 'lucero',
-        motivo: `${Math.abs(dif).toLocaleString('es-PY')} más barato que PaP${rapida ? ' y más rápido' : ''}`,
-        velocidad: vel,
-      })
+    // 16-11 (26-10): contra entrega y los dos cobran → Lucero, sin comparar tarifa (la comparación vieja daba PaP en las
+    // ciudades de Lucero "programada").
+    if (cod) {
+      return conTarifa({ transportadora: 'lucero', motivo: 'Los dos cobran acá: va Lucero (regla del 26-10)', velocidad: vel })
     }
-    if (dif <= SOBREPRECIO_ACEPTABLE && rapida) {
-      return conTarifa({
-        transportadora: 'lucero',
-        motivo: dif === 0 ? 'Misma tarifa y rinde al día siguiente' : `+${dif.toLocaleString('es-PY')} pero entrega ${vel === 'diaria' ? 'en 24hs' : 'en 24-48hs'} y rinde al día siguiente`,
-        velocidad: vel,
-      })
+    // 16-11: ya pagado → la misma regla que el motor: el de menor flete; diferencia menor a ₲3.000 → Lucero (más rápido).
+    if (tarifa != null && Math.abs(dif) >= MARGEN_DESEMPATE_PAGADO && dif > 0) {
+      return conTarifa({ transportadora: 'pap', motivo: `Ya pagado: PaP sale ${dif.toLocaleString('es-PY')} menos de flete`, velocidad: null })
     }
-    // Más caro de lo aceptable, o lento: va PaP.
-    const porQue = vel === 'programada'
-      ? `Lucero sale ${tarifa.toLocaleString('es-PY')} y entrega 1-2 veces por semana`
-      : `Lucero sale +${dif.toLocaleString('es-PY')} acá — no compensa`
-    return conTarifa({ transportadora: 'pap', motivo: porQue, velocidad: null })
+    return conTarifa({ transportadora: 'lucero', motivo: 'Ya pagado: menor flete o diferencia chica → Lucero, más rápido', velocidad: vel })
   }
 
   if (hayPaP) return conTarifa({ transportadora: 'pap', motivo: 'Lucero no cubre esta ciudad', velocidad: null })
@@ -596,6 +592,18 @@ export function sugerirTransportadora(ciudad, productoNombre = '', { cod = true 
     motivo: 'Ninguna transportadora cubre esta ciudad',
     tarifa: null, fleteEstimado: false, velocidad: null,
   }
+}
+
+// 16-11: courier de una venta cargada a mano en la página Ventas, según el método de envío elegido. Antes no se mandaba y
+// la columna quedaba en su default 'pap' aunque el método dijera otra cosa. null = método vacío o desconocido: no se
+// adivina (queda como antes).
+export function transportadoraDeMetodoEnvio(nombre) {
+  const t = claveCiudadLucero(nombre)
+  if (!t) return null
+  if (/\blucero\b/.test(t)) return 'lucero'
+  if (/punto a punto|\bpap\b/.test(t)) return 'pap'
+  if (/^otra\b|retiro/.test(t)) return 'otra'
+  return null
 }
 
 // Nombre de ciudad tal cual lo espera la planilla de Lucero.

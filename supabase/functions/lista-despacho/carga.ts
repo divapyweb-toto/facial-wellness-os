@@ -1,8 +1,43 @@
 // lista-despacho/carga.ts · 05-11 (Enrique: "un secretario super inteligente"). La carga de la lista de despacho, sacada
 // de index.ts para que seguimiento-chat (pedidos_48h) vea EXACTAMENTE el mismo motivo que la lista y Despacho.
-// Solo lee: shopify_pedidos (30 días), ventas, entregas y la tabla de tarifas (rpc sugerir_courier).
+// Solo lee: shopify_pedidos (30 días), ventas, entregas, la tabla de tarifas (rpc sugerir_courier) y, 16-11, el motor de
+// courier (config motor_courier + rpc motor_courier) para los pedidos que todavía no tienen courier en Ventas.
 import { db } from "../_shared/db.ts";
-import { armarLista, ciudadesAConsultar, type CoberturaCiudad, type ListaDespacho, type PedidoShopify, type VentaDespacho } from "./logica.ts";
+import {
+  armarLista, ciudadesAConsultar, claveMotor, type CoberturaCiudad, type ConsultaMotor, consultasMotor, type DecisionMotor, type ListaDespacho,
+  motorRige, normalizarMotor, type PedidoShopify, type VentaDespacho,
+} from "./logica.ts";
+
+/** 16-11: tope por llamada al motor (igual que Despacho, TIMEOUT_MOTOR_MS) y llamadas en paralelo por tanda. */
+export const TIMEOUT_MOTOR_MS = 4000;
+const TANDA_MOTOR = 10;
+type RpcMotor = (args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }>;
+
+/** Decisión del motor por consulta, en tandas, con tope. Nunca tira: error, respuesta rara o tope → null ("sin respuesta"). */
+export async function decisionesMotor(consultas: ConsultaMotor[], rpc: RpcMotor = (a) => db().rpc("motor_courier", a), timeoutMs = TIMEOUT_MOTOR_MS): Promise<Map<string, DecisionMotor | null>> {
+  const m = new Map<string, DecisionMotor | null>();
+  const una = async (q: ConsultaMotor) => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const tope = new Promise<null>((r) => { t = setTimeout(() => r(null), timeoutMs); });
+    const llamada = (async () => {
+      const { data, error } = await rpc({ p_ciudad: q.ciudad, p_producto: q.producto, p_cobro: Math.round(q.cobro), p_costo_prod: null, p_cod: q.cod });
+      return error ? null : normalizarMotor(data);
+    })().catch(() => null);
+    const dec = await Promise.race([llamada, tope]);
+    clearTimeout(t);
+    if (!dec) console.warn(`lista-despacho: motor_courier('${q.ciudad}') sin respuesta`);
+    m.set(claveMotor(q.ciudad, q.producto, q.cobro, q.cod), dec);
+  };
+  for (let i = 0; i < consultas.length; i += TANDA_MOTOR) await Promise.all(consultas.slice(i, i + TANDA_MOTOR).map(una));
+  return m;
+}
+
+/** Motor activo hoy (config.motor_courier). Si no se puede leer, apagado: la lista sigue como antes. */
+async function motorActivo(ahora: Date): Promise<boolean> {
+  const { data, error } = await db().from("config").select("valor").eq("clave", "motor_courier").maybeSingle();
+  if (error) { console.warn("lista-despacho: no se pudo leer config.motor_courier:", error.message); return false; }
+  return motorRige(data?.valor, ahora);
+}
 
 /** Fila de shopify_pedidos con lo que usa la lista y lo que necesita quien escribe al cliente. */
 export interface FilaPedido extends PedidoShopify {
@@ -41,9 +76,12 @@ export async function cargarListaDespacho(ahora = new Date()): Promise<{ lista: 
   if (ev) throw new Error(`ventas: ${ev.message}`);
   if (ee) throw new Error(`entregas: ${ee.message}`);
   const enCourier = new Set((ents ?? []).map((e) => String(e.n_referencia)));
-  let lista = armarLista(filas, (ventas ?? []) as VentaDespacho[], enCourier, ahora);
+  const vs = (ventas ?? []) as VentaDespacho[];
+  // 16-11: con el motor activo, el courier de lo que no está en Ventas sale del motor (misma rpc que Despacho).
+  const motor = await motorActivo(ahora) ? await decisionesMotor(consultasMotor(filas, vs)) : undefined;
+  let lista = armarLista(filas, vs, enCourier, ahora, undefined, motor);
   // 29-10: los que quedaron sin courier se vuelven a mirar con la tabla de tarifas (ciudad mal escrita ≠ sin cobertura).
   const consultar = ciudadesAConsultar(lista);
-  if (consultar.length) lista = armarLista(filas, (ventas ?? []) as VentaDespacho[], enCourier, ahora, await coberturas(consultar));
+  if (consultar.length) lista = armarLista(filas, vs, enCourier, ahora, await coberturas(consultar), motor);
   return { lista, filas };
 }

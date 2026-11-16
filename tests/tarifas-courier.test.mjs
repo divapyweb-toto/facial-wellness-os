@@ -194,9 +194,9 @@ test('sugerirTransportadora nunca preasigna PaP contra entrega donde PaP no cobr
   }
   // Fram: lista oficial Lucero; PaP sin cobranza no cambia nada.
   assert.equal(sugerirTransportadora('Fram', prod).transportadora, 'lucero')
-  // Villarrica (lista oficial PaP): ahora con el flete de su ciudad, no el plano.
+  // Villarrica: 16-11, Lucero también cobra ahí → Lucero (Enrique 26-10: PaP solo donde Lucero no llega), con el flete de la tabla.
   const vr = sugerirTransportadora('Villarrica', prod)
-  assert.deepEqual([vr.transportadora, vr.tarifa, vr.fleteEstimado], ['pap', 31000, false])
+  assert.deepEqual([vr.transportadora, vr.tarifa, vr.fleteEstimado], ['lucero', 44000, false])
   // 02-11: fuera de la tabla, contra entrega no sale por la lista vieja.
   assert.equal(sugerirTransportadora('Guayaibi', prod).transportadora, null)
   // Lucero por lista oficial: tarifa de la tabla.

@@ -113,6 +113,15 @@ export function decisionGuardada(params) {
   return cache.get(claveDecision(params))?.resuelta ?? null
 }
 
+// 16-11: en qué quedó el pedido al motor → null (nunca se pidió) | 'pendiente' | 'ok' | 'fallo' (error, respuesta rara o
+// más de 4 s). Con 'fallo' Despacho avisa "motor sin respuesta: revisar courier" en vez de usar la lista vieja en silencio.
+export function estadoDecision(params) {
+  const e = cache.get(claveDecision(params))
+  if (!e) return null
+  if (e.resuelta) return 'ok'
+  return e.vence != null ? 'fallo' : 'pendiente'
+}
+
 const conTope = (promesa, ms) => new Promise((resolve) => {
   let listo = false
   const t = setTimeout(() => { if (!listo) { listo = true; resolve(null) } }, ms)
@@ -176,7 +185,8 @@ export const paramsMotorDeVenta = (v, info) => ({
   ciudad: v?.ciudad || '',
   producto: info?.producto || v?.producto_nombre || '',
   cobro: info?.cobro ?? v?.total ?? 0,
-  cod: !v?.pago_anticipado,
+  // 16-11: pagado = la venta o las etiquetas de pago de Shopify (pagadoShopify lo pone "Desde Ventas").
+  cod: !(v?.pago_anticipado || v?.pagadoShopify),
 })
 
 // Filas de ventas (una por línea) → Map ref → { producto, cobro }. El producto es el de la regla de producto si hay
@@ -288,6 +298,52 @@ export function aplicarMotorAPedido(p, decision, { activo = false, manual = null
     flete_estimado: p.lineaPrincipal === false ? false : !!d?.estimado,
     despachar: p.cfg?.despachar !== false && nuevo != null && (!p.origenManual || !(p.faltantes || []).length),
   }
+}
+
+// ─── 16-11: cambio manual contra el motor ──────────────────
+// Enrique (aceptado 16-11): el cambio a mano contra el motor NO se bloquea (hay casos válidos, un cliente que pide PaP),
+// pero PIDE CONFIRMACIÓN mostrando cuánto se gana o se pierde. VT-1235 pasó a PaP sin preguntar con el motor en Lucero.
+// Todo sale de lo que devolvió el motor (opciones: ganancia_esperada, p, flete); ningún número fijo.
+// → texto para window.confirm, o null si no hace falta preguntar (mismo courier, motor apagado o sin decisión).
+const NOMBRE_CORTO = { pap: 'PaP', lucero: 'Lucero', otra: 'Otra' }
+const nombreCorto = (c) => NOMBRE_CORTO[c] || String(c)
+const gsPunto = (n) => '₲' + String(Math.abs(Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+const opcionDe = (decision, courier) => (decision?.opciones || []).find(o => o?.courier === courier) || null
+const numero = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v))
+const REGLA_TEXTO = {
+  producto_solo_lucero: 'regla de producto: JawFlex solo por Lucero',
+  producto_fallback_pap: 'JawFlex por PaP porque Lucero no llega',
+  pagado_adelantado: 'ya pagado: el motor elige el de menor flete (empate → Lucero)',
+  desempate_rendicion: 'desempate: rinde más rápido',
+}
+
+export function confirmacionCambioManual(decision, elegido, { activo = true } = {}) {
+  if (!activo || !decision?.ganador || !elegido || elegido === decision.ganador) return null
+  const g = decision.ganador
+  const og = opcionDe(decision, g), oe = opcionDe(decision, elegido)
+  const lineas = [`El motor elige ${nombreCorto(g)}. Pasar a ${nombreCorto(elegido)}:`]
+  if (!oe) {
+    lineas.push(elegido === 'otra'
+      ? '· Otra transportadora: el motor no tiene datos para comparar'
+      : `· ${nombreCorto(elegido)} no figura entre las opciones del motor (no cobra contra entrega acá o no tiene tarifa)`)
+  } else {
+    const ge = numero(oe.ganancia_esperada), gg = numero(og?.ganancia_esperada)
+    if (ge != null && gg != null) {
+      const dif = ge - gg
+      lineas.push(`· ganancia esperada ${dif < 0 ? '−' : '+'}${gsPunto(dif)} por pedido (${nombreCorto(g)} ${gsPunto(gg)} · ${nombreCorto(elegido)} ${gsPunto(ge)})`)
+    }
+    const pg = numero(og?.p), pe = numero(oe.p)
+    if (pg != null && pe != null) lineas.push(`· entrega ${nombreCorto(g)} ${Math.round(pg * 100)}% vs ${nombreCorto(elegido)} ${Math.round(pe * 100)}%`)
+    const fg = numero(og?.flete), fe = numero(oe.flete)
+    if (fg != null && fe != null) lineas.push(`· flete ${nombreCorto(g)} ${gsPunto(fg)} vs ${nombreCorto(elegido)} ${gsPunto(fe)}`)
+  }
+  if (decision.regla === 'guarda_lucero') {
+    lineas.push(`· el motor deja Lucero salvo que PaP gane por encima del mínimo${decision.sugerencia?.motivo ? ` (${decision.sugerencia.motivo})` : ''}`)
+  } else if (REGLA_TEXTO[decision.regla]) {
+    lineas.push(`· ${REGLA_TEXTO[decision.regla]}`)
+  }
+  lineas.push('Queda registrado como cambio manual. ¿Confirmás?')
+  return lineas.join('\n')
 }
 
 // ─── Textos ────────────────────────────────────────────────
