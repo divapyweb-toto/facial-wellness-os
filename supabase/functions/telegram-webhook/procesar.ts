@@ -93,6 +93,11 @@ export interface PedidoContexto {
   courier?: string | null;
   /** 12-10: teléfono del pedido (shopify_pedidos.telefono). */
   telefono?: string | null;
+  /**
+   * 16-11: la venta VT-<n> ya existe con courier (Lucero/PaP): Despacho bajó la planilla/guía con el monto de ese momento,
+   * aunque Shopify todavía no figure preparado. Cuenta como "en camino" para el texto "entregar SIN COBRAR".
+   */
+  venta_con_courier?: boolean;
 }
 
 export type ClaveTextoCliente = "cancelado" | "reposicion" | "escribo" | "pagado";
@@ -233,12 +238,13 @@ const ENVIO_EN_CAMINO = new Set(["EN_PREPARACION", "DESPACHADO", "INTENTO_FALLID
 const ENVIO_TERMINADO = new Set(["ENTREGADO", "RENDIDO", "NO_ENTREGADO", "CANCELADO"]);
 
 /** Preparado en Shopify (fulfilled, REST o GraphQL) o ya con el courier. */
-export function pedidoEnCamino(p: Pick<PedidoContexto, "raw" | "estado_envio">): boolean {
+export function pedidoEnCamino(p: Pick<PedidoContexto, "raw" | "estado_envio" | "venta_con_courier">): boolean {
   const r = p.raw ?? {};
   const preparado = String(r.fulfillment_status ?? "").toLowerCase() === "fulfilled" ||
     String(r.displayFulfillmentStatus ?? "").toUpperCase() === "FULFILLED";
   const envio = String(p.estado_envio ?? "").toUpperCase();
-  return !ENVIO_TERMINADO.has(envio) && (preparado || ENVIO_EN_CAMINO.has(envio));
+  // 16-11: o la venta ya está en la planilla del courier (pagó después de bajarla: 8 casos con guía a cobrar).
+  return !ENVIO_TERMINADO.has(envio) && (preparado || ENVIO_EN_CAMINO.has(envio) || !!p.venta_con_courier);
 }
 
 /** Texto para el courier de un pedido que el cliente ya pagó (cobrar 0). */
@@ -438,7 +444,7 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
             }) as { ok?: boolean; error?: string } | undefined;
             notas.push(t?.ok === false
               ? `No pude mandarte el texto para el courier (${t.error ?? "error"}): avisale que NO cobre.`
-              : "Ya estaba preparado: te mandé el texto para el courier (YA PAGADO, cobrar 0).");
+              : "Ya estaba preparado o en la planilla del courier: te mandé el texto para el courier (YA PAGADO, cobrar 0).");
           } catch (e) {
             notas.push(`No pude mandarte el texto para el courier (${e instanceof Error ? e.message : e}): avisale que NO cobre.`);
           }

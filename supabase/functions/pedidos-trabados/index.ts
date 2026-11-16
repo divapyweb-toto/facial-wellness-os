@@ -13,6 +13,7 @@ import { activarPlantillaReprogramar, depsReales as depsPlantilla } from "./plan
 import { entregasParaActuar } from "./entregas_actuar_io.ts";
 import { alertaPlazoPap } from "./plazo_pap_io.ts";
 import { casosParaCourier, sembrarYaAvisados } from "./casos_courier_envio_io.ts";
+import { alertaPagadosConCobro } from "./pagados_con_cobro_io.ts";
 
 type AccionManual = { pedido: string; quitar_etiqueta?: string; agregar_etiqueta?: string; cancelar?: boolean; preparar?: boolean };
 
@@ -57,7 +58,9 @@ async function automatico(simular: boolean) {
   const plazoPap = await alertaPlazoPap(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
   // 04-11: casos para el courier (casos_courier_envio.ts): un Telegram por courier lun–sáb 08:30 y 14:00; urgentes ya.
   const casos = await casosParaCourier(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
-  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, plantilla_reprogramar: plantilla, cancelaciones, que_nada_quede_parado: actuar, plazo_pap: plazoPap, casos_courier: casos };
+  // 16-11: pagado por adelantado con guía a cobrar → Telegram una vez por pedido y caso (pagados_con_cobro.ts).
+  const pagadosCobro = await alertaPagadosConCobro(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
+  return { revisados: pedidos.length, acciones: hechos, aviso_ruta_pap: ruta, plantilla_reprogramar: plantilla, cancelaciones, que_nada_quede_parado: actuar, plazo_pap: plazoPap, casos_courier: casos, pagados_con_cobro: pagadosCobro };
 }
 
 async function manual(acciones: AccionManual[]) {

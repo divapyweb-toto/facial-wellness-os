@@ -36,12 +36,16 @@ export async function obtenerPedido(id: number): Promise<PedidoContexto | null> 
     conversacion = conv ?? null;
   }
   // 12-10: courier del pedido (para el texto "YA PAGADO"): shopify_pedidos.courier o la transportadora de la venta.
+  // 16-11: la venta se lee siempre: si ya existe con Lucero/PaP, la planilla salió (venta_con_courier).
   let courier = (p.courier as string | null) ?? null;
+  let ventaConCourier = false;
   const n = String(p.nombre ?? "").replace(/\D/g, "");
-  if (!courier && n) {
+  if (n) {
     const { data: v } = await db().from("ventas").select("transportadora").eq("n_referencia", `VT-${n}`)
       .is("deleted_at", null).limit(1).maybeSingle();
-    courier = (v?.transportadora as string | undefined) ?? null;
+    const t = (v?.transportadora as string | undefined) ?? null;
+    ventaConCourier = t === "lucero" || t === "pap";
+    if (!courier) courier = t;
   }
   return {
     shopify_order_id: Number(p.shopify_order_id),
@@ -54,6 +58,7 @@ export async function obtenerPedido(id: number): Promise<PedidoContexto | null> 
     raw: (p.raw as Record<string, unknown> | null) ?? null,
     courier,
     telefono: (p.telefono as string | null) ?? null,
+    venta_con_courier: ventaConCourier,
   };
 }
 

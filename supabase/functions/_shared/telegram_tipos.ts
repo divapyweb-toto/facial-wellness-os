@@ -34,6 +34,8 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   // 04-11: casos de envíos ya despachados, listos para pegar en el WhatsApp del courier (pedidos-trabados/casos_courier_envio.ts).
   casos_courier: { titulo: "Casos para el courier (08:30 y 14:00)", ruta: "inmediato", inventario: "nuevo 04-11 (reemplaza derivar el chat)" },
   casos_courier_urgente: { titulo: "Caso urgente para el courier", ruta: "inmediato", inventario: "nuevo 04-11" },
+  // 16-11: pagado por adelantado con guía a cobrar (pedidos-trabados/pagados_con_cobro.ts): en camino o posible doble cobro.
+  pagado_con_cobro: { titulo: "Pagado con guía a cobrar: texto para el courier", ruta: "inmediato", inventario: "nuevo 16-11 (uno por pedido y caso)" },
   // 05-11: pedido confirmado que a las 48 h no sale por un motivo que el cliente no puede resolver (seguimiento-chat/pedidos_48h.ts).
   pedido_48h: { titulo: "Pedido confirmado hace +48 h que no sale", ruta: "inmediato", inventario: "nuevo 05-11 (uno por pedido)" },
 

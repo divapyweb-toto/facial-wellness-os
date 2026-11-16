@@ -5,6 +5,7 @@ import {
   botonesTrasDecision,
   type Dependencias,
   parsearCallback,
+  pedidoEnCamino,
   type PedidoContexto,
   procesarUpdate,
   rellenar,
@@ -546,4 +547,24 @@ Deno.test("facturarAlCobrar no bloquea el botón (no se espera su promesa)", asy
   const r = await procesarUpdate(update("pagado:5001", 905), f.deps);
   assertEquals(r.tipo, "hecho"); // terminó aunque la factura sigue pendiente
   resolver();
+});
+
+// 16-11 (paquete a): pagó DESPUÉS de bajar la planilla pero Shopify todavía sin preparar → igual sale el texto para el courier.
+Deno.test("Recibido con la venta ya en la planilla del courier (sin preparar en Shopify): sale el texto para el courier", async () => {
+  const f = fakesRecibido(pedidoBase({
+    tags: ["CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"], estado_envio: null, courier: "lucero",
+    raw: { ...RAW_PREPARADO, fulfillment_status: null }, venta_con_courier: true,
+  } as Partial<PedidoContexto>));
+  await procesarUpdate(updateFoto(), f.deps);
+  assertEquals(f.avisos.length, 1);
+  assertStringIncludes(f.avisos[0], "entregar SIN COBRAR (Gs 0)");
+  assertStringIncludes(f.leyendas[0].html, "texto para el courier");
+  assertEquals(f.opciones, [{ tipo: "pago_courier_no_cobrar", destino: "enrique", pedido: "#1001" }]);
+});
+
+Deno.test("pedidoEnCamino: venta con courier cuenta; sin venta ni preparado, no; terminado nunca", () => {
+  const base = { raw: { fulfillment_status: null }, estado_envio: null };
+  assertEquals(pedidoEnCamino(base), false);
+  assertEquals(pedidoEnCamino({ ...base, venta_con_courier: true } as Parameters<typeof pedidoEnCamino>[0]), true);
+  assertEquals(pedidoEnCamino({ ...base, estado_envio: "ENTREGADO", venta_con_courier: true } as Parameters<typeof pedidoEnCamino>[0]), false);
 });
