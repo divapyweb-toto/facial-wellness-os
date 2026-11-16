@@ -133,7 +133,7 @@ Deno.test("requerido: ventana cerrada → no sale nada (como hoy) y no se etique
   assertFalse(st.pedidos.get(ID)!.tags!.includes("PAGO_ANTICIPADO_REQUERIDO"));
 });
 
-Deno.test("requerido: ya pagado o retiro → nada; SIN_COBERTURA → oferta de siempre, nada nuevo", async () => {
+Deno.test("requerido: ya pagado o retiro → nada; SIN_COBERTURA → nada (16-11, B1: sin oferta de prioridad)", async () => {
   for (const tags of [["PAGADO"], ["RETIRO_EN_CASA"]]) {
     const { deps, st } = mock({ devoluciones: 3, pedido: { tags } });
     await procesarMensaje(boton(`conf_si:${ID}`), contacto, deps);
@@ -142,7 +142,7 @@ Deno.test("requerido: ya pagado o retiro → nada; SIN_COBERTURA → oferta de s
   }
   const { deps, st } = mock({ devoluciones: 3, pedido: { tags: ["SIN_COBERTURA"] } });
   await procesarMensaje(boton(`conf_si:${ID}`), contacto, deps);
-  assertEquals(ofertas(st), [TEXTO_OFERTA]);
+  assertEquals(ofertas(st), []); // 16-11 (B1): antes salía la oferta "pagás al recibir"
   assertEquals(st.candados, []);
   assertFalse(st.pedidos.get(ID)!.tags!.includes("PAGO_ANTICIPADO_REQUERIDO"));
 });

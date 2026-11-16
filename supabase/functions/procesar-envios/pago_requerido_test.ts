@@ -110,12 +110,12 @@ Deno.test("requerido: ventana cerrada → la oferta opcional no sale; desde el 0
   assertEquals(log.requerido, []);
 });
 
-Deno.test("requerido: ya pagado → nada; SIN_COBERTURA o retiro → nada nuevo (comportamiento de hoy)", async () => {
+Deno.test("requerido: ya pagado → nada; SIN_COBERTURA o retiro → nada (16-11, B1: SIN_COBERTURA ya no recibe la oferta de prioridad)", async () => {
   const pagado = await correr({ devoluciones: 3, contexto: ctx(["ORIGEN_WHATSAPP", "CONFIRMADO", "PAGADO"]) });
   assertEquals(pagado.log.textos, []);
   assertEquals(pagado.log.requerido, []);
   const sc = await correr({ devoluciones: 3, contexto: ctx(["ORIGEN_WHATSAPP", "CONFIRMADO", "OFERTA_PAGO_ANTICIPADO", "SIN_COBERTURA"]) });
-  assertEquals(sc.log.textos, [TEXTO_OFERTA]);
+  assertEquals(sc.log.textos, []); // 16-11 (B1): antes salía la oferta "pagás al recibir"; sin cobertura tiene que pagar antes
   assertEquals(sc.log.requerido, []);
   const ret = await correr({ devoluciones: 3, contexto: ctx(["ORIGEN_WHATSAPP", "CONFIRMADO", "RETIRO_EN_CASA"]) });
   assertEquals(ret.log.textos, []);
