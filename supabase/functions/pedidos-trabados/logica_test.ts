@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { accionesPara, accionSinCobertura, decidirCiudadPin, trasAvisoSinCobertura, ciudadDesconocida, ciudadPendiente, type Cobertura, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, necesitaCobertura, type PedidoAbierto } from "./logica.ts";
+import { accionesPara, accionSinCobertura, decidirCiudadPin, trasAvisoSinCobertura, ciudadDesconocida, ciudadPendiente, type Cobertura, sinCobertura, coordenadasPin, direccionDesdeNota, direccionUtilizable, necesitaCobertura, type PedidoAbierto, revisarCoberturaDe } from "./logica.ts";
 
 const AHORA = new Date("2026-10-12T18:00:00Z");
 const base = (o: Partial<PedidoAbierto> = {}): PedidoAbierto => ({
@@ -242,4 +242,24 @@ Deno.test("05-11: PAGO_ANTICIPADO_REQUERIDO: 48 h sin pago → cancelar; con fot
   assertEquals(accionSinCobertura({ ...p, tags: [...p.tags, "PAGADO"] }, AHORA, { avisoEn: hace49, adjuntoDespues: false }), null);
   assertEquals(accionSinCobertura(p, AHORA, undefined), null); // sin candado (el bot no llegó a pedirlo): no se cancela
   assertEquals(accionesPara(p, AHORA, false, undefined, new Map([[1, { avisoEn: hace49, adjuntoDespues: false }]])), ["cancelar_pago_requerido"]);
+});
+
+// 16-11 (B1 de WhatsApp API): pedido con SIN_COBERTURA cuya ciudad ahora SÍ tiene cobertura contra entrega (el cliente
+// corrigió la ciudad o la tabla sumó la ciudad) → vuelve a contra entrega: se quita SIN_COBERTURA y no se cancela a las 48 h.
+Deno.test("recuperar_cobertura: SIN_COBERTURA en ciudad con cobertura vuelve a contra entrega; pagado, cancelado o sin dato no", () => {
+  const sc = (o: Partial<PedidoAbierto> = {}) => base({ tags: ["CONFIRMADO", "SIN_COBERTURA"], ciudad: "Pueblo Nuevo", ...o });
+  const vencido = new Map([[1, { avisoEn: "2026-10-09T10:00:00Z", adjuntoDespues: false }]]); // más de 48 h
+  assertEquals(accionesPara(sc(), AHORA, false, new Map([["Pueblo Nuevo", CON]]), vencido), ["recuperar_cobertura"]);
+  // sigue sin cobertura → el flujo de siempre (cancela a las 48 h)
+  assertEquals(accionesPara(sc(), AHORA, false, new Map([["Pueblo Nuevo", SIN]]), vencido), ["cancelar_sin_cobertura"]);
+  // ya pagó → no se toca (sale pagado, courier libre)
+  assertEquals(accionesPara(sc({ tags: ["CONFIRMADO", "SIN_COBERTURA", "PAGO_VERIFICADO"] }), AHORA, false, new Map([["Pueblo Nuevo", CON]])).includes("recuperar_cobertura"), false);
+  // ciudad no reconocida o sin dato de la tabla → no se decide
+  assertEquals(accionesPara(sc(), AHORA, false, new Map([["Pueblo Nuevo", { sin_cobertura: false, ciudad_reconocida: false }]])).includes("recuperar_cobertura"), false);
+  assertEquals(accionesPara(sc(), AHORA, false, new Map()).includes("recuperar_cobertura"), false);
+  // ya cancelado por sin cobertura → nada
+  assertEquals(accionesPara(sc({ tags: ["CONFIRMADO", "SIN_COBERTURA", "SIN_COBERTURA_CANCELADO"] }), AHORA, false, new Map([["Pueblo Nuevo", CON]])).includes("recuperar_cobertura"), false);
+  // la ciudad de un SIN_COBERTURA se consulta en la tabla
+  assertEquals(revisarCoberturaDe(sc()), true);
+  assertEquals(revisarCoberturaDe(sc({ tags: ["CONFIRMADO", "SIN_COBERTURA", "PAGADO"] })), false);
 });

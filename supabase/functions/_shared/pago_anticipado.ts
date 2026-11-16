@@ -133,6 +133,8 @@ export function motivoSinOfertaPrioridad(p: PedidoParaOferta): string | null {
   if (t.includes("RETIRO_EN_CASA")) return "retiro_en_casa";
   if (t.includes("PRUEBA_E2E")) return "prueba_e2e";
   if (t.includes("MAYORISTA") || t.includes("SIN_MENSAJES")) return "mayorista";
+  // 16-11 (B1 de WhatsApp API): sin cobertura contra entrega tiene que pagar por adelantado; nunca "pagás al recibir".
+  if (t.includes("SIN_COBERTURA")) return "sin_cobertura";
   if (p.estado_envio && ENVIO_YA_SALIO.has(String(p.estado_envio).toUpperCase())) return `envio_${String(p.estado_envio).toUpperCase()}`;
   // 12-10: ya despachado (preparado en Shopify) → no se ofrece.
   if (txt(r.fulfillment_status)?.toLowerCase() === "fulfilled" || txt(r.displayFulfillmentStatus)?.toUpperCase() === "FULFILLED") return "ya_preparado";

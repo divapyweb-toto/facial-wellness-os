@@ -401,5 +401,7 @@ export async function ejecutar(accion: Accion, orderId: number, notas = "", dire
   if (accion === "agregar_confirmado") return await etiqueta(orderId, "CONFIRMADO", true);
   if (accion === "agregar_faltan_datos") return await etiqueta(orderId, "FALTAN_DATOS", true);
   if (accion === "quitar_faltan_datos") return await etiqueta(orderId, "FALTAN_DATOS", false);
+  // 16-11: vuelve a contra entrega: primero la marca nueva, después se quita SIN_COBERTURA (si falla, queda como estaba).
+  if (accion === "recuperar_cobertura") return (await etiqueta(orderId, "COBERTURA_RECUPERADA", true)) ?? await etiqueta(orderId, "SIN_COBERTURA", false);
   return await cancelarEnShopify(orderId);
 }

@@ -6,7 +6,7 @@ import { conServiceRole } from "../_shared/auth_servicio.ts";
 import { db } from "../_shared/db.ts";
 import { marcarPreparado } from "../_shared/shopify_preparar.ts";
 import { cancelarEnShopify, candadosTomados, coberturaCiudades, ejecutar, estadoSinCobertura, etiqueta, idCandadoAuto, pedidosAbiertos, registrarError, tomarCandado } from "./io.ts";
-import { accionesPara, necesitaCobertura } from "./logica.ts";
+import { accionesPara, revisarCoberturaDe } from "./logica.ts";
 import { avisoRutaPap } from "./aviso_ruta_pap.ts";
 import { sincronizarCancelaciones } from "./cancelaciones_ventas.ts";
 import { activarPlantillaReprogramar, depsReales as depsPlantilla } from "./plantilla_reprogramar.ts";
@@ -22,7 +22,7 @@ async function automatico(simular: boolean) {
   const pedidos = await pedidosAbiertos(ahora);
   const tomados = await candadosTomados(pedidos.map((p) => p.shopifyOrderId));
   // 20-10: cobertura contra entrega desde la tabla de tarifas (rpc sugerir_courier), solo de las ciudades que importan.
-  const coberturas = await coberturaCiudades(pedidos.filter(necesitaCobertura).map((p) => p.ciudad));
+  const coberturas = await coberturaCiudades(pedidos.filter(revisarCoberturaDe).map((p) => p.ciudad)); // 16-11: + SIN_COBERTURA que pueden volver
   const sinCob = await estadoSinCobertura(pedidos).catch((e) => (console.warn("pedidos-trabados sin cobertura:", e instanceof Error ? e.message : e), new Map()));
   const hechos: Array<{ pedido: string; accion: string; ok: boolean; error?: string }> = [];
   let pinsEstaCorrida = 0;

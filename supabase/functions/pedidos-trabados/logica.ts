@@ -29,7 +29,7 @@
 
 import { direccionUtilizable as direccionUtilizableRegla, tienePin as tienePinRegla } from "../_shared/sale_hoy.js";
 
-export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura" | "avisar_jawflex_pap" | "pedir_ciudad" | "corroborar_ciudad_pin" | "cancelar_pago_requerido" | "revisar_comprobante_pago_requerido";
+export type Accion = "agregar_confirmado" | "cancelar" | "agregar_faltan_datos" | "quitar_faltan_datos" | "completar_direccion" | "ciudad_desde_pin" | "avisar_sin_cobertura" | "cancelar_sin_cobertura" | "revisar_comprobante_sin_cobertura" | "avisar_jawflex_pap" | "pedir_ciudad" | "corroborar_ciudad_pin" | "cancelar_pago_requerido" | "revisar_comprobante_pago_requerido" | "recuperar_cobertura";
 
 export interface PedidoAbierto {
   shopifyOrderId: number;
@@ -173,6 +173,23 @@ export const ETIQUETAS_PAGO = ["PAGADO", "PAGO_VERIFICADO", "PAGADO_QR", "PAGO_A
 export type EstadoSinCobertura = { avisoEn: string | null; adjuntoDespues: boolean };
 export type MapaSinCobertura = ReadonlyMap<number, EstadoSinCobertura>;
 
+/**
+ * 16-11 (B1 de WhatsApp API, decisión de administración): pedido con SIN_COBERTURA cuya ciudad ahora SÍ tiene cobertura
+ * contra entrega en la tabla (el cliente corrigió la ciudad o se cargó la tarifa) y que no pagó → vuelve a contra entrega:
+ * se quita SIN_COBERTURA (y con eso no corre la cancelación de las 48 h) y se marca COBERTURA_RECUPERADA. Ciudad no
+ * reconocida o sin dato de la tabla → no se decide. Pagado → no se toca (sale pagado, courier libre).
+ */
+export function necesitaRecuperarCobertura(p: PedidoAbierto, c?: Cobertura | null): boolean {
+  return p.estado === "confirmado" && !cancelado(p) && tiene(p, "SIN_COBERTURA") && !tiene(p, "SIN_COBERTURA_CANCELADO") &&
+    !ETIQUETAS_PAGO.some((t) => tiene(p, t)) && c?.ciudad_reconocida === true && c.sin_cobertura === false;
+}
+
+/** 16-11: ciudades a consultar en la tabla: las de siempre + las de los SIN_COBERTURA que todavía pueden volver a contra entrega. */
+export function revisarCoberturaDe(p: PedidoAbierto): boolean {
+  return necesitaCobertura(p) || (p.estado === "confirmado" && !cancelado(p) && tiene(p, "SIN_COBERTURA") &&
+    !tiene(p, "SIN_COBERTURA_CANCELADO") && !ETIQUETAS_PAGO.some((t) => tiene(p, t)));
+}
+
 export function accionSinCobertura(p: PedidoAbierto, ahora: Date, s?: EstadoSinCobertura): Accion | null {
   // 05-11: PAGO_ANTICIPADO_REQUERIDO (cliente con devoluciones, se lo pide el bot) sigue el mismo plazo de 48 h.
   const requerido = !tiene(p, "SIN_COBERTURA") && tiene(p, TAG_PAGO_REQUERIDO);
@@ -200,6 +217,8 @@ export function accionesPara(p: PedidoAbierto, ahora: Date, puseFaltanDatos: boo
     return a; // cancelado: nada más que hacer
   }
   if (cancelado(p)) return a;
+  // 16-11: SIN_COBERTURA que ahora tiene cobertura → vuelve a contra entrega (lo demás, en la corrida siguiente, ya sin la etiqueta).
+  if (necesitaRecuperarCobertura(p, coberturas?.get(claveCobertura(p.ciudad)))) return ["recuperar_cobertura"];
   const sc = accionSinCobertura(p, ahora, sinCob?.get(p.shopifyOrderId));
   if (sc === "cancelar_sin_cobertura" || sc === "cancelar_pago_requerido") return [sc]; // se cancela: nada más que hacer
   if (sc) a.push(sc);

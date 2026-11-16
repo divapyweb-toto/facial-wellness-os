@@ -43,6 +43,7 @@ Deno.test("motivoSinOfertaPrioridad: pagado, retiro, prueba, mayorista, cancelad
     [{ tags: ["PRUEBA_E2E"] }, "prueba_e2e"],
     [{ tags: ["MAYORISTA", "CONFIRMADO"] }, "mayorista"],
     [{ tags: ["SIN_MENSAJES"] }, "mayorista"],
+    [{ tags: ["CONFIRMADO", "SIN_COBERTURA"] }, "sin_cobertura"], // 16-11 (B1): tiene que pagar por adelantado, nunca "pagás al recibir"
     [{ tags: [], raw: { cancelled_at: "2026-10-12T10:00:00-03:00" } }, "cancelado"],
     [{ tags: [], estado_confirmacion: "cancelado_cliente" }, "cancelado"],
     [{ tags: [], estado_envio: "DESPACHADO" }, "envio_DESPACHADO"],
