@@ -403,7 +403,7 @@ const AYUDA = `Uso: node scripts/pi-cli.mjs <comando> [opciones]
   cargar-evidencia --candidato <uuid> --archivo evidencia.json [--cargado-por nombre]
   politica-proponer --candidato <uuid>   propone la campaña de negociación (la autoriza Enrique en Voltra OS)
   orden-proponer --candidato <uuid> --archivo orden.json      arma la orden en BORRADOR (no paga)
-  orden-estado <id> --estado <${ESTADOS_ORDEN.join('|')}> [--confirmacion "…"] [--tracking T] [--nota "…"]
+  orden-estado <id> --estado <${ESTADOS_ORDEN.join("|")}> [--tracking T] [--nota "…"]   (CONFIRMADA y PAGADA: solo Enrique en Voltra OS)
 Detalle: scripts/pi-cli.md`
 
 export async function main(argv = process.argv.slice(2)) {
