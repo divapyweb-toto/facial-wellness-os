@@ -80,12 +80,43 @@ const punto = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}.
 const gs = (n: number) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
 /** "L-VT-9001 · Ana Prueba · Ciudad Inventada · ingresó el 30/10. <qué pasa>. Horario: de 12 a 15." (formato de Enrique, 04-11). */
+// 18-11: el courier lee el texto directo por WhatsApp; nada repetido. "pide" puede traer la misma frase dos veces
+// (con "o"/"y" o el orden cambiado) y repetir el horario o la referencia que vienen en sus campos.
+const normalizar = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+const palabras = (s: string) => new Set(normalizar(s).split(" ").filter(Boolean));
+const numeros = (s: string) => new Set(normalizar(s).split(" ").filter((w) => /^\d+$/.test(w)));
+const parecido = (a: Set<string>, b: Set<string>) => {
+  if (!a.size || !b.size) return 0;
+  let comun = 0;
+  for (const w of a) if (b.has(w)) comun++;
+  return comun / (a.size + b.size - comun);
+};
+const tieneHorario = (s: string) => /\bde \d{1,2}(:\d{2})? a \d{1,2}\b/.test(normalizar(s).replace(/(\d+) (\d{2})\b/g, "$1:$2"));
+/** Frases de "pide" sin las casi repetidas (se queda la primera). */
+export function frasesSinRepetir(texto: string): string[] {
+  const frases = texto.split(/(?<=[.!?])\s+/).map((f) => f.trim()).filter(Boolean);
+  const quedan: string[] = [];
+  for (const f of frases) if (!quedan.some((q) => parecido(palabras(q), palabras(f)) >= 0.6)) quedan.push(f);
+  return quedan;
+}
+/** ¿El horario del campo ya está dicho en alguna frase con horario (mismas horas)? */
+const horarioDicho = (frases: string[], horario: string) => {
+  const hs = numeros(horario);
+  return hs.size > 0 && frases.some((f) => tieneHorario(f) && [...hs].every((n) => numeros(f).has(n)));
+};
+/** ¿La referencia ya está dicha (casi todas sus palabras en una frase)? */
+const referenciaDicha = (frases: string[], ref: string) => {
+  const rs = palabras(ref);
+  return rs.size > 0 && frases.some((f) => { const fs = palabras(f); return [...rs].filter((w) => fs.has(w)).length / rs.size >= 0.8; });
+};
+
 export function lineaCaso(l: LineaCaso): string {
   const partes = [`${l.guia} · ${l.nombre} · ${l.ciudad}${l.fechaIngreso ? ` · ingresó el ${ddmm(l.fechaIngreso)}` : ""}.`];
   if (l.urgente) partes.push("URGENTE: lo necesita hoy.");
-  if (l.pide.trim()) partes.push(punto(l.pide));
-  if (l.horario?.trim()) partes.push(punto(`Horario: ${l.horario.trim()}`));
-  if (l.referencia?.trim()) partes.push(punto(`Referencia: ${l.referencia.trim()}`));
+  const frases = l.pide.trim() ? frasesSinRepetir(l.pide) : [];
+  if (frases.length) partes.push(punto(frases.join(" ")));
+  if (l.horario?.trim() && !horarioDicho(frases, l.horario)) partes.push(punto(`Horario: ${l.horario.trim()}`));
+  if (l.referencia?.trim() && !referenciaDicha(frases, l.referencia)) partes.push(punto(`Referencia: ${l.referencia.trim()}`));
   if (l.recibe?.trim()) partes.push(punto(`Recibe: ${l.recibe.trim()}`));
   return partes.join(" ");
 }

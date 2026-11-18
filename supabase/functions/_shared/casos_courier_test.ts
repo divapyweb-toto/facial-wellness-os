@@ -32,3 +32,20 @@ Deno.test("PaP: guía, rendiciones en su propio punto y Telegram escapado", () =
   assert(tg.includes("<b>Para Lucero</b> · 1 caso") && tg.includes("&lt;x&gt;") && tg.includes("<pre>"));
   assertEquals(respuestaCaso("lucero", true), "Listo, se lo paso a Lucero para que te contacten hoy 🙌");
 });
+
+// 18-11: el courier ahora lee el texto directo por WhatsApp. Caso real (datos inventados): el horario salía 3 veces
+// (2 frases casi iguales en "pide" + el renglón "Horario:") y la referencia podía repetirse. Va una sola vez cada cosa.
+Deno.test("línea del caso: sin frases repetidas ni horario o referencia duplicados", () => {
+  const base = { ...L, guia: "L-VT-9248", nombre: "Cliente Demo", ciudad: "Encarnación", fechaIngreso: "2026-11-16" };
+  const pide = "Puede recibir de 8 a 12 o de 14 a 18; el sábado el local está abierto de 8 a 12. Pide que el repartidor le escriba por WhatsApp antes de la entrega. Puede recibir de 8 a 12 y de 14 a 18; sábado de 8 a 12 el local está abierto.";
+  const t = lineaCaso({ ...base, pide, horario: "de 8 a 12 y de 14 a 18; sábado de 8 a 12", referencia: "Calle Demo casi Otra, Local Demo, Encarnación" });
+  assertEquals(t, "L-VT-9248 · Cliente Demo · Encarnación · ingresó el 16/11. Puede recibir de 8 a 12 o de 14 a 18; el sábado el local está abierto de 8 a 12. " +
+    "Pide que el repartidor le escriba por WhatsApp antes de la entrega. Referencia: Calle Demo casi Otra, Local Demo, Encarnación.");
+  assertEquals((t.match(/de 14 a 18/g) ?? []).length, 1);
+  // referencia ya dicha en "pide" → no se repite
+  const r = lineaCaso({ ...base, pide: "Dejar en Calle Demo casi Otra, Local Demo, Encarnación.", horario: null, referencia: "Calle Demo casi Otra, Local Demo, Encarnación" });
+  assertEquals((r.match(/Calle Demo/g) ?? []).length, 1);
+  // horario distinto del que dice "pide" → se mantiene (es información nueva)
+  const h = lineaCaso({ ...base, pide: "Puede recibir de 8 a 12.", horario: "de 15:00 a 19:00", referencia: null });
+  assertEquals(h, "L-VT-9248 · Cliente Demo · Encarnación · ingresó el 16/11. Puede recibir de 8 a 12. Horario: de 15:00 a 19:00.");
+});
