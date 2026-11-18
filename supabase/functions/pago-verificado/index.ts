@@ -15,7 +15,7 @@ import { avisar } from "../_shared/telegram.ts";
 import { dependencias } from "../telegram-webhook/dependencias.ts";
 import { procesarCallback } from "../telegram-webhook/procesar.ts";
 import { facturarAlCobrar } from "../factura/io.ts";
-import type { PedidoPago } from "./logica.ts";
+import { comprobanteEnVentana, MARGEN_COMPROBANTE_PREVIO_MS, type PedidoPago } from "./logica.ts";
 import type { CandidatoPago, ComprobanteChat } from "../_shared/pagos_ranking.ts";
 import { type DepsPago, type Entrada, procesarPago } from "./procesar.ts";
 
@@ -48,7 +48,8 @@ async function candidatosDe(monto: number, fechaISO: string): Promise<CandidatoP
   // Comprobantes de WhatsApp (marcados por wa-webhook) desde el pedido más viejo (máx. 15 días antes) hasta 1 día después.
   const t = Date.parse(fechaISO);
   const masViejo = Math.min(t, ...v.map((x) => Date.parse(String(x.creado_en))).filter(Number.isFinite));
-  const desde = new Date(Math.max(masViejo, t - 15 * 86_400_000)).toISOString();
+  // 18-11: 30 min antes del pedido más viejo, para el comprobante que llegó antes de crearse el pedido (comprobanteEnVentana).
+  const desde = new Date(Math.max(masViejo, t - 15 * 86_400_000) - MARGEN_COMPROBANTE_PREVIO_MS).toISOString();
   const hasta = new Date(t + 86_400_000).toISOString();
   const { data: ms, error: e3 } = await db().from("wa_mensajes").select("cliente_id, creado_en, contenido")
     .eq("direccion", "in").in("tipo", ["image", "document"]).gte("creado_en", desde).lte("creado_en", hasta)
@@ -72,8 +73,9 @@ async function candidatosDe(monto: number, fechaISO: string): Promise<CandidatoP
     const comprobantes: ComprobanteChat[] = [];
     for (const m of ms ?? []) {
       const c = obj(m.contenido);
-      // Descartado por el clasificador, o anterior al pedido: no es de este pago.
-      if (obj(c.comprobante_clasificado).es === false || Date.parse(String(m.creado_en)) < creado) continue;
+      // Descartado por el clasificador, o anterior al pedido: no es de este pago. 18-11: salvo que esté marcado con ESTE
+      // pedido y haya llegado hasta 30 min antes (comprobante_previo de seguimiento-chat, caso #1239).
+      if (obj(c.comprobante_clasificado).es === false || !comprobanteEnVentana(String(m.creado_en), creado, c.comprobante_pago_anticipado, x.shopify_order_id)) continue;
       const telM = m.cliente_id ? clientes.get(String(m.cliente_id))?.telefono ?? null : null;
       const delPedido = String(c.comprobante_pago_anticipado) === String(x.shopify_order_id) ||
         (!!m.cliente_id && m.cliente_id === p.cliente_id) || (ult9(telM).length === 9 && ult9(telM) === ult9(telefono));

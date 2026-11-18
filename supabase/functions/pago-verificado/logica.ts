@@ -78,3 +78,18 @@ export function decidir(p: PedidoPago, monto: number, titular?: string | null, s
   if (senales.includes("titular") || coincideNombre(titular, p.nombresCliente)) return { ok: true, motivo, pendiente, coincidencia: "nombre" };
   return { ok: false, error: "sin_coincidencia", pendiente, detalle: "el monto coincide pero no hay comprobante en el chat ni el titular coincide con el cliente" };
 }
+
+/** 18-11 (caso #1239): margen para aceptar un comprobante que llegó ANTES de crearse el pedido. */
+export const MARGEN_COMPROBANTE_PREVIO_MS = 30 * 60_000;
+
+/**
+ * ¿El comprobante del chat cuenta para este pedido por su fecha? Posterior (o igual) a la creación: sí, como siempre.
+ * Anterior: solo si está marcado con ESE pedido (`contenido.comprobante_pago_anticipado`, lo escribe seguimiento-chat con
+ * comprobante_previo) y llegó hasta 30 min antes de crearse el pedido. Fecha ilegible: no.
+ */
+export function comprobanteEnVentana(mensajeCreadoISO: string, pedidoCreadoMs: number, marca: unknown, orderId: string | number): boolean {
+  const m = Date.parse(mensajeCreadoISO);
+  if (!Number.isFinite(m) || !Number.isFinite(pedidoCreadoMs)) return false;
+  if (m >= pedidoCreadoMs) return true;
+  return marca != null && String(marca) === String(orderId) && m >= pedidoCreadoMs - MARGEN_COMPROBANTE_PREVIO_MS;
+}
