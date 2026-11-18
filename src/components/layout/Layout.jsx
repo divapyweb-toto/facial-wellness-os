@@ -9,7 +9,7 @@ import {
   LayoutDashboard, ShoppingCart, Package, Megaphone,
   DollarSign, Truck, FileBarChart2, Settings, LogOut, Shield,
   Users, Calculator, BarChart3, PackageCheck, MapPin, X, MessageCircle,
-  Grid3X3, Search as SearchIcon, Repeat, PackageOpen, ClipboardCheck, Link2, Inbox, Receipt, Store,
+  Grid3X3, Search as SearchIcon, Repeat, PackageOpen, ClipboardCheck, Link2, Inbox, Receipt, Store, Lightbulb, Ship,
 } from 'lucide-react'
 
 // ── Logo embebido (PNG transparente, negro → invertir con CSS) ──
@@ -43,8 +43,13 @@ const navDinero = [
   { to: '/reportes',  icon: FileBarChart2,   label: 'Reportes'  },
   { to: '/facturas',  icon: Receipt,         label: 'Facturas'  },
 ]
+// Mesa de decisión de importaciones (decisión de Enrique 18-11 (3)): menú propio, arriba de Herramientas.
+const navImportaciones = [
+  { to: '/importaciones', icon: Ship,        label: 'Importaciones' },
+]
 const navHerramientas = [
   { to: '/calculadora', icon: Calculator,    label: 'Calculadora' },
+  { to: '/productos',   icon: Lightbulb,     label: 'Productos nuevos' },
 ]
 // Barra fija del celular: las 3 tareas de TODOS los días + inicio.
 // Cargar venta, despachar y buscar un pedido para un reclamo son el 90% del
@@ -96,6 +101,7 @@ export default function Layout() {
     ...navPrincipal,
     ...navLogistica,
     ...navDinero,
+    ...navImportaciones,
     ...navHerramientas,
     ...(isAdmin ? [
       { to: '/config', icon: Settings, label: 'Configuración' },
@@ -143,6 +149,7 @@ export default function Layout() {
             ['Principal', navPrincipal],
             ['Logística', navLogistica],
             ['Dinero', navDinero],
+            ['Importaciones', navImportaciones],
             ['Herramientas', navHerramientas],
           ].map(([titulo, items]) => (
             <div key={titulo}>
