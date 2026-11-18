@@ -2,7 +2,7 @@
 // alerta_pagados_cobro; candados y Telegram reales (depsReales de entregas_actuar_io.ts). Solo lectura salvo candados.
 import { db } from "../_shared/db.ts";
 import { depsReales } from "./entregas_actuar_io.ts";
-import { leerCanalCourier } from "./aviso_courier_wa_io.ts";
+import { leerCanalCourier } from "../_shared/aviso_courier_wa_io.ts";
 import {
   armarFilas, CLAVE_CFG_PAGADOS_COBRO, configPagadoCobro, type DepsPagadoCobro, type EntregaCruda, type PedidoCrudo,
   procesarPagadosConCobro, type VentaCruda,
@@ -47,7 +47,11 @@ export async function leerFilas(desde: string) {
 /** ¿Ya salió "entregar SIN COBRAR" (pago_courier_no_cobrar) para este pedido al verificar el pago? */
 async function yaAvisadoAlVerificar(pedido: string): Promise<boolean> {
   const { data } = await db().from("telegram_enviados").select("id").eq("tipo", "pago_courier_no_cobrar").eq("ok", true).eq("pedido", pedido).limit(1);
-  return (data?.length ?? 0) > 0;
+  if ((data?.length ?? 0) > 0) return true;
+  // 18-11: o ya salió directo a la transportadora por WhatsApp (candado de _shared/courier_wa.ts, clave pago_courier_no_cobrar:VT-n:<día>).
+  const ref = `VT-${pedido.replace(/\D/g, "")}`;
+  const { data: wa } = await db().from("eventos_crudos").select("id").like("id_externo", `transp_envio:pago_courier_no_cobrar:${ref}:%`).limit(1);
+  return (wa?.length ?? 0) > 0;
 }
 
 const deps: DepsPagadoCobro = { ...depsReales, yaAvisadoAlVerificar };

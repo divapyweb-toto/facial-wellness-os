@@ -28,7 +28,8 @@ import {
 import type { ResultadoPago } from "../_shared/shopify_pagos.ts";
 import { LIMITE_LEYENDA_TELEGRAM, LIMITE_TEXTO_TELEGRAM } from "../_shared/telegram_formato.ts";
 import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
-import { avisoParaCourier, datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
+import { avisoParaCourier, datosCourierDesdeRaw, textoParaCourier } from "../_shared/texto_courier.ts";
+import { avisarPorCourier, type CanalCourier, claveAvisoCourier } from "../_shared/aviso_courier_wa.ts";
 import { TAG_PAGADO, TAG_PRIORIDAD } from "../_shared/pago_anticipado.ts";
 import { decidirMejora, type DepsDecision, type ResultadoDecision } from "../mejora-mensual/aprobacion.ts";
 
@@ -132,6 +133,8 @@ export interface Dependencias {
   /** 12-10: mensaje nuevo a Enrique (HTML ya escapado): el texto para el courier. */
   /** 27-10: opts = tipo/destino (el texto para el courier va a Enrique). */
   avisar?(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
+  /** 18-11: aviso directo a la transportadora por WhatsApp (config_wa.transportadoras.avisos_por_whatsapp). Sin esto = Telegram. */
+  canalCourier?(): Promise<CanalCourier>;
   /** 12-10: la venta del pedido (VT-<n>) queda como pago anticipado; devuelve cuántas filas cambió. */
   marcarVentaPagada?(pedido: PedidoContexto): Promise<number>;
   /**
@@ -247,11 +250,22 @@ export function pedidoEnCamino(p: Pick<PedidoContexto, "raw" | "estado_envio" | 
   return !ENVIO_TERMINADO.has(envio) && (preparado || ENVIO_EN_CAMINO.has(envio) || !!p.venta_con_courier);
 }
 
-/** Texto para el courier de un pedido que el cliente ya pagó (cobrar 0). */
+const PEDIDO_PAGADO = "El cliente ya pagó por transferencia: entregar SIN COBRAR (Gs 0).";
+const datosPagado = (p: PedidoContexto) =>
+  ({ ...datosCourierDesdeRaw(p.nombre ?? `#${p.shopify_order_id}`, p.raw ?? null, p.telefono ?? p.cliente?.telefono ?? null), pagado: true });
+
+/** Texto para el courier de un pedido que el cliente ya pagó (cobrar 0): Telegram a Enrique con el bloque para copiar. */
 export function avisoCourierPagado(p: PedidoContexto): string {
-  const d = { ...datosCourierDesdeRaw(p.nombre ?? `#${p.shopify_order_id}`, p.raw ?? null, p.telefono ?? p.cliente?.telefono ?? null), pagado: true };
-  return avisoParaCourier(d, "El cliente ya pagó por transferencia: entregar SIN COBRAR (Gs 0).", p.courier);
+  return avisoParaCourier(datosPagado(p), PEDIDO_PAGADO, p.courier);
 }
+
+/** 18-11: el mismo bloque en texto plano, para mandarlo directo a la transportadora por WhatsApp. */
+export function textoCourierPagado(p: PedidoContexto): string {
+  return textoParaCourier(datosPagado(p), PEDIDO_PAGADO);
+}
+
+/** "VT-<n>" del pedido (como lo conoce la transportadora y como lo busca pedidos-trabados). */
+export const refVoltra = (p: PedidoContexto) => `VT-${String(p.nombre ?? p.shopify_order_id).replace(/\D/g, "")}`;
 
 /** Texto por defecto cuando config_wa no trae la clave (solo las claves nuevas tienen). */
 const TEXTO_DEFECTO: Partial<Record<ClaveTextoCliente, string>> = { pagado: TEXTO_PAGADO_DEFECTO };
@@ -439,10 +453,27 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
       } else if (pedidoEnCamino(pedido)) {
         if (deps.avisar) {
           try {
-            const t = await deps.avisar(avisoCourierPagado(pedido), undefined, {
+            // 18-11: con config_wa.transportadoras.avisos_por_whatsapp prendido va directo a la transportadora por WhatsApp
+            // (texto plano); si falla o está apagado, el Telegram de siempre a Enrique con el bloque para copiar.
+            const base = deps.avisar;
+            const telegram = async (t: string, _b?: undefined, o?: OpcionesAviso) =>
+              ((await base(t, undefined, o)) as { ok?: boolean; error?: string } | undefined) ?? {};
+            const normal = async (t: string, b?: undefined, o?: OpcionesAviso) => {
+              const r = await telegram(t, b, o);
+              return { ok: r.ok !== false, error: r.error, via: "telegram" as const };
+            };
+            const canal = deps.canalCourier ? await deps.canalCourier().catch(() => undefined) : undefined;
+            const ref = refVoltra(pedido);
+            const mandar = canal?.activo
+              ? avisarPorCourier(canal, normal, { courier: pedido.courier ?? "", ref, textoCourier: textoCourierPagado(pedido), clave: claveAvisoCourier(ref, "pago_courier_no_cobrar", deps.ahora()) })
+              : normal;
+            const t = await mandar(avisoCourierPagado(pedido), undefined, {
               tipo: "pago_courier_no_cobrar", destino: "enrique", pedido: pedido.nombre ?? String(pedido.shopify_order_id),
-            }) as { ok?: boolean; error?: string } | undefined;
-            notas.push(t?.ok === false
+            });
+            const quien = pedido.courier === "pap" ? "Punto a Punto" : pedido.courier === "lucero" ? "Lucero" : "el courier";
+            notas.push(t.via === "whatsapp"
+              ? `Ya estaba preparado o en la planilla del courier: le avisé a ${quien} por WhatsApp que entregue SIN COBRAR (YA PAGADO).`
+              : t.ok === false
               ? `No pude mandarte el texto para el courier (${t.error ?? "error"}): avisale que NO cobre.`
               : "Ya estaba preparado o en la planilla del courier: te mandé el texto para el courier (YA PAGADO, cobrar 0).");
           } catch (e) {

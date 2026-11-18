@@ -439,6 +439,37 @@ Deno.test("Recibido con el pedido ya preparado (fulfilled) o con el courier: tex
   }
 });
 
+// 18-11: aviso directo a la transportadora por WhatsApp (interruptor config_wa.transportadoras.avisos_por_whatsapp).
+Deno.test("Recibido en camino con avisos por WhatsApp: prendido → texto plano a la transportadora y nada a Enrique; error o apagado → Telegram", async () => {
+  const pedido = () => pedidoBase({ tags: ["CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"], telefono: "+595981000000", raw: RAW_PREPARADO, courier: "lucero" });
+  // prendido y OK
+  let f = fakesRecibido(pedido());
+  const enviados: Array<{ courier: string; ref: string; texto: string; clave: string }> = [];
+  f.deps.canalCourier = () => Promise.resolve({ activo: true, enviar: (a) => (enviados.push(a), Promise.resolve({ ok: true })) });
+  await procesarUpdate(updateFoto(), f.deps);
+  assertEquals(f.avisos, []);
+  assertEquals(enviados.length, 1);
+  assertEquals([enviados[0].courier, enviados[0].ref], ["lucero", "VT-1001"]);
+  assert(enviados[0].clave.startsWith("pago_courier_no_cobrar:VT-1001:"));
+  assertStringIncludes(enviados[0].texto, "entregar SIN COBRAR (Gs 0)");
+  assertStringIncludes(enviados[0].texto, "YA PAGADO: no cobrar.");
+  assert(!enviados[0].texto.includes("<pre>") && !enviados[0].texto.includes("<b>"), enviados[0].texto);
+  assertStringIncludes(f.leyendas[0].html, "por WhatsApp");
+  // prendido con error → Telegram de siempre
+  f = fakesRecibido(pedido());
+  f.deps.canalCourier = () => Promise.resolve({ activo: true, enviar: () => Promise.resolve({ ok: false, error: "sin número" }) });
+  await procesarUpdate(updateFoto(), f.deps);
+  assertEquals(f.avisos.length, 1);
+  assertStringIncludes(f.avisos[0], "Para reenviar a Lucero");
+  assertStringIncludes(f.leyendas[0].html, "texto para el courier");
+  // apagado → Telegram de siempre, sin llamar a WhatsApp
+  f = fakesRecibido(pedido());
+  let llamado = false;
+  f.deps.canalCourier = () => Promise.resolve({ activo: false, enviar: () => (llamado = true, Promise.resolve({ ok: true })) });
+  await procesarUpdate(updateFoto(), f.deps);
+  assertEquals([f.avisos.length, llamado], [1, false]);
+});
+
 Deno.test("Recibido con el pedido ya ENTREGADO: no hay texto para el courier ni se toca la venta; avisa que puede haber pagado dos veces", async () => {
   const f = fakesRecibido(pedidoBase({ estado_envio: "ENTREGADO", raw: RAW_PREPARADO }));
   await procesarUpdate(updateFoto(), f.deps);

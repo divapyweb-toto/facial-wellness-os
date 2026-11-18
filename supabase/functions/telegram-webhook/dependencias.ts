@@ -5,6 +5,7 @@ import { agregarTags, cancelarPedido, orderGid } from "../_shared/shopify.ts";
 import { marcarPagado } from "../_shared/shopify_pagos.ts";
 import { enviarTexto } from "../_shared/wa.ts";
 import { avisar, editarLeyenda, editarMensaje, responderCallback } from "../_shared/telegram.ts";
+import { leerCanalCourier } from "../_shared/aviso_courier_wa_io.ts";
 import type { CicloDecision, DepsDecision, EstadoVersion, VersionMin } from "../mejora-mensual/aprobacion.ts";
 import { facturarAlCobrar } from "../factura/io.ts";
 import type { ClaveTextoCliente, Dependencias, PedidoContexto } from "./procesar.ts";
@@ -218,6 +219,8 @@ export function dependencias(chatId: string): Dependencias {
       if (!r.ok) console.error("editMessageCaption:", r.error);
     },
     avisar: (html, botones, opts) => avisar(html, botones, opts),
+    // 18-11: aviso directo a la transportadora (config_wa.transportadoras.avisos_por_whatsapp; apagado = Telegram de siempre).
+    canalCourier: () => leerCanalCourier(),
     // 29-10: "Recibido" / "Es este" (y pago-verificado, que reusa estas deps) → factura al cobrar.
     facturarAlCobrar: (id) => facturarEnSegundoPlano(id),
     // 12-10: "Recibido" → la venta (VT-<n>) queda como pago anticipado: Despacho "Desde Ventas" sale con cobro 0 y la

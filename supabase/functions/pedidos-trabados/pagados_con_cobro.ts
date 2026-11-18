@@ -8,7 +8,7 @@
 // Interruptor: config.alerta_pagados_cobro (sin fila = prendido; "apagado" o {"activo": false} lo apaga).
 import { escaparHtml, formatearGuaranies } from "../_shared/telegram_formato.ts";
 import { avisarUnaVez, type DepsActuar, diasDesde, pedidoDeRef } from "./entregas_actuar.ts";
-import { avisarPorCourier, type CanalCourier, claveAvisoCourier } from "./aviso_courier_wa.ts";
+import { avisarPorCourier, type CanalCourier, claveAvisoCourier } from "../_shared/aviso_courier_wa.ts";
 
 /** Señal de pago con el criterio de Despacho (pedidosVoltra.js esPagoAnticipado + prioridad.js pagadoPorTags + CREDITO). */
 export type SenalPago = "pagado" | "credito" | "parcial";

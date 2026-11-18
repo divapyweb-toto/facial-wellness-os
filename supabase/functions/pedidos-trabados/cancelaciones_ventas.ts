@@ -7,7 +7,7 @@
 import { db } from "../_shared/db.ts";
 import { avisar, type OpcionesAviso } from "../_shared/telegram.ts";
 import { tomarCandado } from "./io.ts";
-import { avisarPorCourier, type CanalCourier, claveAvisoCourier } from "./aviso_courier_wa.ts";
+import { avisarPorCourier, type CanalCourier, claveAvisoCourier } from "../_shared/aviso_courier_wa.ts";
 
 export type ClaseCancelacion = "cancelar" | "cancelado_en_courier" | "reemplazo_en_courier";
 export interface FilaCancelacion { shopify_order_id: number; nombre: string; clase: ClaseCancelacion; courier: string }

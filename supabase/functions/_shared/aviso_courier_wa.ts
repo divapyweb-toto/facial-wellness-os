@@ -1,11 +1,13 @@
-// pedidos-trabados · avisos DIRECTOS a la transportadora por WhatsApp (Enrique 18-11: que el bot avise a las transportadoras
+// _shared · avisos DIRECTOS a la transportadora por WhatsApp (Enrique 18-11: que el bot avise a las transportadoras
 // desde el número de Voltra, sin copiar y pegar). Interruptor config_wa.transportadoras.avisos_por_whatsapp: si falta o no es
 // true, todo sale por el Telegram de siempre.
 // El envío real (ventana de 24 h o plantilla voltra_aviso_transportadora, candado por clave, registro en wa_mensajes y la red
 // de seguridad de 3 h sin leído) es de _shared/courier_wa.ts (WhatsApp API). Acá solo: si va por WhatsApp, con qué texto
 // (el que hoy Enrique reenvía, en texto plano, nunca el Telegram para Enrique) y con qué clave; si falla, el Telegram de siempre.
-import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
-import { diaPy } from "./entregas_actuar.ts";
+import type { OpcionesAviso } from "./telegram_politica.ts";
+
+/** Día de Paraguay (UTC−3, igual que pedidos-trabados/entregas_actuar.ts diaPy). */
+const diaPy = (d: Date) => new Date(d.getTime() - 3 * 3_600_000).toISOString().slice(0, 10);
 
 export type CourierWa = "lucero" | "pap";
 export type EnviarACourier = (a: { courier: CourierWa; ref: string; texto: string; clave: string }) =>

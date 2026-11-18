@@ -15,7 +15,7 @@ import {
 import { escaparHtml, LIMITE_TEXTO_TELEGRAM } from "../_shared/telegram_formato.ts";
 import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import { type DepsActuar, diaPy, diasDesde, horaPy, normEstado, pedidoDeRef } from "./entregas_actuar.ts";
-import { avisarPorCourier, type CanalCourier } from "./aviso_courier_wa.ts";
+import { avisarPorCourier, type CanalCourier } from "../_shared/aviso_courier_wa.ts";
 import { diasHabilesDesde, estadoPlazoPap, type FilaPlazoPap, umbralPlazoPap } from "./plazo_pap.ts";
 
 export type Franja = "am" | "pm";

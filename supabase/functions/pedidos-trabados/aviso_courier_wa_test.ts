@@ -1,7 +1,7 @@
 // 18-11: avisos directos a la transportadora por WhatsApp (interruptor config_wa.transportadoras.avisos_por_whatsapp).
 // Datos inventados (N.º 9xxx, guías falsas).
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { avisarPorCourier, avisosPorWhatsapp, claveAvisoCourier, courierWa, type EnviarACourier } from "./aviso_courier_wa.ts";
+import { avisarPorCourier, avisosPorWhatsapp, claveAvisoCourier, courierWa, type EnviarACourier } from "../_shared/aviso_courier_wa.ts";
 import {
   CANDADO_BASE_PAGADO_COBRO, configPagadoCobro, type DepsPagadoCobro, type FilaPagadoCobro, procesarPagadosConCobro, textoCourierEnCamino,
   textoEnCamino,

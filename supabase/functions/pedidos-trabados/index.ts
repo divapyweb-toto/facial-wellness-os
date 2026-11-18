@@ -9,7 +9,7 @@ import { cancelarEnShopify, candadosTomados, coberturaCiudades, ejecutar, estado
 import { accionesPara, revisarCoberturaDe } from "./logica.ts";
 import { avisoRutaPap } from "./aviso_ruta_pap.ts";
 import { sincronizarCancelaciones } from "./cancelaciones_ventas.ts";
-import { leerCanalCourier } from "./aviso_courier_wa_io.ts";
+import { leerCanalCourier } from "../_shared/aviso_courier_wa_io.ts";
 import { activarPlantillaReprogramar, depsReales as depsPlantilla } from "./plantilla_reprogramar.ts";
 import { entregasParaActuar } from "./entregas_actuar_io.ts";
 import { alertaPlazoPap } from "./plazo_pap_io.ts";

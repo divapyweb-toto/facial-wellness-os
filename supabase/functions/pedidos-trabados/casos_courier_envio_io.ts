@@ -1,7 +1,7 @@
 // pedidos-trabados · I/O de casos_courier_envio.ts: tabla casos_courier (migración 20261104000001), entregas,
 // shopify_pedidos, vistas entregas_plazo_pap y rendicion_atrasada, candados en eventos_crudos y Telegram reales.
 import type { CasoCourier, RendicionPendiente } from "../_shared/casos_courier.ts";
-import { leerCanalCourier } from "./aviso_courier_wa_io.ts";
+import { leerCanalCourier } from "../_shared/aviso_courier_wa_io.ts";
 import { db } from "../_shared/db.ts";
 import { datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
 import { diaPy, pedidoDeRef } from "./entregas_actuar.ts";
