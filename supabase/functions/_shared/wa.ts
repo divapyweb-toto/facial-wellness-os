@@ -22,7 +22,7 @@ export type OpcionesEnvio = {
    * Queda en wa_mensajes.contenido.origen (no viaja a Meta); wa-webhook lo usa para no retomar un chat que
    * Enrique está atendiendo.
    */
-  origen?: "manual";
+  origen?: "manual" | "transportadora";
 };
 
 export type FilaMensajeSaliente = {

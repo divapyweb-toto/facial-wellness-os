@@ -1,7 +1,7 @@
 // 18-11: avisos directos a la transportadora por WhatsApp (interruptor config_wa.transportadoras.avisos_por_whatsapp).
 // Datos inventados (N.º 9xxx, guías falsas).
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { avisarPorCourier, avisosPorWhatsapp, claveAvisoCourier, courierWa, type EnviarACourier } from "../_shared/aviso_courier_wa.ts";
+import { adaptarResultadoCourier, avisarPorCourier, avisosPorWhatsapp, claveAvisoCourier, courierWa, type EnviarACourier } from "../_shared/aviso_courier_wa.ts";
 import {
   CANDADO_BASE_PAGADO_COBRO, configPagadoCobro, type DepsPagadoCobro, type FilaPagadoCobro, procesarPagadosConCobro, textoCourierEnCamino,
   textoEnCamino,
@@ -36,6 +36,13 @@ Deno.test("interruptor: solo true explícito prende; falta, false u otro valor =
   assertEquals(courierWa("pap"), "pap");
   assertEquals(courierWa("aex"), null);
   assertEquals(claveAvisoCourier("VT-9001", "pagado_no_cobrar", AHORA), "pagado_no_cobrar:VT-9001:2026-11-18");
+});
+
+Deno.test("adaptador de enviarACourier: ok o repetido = salió (sin Telegram); si no, error con las fallas", () => {
+  assertEquals(adaptarResultadoCourier({ ok: true, enviados: ["+5959"], fallas: [], wamids: ["wamid.DEMO"] }), { ok: true, wamid: "wamid.DEMO" });
+  assertEquals(adaptarResultadoCourier({ ok: true, enviados: [], fallas: [], repetido: true }), { ok: true, wamid: undefined });
+  assertEquals(adaptarResultadoCourier({ ok: false, enviados: [], fallas: ["sin_numero_de_pap", "tope_diario"] }), { ok: false, error: "sin_numero_de_pap; tope_diario" });
+  assertEquals(adaptarResultadoCourier({ ok: false, enviados: [], fallas: [] }), { ok: false, error: "sin envío" });
 });
 
 Deno.test("avisarPorCourier: apagado → Telegram con el texto de Enrique; prendido → WhatsApp con el texto del courier; error → Telegram", async () => {
@@ -107,6 +114,7 @@ Deno.test("pagados en camino: apagado = Telegram igual que antes; prendido = Wha
   assertEquals([h[0].resultado, x.tg.length, e.enviados.length], ["avisado", 0, 1]);
   assertEquals(e.enviados[0].courier, "lucero");
   assertEquals(e.enviados[0].clave, "pagado_no_cobrar:VT-9001:2026-11-18");
+  assertEquals((e.enviados[0] as { plazoLecturaH?: number }).plazoLecturaH, 3, "pagado: respaldo por no leído a las 3 h");
   assertEquals(e.enviados[0].texto, textoCourierEnCamino(F()));
   // una vez: la segunda corrida no repite (candado)
   await procesarPagadosConCobro([F()], AHORA, configPagadoCobro(null), x.d);
@@ -182,6 +190,7 @@ Deno.test("casos para el courier: apagado = Telegram con el bloque copiable; pre
   assertEquals([h[0].resultado, x.tg.length, e.enviados.length, x.marcados], ["enviado", 0, 1, ["VT-9101"]]);
   assertEquals(e.enviados[0].courier, "pap");
   assertEquals(e.enviados[0].clave, "casos:2026-11-18:am:pap:1");
+  assertEquals((e.enviados[0] as { plazoLecturaH?: number }).plazoLecturaH, undefined, "resto: plazo por defecto de WA3 (4 h)");
   assert(!e.enviados[0].texto.includes("<pre>") && !e.enviados[0].texto.includes("Copiá"));
   assertStringIncludes(e.enviados[0].texto, "VT-9101");
   const mal = enviarFalso({ falla: true });

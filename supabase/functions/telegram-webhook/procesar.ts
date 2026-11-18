@@ -465,7 +465,7 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
             const canal = deps.canalCourier ? await deps.canalCourier().catch(() => undefined) : undefined;
             const ref = refVoltra(pedido);
             const mandar = canal?.activo
-              ? avisarPorCourier(canal, normal, { courier: pedido.courier ?? "", ref, textoCourier: textoCourierPagado(pedido), clave: claveAvisoCourier(ref, "pago_courier_no_cobrar", deps.ahora()) })
+              ? avisarPorCourier(canal, normal, { courier: pedido.courier ?? "", ref, textoCourier: textoCourierPagado(pedido), clave: claveAvisoCourier(ref, "pago_courier_no_cobrar", deps.ahora()), plazoLecturaH: 3 })
               : normal;
             const t = await mandar(avisoCourierPagado(pedido), undefined, {
               tipo: "pago_courier_no_cobrar", destino: "enrique", pedido: pedido.nombre ?? String(pedido.shopify_order_id),

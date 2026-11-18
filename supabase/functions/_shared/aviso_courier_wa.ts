@@ -10,8 +10,17 @@ import type { OpcionesAviso } from "./telegram_politica.ts";
 const diaPy = (d: Date) => new Date(d.getTime() - 3 * 3_600_000).toISOString().slice(0, 10);
 
 export type CourierWa = "lucero" | "pap";
-export type EnviarACourier = (a: { courier: CourierWa; ref: string; texto: string; clave: string }) =>
+export type EnviarACourier = (a: { courier: CourierWa; ref: string; texto: string; clave: string; plazoLecturaH?: number }) =>
   Promise<{ ok: boolean; wamid?: string; error?: string }>;
+
+/**
+ * Resultado de enviarACourier (_shared/courier_wa.ts) → {ok, error}. `repetido` = ya salió bien antes (el candado de
+ * courier_wa se cierra solo con un envío OK): cuenta como enviado y NO se manda Telegram (si no, saldría doble).
+ */
+export function adaptarResultadoCourier(r: { ok: boolean; enviados?: string[]; fallas?: string[]; repetido?: boolean; wamids?: string[] }) {
+  if (r.ok || r.repetido) return { ok: true, wamid: r.wamids?.[0] };
+  return { ok: false, error: (r.fallas ?? []).join("; ") || "sin envío" };
+}
 type Avisar = (texto: string, botones?: undefined, opts?: OpcionesAviso) => Promise<{ ok: boolean; error?: string }>;
 export type ResultadoAvisoCourier = { ok: boolean; error?: string; via: "whatsapp" | "telegram"; errorWhatsapp?: string };
 
@@ -37,14 +46,15 @@ export const claveAvisoCourier = (ref: string, tipo: string, ahora: Date) => `${
  * `textoCourier` por WhatsApp a la transportadora (nada a Enrique); si no aplica o falla, avisa a Enrique con su texto de siempre.
  */
 export function avisarPorCourier(
-  canal: CanalCourier | undefined, base: Avisar, a: { courier: string; ref: string; textoCourier: string; clave: string },
+  canal: CanalCourier | undefined, base: Avisar,
+  a: { courier: string; ref: string; textoCourier: string; clave: string; /** horas hábiles hasta el respaldo por "no leído" (WA3; sin dato = 4) */ plazoLecturaH?: number },
 ) {
   return async (textoEnrique: string, botones?: undefined, opts?: OpcionesAviso): Promise<ResultadoAvisoCourier> => {
     const courier = courierWa(a.courier);
     let errorWhatsapp: string | undefined;
     if (canal?.activo && canal.enviar && courier) {
       try {
-        const r = await canal.enviar({ courier, ref: a.ref, texto: a.textoCourier, clave: a.clave });
+        const r = await canal.enviar({ courier, ref: a.ref, texto: a.textoCourier, clave: a.clave, ...(a.plazoLecturaH ? { plazoLecturaH: a.plazoLecturaH } : {}) });
         if (r.ok) return { ok: true, via: "whatsapp" };
         errorWhatsapp = r.error ?? "WhatsApp falló";
       } catch (e) {

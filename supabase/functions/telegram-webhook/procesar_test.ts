@@ -451,6 +451,7 @@ Deno.test("Recibido en camino con avisos por WhatsApp: prendido → texto plano 
   assertEquals(enviados.length, 1);
   assertEquals([enviados[0].courier, enviados[0].ref], ["lucero", "VT-1001"]);
   assert(enviados[0].clave.startsWith("pago_courier_no_cobrar:VT-1001:"));
+  assertEquals((enviados[0] as { plazoLecturaH?: number }).plazoLecturaH, 3);
   assertStringIncludes(enviados[0].texto, "entregar SIN COBRAR (Gs 0)");
   assertStringIncludes(enviados[0].texto, "YA PAGADO: no cobrar.");
   assert(!enviados[0].texto.includes("<pre>") && !enviados[0].texto.includes("<b>"), enviados[0].texto);
