@@ -15,6 +15,7 @@ import {
 import { escaparHtml, LIMITE_TEXTO_TELEGRAM } from "../_shared/telegram_formato.ts";
 import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import { type DepsActuar, diaPy, diasDesde, horaPy, normEstado, pedidoDeRef } from "./entregas_actuar.ts";
+import { avisarPorCourier, type CanalCourier } from "./aviso_courier_wa.ts";
 import { diasHabilesDesde, estadoPlazoPap, type FilaPlazoPap, umbralPlazoPap } from "./plazo_pap.ts";
 
 export type Franja = "am" | "pm";
@@ -116,15 +117,19 @@ export const textoSoloRendiciones = (courier: CourierCaso, rendiciones: Rendicio
   `<pre>${escaparHtml(textoParaCourier(courier, [], rendiciones))}</pre>`;
 
 /** Telegram(s) de un envío: si no entra en uno, se parte por casos (las rendiciones van en el primero). */
-export function partesEnvio(e: EnvioCasos, lineas: LineaCaso[], rendiciones: RendicionPendiente[]): Array<{ texto: string; casos: CasoCourier[] }> {
+// 18-11: cada parte lleva además `textoCourier` = el texto plano que va a la transportadora por WhatsApp (lo que hoy está en el <pre>).
+export function partesEnvio(e: EnvioCasos, lineas: LineaCaso[], rendiciones: RendicionPendiente[]): Array<{ texto: string; casos: CasoCourier[]; textoCourier: string }> {
   const rend = (i: number) => (e.conRendiciones && i === 0 ? rendiciones : []);
-  if (!lineas.length) return [{ texto: textoSoloRendiciones(e.courier, rend(0)), casos: [] }];
-  const partes: Array<{ texto: string; casos: CasoCourier[] }> = [];
+  if (!lineas.length) return [{ texto: textoSoloRendiciones(e.courier, rend(0)), casos: [], textoCourier: textoParaCourier(e.courier, [], rend(0)) }];
+  const partes: Array<{ texto: string; casos: CasoCourier[]; textoCourier: string }> = [];
   let desde = 0;
   while (desde < lineas.length) {
     let hasta = desde + 1;
     while (hasta < lineas.length && textoTelegramCasos(e.courier, lineas.slice(desde, hasta + 1), e.urgente, rend(partes.length)).length <= LIMITE_TEXTO_CASOS) hasta++;
-    partes.push({ texto: textoTelegramCasos(e.courier, lineas.slice(desde, hasta), e.urgente, rend(partes.length)), casos: e.casos.slice(desde, hasta) });
+    partes.push({
+      texto: textoTelegramCasos(e.courier, lineas.slice(desde, hasta), e.urgente, rend(partes.length)), casos: e.casos.slice(desde, hasta),
+      textoCourier: textoParaCourier(e.courier, lineas.slice(desde, hasta), rend(partes.length)),
+    });
     desde = hasta;
   }
   return partes;
@@ -257,13 +262,18 @@ export async function procesarCasosSistema(
 export interface DepsCasos extends Pick<DepsActuar, "tomarCandado" | "soltarCandado" | "existeCandado" | "avisar" | "esperar"> {
   /** estado 'enviado', enviado_en = ahora, lote (con el estado del courier en ese momento, para el reenvío). */
   marcarEnviados(casos: CasoCourier[], lote: (c: CasoCourier) => string, ahora: Date): Promise<void>;
+  /** 18-11: aviso directo a la transportadora por WhatsApp. Sin canal = Telegram de siempre. */
+  canalCourier?: CanalCourier;
 }
 export interface HechoEnvio { lote: string; courier: CourierCaso; casos: string[]; resultado: string; textos?: string[] }
 
-async function mandar(d: DepsCasos, texto: string, opts: OpcionesAviso): Promise<string | null> {
+async function mandar(d: DepsCasos, texto: string, opts: OpcionesAviso, courier?: { courier: CourierCaso; ref: string; texto: string; clave: string }): Promise<string | null> {
+  const avisar = courier && d.canalCourier?.activo
+    ? avisarPorCourier(d.canalCourier, d.avisar, { courier: courier.courier, ref: courier.ref, textoCourier: courier.texto, clave: courier.clave })
+    : d.avisar;
   let ultimo = "";
   for (let i = 0; i < 3; i++) {
-    const r = await d.avisar(texto, undefined, opts);
+    const r = await avisar(texto, undefined, opts);
     if (r.ok) return null;
     ultimo = r.error ?? "Telegram falló";
     if (i < 2) await d.esperar(1500);
@@ -288,8 +298,9 @@ export async function enviarCasos(
     if (!(await d.tomarCandado(e.clave, { lote: e.lote, casos: h.casos }))) { h.resultado = "ya_enviado"; continue; }
     const opts = e.urgente ? opcionesUrgente(e.casos[0].ref) : OPCIONES_CASOS;
     h.resultado = "enviado";
-    for (const p of partes) {
-      const error = await mandar(d, p.texto, opts);
+    for (const [i, p] of partes.entries()) {
+      // 18-11: clave estable = lote (día:franja:courier o urgente:<id>) + n.º de parte.
+      const error = await mandar(d, p.texto, opts, { courier: e.courier, ref: e.casos[0]?.ref ?? e.lote, texto: p.textoCourier, clave: `casos:${e.lote}:${i + 1}` });
       if (error) {
         await d.soltarCandado(e.clave);
         h.resultado = `error: Telegram: ${error}`;

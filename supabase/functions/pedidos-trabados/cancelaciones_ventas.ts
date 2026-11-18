@@ -7,6 +7,7 @@
 import { db } from "../_shared/db.ts";
 import { avisar, type OpcionesAviso } from "../_shared/telegram.ts";
 import { tomarCandado } from "./io.ts";
+import { avisarPorCourier, type CanalCourier, claveAvisoCourier } from "./aviso_courier_wa.ts";
 
 export type ClaseCancelacion = "cancelar" | "cancelado_en_courier" | "reemplazo_en_courier";
 export interface FilaCancelacion { shopify_order_id: number; nombre: string; clase: ClaseCancelacion; courier: string }
@@ -30,6 +31,34 @@ export function opcionesAviso(f: FilaCancelacion): OpcionesAviso {
     : { tipo: "cancelado_en_courier", destino: "enrique", pedido: f.nombre, clave: String(f.shopify_order_id), unaVezPorDia: true };
 }
 
+/** 18-11: texto para la transportadora (va por WhatsApp si config_wa.transportadoras.avisos_por_whatsapp está prendido). */
+export function textoCourierCancelado(f: FilaCancelacion & { ref?: string }): string {
+  return `Hola, el pedido ${f.ref || f.nombre} fue cancelado por el cliente. Por favor no lo entreguen y devuélvanlo a Voltra. Gracias.`;
+}
+
+/**
+ * Manda el aviso de una cancelación (3 intentos). "Cancelado ya en el courier" puede ir directo a la transportadora por WhatsApp;
+ * si falla o está apagado, el Telegram de siempre. "Reemplazo" siempre a Enrique (necesita su criterio). Devuelve "" si salió.
+ */
+export async function avisarCancelacion(
+  f: FilaCancelacion & { ref?: string },
+  d: { avisar: (t: string, b?: undefined, o?: OpcionesAviso) => Promise<{ ok: boolean; error?: string }>; esperar: (ms: number) => Promise<void> },
+  canal: CanalCourier | undefined, ahora: Date,
+): Promise<string> {
+  const ref = f.ref || f.nombre;
+  const mandar = f.clase === "cancelado_en_courier" && canal?.activo
+    ? avisarPorCourier(canal, d.avisar, { courier: f.courier, ref, textoCourier: textoCourierCancelado(f), clave: claveAvisoCourier(ref, "cancelado_en_courier", ahora) })
+    : d.avisar;
+  let ultimo = "";
+  for (let i = 0; i < 3; i++) {
+    const r = await mandar(textoAviso(f), undefined, opcionesAviso(f));
+    if (r.ok) return "";
+    ultimo = r.error ?? "Telegram falló";
+    if (i < 2) await d.esperar(1500);
+  }
+  return ultimo;
+}
+
 export async function filasCancelacion(): Promise<FilaCancelacion[]> {
   const { data, error } = await db().from("ventas_cancelacion_shopify")
     .select("shopify_order_id,nombre,ref,clase,courier_real,transportadora");
@@ -41,7 +70,7 @@ export async function filasCancelacion(): Promise<FilaCancelacion[]> {
   } as FilaCancelacion & { ref: string }));
 }
 
-export async function sincronizarCancelaciones(simular = false) {
+export async function sincronizarCancelaciones(simular = false, canal?: CanalCourier) {
   const filas = (await filasCancelacion()) as Array<FilaCancelacion & { ref: string }>;
   const hechos: Array<{ pedido: string; clase: string; resultado: string }> = [];
   for (const f of filas) {
@@ -53,13 +82,7 @@ export async function sincronizarCancelaciones(simular = false) {
     }
     const candado = `auto_${f.clase}:${f.shopify_order_id}`;
     if (!(await tomarCandado(candado, { pedido: f.nombre, clase: f.clase }))) continue; // ya avisado
-    let ultimo = "";
-    for (let i = 0; i < 3; i++) {
-      const r = await avisar(textoAviso(f), undefined, opcionesAviso(f));
-      if (r.ok) { ultimo = ""; break; }
-      ultimo = r.error ?? "Telegram falló";
-      await new Promise((z) => setTimeout(z, 1500));
-    }
+    const ultimo = await avisarCancelacion(f, { avisar, esperar: (ms) => new Promise((z) => setTimeout(z, ms)) }, canal, new Date());
     if (ultimo) await db().from("eventos_crudos").delete().eq("fuente", "shopify").eq("id_externo", candado); // se reintenta en 10 min
     hechos.push({ pedido: f.nombre, clase: f.clase, resultado: ultimo ? `Telegram: ${ultimo}` : "avisado" });
   }

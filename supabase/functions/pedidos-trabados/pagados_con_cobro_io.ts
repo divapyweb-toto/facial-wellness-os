@@ -2,6 +2,7 @@
 // alerta_pagados_cobro; candados y Telegram reales (depsReales de entregas_actuar_io.ts). Solo lectura salvo candados.
 import { db } from "../_shared/db.ts";
 import { depsReales } from "./entregas_actuar_io.ts";
+import { leerCanalCourier } from "./aviso_courier_wa_io.ts";
 import {
   armarFilas, CLAVE_CFG_PAGADOS_COBRO, configPagadoCobro, type DepsPagadoCobro, type EntregaCruda, type PedidoCrudo,
   procesarPagadosConCobro, type VentaCruda,
@@ -55,5 +56,6 @@ const deps: DepsPagadoCobro = { ...depsReales, yaAvisadoAlVerificar };
 export async function alertaPagadosConCobro(ahora: Date, simular: boolean) {
   const cfg = await leerCfg();
   if (!cfg.activo) return { activo: false, hechos: [] };
-  return { activo: true, hechos: await procesarPagadosConCobro(await leerFilas(cfg.desde), ahora, cfg, deps, simular) };
+  const canalCourier = await leerCanalCourier(); // 18-11: aviso directo a la transportadora (apagado = Telegram de siempre)
+  return { activo: true, hechos: await procesarPagadosConCobro(await leerFilas(cfg.desde), ahora, cfg, { ...deps, canalCourier }, simular) };
 }

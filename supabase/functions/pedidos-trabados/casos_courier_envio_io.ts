@@ -1,6 +1,7 @@
 // pedidos-trabados · I/O de casos_courier_envio.ts: tabla casos_courier (migración 20261104000001), entregas,
 // shopify_pedidos, vistas entregas_plazo_pap y rendicion_atrasada, candados en eventos_crudos y Telegram reales.
 import type { CasoCourier, RendicionPendiente } from "../_shared/casos_courier.ts";
+import { leerCanalCourier } from "./aviso_courier_wa_io.ts";
 import { db } from "../_shared/db.ts";
 import { datosCourierDesdeRaw } from "../_shared/texto_courier.ts";
 import { diaPy, pedidoDeRef } from "./entregas_actuar.ts";
@@ -161,7 +162,8 @@ export async function casosParaCourier(ahora: Date, simular: boolean) {
     const plan = planificarEnvios(pendientes, ahora, rend.length > 0);
     if (!plan.length) return [];
     const refs = plan.flatMap((e) => e.casos.map((c) => c.ref));
-    return await enviarCasos(plan, await datosPedidos(refs), rend, ahora, depsCasosReales, simular);
+    const canalCourier = await leerCanalCourier(); // 18-11: aviso directo a la transportadora (apagado = Telegram de siempre)
+    return await enviarCasos(plan, await datosPedidos(refs), rend, ahora, { ...depsCasosReales, canalCourier }, simular);
   })().catch(atrapar("casos_envio"));
   return { sistema, envios };
 }

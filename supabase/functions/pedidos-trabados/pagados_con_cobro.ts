@@ -8,6 +8,7 @@
 // Interruptor: config.alerta_pagados_cobro (sin fila = prendido; "apagado" o {"activo": false} lo apaga).
 import { escaparHtml, formatearGuaranies } from "../_shared/telegram_formato.ts";
 import { avisarUnaVez, type DepsActuar, diasDesde, pedidoDeRef } from "./entregas_actuar.ts";
+import { avisarPorCourier, type CanalCourier, claveAvisoCourier } from "./aviso_courier_wa.ts";
 
 /** Señal de pago con el criterio de Despacho (pedidosVoltra.js esPagoAnticipado + prioridad.js pagadoPorTags + CREDITO). */
 export type SenalPago = "pagado" | "credito" | "parcial";
@@ -23,6 +24,8 @@ export interface CfgPagadoCobro { activo: boolean; desde: string; diasResumen: n
 export type DepsPagadoCobro = DepsActuar & {
   /** ¿Ya salió el texto "entregar SIN COBRAR" al verificar el pago (telegram_enviados, pago_courier_no_cobrar)? */
   yaAvisadoAlVerificar?(pedido: string): Promise<boolean>;
+  /** 18-11: aviso directo a la transportadora por WhatsApp (solo "en camino"). Sin canal = Telegram de siempre. */
+  canalCourier?: CanalCourier;
 };
 
 export const CLAVE_CFG_PAGADOS_COBRO = "alerta_pagados_cobro";
@@ -119,20 +122,25 @@ const fechaLinda = (f: string | null) => (f && /^\d{4}-\d{2}-\d{2}/.test(f) ? `$
 const gs = (n: number) => `Gs ${Math.round(n).toLocaleString("es-PY").replace(/,/g, ".")}`;
 const queEs = (f: FilaPagadoCobro) => (f.senal === "credito" ? "a crédito" : f.senal === "parcial" ? "con pago parcial" : "pagado");
 
-export function textoEnCamino(f: FilaPagadoCobro): string {
-  const n = escaparHtml(pedidoDeRef(f.ref)), c = nombreCourier(f.courier), monto = montoDe(f);
-  const guia = f.guia ? `la guía ${escaparHtml(f.guia)}` : "la guía (sin número cargado)";
-  const guiaCorta = f.guia ? ` (guía ${escaparHtml(f.guia)})` : "";
-  const destino = f.ciudad?.trim() ? `, destino ${escaparHtml(f.ciudad.trim())},` : "";
-  const parcial = f.senal === "parcial"
-    ? ` Ojo: pago parcial${f.saldo != null ? `; el saldo es ${formatearGuaranies(f.saldo)}` : ""}: confirmá con ${c} cuánto tiene que cobrar.` : "";
-  const pedidoCourier = f.senal === "parcial"
+/** 18-11: el bloque que va a la transportadora (el que Enrique reenvía), en texto plano. `esc` = escaparHtml para el Telegram. */
+export function textoCourierEnCamino(f: FilaPagadoCobro, esc: (s: string) => string = (s) => s): string {
+  const n = esc(pedidoDeRef(f.ref)), monto = montoDe(f);
+  const guiaCorta = f.guia ? ` (guía ${esc(f.guia)})` : "";
+  const destino = f.ciudad?.trim() ? `, destino ${esc(f.ciudad.trim())},` : "";
+  return f.senal === "parcial"
     ? `Hola, el pedido ${n}${guiaCorta}${destino} ya está pagado en parte por transferencia: NO cobrar ${gs(monto)}. Les confirmo el monto a cobrar. Gracias.`
     : f.senal === "credito"
     ? `Hola, el pedido ${n}${guiaCorta}${destino} es a crédito: entregar SIN COBRAR (Gs 0). Por favor pasen el monto a cobrar de la guía a 0. Gracias.`
     : `Hola, el pedido ${n}${guiaCorta}${destino} ya está pagado por transferencia: entregar SIN COBRAR (Gs 0). Por favor pasen el monto a cobrar de la guía a 0. Gracias.`;
+}
+
+export function textoEnCamino(f: FilaPagadoCobro): string {
+  const n = escaparHtml(pedidoDeRef(f.ref)), c = nombreCourier(f.courier), monto = montoDe(f);
+  const guia = f.guia ? `la guía ${escaparHtml(f.guia)}` : "la guía (sin número cargado)";
+  const parcial = f.senal === "parcial"
+    ? ` Ojo: pago parcial${f.saldo != null ? `; el saldo es ${formatearGuaranies(f.saldo)}` : ""}: confirmá con ${c} cuánto tiene que cobrar.` : "";
   return `💸 ${n} ${queEs(f)}: pedile a ${c} que ${guia} pase a ₲0 (hoy figura a cobrar ${formatearGuaranies(monto)}).${parcial} ` +
-    `Reenviale esto a ${c}:\n\n${pedidoCourier}`;
+    `Reenviale esto a ${c}:\n\n${textoCourierEnCamino(f, escaparHtml)}`;
 }
 
 export function textoCobrado(f: FilaPagadoCobro): string {
@@ -203,7 +211,12 @@ export async function procesarPagadosConCobro(
       continue;
     }
     const texto = caso === "cobrado" ? textoCobrado(f) : textoEnCamino(f);
-    hechos.push({ ref: f.ref, caso, monto, resultado: await avisarUnaVez(d, id, { ref: f.ref, caso, monto }, texto, simular, opts(f.ref)) });
+    // 18-11: "en camino" puede ir directo a la transportadora por WhatsApp (si falla o está apagado, el Telegram de siempre).
+    // "cobrado" (posible doble cobro) siempre a Enrique: es plata y rendición.
+    const dd: DepsActuar = caso === "en_camino" && d.canalCourier?.activo
+      ? { ...d, avisar: avisarPorCourier(d.canalCourier, d.avisar, { courier: f.courier, ref: f.ref, textoCourier: textoCourierEnCamino(f), clave: claveAvisoCourier(f.ref, "pagado_no_cobrar", ahora) }) }
+      : d;
+    hechos.push({ ref: f.ref, caso, monto, resultado: await avisarUnaVez(dd, id, { ref: f.ref, caso, monto }, texto, simular, opts(f.ref)) });
   }
   return hechos;
 }

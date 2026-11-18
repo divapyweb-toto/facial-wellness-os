@@ -9,6 +9,7 @@ import { cancelarEnShopify, candadosTomados, coberturaCiudades, ejecutar, estado
 import { accionesPara, revisarCoberturaDe } from "./logica.ts";
 import { avisoRutaPap } from "./aviso_ruta_pap.ts";
 import { sincronizarCancelaciones } from "./cancelaciones_ventas.ts";
+import { leerCanalCourier } from "./aviso_courier_wa_io.ts";
 import { activarPlantillaReprogramar, depsReales as depsPlantilla } from "./plantilla_reprogramar.ts";
 import { entregasParaActuar } from "./entregas_actuar_io.ts";
 import { alertaPlazoPap } from "./plazo_pap_io.ts";
@@ -49,7 +50,7 @@ async function automatico(simular: boolean) {
   // 19-10: aviso "en recorrido de reparto" para PaP (aviso_ruta_pap.ts). Un error acá no frena lo demás.
   const ruta = await avisoRutaPap(ahora, simular).catch((e) => ({ activo: true, error: e instanceof Error ? e.message : String(e), hechos: [] }));
   // 21-10: pedido cancelado en Shopify → la venta de Voltra OS se entera (cancelaciones_ventas.ts). Un error acá no frena lo demás.
-  const cancelaciones = await sincronizarCancelaciones(simular).catch((e) => [{ pedido: "-", clase: "error", resultado: e instanceof Error ? e.message : String(e) }]);
+  const cancelaciones = await leerCanalCourier().then((canal) => sincronizarCancelaciones(simular, canal)).catch((e) => [{ pedido: "-", clase: "error", resultado: e instanceof Error ? e.message : String(e) }]);
   // 21-10: que nada quede parado: entregas fallidas de Lucero, última chance de PaP, pedidos parados (9:00) y rendición atrasada (entregas_actuar.ts).
   const actuar = await entregasParaActuar(ahora, simular).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
   // 22-10: activa sola la plantilla de reprogramación de Lucero cuando Meta la aprueba (un error acá no frena lo demás).
