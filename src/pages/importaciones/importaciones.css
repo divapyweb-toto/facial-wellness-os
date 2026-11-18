@@ -11,6 +11,8 @@
 .imp-sem { position: absolute; top: 8px; right: 8px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(0,0,0,0.5); }
 .imp-sin-foto { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--text-muted); font-size: 12px; text-align: center; padding: 8px; }
 .imp-sin-foto-grande { min-height: 140px; border: 1px dashed var(--border); border-radius: var(--radius); }
+.imp-foto-aviso { color: var(--red); background: var(--red-dim); font-weight: 600; }
+.imp-foto-item .imp-sin-foto { aspect-ratio: 4 / 3; height: auto; }
 .imp-tarjeta-cuerpo { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .imp-nombre { font-weight: 600; font-size: 13px; color: var(--text-primary); }
 .imp-datos { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; font-size: 13px; }

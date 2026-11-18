@@ -66,9 +66,12 @@ export const DEMO = {
     base('demo-tr-3', { tipo: 'investigar_py', candidato_id: C1, carga: { consulta: 'lámpara de lectura' }, estado: 'SUCCEEDED', intento: 1, lease_hasta: null, ejecutor: 'mac-demo', checkpoint: null, bloqueo: null, resultado: { evidencias: 2 } }),
   ],
   pi_politicas: [
+    // Permiso general DEMO (candidato_id null = vale para todos los productos), sin autorizar.
+    base('demo-pol-general', { candidato_id: null, autorizada_texto: null, alcance: { tipo: 'general', negocia: ['precio', 'cantidades', 'color_variante', 'calidad', 'empaque', 'plazos', 'condiciones'], proveedores_max_por_producto: 10, rondas_max_por_producto: 3, seguimiento_dias_habiles: 2 }, permite_envio: false, vigente_hasta: null, autorizada_por: null, autorizada_en: null }),
     base('demo-pol-1', { candidato_id: C1, autorizada_texto: null, alcance: { proveedores_max: 5, mensajes_max: 10, rondas: 2, plazo_dias: 7 }, permite_envio: false, vigente_hasta: null, autorizada_por: null, autorizada_en: null }),
   ],
   pi_mensajes: [
+    base('demo-msg-2', { politica_id: 'demo-pol-general', candidato_id: C1, proveedor_id: P3, estado: 'DRAFT', idempotencia: 'demo-pol-general:demo-cand-0001:demo-prov-0003:v1:rfq', original: 'Hello, could you quote 50/100 units in white, with individual box? Evaluation quantities, not a commitment. (DEMO)', traduccion: 'Hola, ¿podés cotizar 50/100 unidades en blanco, con caja individual? Cantidades de evaluación, no un compromiso. (DEMO)', idioma: 'en' }),
     base('demo-msg-1', { politica_id: 'demo-pol-1', proveedor_id: P2, estado: 'DRAFT', idempotencia: 'demo-pol-1:demo-prov-0002:v1:rfq', original: 'Hello, we would like a quotation for 20/50/100 units of the attached spec (v2). These are evaluation quantities, not a commitment. (DEMO)', traduccion: 'Hola, quisiéramos cotización para 20/50/100 unidades de la ficha adjunta (v2). Son cantidades de evaluación, no un compromiso. (DEMO)', idioma: 'en' }),
   ],
   pi_ordenes_compra: [
@@ -77,6 +80,7 @@ export const DEMO = {
   pi_fotos: [
     base('demo-foto-1', { candidato_id: C1, storage_path: null, url_externa: fotoDemo('Foto del proveedor (DEMO)', '#1f3a5a', 'clip'), fuente: 'proveedor', es_principal: true, orden: 1, descripcion: 'DEMO: foto de la ficha del proveedor 1' }),
     base('demo-foto-2', { candidato_id: C1, storage_path: null, url_externa: fotoDemo('Empaque según proveedor (DEMO)', '#2a2f45', 'caja'), fuente: 'proveedor', es_principal: false, orden: 2, descripcion: 'DEMO: empaque individual' }),
+    base('demo-foto-4', { candidato_id: C1, storage_path: null, url_externa: 'https://ejemplo.invalid/foto-demo-bloqueada.jpg', fuente: 'ia_referencia', es_principal: false, orden: 4, descripcion: 'DEMO: link externo que no carga (muestra el aviso de foto bloqueada)' }),
     base('demo-foto-3', { candidato_id: C1, storage_path: null, url_externa: fotoDemo('Referencia IA (DEMO)', '#3a2a45', 'aro'), fuente: 'ia_referencia', es_principal: false, orden: 3, descripcion: 'DEMO: imagen de referencia hecha con IA, no es el producto real' }),
   ],
   pi_decisiones: [],

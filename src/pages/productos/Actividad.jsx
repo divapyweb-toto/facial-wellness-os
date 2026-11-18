@@ -7,6 +7,7 @@ import { Activity, Plus, RotateCcw, X, Laptop, ShieldAlert, MessageSquare } from
 import { useToast } from '../../lib/toast'
 import { listarTrabajos, crearTrabajo, actualizarTrabajo, listarMensajes, listarPoliticas, listarCandidatos, esModoDemo } from './api'
 import { fmtFechaHora } from './formato'
+import { politicaVigente } from './derivados'
 import { Campo, Vacio, ErrorCaja, Demo, Modal } from './ui'
 
 const ESTADOS_TRABAJO = {
@@ -131,20 +132,20 @@ function Mensajes({ mensajes, politicas, nombreCand }) {
       <div className="section-label"><MessageSquare size={12} /> Mensajes a proveedores</div>
       <div className="alert alert-warning" style={{ marginTop: 8 }}>
         <ShieldAlert size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>No se envía nada sin una política autorizada: un mensaje sale solo si su campaña está vigente, permite enviar y está dentro del alcance. Comprar, pagar, muestras o exclusividad necesitan tu confirmación aparte.</span>
+        <span>No se envía nada sin una política autorizada: un mensaje sale solo si su permiso para negociar (el general o el del producto) está vigente, permite enviar y está dentro del alcance. Comprar, pagar, muestras o exclusividad necesitan tu confirmación aparte.</span>
       </div>
       {mensajes.length === 0 ? <p className="pi-desc" style={{ marginTop: 8 }}>Sin mensajes.</p> : (
         <div className="m-card-list" style={{ marginTop: 8 }}>
           {mensajes.map(m => {
             const p = polPorId[m.politica_id]
-            const vigente = p?.permite_envio && (!p.vigente_hasta || new Date(p.vigente_hasta) > ahora)
+            const vigente = politicaVigente(p, ahora)
             const [lab, badge] = ESTADOS_MSG[m.estado] || [m.estado, 'badge-gray']
             return (
               <div key={m.id} className="m-card pi-msg">
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span className={`badge ${badge}`}>{lab}</span>
-                  <span className={`badge ${vigente ? 'badge-green' : 'badge-gray'}`}>{vigente ? 'campaña vigente' : 'sin campaña vigente: solo borrador'}</span>
-                  <span className="pi-sub">{p?.candidato_id ? nombreCand[p.candidato_id] || '' : ''} · {fmtFechaHora(m.actualizado_en || m.creado_en)}</span>
+                  <span className={`badge ${vigente ? 'badge-green' : 'badge-gray'}`}>{vigente ? (p?.candidato_id == null ? 'permiso general vigente' : 'permiso para negociar vigente') : 'sin permiso para negociar vigente: solo borrador'}</span>
+                  <span className="pi-sub">{nombreCand[m.candidato_id || p?.candidato_id] || ''} · {fmtFechaHora(m.actualizado_en || m.creado_en)}</span>
                   {esModoDemo() && <Demo />}
                 </div>
                 <div className="pi-msg-cuerpo">
@@ -179,7 +180,7 @@ function NuevoTrabajo({ candidatos, onCerrar, onListo, toast }) {
         {f.tipo === 'investigar_py' && <Campo label="Zonas" span={2}><input className="form-input" value={f.zonas} onChange={set('zonas')} /></Campo>}
         <Campo label="Notas" span={2}><textarea className="form-textarea" value={f.notas} onChange={set('notas')} /></Campo>
       </div>
-      <p className="pi-sub" style={{ marginTop: 8 }}>"Pedir cotizaciones" prepara borradores; se envían solo dentro de una campaña autorizada.</p>
+      <p className="pi-sub" style={{ marginTop: 8 }}>"Pedir cotizaciones" prepara borradores; se envían solo dentro de un permiso para negociar autorizado.</p>
     </Modal>
   )
 }

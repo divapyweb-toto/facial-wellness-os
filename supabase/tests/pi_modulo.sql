@@ -272,6 +272,61 @@ end $$;
 reset role;
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000d3e0","role":"authenticated"}', true);
 
+-- 11. Permiso GENERAL para negociar (migración 20261119000002): una sola fila, sin vencimiento, la autoriza solo Enrique,
+--     cubre todos los productos pero cada mensaje dice su producto; revocado no envía.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000aa","role":"authenticated"}', true);
+set local role authenticated;
+do $$
+declare g uuid;
+begin
+  select id into g from public.pi_politicas where candidato_id is null;
+  assert g is not null, '11a: no está la fila del permiso general';
+  begin update public.pi_politicas set permite_envio = true, autorizada_texto = 'DEMO siempre' where id = g;
+    raise exception '11b: otro usuario autorizó el permiso general'; exception when insufficient_privilege then null; end;
+  begin insert into public.pi_politicas (candidato_id, alcance) values (null, '{"tipo":"general"}');
+    raise exception '11c: aceptó un segundo permiso general'; exception when unique_violation then null; end;
+end $$;
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000d3e0","role":"authenticated"}', true);
+set local role authenticated;
+do $$
+declare g uuid; c uuid; c2 uuid; pr uuid; po uuid; r record;
+begin
+  select id into g from public.pi_politicas where candidato_id is null;
+  select id into c from public.pi_candidatos where nombre = 'DEMO candidato';
+  insert into public.pi_candidatos (nombre, demo) values ('DEMO otro producto', true) returning id into c2;
+  select id into pr from public.pi_proveedores where id_externo = 'DEMO-1';
+  update public.pi_politicas set permite_envio = true, autorizada_texto = 'DEMO siempre autorizado a negociar' where id = g;
+  select * into r from public.pi_politicas where id = g;
+  assert r.permite_envio and r.vigente_hasta is null and r.autorizada_en is not null and r.autorizada_por like 'usuario:%',
+    '11d: Enrique no pudo autorizar el permiso general o quedó con vencimiento';
+  -- mensaje bajo el permiso general: sin producto no sale; con producto sí (de cualquier producto)
+  insert into public.pi_mensajes (politica_id, proveedor_id, idempotencia, original, traduccion) values (g, pr, 'DEMO-gen-1', 'DEMO hi', 'DEMO hola');
+  begin update public.pi_mensajes set estado = 'AUTHORIZED' where idempotencia = 'DEMO-gen-1';
+    raise exception '11e: autorizó un mensaje del permiso general sin producto'; exception when check_violation then null; end;
+  update public.pi_mensajes set candidato_id = c2, estado = 'AUTHORIZED' where idempotencia = 'DEMO-gen-1';
+  assert (select estado from public.pi_mensajes where idempotencia = 'DEMO-gen-1') = 'AUTHORIZED', '11f: con producto no pasó a AUTHORIZED';
+  -- permiso por producto: un mensaje de OTRO producto no sale con ese permiso
+  select id into po from public.pi_politicas where candidato_id = c and alcance->>'producto' is null and permite_envio limit 1;
+  insert into public.pi_politicas (candidato_id, alcance, permite_envio, autorizada_texto, vigente_hasta)
+    values (c, '{"producto":"DEMO"}', true, 'DEMO dale', now() + interval '14 days') returning id into po;
+  insert into public.pi_mensajes (politica_id, proveedor_id, idempotencia, original, traduccion, candidato_id) values (po, pr, 'DEMO-prod-1', 'DEMO hi', 'DEMO hola', c2);
+  begin update public.pi_mensajes set estado = 'AUTHORIZED' where idempotencia = 'DEMO-prod-1';
+    raise exception '11g: un permiso por producto autorizó un mensaje de otro producto'; exception when check_violation then null; end;
+  -- un permiso por producto SIN vencimiento no sirve (solo el general no vence)
+  update public.pi_politicas set vigente_hasta = null where id = po;
+  update public.pi_mensajes set candidato_id = c where idempotencia = 'DEMO-prod-1';
+  begin update public.pi_mensajes set estado = 'AUTHORIZED' where idempotencia = 'DEMO-prod-1';
+    raise exception '11h: un permiso por producto sin vencimiento autorizó'; exception when check_violation then null; end;
+  -- revocar el general: cualquiera puede, y el AUTHORIZED ya no pasa a SENDING
+  update public.pi_politicas set permite_envio = false where id = g;
+  begin update public.pi_mensajes set estado = 'SENDING' where idempotencia = 'DEMO-gen-1';
+    raise exception '11i: con el permiso general revocado salió un mensaje'; exception when check_violation then null; end;
+  insert into pi_prueba_ok (prueba) values ('11 permiso general: una sola fila; otro usuario no lo autoriza; Enrique sí y queda sin vencimiento; sin producto no sale, con producto sí; un permiso por producto no sirve para otro producto ni sin vencimiento; revocado no sale');
+end $$;
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-00000000d3e0","role":"authenticated"}', true);
+
 -- 9. Fotos, etapa DECIDIR, decisiones y Storage (como authenticated).
 set local role authenticated;
 do $$

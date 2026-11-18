@@ -25,6 +25,22 @@ export function reglaFotos(fotos) {
   return { ok, reales, proveedor, motivo }
 }
 
+// Foto principal (contrato 18-11): solo cuenta la marcada es_principal. Sin principal = alerta roja,
+// aunque haya otras fotos.
+export const fotoPrincipal = (fotos) => (fotos || []).find(f => f.es_principal) || null
+export function alertaFoto(fotos) {
+  const lista = fotos || []
+  if (!lista.length) return { tipo: 'sin_foto', texto: 'Sin foto' }
+  if (!fotoPrincipal(lista)) return { tipo: 'sin_principal', texto: 'Sin foto principal: elegí una' }
+  return null
+}
+// Link externo de foto: solo http/https (nunca data: ni otros esquemas fuera de DEMO).
+export function urlFotoExternaValida(url) {
+  const t = String(url || '').trim()
+  if (!/^https?:\/\//i.test(t)) return false
+  try { const u = new URL(t); return (u.protocol === 'http:' || u.protocol === 'https:') && !!u.hostname } catch { return false }
+}
+
 const ultimoPor = (arr, campo = 'candidato_id') => {
   const m = new Map()
   for (const x of arr || []) if (!m.has(x[campo])) m.set(x[campo], x) // vienen ordenados del más nuevo al más viejo
@@ -54,7 +70,7 @@ export function armarTarjetas(t, ahora = new Date()) {
     const alertas = alertasDe({ cots, esc, ahora })
     const sem = semaforo({ esc, caso, fotos, cots, ahora })
     return {
-      c, etapa: etapaDe(c), principal, nFotos: fotos.length, esc,
+      c, etapa: etapaDe(c), principal, nFotos: fotos.length, alertaFoto: t.fotos ? alertaFoto(fotos) : null, esc,
       precio: esc?.entradas?.motor?.precio ?? null,
       ganancia: r.contribDespuesAdsConfirmado ?? null,
       plata: plataTotal(esc?.resultado),

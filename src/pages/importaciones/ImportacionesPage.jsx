@@ -12,6 +12,8 @@ import { Demo, ErrorCaja, Vacio } from '../productos/ui'
 import { cargarTablero } from './api'
 import { ETAPAS, armarTarjetas } from './logica'
 import Ficha from './Ficha'
+import FotoImg from './FotoImg'
+import PermisoGeneral from '../productos/PermisoGeneral'
 import '../productos/productos.css'
 import './importaciones.css'
 
@@ -42,6 +44,7 @@ export default function ImportacionesPage() {
           <span><b>Modo DEMO:</b> productos, fotos y números inventados; nada se guarda en la base.</span>
         </div>
       )}
+      {!candidatoId && <PermisoGeneral />}
       {candidatoId
         ? <Ficha candidatoId={candidatoId} onVolver={() => abrir(null)} />
         : <Tablero onAbrir={abrir} onActivarDemo={!demo ? alternarDemo : null} />}
@@ -93,7 +96,7 @@ function Tarjeta({ x, onAbrir }) {
   return (
     <button className="imp-tarjeta" onClick={() => onAbrir(x.c.id)}>
       <div className="imp-foto">
-        {x.principal?.url ? <img src={x.principal.url} alt={x.principal.descripcion || x.c.nombre} loading="lazy" /> : <div className="imp-sin-foto"><ImageOff size={20} /><span>Sin foto</span></div>}
+        {x.principal ? <FotoImg foto={x.principal} alt={x.principal.descripcion || x.c.nombre} /> : <div className="imp-sin-foto imp-foto-aviso"><ImageOff size={20} /><span>Sin foto</span></div>}
         <span className="imp-sem" style={{ background: COLOR_SEM[x.semaforo.color] }} title={x.semaforo.motivos.join(' · ')} aria-label={`Semáforo ${x.semaforo.color}`} />
       </div>
       <div className="imp-tarjeta-cuerpo">
@@ -105,6 +108,7 @@ function Tarjeta({ x, onAbrir }) {
           <div><span className="data-label">Recupera en</span><span className="pi-num">{x.dias != null ? `${x.dias} días` : x.recupera === false ? 'no recupera' : '—'}</span></div>
         </div>
         <div className="pi-sub" style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Clock size={11} /> {x.vence ? `cotización hasta ${fmtFecha(x.vence)}` : 'sin cotización vigente'} · {x.nFotos} foto(s)</div>
+        {x.alertaFoto && <div className="imp-alertas"><span className="badge badge-red" title="Toda propuesta necesita una foto principal: subila en la ficha (a · Fotos) y marcala con la estrella."><ImageOff size={10} /> {x.alertaFoto.texto}</span></div>}
         {x.alertas.length > 0 && (
           <div className="imp-alertas">{x.alertas.map((a, i) => <span key={i} className={`badge ${a.tipo === 'vencida' ? 'badge-red' : 'badge-yellow'}`}><AlertTriangle size={10} /> {a.texto}</span>)}</div>
         )}

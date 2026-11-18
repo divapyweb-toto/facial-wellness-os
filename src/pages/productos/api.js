@@ -108,14 +108,16 @@ export const actualizarCandidato = (id, cambios) => actualizar('pi_candidatos', 
 
 // Resumen para la lista de Oportunidades: todo junto, en paralelo.
 export async function cargarResumenOportunidades() {
-  const [candidatos, evidencias, escenarios, cotizaciones, ofertas] = await Promise.all([
+  const [candidatos, evidencias, escenarios, cotizaciones, ofertas, fotos] = await Promise.all([
     listarCandidatos(),
     listar('pi_evidencias', { columnas: 'id,candidato_id,tipo,campo,valido_hasta', orden: null }),
     listar('pi_escenarios_costo', { columnas: 'id,candidato_id,nombre,version,resultado,calculado_en', orden: 'calculado_en' }),
     listar('pi_cotizaciones', { columnas: 'id,candidato_id,tipo', orden: null }),
     listar('pi_ofertas_competencia', { columnas: 'id,candidato_id,vendedor_clave', orden: null }),
+    // Fotos (alerta roja "sin foto"): si la tabla falta, null y no se alerta.
+    listar('pi_fotos', { columnas: 'id,candidato_id,es_principal', orden: null }).catch(e => { if (e.faltaTabla) return null; throw e }),
   ])
-  return { candidatos, evidencias, escenarios, cotizaciones, ofertas }
+  return { candidatos, evidencias, escenarios, cotizaciones, ofertas, fotos }
 }
 
 // Tablero de acierto (ampliación A2). Vista pi_tasa_acierto; si no existe, null.
@@ -138,14 +140,15 @@ export async function cargarDetalle(candidatoId) {
     listar('pi_experimentos', { eq, orden: 'creado_en' }),
     listar('pi_trabajos', { eq, orden: 'creado_en' }),
   ])
-  // Tablas de las ampliaciones (órdenes, campañas, conversaciones): si faltan, la pantalla sigue.
+  // Tablas de las ampliaciones (órdenes, permisos para negociar, conversaciones): si faltan, la pantalla sigue.
   const opcional = (p) => p.catch(e => { if (e.faltaTabla) return null; throw e })
   const [ordenes, politicas] = await Promise.all([
     opcional(listar('pi_ordenes_compra', { eq, orden: 'creado_en' })),
     opcional(listar('pi_politicas', { eq, orden: 'creado_en' })),
   ])
   const idsPol = new Set((politicas || []).map(p => p.id))
-  const mensajes = idsPol.size ? ((await opcional(listar('pi_mensajes', { orden: 'creado_en' }))) || []).filter(m => idsPol.has(m.politica_id)) : []
+  // Mensajes del producto: los de sus permisos por producto + los del permiso general que llevan su candidato_id.
+  const mensajes = politicas ? ((await opcional(listar('pi_mensajes', { orden: 'creado_en' }))) || []).filter(m => idsPol.has(m.politica_id) || m.candidato_id === candidatoId) : []
   return { candidato: cands[0] || null, fichas, evidencias, ofertas, cotizaciones, proveedores, escenarios, casos, experimentos, trabajos, ordenes, politicas, mensajes }
 }
 
@@ -154,14 +157,25 @@ export async function cargarDetalle(candidatoId) {
 export const crearOrden = (o) => insertar('pi_ordenes_compra', { estado: 'BORRADOR', ...o })
 export const actualizarOrden = (id, cambios) => actualizar('pi_ordenes_compra', id, cambios)
 
-// Autorizar una campaña de negociación (revisión 18-11, hallazgo 4): la base solo deja si quien está
+// Autorizar un permiso para negociar (revisión 18-11, hallazgo 4): la base solo deja si quien está
 // logueado es el usuario autorizado de pi_config (Enrique). Quién y cuándo los pone la base.
+// Permiso general (candidato_id NULL): no se manda vigente_hasta, queda NULL = no vence.
 export async function autorizarPolitica(politica, texto) {
+  if (politica?.candidato_id == null) return actualizar('pi_politicas', politica.id, { permite_envio: true, autorizada_texto: texto.trim() })
   const dias = Number(politica?.alcance?.vigencia_dias) || 14
   const vigente_hasta = new Date(Date.now() + dias * 86_400_000).toISOString()
   return actualizar('pi_politicas', politica.id, { permite_envio: true, autorizada_texto: texto.trim(), vigente_hasta })
 }
 export const apagarPolitica = (id) => actualizar('pi_politicas', id, { permite_envio: false })
+
+// Permiso general para negociar: la única fila de pi_politicas con candidato_id NULL.
+// Devuelve la fila, o null si todavía no existe (migración sin aplicar o tabla faltante).
+export async function leerPermisoGeneral() {
+  if (modoDemo) return memTabla('pi_politicas').find(p => p.candidato_id == null) || null
+  const { data, error } = await supabase.from('pi_politicas').select('*').is('candidato_id', null).limit(1)
+  if (error) { const e = errorLegible(error, 'pi_politicas'); if (e.faltaTabla) return null; throw e }
+  return (data || [])[0] || null
+}
 
 // Ficha versionada: nunca se pisa; cada cambio es versión nueva.
 export async function guardarFicha(candidatoId, spec, versionActual) {

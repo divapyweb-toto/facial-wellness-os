@@ -3,11 +3,12 @@
 // plata requerida, contribución prevista y siguiente acción. Arriba, el
 // tablero de acierto (ampliación A2, vista pi_tasa_acierto).
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Plus, Lightbulb, Target } from 'lucide-react'
+import { Plus, Lightbulb, Target, ImageOff } from 'lucide-react'
 import { useToast } from '../../lib/toast'
 import { cargarResumenOportunidades, crearCandidato, leerTasaAcierto, esModoDemo } from './api'
 import { fmtGs, fmtFecha, vencida, ESTADOS_CANDIDATO, fmtPct, estadoInfo } from './formato'
 import { resumenDeEscenario } from './calculo'
+import { alertaFoto } from '../importaciones/logica'
 import { Campo, Demo, BadgeEstado, Vacio, ErrorCaja, Modal } from './ui'
 
 export default function Oportunidades({ onAbrir, onActivarDemo }) {
@@ -42,7 +43,9 @@ export default function Oportunidades({ onAbrir, onActivarDemo }) {
         const r = resumenDeEscenario(esc?.resultado)
         const vendedores = new Set(datos.ofertas.filter(o => o.candidato_id === c.id).map(o => o.vendedor_clave || o.id)).size
         const cotFirmes = datos.cotizaciones.filter(q => q.candidato_id === c.id && q.tipo === 'firme').length
-        return { c, evs: evs.length, pendientes, vencidas, r, esc, vendedores, cotFirmes }
+        // Alerta roja "sin foto" (contrato 18-11): sin foto principal marcada. Si la tabla falta, no se alerta.
+        const sinFoto = datos.fotos ? alertaFoto(datos.fotos.filter(f => f.candidato_id === c.id)) : null
+        return { c, evs: evs.length, pendientes, vencidas, r, esc, vendedores, cotFirmes, sinFoto }
       })
   }, [datos, filtro])
 
@@ -80,10 +83,11 @@ export default function Oportunidades({ onAbrir, onActivarDemo }) {
               </tr>
             </thead>
             <tbody>
-              {filas.map(({ c, evs, pendientes, vencidas, r, esc, vendedores, cotFirmes }) => (
+              {filas.map(({ c, evs, pendientes, vencidas, r, esc, vendedores, cotFirmes, sinFoto }) => (
                 <tr key={c.id} className="pi-fila-click" onClick={() => onAbrir(c.id)}>
                   <td data-label="Candidato" style={{ whiteSpace: 'normal', minWidth: 180 }}>
                     <div style={{ fontWeight: 600 }}>{c.nombre} {c.demo && <Demo />}</div>
+                    {sinFoto && <span className="badge badge-red" title="Subí la foto en Importaciones → ficha → a · Fotos y marcala como principal (estrella)."><ImageOff size={10} /> {sinFoto.texto}</span>}
                     <div className="pi-sub">{c.categoria || 'sin categoría'} · {c.origen === 'producto' ? 'producto primero' : c.origen === 'demanda' ? 'demanda primero' : 'origen sin definir'}</div>
                   </td>
                   <td data-label="Estado"><BadgeEstado estado={c.estado} /></td>

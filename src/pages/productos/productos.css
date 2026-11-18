@@ -30,6 +30,7 @@
 .pi-avisos, .pi-bloqueos { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
 .pi-bloqueos { color: var(--text-primary); }
 .pi-campana { border-top: 1px solid var(--border-subtle); padding-top: 10px; margin-top: 10px; }
+.pi-permiso-lista { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-secondary); display: flex; flex-direction: column; gap: 3px; }
 .pi-msg { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .pi-msg-cuerpo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .pi-msg-cuerpo p { margin: 3px 0 0; font-size: 13px; color: var(--text-primary); white-space: pre-wrap; }

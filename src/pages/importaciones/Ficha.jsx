@@ -9,8 +9,9 @@ import { actualizarCandidato, crearOrden, crearTrabajo, leerResultadoExperimento
 import { fmtGs, fmtFecha, fmtFechaHora, fmtDinero, fmtPct, aMinor, claveVendedor, tipoEvidenciaInfo, TIPOS_EVIDENCIA, vencida, urlSegura } from '../productos/formato'
 import { Campo, Demo, BadgeEstado, BadgeTipo, ErrorCaja, Modal } from '../productos/ui'
 import { cargarFicha, subirFoto, agregarFotoExterna, marcarPrincipal, borrarFoto, cambiarEtapa, registrarDecision } from './api'
-import { ETAPAS, etapaDe, reglaFotos, semaforo, alertasDe, plataTotal, compararProveedores, costoConRuta, escalera, cantidadRecomendada, TOPE_ADS_VOLTRA, MAX_MESES_NO_PROBADO } from './logica'
+import { ETAPAS, etapaDe, reglaFotos, semaforo, alertasDe, plataTotal, compararProveedores, costoConRuta, escalera, cantidadRecomendada, TOPE_ADS_VOLTRA, MAX_MESES_NO_PROBADO, alertaFoto } from './logica'
 import { exportarPDF } from './pdf'
+import FotoImg from './FotoImg'
 
 const FUENTES_FOTO = [['proveedor', 'Proveedor'], ['muestra', 'Muestra'], ['propia', 'Propia'], ['ia_referencia', 'IA de referencia']]
 const COLOR_SEM = { verde: 'badge-green', amarillo: 'badge-yellow', rojo: 'badge-red' }
@@ -132,13 +133,19 @@ function Galeria({ d, fotos, regla, recargar, toast }) {
   return (
     <Seccion letra="a" titulo="Fotos del producto (obligatorias)" extra={<span className={`badge ${regla.ok ? 'badge-green' : 'badge-red'}`}>{regla.reales} reales · {regla.proveedor} del proveedor</span>}>
       {d.fotos === null && <p className="pi-desc">La tabla de fotos todavía no está en la base.</p>}
+      {d.fotos !== null && alertaFoto(fotos) && (
+        <div className="alert alert-error" style={{ marginBottom: 10 }}>
+          <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span><b>{alertaFoto(fotos).texto}.</b> {fotos.length ? 'Tocá la estrella de la foto que va en la tarjeta.' : 'Subí al menos una foto: es la que se ve en la tarjeta.'}</span>
+        </div>
+      )}
       {fotos.length === 0 ? (
         <div className="imp-sin-foto imp-sin-foto-grande"><ImageOff size={26} /><span>Sin fotos. Mínimo 3 (al menos 1 real del proveedor; después de la muestra, 1 propia).</span></div>
       ) : (
         <div className="imp-galeria">
           {fotos.map(ft => (
             <figure key={ft.id} className={`imp-foto-item ${ft.es_principal ? 'principal' : ''}`}>
-              {ft.url ? <img src={ft.url} alt={ft.descripcion || 'foto del producto'} loading="lazy" /> : <div className="imp-sin-foto"><ImageOff size={18} /><span>no se pudo firmar la URL</span></div>}
+              <FotoImg foto={ft} />
               <figcaption>
                 <span className={`badge ${ft.fuente === 'ia_referencia' ? 'badge-purple' : ft.fuente === 'proveedor' ? 'badge-blue' : 'badge-green'}`}>{FUENTES_FOTO.find(x => x[0] === ft.fuente)?.[1] || ft.fuente}{ft.fuente === 'ia_referencia' ? ' · no es el producto real' : ''}</span>
                 <span className="pi-sub">{ft.descripcion || ''}</span>
@@ -450,7 +457,7 @@ function PrevistoReal({ d, numeros }) {
 const DECISIONES = [
   { v: 'IMPORTAR', label: 'Importar', compra: true, ayuda: 'Arma la orden en BORRADOR con la cantidad recomendada. Pasar de borrador exige tu texto en la orden; el pago lo hacés vos.' },
   { v: 'MUESTRA', label: 'Pedir muestra', compra: true, ayuda: 'Pasa a la etapa Muestra. Comprar la muestra necesita tu confirmación aparte.' },
-  { v: 'RENEGOCIAR', label: 'Renegociar', compra: false, ayuda: 'Crea un trabajo para Claude (dentro de la campaña autorizada).' },
+  { v: 'RENEGOCIAR', label: 'Renegociar', compra: false, ayuda: 'Crea un trabajo para Claude (dentro del permiso para negociar autorizado).' },
   { v: 'DESCARTAR', label: 'Descartar', compra: false, ayuda: 'Pide el motivo. Queda registrado para aprender.' },
 ]
 

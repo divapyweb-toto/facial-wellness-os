@@ -1,7 +1,7 @@
 // src/pages/productos/Proveedores.jsx
 // Pestaña Proveedores (§10.3): proveedores, cotizaciones (carga manual),
-// comparador normalizado por unidad vendible en ₲, campaña de negociación
-// (pi_politicas), conversaciones (pi_mensajes) y órdenes de compra
+// comparador normalizado por unidad vendible en ₲, permisos para negociar
+// (pi_politicas: el general y el del producto), conversaciones (pi_mensajes) y órdenes de compra
 // (pi_ordenes_compra). Esta pantalla no envía mensajes, no compra ni paga.
 import { useState, useMemo } from 'react'
 import { Plus, Trash2, ShieldAlert, Info, MessageSquare, ShoppingBag, Scale } from 'lucide-react'
@@ -9,6 +9,8 @@ import { crearProveedor, crearCotizacion, borrarCotizacion, crearOrden, actualiz
 import { convertirAPYG } from '../../lib/productos/dinero'
 import { aMinor, fmtDinero, fmtGs, fmtFecha, fmtFechaHora, vencida, fechaLocalAISO, urlSegura } from './formato'
 import { Campo, Vacio, Demo, SelectMoneda, Modal } from './ui'
+import { politicaVigente } from './derivados'
+import PermisoGeneral from './PermisoGeneral'
 
 const PLATAFORMAS = [['alibaba', 'Alibaba'], ['1688', '1688'], ['local', 'Local / mayorista CDE'], ['otro', 'Otro']]
 const TIPOS_COT = [['firme', 'Firme (por escrito, para esta ficha)'], ['escaparate', 'Escaparate (precio publicado)'], ['estimada', 'Estimada']]
@@ -29,7 +31,7 @@ export default function Proveedores({ d, recargar, toast }) {
       </div>
       <div className="alert alert-warning">
         <ShieldAlert size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>Claude negocia solo dentro de la campaña autorizada; comprar, pagar, muestras o exclusividad necesitan tu confirmación aparte.</span>
+        <span>Claude negocia solo dentro de un permiso para negociar autorizado (el general o el de este producto); comprar, pagar, muestras o exclusividad necesitan tu confirmación aparte.</span>
       </div>
       <Campana d={d} provPorId={provPorId} recargar={recargar} toast={toast} />
       <Cotizaciones d={d} recargar={recargar} toast={toast} provPorId={provPorId} />
@@ -39,27 +41,29 @@ export default function Proveedores({ d, recargar, toast }) {
   )
 }
 
-// ─── Campaña y conversaciones ───────────────────────────────
+// ─── Permisos para negociar y conversaciones ───────────────────────────────
 function Campana({ d, provPorId, recargar, toast }) {
   const [autorizando, setAutorizando] = useState(null) // { politica, texto }
   const autorizar = async () => {
     if ((autorizando.texto || '').trim().length < 3) { toast('Escribí tu autorización con tus palabras (queda textual).', 'error'); return }
-    try { await autorizarPolitica(autorizando.politica, autorizando.texto); toast('Campaña autorizada', 'success'); setAutorizando(null); recargar() }
+    try { await autorizarPolitica(autorizando.politica, autorizando.texto); toast('Permiso para negociar autorizado', 'success'); setAutorizando(null); recargar() }
     catch (e) { toast(e.message, 'error') }
   }
   const apagar = async (p) => {
-    try { await apagarPolitica(p.id); toast('Campaña apagada: los mensajes vuelven a borrador', 'success'); recargar() }
+    try { await apagarPolitica(p.id); toast('Permiso para negociar apagado: los mensajes vuelven a borrador', 'success'); recargar() }
     catch (e) { toast(e.message, 'error') }
   }
-  if (d.politicas === null) return <div className="card card-sm"><p className="pi-desc">La tabla de campañas (pi_politicas) todavía no está en la base.</p></div>
+  if (d.politicas === null) return <div className="card card-sm"><p className="pi-desc">La tabla de permisos para negociar (pi_politicas) todavía no está en la base.</p></div>
   const ahora = new Date()
   return (
     <div className="card">
-      <div className="section-label"><MessageSquare size={12} /> Campaña de negociación y conversaciones</div>
+      <div className="section-label"><MessageSquare size={12} /> Permisos para negociar y conversaciones</div>
+      <div style={{ marginTop: 8 }}><PermisoGeneral onCambio={recargar} /></div>
+      <div className="data-label" style={{ marginTop: 12 }}>Permiso de este producto</div>
       {d.politicas.length === 0 ? (
-        <p className="pi-desc" style={{ marginTop: 6 }}>Sin campaña autorizada para este producto: los mensajes quedan en borrador. Claude propone la campaña (alcance por defecto: 5 proveedores, 2 rondas, seguimiento a los 2 días hábiles, 14 días de vigencia) y la autorizás vos acá con el botón "Autorizar", con tu sesión: la base no acepta la autorización de nadie más.</p>
+        <p className="pi-desc" style={{ marginTop: 6 }}>Sin permiso propio para este producto (con el general autorizado no hace falta). Si hiciera falta uno aparte, Claude lo propone (alcance por defecto: 5 proveedores, 2 rondas, seguimiento a los 2 días hábiles, 14 días de vigencia) y lo autorizás vos acá con el botón "Autorizar", con tu sesión: la base no acepta la autorización de nadie más.</p>
       ) : d.politicas.map(p => {
-        const vigente = p.permite_envio && (!p.vigente_hasta || new Date(p.vigente_hasta) > ahora)
+        const vigente = politicaVigente(p, ahora)
         const a = p.alcance || {}
         return (
           <div key={p.id} className="pi-campana">
@@ -85,7 +89,7 @@ function Campana({ d, provPorId, recargar, toast }) {
       })}
 
       {autorizando && (
-        <Modal titulo="Autorizar campaña de negociación" onCerrar={() => setAutorizando(null)} pie={<><button className="btn btn-ghost" onClick={() => setAutorizando(null)}>Cancelar</button><button className="btn btn-primary" onClick={autorizar}>Autorizar</button></>}>
+        <Modal titulo="Autorizar permiso para negociar de este producto" onCerrar={() => setAutorizando(null)} pie={<><button className="btn btn-ghost" onClick={() => setAutorizando(null)}>Cancelar</button><button className="btn btn-primary" onClick={autorizar}>Autorizar</button></>}>
           <Campo label="Tu autorización (textual)" hint="Queda guardada tal cual. Solo vale con tu sesión.">
             <textarea className="form-textarea" value={autorizando.texto} onChange={e => setAutorizando(a => ({ ...a, texto: e.target.value }))} />
           </Campo>

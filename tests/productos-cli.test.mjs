@@ -175,6 +175,81 @@ await ok('un mensaje que no es DRAFT (ej. SEND_UNKNOWN) no se re-autoriza', () =
   assert.equal(T.puedeAutorizarMensaje(msgDraft({ estado: 'SEND_UNKNOWN' }), polAut(), { ahora: AHORA }).ok, false)
 })
 
+// ── Permiso general para negociar (pedido de Enrique 18-11) ──
+// UNA fila de pi_politicas con candidato_id null; no vence; topes por producto.
+const polGen = (extra = {}) => ({ id: 'pol-general', candidato_id: null, permite_envio: true, vigente_hasta: null, autorizada_por: 'Enrique', autorizada_en: '2026-11-18T12:00:00Z', autorizada_texto: 'DEMO: negociá todo siempre', alcance: { ...T.ALCANCE_PERMISO_GENERAL }, ...extra })
+const msgGen = (extra = {}) => msgDraft({ candidato_id: U2, politica_id: 'pol-general', ...extra })
+await ok('permiso general: alcance exportado (10 proveedores y 3 rondas por producto, 2 días hábiles)', () => {
+  assert.equal(T.ALCANCE_PERMISO_GENERAL.tipo, 'general')
+  assert.deepEqual([...T.ALCANCE_PERMISO_GENERAL.negocia], ['precio', 'cantidades', 'color_variante', 'calidad', 'empaque', 'plazos', 'condiciones'])
+  assert.equal(T.ALCANCE_PERMISO_GENERAL.proveedores_max_por_producto, 10)
+  assert.equal(T.ALCANCE_PERMISO_GENERAL.rondas_max_por_producto, 3)
+  assert.equal(T.ALCANCE_PERMISO_GENERAL.seguimiento_dias_habiles, 2)
+})
+await ok('permiso general sin fecha (no vence) → AUTHORIZED; por producto sin fecha sigue sin pasar', () => {
+  const r = T.puedeAutorizarMensaje(msgGen(), polGen(), { ahora: AHORA, proveedoresEnCampana: ['prov-a'], ronda: 1 })
+  assert.equal(r.ok, true, r.error); assert.equal(r.estado, 'AUTHORIZED')
+  assert.equal(T.puedeAutorizarMensaje(msgDraft(), { ...polAut(), vigente_hasta: null }, { ahora: AHORA }).ok, false)
+  // si el general viniera con fecha, se respeta
+  assert.equal(T.puedeAutorizarMensaje(msgGen(), polGen({ vigente_hasta: '2026-11-18T14:00:00Z' }), { ahora: AHORA }).ok, false)
+})
+await ok('permiso general: mensaje sin candidato_id (producto) → DRAFT', () => {
+  const r = T.puedeAutorizarMensaje(msgGen({ candidato_id: null }), polGen(), { ahora: AHORA })
+  assert.equal(r.ok, false); assert.equal(r.estado, 'DRAFT'); assert.match(r.error, /candidato_id/)
+})
+await ok('permiso general: tope 10 proveedores por producto y 3 rondas', () => {
+  const nueve = Array.from({ length: 9 }, (_, i) => `p${i}`)
+  const diez = [...nueve, 'p9']
+  assert.equal(T.puedeAutorizarMensaje(msgGen(), polGen(), { ahora: AHORA, proveedoresEnCampana: nueve }).ok, true) // 10.º pasa (por producto eran 5)
+  assert.equal(T.puedeAutorizarMensaje(msgGen(), polGen(), { ahora: AHORA, proveedoresEnCampana: diez }).ok, false) // 11.º no
+  assert.equal(T.puedeAutorizarMensaje(msgGen({ proveedor_id: 'p4' }), polGen(), { ahora: AHORA, proveedoresEnCampana: diez }).ok, true) // ya contactado sí
+  assert.equal(T.puedeAutorizarMensaje(msgGen(), polGen(), { ahora: AHORA, ronda: 3 }).ok, true)
+  assert.equal(T.puedeAutorizarMensaje(msgGen(), polGen(), { ahora: AHORA, ronda: 4 }).ok, false)
+})
+await ok('permiso general revocado o sin texto de Enrique → DRAFT; los frenos de compromiso siguen', () => {
+  assert.equal(T.puedeAutorizarMensaje(msgGen(), polGen({ permite_envio: false }), { ahora: AHORA }).ok, false)
+  assert.equal(T.puedeAutorizarMensaje(msgGen(), polGen({ autorizada_texto: null }), { ahora: AHORA }).ok, false)
+  const r = T.puedeAutorizarMensaje(msgGen({ original: 'We accept the order at USD 2.10' }), polGen(), { ahora: AHORA })
+  assert.equal(r.ok, false); assert.match(r.error, /confirmación aparte/)
+  // un alcance sin tipo "general" con candidato null no se toma como permiso general
+  assert.equal(T.puedeAutorizarMensaje(msgGen(), polGen({ alcance: { proveedores_max: 5 } }), { ahora: AHORA }).ok, false)
+})
+await ok('puedeEnviar acepta el permiso general sin fecha (igual que la base) y exige candidato_id', () => {
+  const m = { estado: 'AUTHORIZED', idempotencia: 'g|p1|c|1|consulta', candidato_id: U2 }
+  assert.equal(T.puedeEnviar(m, polGen(), { ahora: AHORA }).ok, true)
+  assert.equal(T.puedeEnviar({ ...m, candidato_id: null }, polGen(), { ahora: AHORA }).ok, false)
+  assert.equal(T.puedeEnviar(m, polGen({ permite_envio: false }), { ahora: AHORA }).ok, false)
+})
+
+// ── Fotos (foto-subir): lógica pura ──────────────────────
+const JPG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 1])
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52])
+const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.from([0x24, 0, 0, 0]), Buffer.from('WEBPVP8 ')])
+await ok('foto: el tipo sale de los primeros bytes (JPEG, PNG, WEBP); HTML, GIF o vacío → null', () => {
+  assert.deepEqual(T.tipoImagenPorBytes(JPG), { ext: 'jpg', mime: 'image/jpeg' })
+  assert.deepEqual(T.tipoImagenPorBytes(PNG), { ext: 'png', mime: 'image/png' })
+  assert.deepEqual(T.tipoImagenPorBytes(WEBP), { ext: 'webp', mime: 'image/webp' })
+  assert.equal(T.tipoImagenPorBytes(Buffer.from('<!doctype html><html>DEMO</html>')), null)
+  assert.equal(T.tipoImagenPorBytes(Buffer.from('GIF89a......')), null)
+  assert.equal(T.tipoImagenPorBytes(Buffer.alloc(0)), null)
+  assert.equal(T.FOTO_MAX_BYTES, 8 * 1024 * 1024)
+})
+await ok('foto: pedido válido (fuente por defecto proveedor); URL no http, con usuario, fuente rara o host privado → rechazo', () => {
+  const r = T.validarPedidoFoto({ candidato: U1, url: 'https://cdn-demo.example.com/foto.jpg' })
+  assert.equal(r.ok, true, r.errores.join()); assert.equal(r.valor.fuente, 'proveedor'); assert.equal(r.valor.principal, false); assert.equal(r.valor.descripcion, null)
+  assert.equal(T.validarPedidoFoto({ candidato: U1, url: 'https://cdn-demo.example.com/f.png', fuente: 'muestra', principal: true, descripcion: 'DEMO frente' }).valor.principal, true)
+  for (const url of ['ftp://cdn-demo.example.com/f.jpg', 'file:///etc/passwd', 'javascript:alert(1)', 'https://u:p@cdn-demo.example.com/f.jpg', '', true]) {
+    assert.equal(T.validarPedidoFoto({ candidato: U1, url }).ok, false, String(url))
+  }
+  assert.equal(T.validarPedidoFoto({ candidato: U1, url: 'https://cdn-demo.example.com/f.jpg', fuente: 'robada' }).ok, false)
+  assert.equal(T.validarPedidoFoto({ candidato: 'no-uuid', url: 'https://cdn-demo.example.com/f.jpg' }).ok, false)
+  assert.equal(T.validarPedidoFoto({ candidato: U1, url: 'https://cdn-demo.example.com/f.jpg', principal: 'si' }).ok, false)
+  for (const h of ['localhost', '127.0.0.1', '10.0.0.5', '192.168.1.10', '172.20.0.1', '169.254.169.254', '[::1]']) {
+    assert.equal(T.validarPedidoFoto({ candidato: U1, url: `http://${h}/f.jpg` }).ok, false, h)
+  }
+  assert.equal(T.validarPedidoFoto({ candidato: U1, url: 'http://127.0.0.1:9/f.jpg' }, { permitirLocal: true }).ok, true)
+})
+
 // ── Evidencias ───────────────────────────────────────────
 await ok('evidencia válida pasa y precio local caduca a los 7 días', () => {
   const r = T.validarEvidencia(evBase(), { ahora: AHORA, cargadoPor: 'mac-enrique' })
@@ -281,10 +356,20 @@ const CLAVE_FALSA = 'clave-falsa-DEMO-' + 'x'.repeat(40)
 function servidorFalso(manejador) {
   return new Promise((res) => {
     const s = http.createServer((req, r) => {
-      let cuerpo = ''
-      req.on('data', (d) => { cuerpo += d })
+      const partes = []
+      req.on('data', (d) => { partes.push(d) })
       req.on('end', () => {
-        const [st, datos] = manejador(req, cuerpo ? JSON.parse(cuerpo) : null)
+        // JSON se parsea; un cuerpo binario (subida a Storage) llega como Buffer.
+        const crudo = Buffer.concat(partes)
+        const cuerpo = !crudo.length ? null : String(req.headers['content-type'] || '').includes('json') ? JSON.parse(crudo) : crudo
+        const [st, datos, tipo] = manejador(req, cuerpo)
+        // Respuesta binaria (la "imagen" del proveedor DEMO): [st, Buffer | [Buffer, …] (va por trozos), tipo]
+        if (Buffer.isBuffer(datos) || Array.isArray(tipo ? datos : null)) {
+          const trozos = Buffer.isBuffer(datos) ? [datos] : datos
+          r.writeHead(st, { 'Content-Type': tipo || 'application/octet-stream', ...(trozos.length === 1 ? { 'Content-Length': trozos[0].length } : {}) })
+          for (const t of trozos.slice(0, -1)) r.write(t)
+          return r.end(trozos.at(-1))
+        }
         r.writeHead(st, { 'Content-Type': 'application/json' }); r.end(JSON.stringify(datos))
       })
     })
@@ -345,6 +430,87 @@ await ok('CLI completar ajeno: si otro ejecutor tiene el trabajo, no toca nada',
   const f = path.join(vacio, 'res.json'); writeFileSync(f, JSON.stringify({ resumen: 'DEMO' }))
   const r = await correrCli(['completar', U1, '--archivo', f, '--ejecutor', 'mac-enrique'], s.address().port); s.close()
   assert.equal(r.codigo, 1); assert.match(r.salida, /otro ejecutor/); assert.ok(!pedidos.includes('PATCH'))
+})
+
+// ── CLI foto-subir contra Storage + PostgREST falsos (DEMO) ──
+// El mismo servidor falso sirve la "imagen del proveedor" en /img/* (la base es local: se permite).
+const UUID_RE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+function servidorFotos({ imagen, tipoImagen = 'image/png', ordenPrevio = 2, insertOk = true, principalVieja = null }) {
+  const pedidos = []
+  const s = servidorFalso((req, cuerpo) => {
+    pedidos.push({ m: req.method, u: req.url, cuerpo, h: req.headers })
+    if (req.url.startsWith('/img/')) return [200, imagen, tipoImagen]
+    if (req.url.startsWith('/rest/v1/pi_candidatos')) return [200, [{ id: U1, nombre: 'Corrector DEMO' }]]
+    if (req.method === 'GET' && req.url.startsWith('/rest/v1/pi_fotos')) return [200, ordenPrevio === null ? [] : [{ orden: ordenPrevio }]]
+    if (req.url.startsWith('/storage/v1/object/pi-fotos/')) return [200, { Key: 'pi-fotos/DEMO' }]
+    if (req.method === 'PATCH' && req.url.startsWith('/rest/v1/pi_fotos')) return [200, principalVieja ? [{ id: principalVieja }] : []]
+    if (req.method === 'POST' && req.url === '/rest/v1/pi_fotos') return insertOk ? [201, [{ id: U2, ...cuerpo }]] : [409, { code: '23505', message: 'DEMO choque' }]
+    return [201, null]
+  })
+  return s.then((srv) => ({ srv, pedidos, url: (ruta) => `http://127.0.0.1:${srv.address().port}${ruta}` }))
+}
+const sinStorageNiInsert = (pedidos) => !pedidos.some((p) => p.u.startsWith('/storage/') || (p.m === 'POST' && p.u === '/rest/v1/pi_fotos'))
+
+await ok('CLI foto-subir: URL que no es http/https se rechaza sin tocar la red', async () => {
+  const { srv, pedidos } = await servidorFotos({ imagen: PNG })
+  const r = await correrCli(['foto-subir', '--candidato', U1, '--url', 'ftp://cdn-demo.example.com/f.png'], srv.address().port); srv.close()
+  assert.equal(r.codigo, 1, r.salida); assert.match(r.salida, /http o https/); assert.equal(pedidos.length, 0)
+})
+await ok('CLI foto-subir: HTML con content-type image/png se rechaza por los bytes (no sube nada)', async () => {
+  const { srv, pedidos, url } = await servidorFotos({ imagen: Buffer.from('<!doctype html><html>DEMO login</html>'), tipoImagen: 'image/png' })
+  const r = await correrCli(['foto-subir', '--candidato', U1, '--url', url('/img/falsa.png')], srv.address().port); srv.close()
+  assert.equal(r.codigo, 1, r.salida); assert.match(r.salida, /no es una imagen JPEG, PNG o WEBP/)
+  assert.ok(sinStorageNiInsert(pedidos))
+})
+await ok('CLI foto-subir: imagen de más de 8 MB (por trozos, sin Content-Length) se corta y no sube nada', async () => {
+  const grande = [Buffer.concat([JPG, Buffer.alloc(5 * 1024 * 1024)]), Buffer.alloc(4 * 1024 * 1024)]
+  const { srv, pedidos, url } = await servidorFotos({ imagen: grande, tipoImagen: 'image/jpeg' })
+  const r = await correrCli(['foto-subir', '--candidato', U1, '--url', url('/img/enorme.jpg')], srv.address().port); srv.close()
+  assert.equal(r.codigo, 1, r.salida); assert.match(r.salida, /8 MB/)
+  assert.ok(sinStorageNiInsert(pedidos))
+})
+await ok('CLI foto-subir: baja sin clave, sube a Storage y DESPUÉS registra pi_fotos con storage_path (sin url_externa)', async () => {
+  const { srv, pedidos, url } = await servidorFotos({ imagen: PNG })
+  const r = await correrCli(['foto-subir', '--candidato', U1, '--url', url('/img/demo.png'), '--descripcion', 'DEMO frente'], srv.address().port); srv.close()
+  assert.equal(r.codigo, 0, r.salida)
+  const img = pedidos.find((p) => p.u.startsWith('/img/'))
+  assert.equal(img.h.authorization, undefined); assert.equal(img.h.apikey, undefined) // la clave nunca va al proveedor
+  const iSub = pedidos.findIndex((p) => p.u.startsWith('/storage/v1/object/pi-fotos/'))
+  const iIns = pedidos.findIndex((p) => p.m === 'POST' && p.u === '/rest/v1/pi_fotos')
+  assert.ok(iSub >= 0 && iIns > iSub, 'primero Storage, después pi_fotos')
+  const sub = pedidos[iSub]
+  assert.equal(sub.m, 'POST'); assert.match(sub.u, new RegExp(`^/storage/v1/object/pi-fotos/${U1}/${UUID_RE}\\.png$`))
+  assert.equal(sub.h['content-type'], 'image/png'); assert.equal(sub.h.authorization, `Bearer ${CLAVE_FALSA}`)
+  assert.ok(Buffer.isBuffer(sub.cuerpo) && sub.cuerpo.equals(PNG))
+  const ins = pedidos[iIns].cuerpo
+  assert.equal(ins.storage_path, sub.u.replace('/storage/v1/object/pi-fotos/', ''))
+  assert.equal(ins.url_externa, null); assert.equal(ins.candidato_id, U1); assert.equal(ins.fuente, 'proveedor')
+  assert.equal(ins.es_principal, false); assert.equal(ins.orden, 3); assert.equal(ins.descripcion, 'DEMO frente')
+  assert.ok(!pedidos.some((p) => p.m === 'PATCH' && p.u.startsWith('/rest/v1/pi_fotos')))
+  assert.match(r.salida, /Foto subida/); assert.ok(!r.salida.includes(CLAVE_FALSA))
+})
+await ok('CLI foto-subir --principal: primero desmarca la principal vieja, después inserta la nueva como principal', async () => {
+  const { srv, pedidos, url } = await servidorFotos({ imagen: WEBP, tipoImagen: 'image/webp', ordenPrevio: null, principalVieja: U2 })
+  const r = await correrCli(['foto-subir', '--candidato', U1, '--url', url('/img/demo.webp'), '--fuente', 'muestra', '--principal'], srv.address().port); srv.close()
+  assert.equal(r.codigo, 0, r.salida)
+  const iPatch = pedidos.findIndex((p) => p.m === 'PATCH' && p.u.startsWith('/rest/v1/pi_fotos'))
+  const iIns = pedidos.findIndex((p) => p.m === 'POST' && p.u === '/rest/v1/pi_fotos')
+  assert.ok(iPatch >= 0 && iIns > iPatch, 'desmarca antes de insertar')
+  assert.match(pedidos[iPatch].u, new RegExp(`candidato_id=eq\\.${U1}&es_principal=eq\\.true`))
+  assert.equal(pedidos[iPatch].cuerpo.es_principal, false)
+  const ins = pedidos[iIns].cuerpo
+  assert.equal(ins.es_principal, true); assert.equal(ins.fuente, 'muestra'); assert.equal(ins.orden, 1); assert.match(ins.storage_path, /\.webp$/)
+})
+await ok('CLI foto-subir: si falla el insert, borra el objeto subido y vuelve a marcar la principal vieja', async () => {
+  const { srv, pedidos, url } = await servidorFotos({ imagen: JPG, tipoImagen: 'image/jpeg', insertOk: false, principalVieja: U2 })
+  const r = await correrCli(['foto-subir', '--candidato', U1, '--url', url('/img/demo.jpg'), '--principal'], srv.address().port); srv.close()
+  assert.notEqual(r.codigo, 0, r.salida); assert.match(r.salida, /pi_fotos/)
+  const sub = pedidos.find((p) => p.m === 'POST' && p.u.startsWith('/storage/'))
+  const del = pedidos.find((p) => p.m === 'DELETE' && p.u.startsWith('/storage/'))
+  assert.ok(del, 'borra el objeto'); assert.equal(del.u, sub.u)
+  const re = pedidos.filter((p) => p.m === 'PATCH' && p.u.startsWith('/rest/v1/pi_fotos')).at(-1)
+  assert.match(re.u, new RegExp(`id=in\\.\\(${U2}\\)`)); assert.equal(re.cuerpo.es_principal, true)
+  assert.ok(!r.salida.includes(CLAVE_FALSA))
 })
 
 console.log(`\n${n} pasaron, ${fallas} fallaron`)

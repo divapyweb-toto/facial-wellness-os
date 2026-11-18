@@ -241,7 +241,7 @@ export function transicionMensajeValida(desde, hacia) {
   return Object.hasOwn(TRANSICIONES_MENSAJE, desde) && TRANSICIONES_MENSAJE[desde].includes(hacia)
 }
 
-/** Clave de idempotencia: campaña|proveedor|conversación|versión|tipo. */
+/** Clave de idempotencia: permiso|proveedor|conversación|versión|tipo (el parámetro sigue llamándose campana). */
 export const claveIdempotencia = envolver(({ campana, proveedor, conversacion, version, tipo } = {}) => {
   const parte = (v, c) => {
     const t = R.texto({ max: 200 })(String(v ?? ''), c)
@@ -249,7 +249,7 @@ export const claveIdempotencia = envolver(({ campana, proveedor, conversacion, v
     return t
   }
   return [
-    parte(campana, 'campaña'), parte(proveedor, 'proveedor'), parte(conversacion, 'conversación'),
+    parte(campana, 'permiso'), parte(proveedor, 'proveedor'), parte(conversacion, 'conversación'),
     String(R.entero({ min: 1, max: 100000 })(version, 'versión')), R.enumerado(TIPOS_MENSAJE)(tipo, 'tipo'),
   ].join('|')
 })
@@ -259,19 +259,20 @@ export const claveIdempotencia = envolver(({ campana, proveedor, conversacion, v
 export function puedeEnviar(mensaje, politica, { ahora = new Date(), enviadosEnCampana = 0, clavesUsadas = [] } = {}) {
   if (mensaje?.estado === 'SEND_UNKNOWN') return { ok: false, error: 'SEND_UNKNOWN: conciliar la conversación antes de cualquier reintento' }
   if (mensaje?.estado !== 'AUTHORIZED') return { ok: false, error: `el mensaje está en ${mensaje?.estado}; solo AUTHORIZED puede enviarse` }
-  if (!politica) return { ok: false, error: 'sin política de campaña: solo borradores' }
+  if (!politica) return { ok: false, error: 'sin permiso para negociar: solo borradores' }
   if (politica.permite_envio !== true) return { ok: false, error: 'la política solo permite redactar, no enviar' }
-  if (!politica.vigente_hasta || Date.parse(politica.vigente_hasta) <= ahora.getTime()) return { ok: false, error: 'la política está vencida' }
+  if (!politicaVigente(politica, ahora)) return { ok: false, error: 'la política está vencida' }
   if (!politica.autorizada_por || !politica.autorizada_en) return { ok: false, error: 'la política no tiene autorización registrada' }
+  if (esPermisoGeneral(politica) && !mensaje.candidato_id) return { ok: false, error: 'bajo el permiso general el mensaje tiene que llevar candidato_id (el producto)' }
   const max = politica.alcance?.mensajes_max
-  if (max !== undefined && (!Number.isSafeInteger(max) || enviadosEnCampana >= max)) return { ok: false, error: 'se alcanzó el límite de mensajes de la campaña' }
+  if (max !== undefined && (!Number.isSafeInteger(max) || enviadosEnCampana >= max)) return { ok: false, error: 'se alcanzó el límite de mensajes del permiso para negociar' }
   if (!mensaje.idempotencia) return { ok: false, error: 'el mensaje no tiene clave de idempotencia' }
   if (clavesUsadas.includes(mensaje.idempotencia)) return { ok: false, error: 'esa clave de idempotencia ya se usó: no se reenvía' }
   return { ok: true }
 }
 
-// ─── Política de campaña (decisión de Enrique 18-11 (2)) ───
-// Enrique autoriza UNA campaña por producto con una línea en el chat. Dentro de
+// ─── Permiso para negociar por producto (decisión de Enrique 18-11 (2)) ───
+// Enrique autoriza UN permiso por producto con una línea en el chat. Dentro de
 // ese alcance se consulta, cotiza, repregunta y contraoferta sin pedir más.
 export const ALCANCE_POLITICA_DEFECTO = Object.freeze({
   proveedores_max: 5, rondas_max: 2, seguimiento_dias_habiles: 2, escalones: [], vigencia_dias: 14,
@@ -299,14 +300,30 @@ export const crearPoliticaAutorizada = envolver(({ candidatoId, texto, producto,
   }
 })
 
-// Propuesta de campaña (revisión 18-11, hallazgo 4): el CLI usa la clave de servicio y la base NO le deja
-// autorizar. Crea la campaña con permite_envio = false; la autoriza Enrique en Voltra OS con su sesión.
+// Propuesta de permiso por producto (revisión 18-11, hallazgo 4): el CLI usa la clave de servicio y la base NO
+// le deja autorizar. Lo crea con permite_envio = false; lo autoriza Enrique en Voltra OS con su sesión.
 export const crearPoliticaPropuesta = envolver((datos = {}) => {
   const r = crearPoliticaAutorizada({ ...datos, texto: datos.texto || 'propuesta' })
   if (!r.ok) falla(r.errores[0]?.split(':')[0] || 'politica', r.errores.join('; '))
   const { candidato_id, alcance } = r.valor
   return { candidato_id, alcance, permite_envio: false, vigente_hasta: null, autorizada_por: null, autorizada_en: null, autorizada_texto: null }
 })
+
+// ─── Permiso GENERAL para negociar (pedido de Enrique 18-11: "siempre estes autorizado a negociar") ───
+// UNA fila de pi_politicas con candidato_id null (la crea la migración como propuesta; la autoriza Enrique
+// una vez en Voltra OS). No vence (vigente_hasta null) y los topes son POR PRODUCTO. Aceptar orden, pagar,
+// muestras, exclusividad y términos quedan siempre afuera (pareceCompromiso).
+export const ALCANCE_PERMISO_GENERAL = Object.freeze({
+  tipo: 'general',
+  negocia: Object.freeze(['precio', 'cantidades', 'color_variante', 'calidad', 'empaque', 'plazos', 'condiciones']),
+  proveedores_max_por_producto: 10, rondas_max_por_producto: 3, seguimiento_dias_habiles: 2,
+})
+export const esPermisoGeneral = (p) => !!p && p.candidato_id == null && p.alcance?.tipo === 'general'
+// Igual que el disparador de la base: vigente_hasta > ahora, o null solo en el permiso general.
+function politicaVigente(p, ahora) {
+  if (p.vigente_hasta == null) return esPermisoGeneral(p)
+  return Date.parse(p.vigente_hasta) > ahora.getTime()
+}
 
 // Estados que solo puede poner Enrique con su sesión (la base rechaza la clave de servicio).
 export const ESTADOS_ORDEN_SOLO_ENRIQUE = ['CONFIRMADA_POR_ENRIQUE', 'PAGADA_POR_ENRIQUE']
@@ -328,22 +345,27 @@ export function pareceCompromiso(texto) {
 
 /** ¿Puede este mensaje pasar de DRAFT a AUTHORIZED? Solo con política vigente
  *  que permita enviar y si el mensaje está dentro del alcance. Si no, queda DRAFT.
- *  ctx: { ahora, proveedoresEnCampana: [ids ya contactados], ronda: n.º de ronda de negociación de este mensaje con ese proveedor } */
+ *  Sirve para el permiso por producto y para el general (este exige mensaje.candidato_id).
+ *  ctx: { ahora, proveedoresEnCampana: [ids ya contactados PARA ESE PRODUCTO], ronda: n.º de ronda de negociación de este mensaje con ese proveedor } */
 export function puedeAutorizarMensaje(mensaje, politica, { ahora = new Date(), proveedoresEnCampana = [], ronda = 0 } = {}) {
   const no = (error) => ({ ok: false, estado: 'DRAFT', error })
   if (mensaje?.estado !== 'DRAFT') return no(`solo un DRAFT se autoriza (está en ${mensaje?.estado})`)
-  if (!politica) return no('sin política de campaña: queda en borrador')
+  if (!politica) return no('sin permiso para negociar: queda en borrador')
   if (politica.permite_envio !== true) return no('la política solo permite redactar')
   if (!politica.autorizada_en || !politica.autorizada_texto) return no('la política no tiene la autorización textual de Enrique')
-  if (!politica.vigente_hasta || Date.parse(politica.vigente_hasta) <= ahora.getTime()) return no('la política está vencida')
+  if (!politicaVigente(politica, ahora)) return no('la política está vencida')
   if (Date.parse(politica.autorizada_en) > ahora.getTime()) return no('la política todavía no rige')
-  if (mensaje.politica_id && politica.id && mensaje.politica_id !== politica.id) return no('el mensaje es de otra campaña')
+  if (mensaje.politica_id && politica.id && mensaje.politica_id !== politica.id) return no('el mensaje es de otro permiso para negociar')
   const a = politica.alcance ?? {}
+  const general = esPermisoGeneral(politica)
+  if (general && !mensaje.candidato_id) return no('bajo el permiso general el mensaje tiene que llevar candidato_id (el producto)')
+  const maxProv = general ? (a.proveedores_max_por_producto ?? ALCANCE_PERMISO_GENERAL.proveedores_max_por_producto) : (a.proveedores_max ?? ALCANCE_POLITICA_DEFECTO.proveedores_max)
+  const maxRondas = general ? (a.rondas_max_por_producto ?? ALCANCE_PERMISO_GENERAL.rondas_max_por_producto) : (a.rondas_max ?? ALCANCE_POLITICA_DEFECTO.rondas_max)
   if (!mensaje.proveedor_id) return no('el mensaje no tiene proveedor')
   const ya = proveedoresEnCampana.includes(mensaje.proveedor_id)
-  if (!ya && new Set(proveedoresEnCampana).size >= (a.proveedores_max ?? ALCANCE_POLITICA_DEFECTO.proveedores_max)) return no('se alcanzó el máximo de proveedores de la campaña')
+  if (!ya && new Set(proveedoresEnCampana).size >= maxProv) return no(`se alcanzó el máximo de ${maxProv} proveedores ${general ? 'por producto' : 'del permiso'}`)
   if (!Number.isSafeInteger(ronda) || ronda < 0) return no('ronda inválida')
-  if (ronda > (a.rondas_max ?? ALCANCE_POLITICA_DEFECTO.rondas_max)) return no('se pasó el máximo de rondas de negociación')
+  if (ronda > maxRondas) return no(`se pasó el máximo de ${maxRondas} rondas de negociación`)
   if (!mensaje.idempotencia) return no('el mensaje no tiene clave de idempotencia')
   const textos = [mensaje.original, mensaje.traduccion].filter(Boolean)
   if (!mensaje.original || !mensaje.traduccion) return no('falta el original o la traducción')
@@ -374,6 +396,45 @@ export const conciliarSendUnknown = envolver((mensaje, { salio, observado_en, ca
     ? { estado: 'SENT_CONFIRMED', reenviar: false }
     // No salió: se marca FAILED. Reenviar exige una NUEVA versión (otra clave), autorizada de nuevo.
     : { estado: 'FAILED', reenviar: false, siguiente: 'crear nueva versión y autorizarla para reenviar' }
+})
+
+// ─── Fotos de candidatos (comando foto-subir) ───────────────
+// La foto se BAJA y se guarda en el bucket privado pi-fotos: nunca se registra solo la URL externa
+// (los proveedores bloquean el enlace directo y la foto no aparece en Voltra OS).
+export const FUENTES_FOTO = ['proveedor', 'muestra', 'propia', 'ia_referencia']
+export const FOTO_MAX_BYTES = 8 * 1024 * 1024
+export const FOTO_TIMEOUT_MS = 20_000
+
+/** Tipo real por los primeros bytes (no se cree en el content-type). Solo JPEG, PNG o WEBP; si no, null. */
+export function tipoImagenPorBytes(b) {
+  if (!b || b.length < 12) return null
+  const ascii = (desde, hasta) => String.fromCharCode(...b.subarray(desde, hasta))
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { ext: 'jpg', mime: 'image/jpeg' }
+  if ([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((x, i) => b[i] === x)) return { ext: 'png', mime: 'image/png' }
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return { ext: 'webp', mime: 'image/webp' }
+  return null
+}
+
+// Direcciones locales o privadas escritas tal cual (no resuelve DNS). Se rechazan salvo en pruebas locales.
+const HOST_PRIVADO = /^(localhost|.+\.localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|0\.\d+\.\d+\.\d+|\[.*\])$/i
+export const validarUrlImagen = envolver((url, { permitirLocal = false } = {}) => {
+  const u = R.url()(url, '--url')
+  if (!permitirLocal && HOST_PRIVADO.test(new URL(u).hostname)) falla('--url', 'no se bajan imágenes de direcciones locales o privadas')
+  return u
+})
+
+/** Opciones de foto-subir, validadas antes de tocar la red. */
+export const validarPedidoFoto = envolver(({ candidato, url, fuente, principal, descripcion } = {}, { permitirLocal = false } = {}) => {
+  if (!esUuid(candidato)) falla('--candidato', 'falta o no es un id válido (uuid)')
+  const u = validarUrlImagen(url, { permitirLocal })
+  if (!u.ok) throw new ErrorCampo(u.errores[0])
+  if (principal !== undefined && principal !== true) falla('--principal', 'va sin valor')
+  return {
+    candidato: candidato.toLowerCase(), url: u.valor,
+    fuente: fuente === undefined ? 'proveedor' : R.enumerado(FUENTES_FOTO)(fuente, '--fuente'),
+    principal: principal === true,
+    descripcion: descripcion === undefined ? null : R.texto({ max: 500 })(descripcion, '--descripcion'),
+  }
 })
 
 // ─── Evidencias ─────────────────────────────────────────────

@@ -27,7 +27,8 @@ Códigos de salida: `0` OK · `1` error de datos o de uso · `2` faltan tablas o
 | `bloquear <id> --motivo "…"` | Pasa a `BLOCKED` con el motivo (CAPTCHA, login, código, fuente caída, dato que falta). |
 | `liberar <id>` | Si un trabajo quedó colgado (lease vencido), lo devuelve a la cola con su checkpoint. |
 | `cargar-evidencia --candidato <id> --archivo evidencia.json` | Inserta evidencias en `pi_evidencias` y ofertas en `pi_ofertas_competencia`. Todo o nada: si una pieza falla, no se carga ninguna. Saltea ofertas duplicadas. |
-| `politica-proponer --candidato <id>` | Propone la campaña de negociación de ese producto con el alcance por defecto (NO permite enviar). La autoriza Enrique en Voltra OS con su sesión: la base rechaza la clave de servicio. |
+| `politica-proponer --candidato <id>` | Propone un **permiso para negociar ese producto** con el alcance por defecto (NO permite enviar). Lo autoriza Enrique en Voltra OS con su sesión: la base rechaza la clave de servicio. Con el permiso general autorizado no hace falta. |
+| `foto-subir --candidato <id> --url <imagen> [--fuente proveedor\|muestra\|propia\|ia_referencia] [--principal] [--descripcion "…"]` | Baja la foto, la sube al bucket privado `pi-fotos` y la registra en `pi_fotos`. Ver "Fotos" abajo. |
 | `orden-proponer --candidato <id> --archivo orden.json` | Arma una orden de compra en `BORRADOR`. No paga nada. |
 | `orden-estado <id> --estado <ESTADO> [--tracking T] [--nota "…"]` | Mueve la orden por los pasos logísticos (PEDIDA, EN_TRANSITO, RECIBIDA, CANCELADA). CONFIRMADA_POR_ENRIQUE y PAGADA_POR_ENRIQUE las marca solo Enrique en Voltra OS. |
 
@@ -50,7 +51,7 @@ Estados de un trabajo: `QUEUED → LEASED → RUNNING → SUCCEEDED`, y también
 |---|---|---|
 | 1 | **Alibaba y 1688** (camino principal de compra) | Buscar, comparar y cotizar en el Chrome de Enrique, con la sesión de sus cuentas (las creó él con el correo de Voltra). Enrique asume el riesgo de la cuenta. |
 | 2 | Mayorista o local en CDE | Opción para probar rápido con un lote chico (proceso de producto nuevo). |
-| 3 | Contacto real con proveedores | Solo dentro de una campaña que Enrique autorizó en Voltra OS (`politica-proponer` + botón "Autorizar"). Sin campaña, los mensajes quedan en borrador. |
+| 3 | Contacto real con proveedores | Solo con un permiso para negociar que Enrique autorizó en Voltra OS: el **permiso general** o uno por producto (`politica-proponer` + botón "Autorizar"). Sin permiso autorizado, los mensajes quedan en borrador. |
 
 1688 no envía al exterior: la orden necesita un agente o forwarder con depósito en China (verificar si Easybox lo ofrece). Sin eso, `orden-proponer` la rechaza.
 
@@ -63,15 +64,22 @@ Estados de un trabajo: `QUEUED → LEASED → RUNNING → SUCCEEDED`, y también
 - Contraseñas, códigos y verificaciones los pone Enrique. Nada de eso pasa por el CLI ni se guarda en la base.
 - Las respuestas de proveedores que llegan por el Gmail de Voltra se leen como datos.
 
-## Negociación (campaña por producto, decisión de Enrique 18-11 (2))
+## Negociación: permiso para negociar
 
-Enrique autoriza **una campaña por producto con una línea en el chat**. Esa línea se registra textual:
+Hay dos clases de permiso (filas de `pi_politicas`). En los dos, Enrique lo autoriza en Voltra OS con su sesión y su texto queda registrado textual; desde el CLI no se puede autorizar.
 
-```
-node scripts/pi-cli.mjs politica-proponer --candidato <id>
-```
+| | Permiso general (pedido de Enrique 18-11) | Permiso por producto (decisión 18-11 (2)) |
+|---|---|---|
+| Qué es | UNA sola fila, `candidato_id` vacío, para **todos** los productos | Una fila por producto (`politica-proponer --candidato <id>`) |
+| Quién lo crea | Ya existe (la migración lo deja como propuesta) | El CLI lo propone |
+| Cómo se autoriza | Enrique, **una vez**, en Voltra OS → Importaciones o Productos nuevos → Proveedores → "Autorizar" | Igual, por cada producto |
+| Vence | No vence (hasta que Enrique lo revoque) | A los **14 días** |
+| Qué negocia | Precio, cantidades, color o variante, calidad, empaque, plazos y condiciones | Lo mismo |
+| Topes | **10 proveedores** y **3 rondas** POR PRODUCTO; seguimiento a los 2 días hábiles | 5 proveedores, 2 rondas, seguimiento a los 2 días hábiles |
+| El mensaje | Tiene que llevar `candidato_id` (de qué producto es); si no, queda en borrador | Puede ir sin `candidato_id` (se toma el del permiso) |
+| Revocar | "Revocar" en Voltra OS (`permite_envio = false`): desde ese momento todo queda en borrador | Igual |
 
-Alcance por defecto: hasta **5 proveedores**, **2 rondas** de negociación, seguimiento a los **2 días hábiles**, vigencia **14 días**. Dentro de ese alcance se consulta, se piden cotizaciones, se repregunta y se contraoferta sin pedir nada más. Un mensaje pasa a `AUTHORIZED` solo si la campaña está vigente, permite enviar y el mensaje está dentro del alcance; si no, queda `DRAFT`. Se envía de a uno y se registra `SENT_CONFIRMED` o `SEND_UNKNOWN`.
+Dentro del alcance se consulta, se piden cotizaciones, se repregunta y se contraoferta sin pedir nada más. Un mensaje pasa a `AUTHORIZED` solo si el permiso está autorizado y vigente, permite enviar y el mensaje está dentro del alcance; si no, queda `DRAFT`. Se envía de a uno y se registra `SENT_CONFIRMED` o `SEND_UNKNOWN`.
 
 **Si quedó `SEND_UNKNOWN`** (no se sabe si salió): no se reenvía nunca a ciegas. Se mira la conversación real, se concilia y, si no salió, se arma una versión nueva.
 
@@ -83,6 +91,18 @@ Alcance por defecto: hasta **5 proveedores**, **2 rondas** de negociación, segu
 | Firmar o aceptar términos | Presentar un precio de escaparate como cotización firme |
 
 Se escribe como comprador de Voltra, en inglés o chino simple, y se guardan el original y la traducción. La validación frena la autorización si el texto parece comprometer una compra, un pago, muestras o exclusividad, o si incluye el presupuesto máximo.
+
+## Fotos (`foto-subir`)
+
+```
+node scripts/pi-cli.mjs foto-subir --candidato <id> --url https://… [--fuente proveedor|muestra|propia|ia_referencia] [--principal] [--descripcion "…"]
+```
+
+- **Baja** la imagen (sin mandar ninguna clave al sitio del proveedor; hasta 3 redirecciones; corta a los 20 s) y la guarda en el bucket **privado** `pi-fotos`, en `<candidato>/<id-nuevo>.<jpg|png|webp>`. En `pi_fotos` queda `storage_path` y `url_externa` vacía: nunca se guarda solo la URL externa (los proveedores bloquean el enlace directo y la foto no aparece en Voltra OS).
+- Solo **JPEG, PNG o WEBP**, comprobado por el contenido del archivo (no por el nombre ni por lo que dice el servidor). Máximo **8 MB**. URL solo `http`/`https`, sin usuario ni contraseña, y no se bajan direcciones locales o privadas.
+- `--fuente` por defecto `proveedor`. `orden` = la siguiente de ese candidato.
+- `--principal`: primero desmarca la foto principal anterior y después registra la nueva como principal (hay una sola por candidato).
+- Si falla el registro en `pi_fotos`, borra el archivo recién subido y vuelve a marcar la principal anterior. No imprime la clave.
 
 ## Órdenes de compra (llegan solo hasta el paso de pago)
 

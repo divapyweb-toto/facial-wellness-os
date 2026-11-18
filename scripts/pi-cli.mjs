@@ -11,7 +11,8 @@
 // Credenciales: SUPABASE_SERVICE_ROLE_KEY de ~/Negocios/fw-os/.env.produccion
 // (solo en la Mac). La URL sale de SUPABASE_URL, o de VITE_SUPABASE_URL en .env,
 // o de SUPABASE_PROJECT_REF. Nunca se imprimen: toda salida pasa por ocultar().
-// Habla directo con PostgREST por HTTPS (sin dependencias).
+// Habla directo con PostgREST por HTTPS (sin dependencias); foto-subir usa además
+// Storage, solo el bucket privado pi-fotos.
 //
 // Uso: node scripts/pi-cli.mjs <comando> [opciones]   (ver scripts/pi-cli.md)
 // ═══════════════════════════════════════════════════════════
@@ -19,11 +20,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import {
   TIPOS_TRABAJO, ESTADOS_TRABAJO, esUuid, esEjecutor, validarCarga, validarCheckpoint,
   validarResultado, validarMotivo, verificarTransicion, verificarPropiedad, rutaCompletar,
   leaseVencido, validarArchivoEvidencia, deduplicarOfertas, validarOrdenPropuesta, validarCambioOrden,
   ESTADOS_ORDEN, crearPoliticaPropuesta, ESTADOS_ORDEN_SOLO_ENRIQUE,
+  validarPedidoFoto, validarUrlImagen, tipoImagenPorBytes, FOTO_MAX_BYTES, FOTO_TIMEOUT_MS,
 } from './pi-trabajos.mjs'
 
 const RAIZ_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -64,10 +67,13 @@ export function leerCredenciales() {
   return { url: url.replace(/\/+$/, ''), clave }
 }
 
+const HOSTS_LOCALES = ['localhost', '127.0.0.1', '[::1]']
+const esBaseLocal = (url) => { try { return HOSTS_LOCALES.includes(new URL(url).hostname) } catch { return false } }
+
 function validarUrlBase(url) {
   let u
   try { u = new URL(url) } catch { return 'la URL de Supabase no es válida' }
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
+  const local = HOSTS_LOCALES.includes(u.hostname)
   if (u.protocol !== 'https:' && !(local && u.protocol === 'http:')) return 'la URL de Supabase tiene que ser https'
   if (!local && !u.hostname.endsWith('.supabase.co')) return 'la URL no es de supabase.co'
   return null
@@ -96,7 +102,59 @@ function cliente({ url, clave }) {
     if (d.code === 'PGRST202') throw new ErrorCli(`${que}: función pi_reclamar_trabajo no encontrada (falta aplicar la migración)`, 2)
     throw new ErrorCli(`${que}: error ${res.status} ${d.message || ''}`.trim())
   }
-  return { pedir, exigir }
+  // Storage: SOLO el bucket privado pi-fotos, para subir y borrar (foto-subir). Cuerpo binario.
+  async function storageFoto(metodo, ruta, { bytes, mime } = {}) {
+    let r
+    try {
+      r = await fetch(`${url}/storage/v1/object/pi-fotos/${ruta}`, {
+        method: metodo,
+        headers: { apikey: clave, Authorization: `Bearer ${clave}`, ...(bytes ? { 'Content-Type': mime, 'x-upsert': 'false' } : {}) },
+        body: bytes,
+      })
+    } catch (e) {
+      throw new ErrorCli(`sin conexión con Supabase Storage (${e.cause?.code || e.message})`, 3)
+    }
+    const texto = await r.text()
+    let datos = null
+    try { datos = texto ? JSON.parse(texto) : null } catch { datos = texto }
+    return { status: r.status, ok: r.ok, datos }
+  }
+  return { pedir, exigir, subirFoto: (ruta, bytes, mime) => storageFoto('POST', ruta, { bytes, mime }), borrarFoto: (ruta) => storageFoto('DELETE', ruta) }
+}
+
+// Baja la imagen del proveedor SIN credenciales (la clave nunca sale hacia otro host): hasta 3
+// redirecciones (cada una se vuelve a validar), 20 s, máx. 8 MB contados mientras llega, y el tipo
+// se comprueba por los primeros bytes.
+async function bajarImagen(urlImagen, permitirLocal) {
+  const senal = AbortSignal.timeout(FOTO_TIMEOUT_MS)
+  const cortar = (e) => new ErrorCli(e?.name === 'TimeoutError' || e?.name === 'AbortError' ? 'la imagen tardó más de 20 s: no se subió nada' : `no se pudo bajar la imagen (${e?.cause?.code || e?.message})`)
+  let actual = urlImagen, r
+  for (let saltos = 0; ; saltos++) {
+    try { r = await fetch(actual, { redirect: 'manual', signal: senal, headers: { Accept: 'image/jpeg,image/png,image/webp' } }) } catch (e) { throw cortar(e) }
+    const destino = r.status >= 300 && r.status < 400 ? r.headers.get('location') : null
+    if (!destino) break
+    await r.body?.cancel()
+    if (saltos >= 3) throw new ErrorCli('la imagen redirige demasiadas veces: no se subió nada')
+    const v = validarUrlImagen(new URL(destino, actual).toString(), { permitirLocal })
+    if (!v.ok) throw new ErrorCli(`la imagen redirige a una URL no permitida (${v.errores[0]})`)
+    actual = v.valor
+  }
+  if (!r.ok) { await r.body?.cancel(); throw new ErrorCli(`la imagen respondió ${r.status}: no se subió nada`) }
+  const muyGrande = () => new ErrorCli(`la imagen pesa más de ${FOTO_MAX_BYTES / 1024 / 1024} MB: no se subió nada`)
+  if (Number(r.headers.get('content-length')) > FOTO_MAX_BYTES) { await r.body?.cancel(); throw muyGrande() }
+  const partes = []
+  let total = 0
+  try {
+    for await (const parte of r.body ?? []) {
+      total += parte.length
+      if (total > FOTO_MAX_BYTES) throw muyGrande() // salir del for await cancela la descarga
+      partes.push(parte)
+    }
+  } catch (e) { throw e instanceof ErrorCli ? e : cortar(e) }
+  const bytes = Buffer.concat(partes)
+  const tipo = tipoImagenPorBytes(bytes)
+  if (!tipo) throw new ErrorCli('el archivo no es una imagen JPEG, PNG o WEBP (se mira el contenido, no el nombre): no se subió nada')
+  return { bytes, ...tipo }
 }
 
 // ─── Utilidades de argumentos ───────────────────────────────
@@ -346,8 +404,9 @@ const COMANDOS = {
     if (hacia === 'PEDIDA') out('Llegó al paso de pago: el pago lo hace Enrique, y después la marca PAGADA en Voltra OS con su sesión.')
   },
 
-  // Campaña de negociación: el CLI la PROPONE (permite_envio = false) con el alcance por defecto del
-  // contrato. La autoriza Enrique en Voltra OS con su sesión (la base rechaza la clave de servicio).
+  // Permiso para negociar POR PRODUCTO: el CLI lo PROPONE (permite_envio = false) con el alcance por defecto
+  // del contrato. Lo autoriza Enrique en Voltra OS con su sesión (la base rechaza la clave de servicio).
+  // El permiso GENERAL (todos los productos) ya existe como fila única; también lo autoriza Enrique en Voltra OS.
   async 'politica-proponer'(api, { op }) {
     const candidato = exigirUuid(op.candidato, '--candidato')
     const c = api.exigir(await api.pedir('GET', `/pi_candidatos?id=eq.${candidato}&select=id,nombre`), 'buscar candidato')
@@ -357,10 +416,56 @@ const COMANDOS = {
     const [p] = api.exigir(await api.pedir('POST', '/pi_politicas', { cuerpo: v.valor, prefer: 'return=representation' }), 'crear política')
     await registrarEvento(api, 'pi_politicas', p.id, 'proponer', { alcance: v.valor.alcance }, ejecutorDe(op))
     const a = v.valor.alcance
-    out(`Campaña propuesta: ${p.id} · ${a.producto} (todavía NO permite enviar)`)
+    out(`Permiso para negociar propuesto: ${p.id} · ${a.producto} (todavía NO permite enviar)`)
     out(`Alcance: hasta ${a.proveedores_max} proveedores, ${a.rondas_max} rondas, seguimiento a los ${a.seguimiento_dias_habiles} días hábiles, ${a.vigencia_dias} días desde que Enrique la autorice`)
     out('Siguiente: Enrique la autoriza en Voltra OS → Productos nuevos → Proveedores → "Autorizar", con su sesión.')
     out('Fuera de alcance siempre: aceptar orden, pagar, muestras, exclusividad, términos (confirmación aparte de Enrique).')
+  },
+
+  // Foto de un candidato: se BAJA, se sube al bucket privado pi-fotos y se registra pi_fotos con
+  // storage_path (url_externa queda NULL: la URL externa sola no se ve en Voltra OS).
+  async 'foto-subir'(api, { op, cred }) {
+    const permitirLocal = esBaseLocal(cred.url) // solo con una base local (pruebas)
+    const v = validarPedidoFoto({ candidato: op.candidato, url: op.url, fuente: op.fuente, principal: op.principal, descripcion: op.descripcion }, { permitirLocal })
+    if (!v.ok) throw new ErrorCli(v.errores.join('; '))
+    const f = v.valor
+    const actor = ejecutorDe(op)
+    const c = api.exigir(await api.pedir('GET', `/pi_candidatos?id=eq.${f.candidato}&select=id`), 'buscar candidato')
+    if (!c.length) throw new ErrorCli(`no existe el candidato ${f.candidato}`)
+    const img = await bajarImagen(f.url, permitirLocal)
+
+    const previas = api.exigir(await api.pedir('GET', `/pi_fotos?candidato_id=eq.${f.candidato}&select=orden&order=orden.desc&limit=1`), 'leer fotos')
+    const orden = (Number.isSafeInteger(previas?.[0]?.orden) ? previas[0].orden : 0) + 1
+    const ruta = `${f.candidato}/${randomUUID()}.${img.ext}`
+    const sub = await api.subirFoto(ruta, img.bytes, img.mime)
+    if (!sub.ok) throw new ErrorCli(`no se pudo subir la foto al bucket pi-fotos (${sub.status} ${sub.datos?.message ?? ''})`.trim())
+
+    // Compensación: si algo falla después de subir, se borra el objeto y se vuelve a marcar la principal vieja.
+    let desmarcadas = []
+    const deshacer = async (motivo) => {
+      const b = await api.borrarFoto(ruta)
+      let vuelta = ''
+      if (desmarcadas.length) {
+        const rm = await api.pedir('PATCH', `/pi_fotos?id=in.(${desmarcadas.join(',')})`, { cuerpo: { es_principal: true }, prefer: 'return=minimal' })
+        vuelta = rm.ok ? '; la principal anterior quedó como estaba' : `; OJO: no se pudo volver a marcar la principal anterior ${desmarcadas.join(',')}`
+      }
+      throw new ErrorCli(`${motivo}; ${b.ok ? 'se borró la foto subida' : `OJO: no se pudo borrar pi-fotos/${ruta}`}${vuelta}`)
+    }
+    if (f.principal) {
+      // Primero se desmarca la principal vieja: el índice pi_fotos_una_principal_uq no deja dos.
+      const r = await api.pedir('PATCH', `/pi_fotos?candidato_id=eq.${f.candidato}&es_principal=eq.true`, { cuerpo: { es_principal: false, actualizado_en: new Date().toISOString() }, prefer: 'return=representation' })
+      if (!r.ok) await deshacer(`no se pudo desmarcar la foto principal anterior (${r.status})`)
+      desmarcadas = (Array.isArray(r.datos) ? r.datos : []).map((x) => x.id).filter(esUuid)
+    }
+    const ins = await api.pedir('POST', '/pi_fotos', {
+      cuerpo: { candidato_id: f.candidato, storage_path: ruta, url_externa: null, fuente: f.fuente, es_principal: f.principal, orden, descripcion: f.descripcion },
+      prefer: 'return=representation',
+    })
+    const foto = Array.isArray(ins.datos) ? ins.datos[0] : null
+    if (!ins.ok || !foto?.id) await deshacer(`falló el registro en pi_fotos (${ins.status} ${ins.datos?.message ?? ''})`.trim())
+    await registrarEvento(api, 'pi_candidatos', f.candidato, 'foto_subir', { foto_id: foto.id, storage_path: ruta, fuente: f.fuente, es_principal: f.principal }, actor)
+    out(`Foto subida: ${foto.id} · pi-fotos/${ruta} · ${img.mime}, ${Math.ceil(img.bytes.length / 1024)} KB · orden ${orden}${f.principal ? ' · PRINCIPAL' : ''}`)
+    out('Se ve en Voltra OS (Productos nuevos e Importaciones) con URL firmada del bucket privado.')
   },
 
   async diagnostico(api, { cred }) {
@@ -401,7 +506,9 @@ const AYUDA = `Uso: node scripts/pi-cli.mjs <comando> [opciones]
   bloquear <id> --motivo "texto" [--ejecutor mac-enrique]
   liberar <id>                                  devuelve a la cola un trabajo con lease vencido
   cargar-evidencia --candidato <uuid> --archivo evidencia.json [--cargado-por nombre]
-  politica-proponer --candidato <uuid>   propone la campaña de negociación (la autoriza Enrique en Voltra OS)
+  politica-proponer --candidato <uuid>   propone un permiso para negociar ESE producto (lo autoriza Enrique en Voltra OS)
+  foto-subir --candidato <uuid> --url <imagen http/https> [--fuente proveedor|muestra|propia|ia_referencia] [--principal] [--descripcion "…"]
+                                                baja la foto (JPEG/PNG/WEBP, máx. 8 MB) y la guarda en el bucket privado
   orden-proponer --candidato <uuid> --archivo orden.json      arma la orden en BORRADOR (no paga)
   orden-estado <id> --estado <${ESTADOS_ORDEN.join("|")}> [--tracking T] [--nota "…"]   (CONFIRMADA y PAGADA: solo Enrique en Voltra OS)
 Detalle: scripts/pi-cli.md`

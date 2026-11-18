@@ -40,7 +40,7 @@ export default function ProductosPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Productos nuevos</h1>
-          <p className="page-subtitle">Investigar, comparar proveedores, calcular la plata y decidir con evidencia. Desde acá no se compra ni se paga; a proveedores se les escribe solo dentro de una campaña autorizada.</p>
+          <p className="page-subtitle">Investigar, comparar proveedores, calcular la plata y decidir con evidencia. Desde acá no se compra ni se paga; a proveedores se les escribe solo dentro de un permiso para negociar autorizado.</p>
         </div>
         <div className="page-actions">
           <button className={`btn btn-sm ${demo ? 'btn-primary' : 'btn-ghost'}`} onClick={alternarDemo} title="Datos inventados en memoria; no se guarda nada en la base">

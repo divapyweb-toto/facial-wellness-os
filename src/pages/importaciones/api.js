@@ -5,6 +5,7 @@
 // etapa del embudo (pi_candidatos.etapa) y decisiones (pi_decisiones).
 import { supabase } from '../../lib/supabase'
 import { listar, insertar, actualizar, borrar, esModoDemo, cargarDetalle } from '../productos/api'
+import { urlFotoExternaValida } from './logica'
 
 export const BUCKET_FOTOS = 'pi-fotos'
 const opcional = (p) => p.catch(e => { if (e.faltaTabla) return null; throw e })
@@ -65,8 +66,11 @@ export async function subirFoto(candidatoId, file, { fuente, descripcion, esPrin
   return insertar('pi_fotos', { candidato_id: candidatoId, storage_path: path, url_externa: null, fuente, es_principal: !!esPrincipal, orden, descripcion: descripcion || null })
 }
 
-export const agregarFotoExterna = (candidatoId, url, { fuente, descripcion, esPrincipal, orden }) =>
-  insertar('pi_fotos', { candidato_id: candidatoId, storage_path: null, url_externa: url, fuente, es_principal: !!esPrincipal, orden, descripcion: descripcion || null })
+// Link externo: fuera de DEMO solo http/https (nunca data: ni otro esquema; las fotos subidas van al bucket).
+export async function agregarFotoExterna(candidatoId, url, { fuente, descripcion, esPrincipal, orden }) {
+  if (!esModoDemo() && !urlFotoExternaValida(url)) throw new Error('El link de la foto tiene que empezar con http:// o https://. Para una foto de tu compu usá "Elegir archivo".')
+  return insertar('pi_fotos', { candidato_id: candidatoId, storage_path: null, url_externa: String(url).trim(), fuente, es_principal: !!esPrincipal, orden, descripcion: descripcion || null })
+}
 
 // Primero se desmarca la principal vieja y después se marca la nueva: al revés choca con el índice único
 // pi_fotos_una_principal_uq (revisión 18-11, hallazgo 7).

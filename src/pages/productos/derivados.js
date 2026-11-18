@@ -53,3 +53,29 @@ export function armarDatosDossier(d) {
   }
 }
 
+
+// ── Permiso para negociar (antes "campaña"). Contrato FUNCIONES 18-11 ──
+// Permiso general = la única fila de pi_politicas con candidato_id NULL (vale para todos los productos).
+export const esPermisoGeneral = (p) => !!p && p.candidato_id == null && p.alcance?.tipo === 'general'
+
+// Igual que el disparador de la base: el general no vence si vigente_hasta es NULL; el por producto, sí.
+export function politicaVigente(p, ahora = new Date()) {
+  if (!p?.permite_envio) return false
+  if (p.vigente_hasta) return new Date(p.vigente_hasta) > ahora
+  return p.candidato_id == null
+}
+
+const NEGOCIA_TEXTO = { precio: 'precio', cantidades: 'cantidades', color_variante: 'color o variante', calidad: 'calidad', empaque: 'empaque', plazos: 'plazos', condiciones: 'condiciones' }
+export const NUNCA_CUBRE = ['aceptar o confirmar una orden', 'pagar', 'comprar muestras', 'prometer exclusividad', 'aceptar términos']
+
+// "precio, cantidades, color o variante, … y condiciones"
+export function textoNegocia(alcance) {
+  const l = (Array.isArray(alcance?.negocia) ? alcance.negocia : []).map(k => NEGOCIA_TEXTO[k] || String(k).replace(/_/g, ' '))
+  if (!l.length) return 'nada cargado'
+  return l.length === 1 ? l[0] : `${l.slice(0, -1).join(', ')} y ${l[l.length - 1]}`
+}
+
+export function topesPermisoGeneral(alcance) {
+  const n = (v, def) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : def)
+  return { proveedores: n(alcance?.proveedores_max_por_producto, 10), rondas: n(alcance?.rondas_max_por_producto, 3), seguimientoDias: n(alcance?.seguimiento_dias_habiles, 2) }
+}
