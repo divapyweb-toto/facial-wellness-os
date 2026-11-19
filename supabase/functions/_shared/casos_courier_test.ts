@@ -20,7 +20,9 @@ Deno.test("Lucero: no encontradas agrupadas primero con la pregunta, después ca
   assertEquals(t.split("\n")[0], "Buenas, les escribo de Voltra (Facial Wellness). Necesito ayuda con estos envíos, los clientes nos están reclamando:");
   assert(t.includes('1) Estos 2 en su página aparecen como "No se encontró el envío solicitado". ¿Los recibieron? ¿En qué estado están?\n- L-VT-9002'), t);
   assert(t.includes("\n\n2) L-VT-9001 · Ana Prueba"), t);
-  assert(t.endsWith("¿Me confirman qué día sale cada uno? Muchas gracias."));
+  // 19-11: a Lucero sin pedir confirmación de salida; a PaP sí.
+  assert(t.endsWith("\n\nMuchas gracias.") && !t.includes("¿Me confirman qué día sale"));
+  assert(textoParaCourier("pap", [L]).endsWith("¿Me confirman qué día sale cada uno? Muchas gracias."));
 });
 
 Deno.test("PaP: guía, rendiciones en su propio punto y Telegram escapado", () => {

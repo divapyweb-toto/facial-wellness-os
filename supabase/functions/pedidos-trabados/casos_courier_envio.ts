@@ -36,6 +36,23 @@ export const DIA_YA_AVISADOS = "2026-11-04";
 export const LIMITE_TEXTO_CASOS = LIMITE_TEXTO_TELEGRAM - 300;
 
 const COURIERS: CourierCaso[] = ["lucero", "pap"];
+
+// 19-11 (Enrique: "que el bot no le escriba todo el tiempo a los de lucero del este okay????"; comunicado de Lucero: el
+// estado está en su sistema, el WhatsApp es para incidencias). A Lucero:
+//   · NUNCA preguntas de estado: los casos del sistema (plazo / no encontrada) no se crean, no se reenvían y los
+//     pendientes se cierran. Voltra OS ya importa el estado de Lucero; lo trabado lo mira administración.
+//   · Los pedidos del cliente (reprogramar, dirección, horario, "no le llegó y lo necesita") van en UN lote por día, 14:00.
+//   · Un urgente sale al toque solo si es de plata o cancelación (no cobrar / ya pagado / cancelado / no entregar);
+//     si no, va en el lote de las 14:00. Pagado y cancelado por sus otros caminos (pagados_con_cobro, telegram-webhook,
+//     cancelaciones_ventas) siguen saliendo en el momento.
+export const LUCERO_SOLO_INCIDENCIAS = true;
+export const FRANJA_LUCERO: Franja = "pm";
+const INCIDENCIA_INMEDIATA = /pagad|sin cobrar|no cobr|cobrar 0|cancel|no (lo )?entreg|devolv/;
+/** ¿Este urgente sale al toque? PaP siempre; Lucero solo si es de plata o cancelación. */
+export const urgenteAlToque = (c: CasoCourier) =>
+  c.urgente && (!LUCERO_SOLO_INCIDENCIAS || c.courier !== "lucero" || INCIDENCIA_INMEDIATA.test(sinTildes(String(c.pide ?? "")).toLowerCase()));
+/** Casos del sistema (preguntas de estado) que ya no van a Lucero. */
+export const sinEstadoALucero = (courier: CourierCaso) => LUCERO_SOLO_INCIDENCIAS && courier === "lucero";
 const sinTildes = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "");
 const ddmm = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
 const porFecha = (a: CasoCourier, b: CasoCourier) => a.creado_en.localeCompare(b.creado_en);
@@ -97,13 +114,15 @@ export interface EnvioCasos { clave: string; lote: string; courier: CourierCaso;
 export function planificarEnvios(pendientes: CasoCourier[], ahora: Date, hayRendicionesPap = false): EnvioCasos[] {
   const p = pendientes.filter((c) => c.estado === "pendiente").sort(porFecha);
   const h = horaPy(ahora), horaUrgente = h >= HORA_URGENTES.desde && h < HORA_URGENTES.hasta;
-  const envios: EnvioCasos[] = p.filter((c) => c.urgente && horaUrgente).map((c) => ({
+  const envios: EnvioCasos[] = p.filter((c) => urgenteAlToque(c) && horaUrgente).map((c) => ({
     clave: claveCandadoUrgente(c.id), lote: `urgente:${c.id}`, courier: c.courier, urgente: true, casos: [c], conRendiciones: false,
   }));
   const f = franjaActual(ahora);
   if (!f) return envios;
   for (const courier of COURIERS) {
-    const casos = p.filter((c) => !c.urgente && c.courier === courier && c.creado_en <= f.corte);
+    if (courier === "lucero" && LUCERO_SOLO_INCIDENCIAS && f.franja !== FRANJA_LUCERO) continue; // Lucero: un lote, 14:00
+    const casos = p.filter((c) => !urgenteAlToque(c) && c.courier === courier && c.creado_en <= f.corte &&
+      !(c.origen === "sistema" && sinEstadoALucero(courier)));
     const conRendiciones = courier === "pap" && hayRendicionesPap;
     if (!casos.length && !(conRendiciones && f.franja === "am")) continue;
     envios.push({ clave: claveCandadoCasos(f.dia, f.franja, courier), lote: loteCasos(f.dia, f.franja, courier), courier, urgente: false, casos, conRendiciones });
@@ -238,7 +257,14 @@ export async function procesarCasosSistema(
     hechos.push({ ref, tipo, resultado: r });
   };
   for (const c of ultimo.values()) {
+    // 19-11: a Lucero no se le preguntan estados. Un pendiente del sistema se cierra sin salir; uno enviado no se reenvía.
+    if (sinEstadoALucero(c.courier) && c.estado === "pendiente") {
+      tocados.add(c.ref);
+      await hacer(c.ref, c.tipo, "cerrado (Lucero: sin preguntas de estado)", () => d.actualizarCaso(c.id, { estado: "cerrado" }));
+      continue;
+    }
     const s = decidirSeguimiento(c, datos.get(c.ref), ahora);
+    if (s.accion === "reenviar" && sinEstadoALucero(c.courier)) continue;
     if (s.accion === "nada") continue;
     tocados.add(c.ref);
     if (s.accion === "cerrar") await hacer(c.ref, c.tipo, `cerrado (${s.motivo})`, () => d.actualizarCaso(c.id, { estado: "cerrado" }));
@@ -247,6 +273,7 @@ export async function procesarCasosSistema(
   }
   const yaAvisadosVigentes = (diasHabilesDesde(DIA_YA_AVISADOS, ahora) ?? 0) < DIAS_HABILES_REENVIO;
   for (const n of nuevos) {
+    if (sinEstadoALucero(n.courier)) continue; // 19-11: preguntas de estado a Lucero, no
     if (tocados.has(n.ref)) continue;
     if (existentes.some((c) => c.ref === n.ref && c.tipo === n.tipo)) continue; // ya tuvo su caso: lo sigue el reenvío
     if (ultimo.get(n.ref)?.estado === "pendiente") continue; // ya hay uno pendiente del sistema para ese pedido

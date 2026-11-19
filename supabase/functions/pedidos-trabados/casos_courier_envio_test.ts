@@ -11,7 +11,7 @@ const py = (f: string) => new Date(`${f}:00-03:00`);
 let n = 0;
 const C = (o: Partial<CasoCourier> = {}): CasoCourier => ({
   id: `c${++n}`, creado_en: py("2026-11-03T10:00").toISOString(), shopify_order_id: 9000 + n, ref: `VT-90${String(n).padStart(2, "0")}`,
-  courier: "lucero", origen: "bot", tipo: "reclamo", pide: "Esperó el martes y no le llegó", horario: null, referencia: null, recibe: null,
+  courier: "pap", origen: "bot", tipo: "reclamo", pide: "Esperó el martes y no le llegó", horario: null, referencia: null, recibe: null,
   urgente: false, estado: "pendiente", enviado_en: null, lote: null, cliente_id: null, conversacion_id: null, ...o,
 });
 const D = (o: Partial<DatosPedidoCaso> = {}): DatosPedidoCaso => ({
@@ -58,25 +58,25 @@ Deno.test("una corrida por franja: 08:31 sale una vez, 13:00 nada nuevo, 14:05 l
   const x = deps(), a = C(), b = C({ creado_en: py("2026-11-04T10:00").toISOString() });
   assertEquals(await corrida([a, b], py("2026-11-04T07:00"), x), []);
   const am = await corrida([a, b], py("2026-11-04T08:31"), x);
-  assertEquals(am.map((h) => [h.lote, h.resultado, h.casos]), [["2026-11-04:am:lucero", "enviado", [a.ref]]]); // b llegó después de las 08:30
+  assertEquals(am.map((h) => [h.lote, h.resultado, h.casos]), [["2026-11-04:am:pap", "enviado", [a.ref]]]); // b llegó después de las 08:30
   assertEquals((await corrida([a, b], py("2026-11-04T08:41"), x)).length, 0);
   assertEquals((await corrida([a, b], py("2026-11-04T13:00"), x)).length, 0);
   const pm = await corrida([a, b], py("2026-11-04T14:05"), x);
-  assertEquals(pm.map((h) => [h.lote, h.resultado, h.casos]), [["2026-11-04:pm:lucero", "enviado", [b.ref]]]);
+  assertEquals(pm.map((h) => [h.lote, h.resultado, h.casos]), [["2026-11-04:pm:pap", "enviado", [b.ref]]]);
   assertEquals(x.telegram.length, 2);
-  assert(x.candados.has(claveCandadoCasos("2026-11-04", "am", "lucero")));
+  assert(x.candados.has(claveCandadoCasos("2026-11-04", "am", "pap")));
 });
 
 Deno.test("domingo nada; sábado sí", async () => {
   const x = deps();
   assertEquals(await corrida([C()], py("2026-11-08T10:00"), x), []);
-  assertEquals((await corrida([C()], py("2026-11-07T10:00"), x)).map((h) => h.lote), ["2026-11-07:am:lucero"]);
+  assertEquals((await corrida([C()], py("2026-11-07T10:00"), x)).map((h) => h.lote), ["2026-11-07:am:pap"]);
 });
 
 Deno.test("urgente: de noche espera a las 07:00; el domingo sale de día, solo y con su propio lote", async () => {
   const x = deps(), u = C({ urgente: true, creado_en: py("2026-11-07T21:00").toISOString() }), normal = C();
   const noche = await corrida([u, normal], py("2026-11-07T21:05"), x); // sábado 21:05: sale la tanda pm, el urgente no
-  assertEquals(noche.map((e) => e.lote), ["2026-11-07:pm:lucero"]);
+  assertEquals(noche.map((e) => e.lote), ["2026-11-07:pm:pap"]);
   assertEquals(await corrida([u], py("2026-11-08T06:55"), x), []);
   const h = await corrida([u, C()], py("2026-11-08T07:00"), x); // domingo: el normal no sale
   assertEquals(h.map((e) => [e.lote, e.casos]), [[`urgente:${u.id}`, [u.ref]]]);
@@ -88,9 +88,10 @@ Deno.test("urgente: de noche espera a las 07:00; el domingo sale de día, solo y
 });
 
 Deno.test("agrupa por courier y ordena del más viejo al más nuevo", () => {
-  const nuevo = C({ creado_en: py("2026-11-03T15:00").toISOString() }), viejo = C({ creado_en: py("2026-11-02T09:00").toISOString() });
+  // 19-11: Lucero sale solo en la franja de las 14:00 (un lote por día).
+  const nuevo = C({ courier: "lucero", creado_en: py("2026-11-03T15:00").toISOString() }), viejo = C({ courier: "lucero", creado_en: py("2026-11-02T09:00").toISOString() });
   const pap = C({ courier: "pap" });
-  const plan = planificarEnvios([nuevo, pap, viejo], py("2026-11-04T08:35"));
+  const plan = planificarEnvios([nuevo, pap, viejo], py("2026-11-04T14:05"));
   assertEquals(plan.map((e) => [e.courier, e.casos.map((c) => c.id)]), [["lucero", [viejo.id, nuevo.id]], ["pap", [pap.id]]]);
 });
 
@@ -109,7 +110,7 @@ Deno.test("simular: no manda, no toma candados, no marca, pero muestra el texto"
   const x = deps();
   const h = await corrida([C()], py("2026-11-04T08:31"), x, true);
   assertEquals(h[0].resultado, "simulado");
-  assertStringIncludes(h[0].textos![0], "Para Lucero");
+  assertStringIncludes(h[0].textos![0], "Para Punto a Punto");
   assertEquals([x.telegram.length, x.candados.size, x.marcados.length], [0, 0, 0]);
 });
 
@@ -182,7 +183,7 @@ Deno.test("sistema: un caso por pedido y tipo, una sola vez", async () => {
 });
 
 Deno.test("los ya avisados a mano el 04-11 no salen antes de 2 días hábiles aunque falte la siembra", async () => {
-  const x = depsSis(), n0 = { ref: "VT-1172", courier: "lucero" as const, tipo: "plazo" as const, pide: "x" };
+  const x = depsSis(), n0 = { ref: "VT-1172", courier: "pap" as const, tipo: "plazo" as const, pide: "x" };
   await procesarCasosSistema([n0], [], new Map(), py("2026-11-05T09:00"), x.d);
   assertEquals(x.insertados, []);
   await procesarCasosSistema([n0], [], new Map(), py("2026-11-06T09:00"), x.d);
@@ -208,10 +209,49 @@ Deno.test("reenvío: 2 días hábiles sin novedad; novedad reinicia; entregado o
   assertEquals(pideReenvio(enviado, igual), 'Ya lo consulté el 04/11 y sigue "Aceptado"');
 });
 
-Deno.test("reenvío desde la siembra: inserta un caso nuevo con el mismo tipo", async () => {
+Deno.test("reenvío desde la siembra (PaP): inserta un caso nuevo con el mismo tipo", async () => {
   const x = depsSis();
-  const sembrado = C({ ref: "VT-1109", origen: "sistema", tipo: "no_encontrada", estado: "enviado", enviado_en: "2026-11-04T12:00:00-03:00", lote: "manual:2026-11-04|estado:no_encontrado" });
-  const h = await procesarCasosSistema(casosNoEncontrada(["VT-1109"]), [sembrado], new Map([["VT-1109", D({ noEncontrada: true })]]), py("2026-11-06T09:00"), x.d);
+  const sembrado = C({ ref: "VT-1109", courier: "pap", origen: "sistema", tipo: "plazo", estado: "enviado", enviado_en: "2026-11-04T12:00:00-03:00", lote: "manual:2026-11-04|estado:aceptado" });
+  const h = await procesarCasosSistema([], [sembrado], new Map([["VT-1109", D({ estadoCourier: "Aceptado" })]]), py("2026-11-06T09:00"), x.d);
   assertEquals(h.map((e) => e.resultado), ["reenviado"]);
-  assertEquals(x.insertados, ["VT-1109:no_encontrada:Ya lo consulté el 04/11 y sigue sin aparecer"]);
+  assertEquals(x.insertados, ['VT-1109:plazo:Ya lo consulté el 04/11 y sigue "Aceptado"']);
+});
+
+// 19-11 (Enrique: "que el bot no le escriba todo el tiempo a los de lucero del este okay????"): a Lucero solo incidencias.
+Deno.test("Lucero: sin preguntas de estado (no se crean, no se reenvían, las pendientes se cierran)", async () => {
+  const x = depsSis();
+  // no encontrada y plazo nuevos de Lucero: no se crean
+  await procesarCasosSistema([...casosNoEncontrada(["VT-9401"]), { ref: "VT-9402", courier: "lucero", tipo: "plazo", pide: "x" }], [], new Map(), py("2026-11-19T00:03"), x.d);
+  assertEquals(x.insertados, []);
+  // uno ya enviado: no se reenvía aunque pasen los días hábiles
+  const enviado = C({ ref: "VT-9403", courier: "lucero", origen: "sistema", tipo: "no_encontrada", estado: "enviado", enviado_en: "2026-11-04T12:00:00-03:00", lote: "manual:2026-11-04|estado:no_encontrado" });
+  const h = await procesarCasosSistema([], [enviado], new Map([["VT-9403", D({ noEncontrada: true })]]), py("2026-11-19T00:03"), x.d);
+  assertEquals([h.length, x.insertados.length], [0, 0]);
+  // uno pendiente (creado antes del cambio): se cierra sin salir
+  const pend = C({ ref: "VT-9404", courier: "lucero", origen: "sistema", tipo: "plazo", estado: "pendiente" });
+  const h2 = await procesarCasosSistema([], [pend], new Map([["VT-9404", D()]]), py("2026-11-19T00:03"), x.d);
+  assertEquals(h2.map((e) => e.resultado), ["cerrado (Lucero: sin preguntas de estado)"]);
+  // y si quedara un pendiente del sistema, el planificador tampoco lo manda
+  assertEquals(planificarEnvios([pend], py("2026-11-19T14:05")), []);
+  // PaP sigue igual
+  await procesarCasosSistema([{ ref: "VT-9405", courier: "pap", tipo: "plazo", pide: "x" }], [], new Map(), py("2026-11-19T00:03"), x.d);
+  assertEquals(x.insertados, ["VT-9405:plazo:x"]);
+});
+
+Deno.test("Lucero: un solo lote a las 14:00 con los pedidos del cliente; urgente al toque solo si es plata o cancelación", () => {
+  const pedido = C({ courier: "lucero", pide: "Pide reprogramar para el viernes", creado_en: py("2026-11-19T07:00").toISOString() });
+  assertEquals(planificarEnvios([pedido], py("2026-11-19T08:35")), []); // a las 08:30 Lucero no sale
+  assertEquals(planificarEnvios([pedido], py("2026-11-19T14:05")).map((e) => [e.lote, e.casos.map((c) => c.id)]), [["2026-11-19:pm:lucero", [pedido.id]]]);
+  // urgente "no le llegó y lo necesita": va en el lote de las 14:00, no al toque
+  const urg = C({ courier: "lucero", urgente: true, pide: "Esperaba el pedido hoy y no le llegó", creado_en: py("2026-11-19T09:00").toISOString() });
+  assertEquals(planificarEnvios([urg], py("2026-11-19T09:10")), []);
+  assertEquals(planificarEnvios([urg], py("2026-11-19T14:05")).map((e) => e.lote), ["2026-11-19:pm:lucero"]);
+  // urgente de plata o cancelación: al toque
+  for (const pide of ["Pedido YA PAGADO por transferencia: entregar SIN COBRAR", "El cliente canceló: no lo entreguen"]) {
+    const u = C({ courier: "lucero", urgente: true, pide, creado_en: py("2026-11-19T09:00").toISOString() });
+    assertEquals(planificarEnvios([u], py("2026-11-19T09:10")).map((e) => e.lote), [`urgente:${u.id}`], pide);
+  }
+  // PaP: urgente al toque y franja am como siempre
+  const papU = C({ courier: "pap", urgente: true, pide: "Esperaba el pedido hoy", creado_en: py("2026-11-19T09:00").toISOString() });
+  assertEquals(planificarEnvios([papU], py("2026-11-19T09:10")).map((e) => e.lote), [`urgente:${papU.id}`]);
 });

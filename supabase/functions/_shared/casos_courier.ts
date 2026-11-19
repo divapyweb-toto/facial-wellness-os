@@ -176,7 +176,8 @@ export function textoParaCourier(courier: CourierCaso, lineas: LineaCaso[], rend
     puntos.push(`Quedan sin rendir ${r}${f ? `, entregados el ${ddmm(f)}` : ""}. ¿Cuándo los depositan?`);
   }
   const cuerpo = puntos.map((p, i) => `${i + 1}) ${p}`).join("\n\n");
-  const cierre = lineas.length ? "¿Me confirman qué día sale cada uno? Muchas gracias." : "Muchas gracias.";
+  // 19-11: a Lucero sin pedirle confirmación de salida (el estado está en su sistema); solo las incidencias.
+  const cierre = lineas.length && courier !== "lucero" ? "¿Me confirman qué día sale cada uno? Muchas gracias." : "Muchas gracias.";
   return `${ENCABEZADO[courier]}\n\n${cuerpo}\n\n${cierre}`;
 }
 
