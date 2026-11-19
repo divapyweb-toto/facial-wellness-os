@@ -83,7 +83,7 @@ Deno.test("urgente: de noche espera a las 07:00; el domingo sale de día, solo y
   const t = x.telegram.at(-1)!;
   assertEquals(t.tipo, "casos_courier_urgente");
   assertStringIncludes(t.texto, "🚨");
-  assertStringIncludes(t.texto, "URGENTE: lo necesita hoy.");
+  assertStringIncludes(t.texto, "URGENTE: el cliente lo necesita desde el 07/11.");
   assertEquals(x.marcados.at(-1)?.lote, `urgente:${u.id}|estado:aceptado`);
 });
 

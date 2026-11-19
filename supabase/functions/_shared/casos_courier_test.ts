@@ -49,3 +49,21 @@ Deno.test("línea del caso: sin frases repetidas ni horario o referencia duplica
   const h = lineaCaso({ ...base, pide: "Puede recibir de 8 a 12.", horario: "de 15:00 a 19:00", referencia: null });
   assertEquals(h, "L-VT-9248 · Cliente Demo · Encarnación · ingresó el 16/11. Puede recibir de 8 a 12. Horario: de 15:00 a 19:00.");
 });
+
+// 19-11: el courier lee el texto al día siguiente (caso L-VT-1242: creado 18/11 20:38, salió 19/11 07:03). "hoy",
+// "ayer" y "mañana" se escriben como fecha, tomando como base el día en que se creó el caso.
+Deno.test("fechas absolutas: hoy/ayer/mañana pasan a fecha del día del caso; 'a la mañana' no se toca", async () => {
+  const { fechasAbsolutas } = await import("./casos_courier.ts");
+  const d = "2026-11-18";
+  assertEquals(fechasAbsolutas("Esperaba el pedido hoy 18/11, no le llegó", d), "Esperaba el pedido el 18/11, no le llegó");
+  assertEquals(fechasAbsolutas("Lo necesita hoy sin falta", d), "Lo necesita el 18/11 sin falta");
+  assertEquals(fechasAbsolutas("Hoy no está en casa. Mañana sí.", d), "El 18/11 no está en casa. El 19/11 sí.");
+  assertEquals(fechasAbsolutas("Le dijeron que llegaba ayer", d), "Le dijeron que llegaba el 17/11");
+  assertEquals(fechasAbsolutas("Puede recibir pasado mañana", d), "Puede recibir el 20/11");
+  assertEquals(fechasAbsolutas("Puede recibir a la mañana o de mañana temprano", d), "Puede recibir a la mañana o de mañana temprano");
+  assertEquals(fechasAbsolutas("Hoy no", null), "Hoy no"); // sin día del caso no se adivina
+  // en la línea: el pedido del cliente y el aviso de urgente, con fecha
+  const t = lineaCaso({ ...L, guia: "L-VT-9242", urgente: true, esperaDesde: d, fechaIngreso: "2026-11-14", pide: "Esperaba el pedido hoy 18/11, no le llegó" });
+  assertEquals(t, "L-VT-9242 · Ana Prueba · Luque · ingresó el 14/11. URGENTE: el cliente lo necesita desde el 18/11. Esperaba el pedido el 18/11, no le llegó.");
+  assert(!/\bhoy\b/i.test(t));
+});

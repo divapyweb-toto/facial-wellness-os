@@ -75,6 +75,28 @@ export const respuestaCaso = (courier: CourierCaso, urgente: boolean) =>
 
 const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const ddmm = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
+
+const sumarDias = (dia: string, n: number) => {
+  const d = new Date(`${dia}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+/**
+ * 19-11: el courier puede leer el texto otro día (un urgente de la noche sale a las 07:00). "hoy", "ayer", "mañana" y
+ * "pasado mañana" pasan a fecha, con base en el día en que se creó el caso (`dia`, AAAA-MM-DD). Si ya viene la fecha
+ * ("hoy 18/11") queda "el 18/11". "a la mañana", "de mañana", "por la mañana" (= a la mañana) no se tocan. Sin día, igual.
+ */
+export function fechasAbsolutas(texto: string, dia: string | null | undefined): string {
+  if (!dia || !/^\d{4}-\d{2}-\d{2}/.test(dia)) return texto;
+  const re = /(?<!\b(?:la|de|esta|toda|por)\s)\b(pasado\s+ma[ñn]ana|hoy|ma[ñn]ana|ayer)\b(\s+(?:el\s+)?\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)?/giu;
+  return texto.replace(re, (_m, palabra: string, fecha: string | undefined, pos: number, todo: string) => {
+    const k = palabra.toLowerCase().replace(/\s+/g, " ");
+    const n = k === "hoy" ? 0 : k === "ayer" ? -1 : k.startsWith("pasado") ? 2 : 1;
+    const valor = fecha ? fecha.trim().replace(/^el\s+/i, "") : ddmm(sumarDias(dia, n));
+    const inicio = pos === 0 || /[.!?]\s*$/.test(todo.slice(0, pos));
+    return `${inicio ? "El" : "el"} ${valor}`;
+  });
+}
 export const fechaConDia = (f: string) => `${DIAS[new Date(`${f.slice(0, 10)}T12:00:00Z`).getUTCDay()]} ${ddmm(f)}`;
 const punto = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
 const gs = (n: number) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
@@ -112,8 +134,9 @@ const referenciaDicha = (frases: string[], ref: string) => {
 
 export function lineaCaso(l: LineaCaso): string {
   const partes = [`${l.guia} · ${l.nombre} · ${l.ciudad}${l.fechaIngreso ? ` · ingresó el ${ddmm(l.fechaIngreso)}` : ""}.`];
-  if (l.urgente) partes.push("URGENTE: lo necesita hoy.");
-  const frases = l.pide.trim() ? frasesSinRepetir(l.pide) : [];
+  // 19-11: con fecha (el courier puede leerlo al día siguiente); "hoy" del cliente también pasa a fecha.
+  if (l.urgente) partes.push(l.esperaDesde ? `URGENTE: el cliente lo necesita desde el ${ddmm(l.esperaDesde)}.` : "URGENTE: el cliente lo necesita cuanto antes.");
+  const frases = l.pide.trim() ? frasesSinRepetir(fechasAbsolutas(l.pide, l.esperaDesde)) : [];
   if (frases.length) partes.push(punto(frases.join(" ")));
   if (l.horario?.trim() && !horarioDicho(frases, l.horario)) partes.push(punto(`Horario: ${l.horario.trim()}`));
   if (l.referencia?.trim() && !referenciaDicha(frases, l.referencia)) partes.push(punto(`Referencia: ${l.referencia.trim()}`));
