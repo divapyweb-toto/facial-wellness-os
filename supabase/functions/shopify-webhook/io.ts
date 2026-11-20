@@ -1,7 +1,8 @@
 // I/O real (Supabase) para procesarPedido. Lo comparten shopify-webhook y shopify-conciliar.
 import { db, guardarEventoCrudo } from "../_shared/db.ts";
 import { normalizarTelefonoPY } from "../_shared/telefono.ts";
-import { gql } from "../_shared/shopify.ts";
+import { cancelarPedido, gql } from "../_shared/shopify.ts";
+import { CLAVE_CONFIG_BLOQUEO, listaBloqueoDesde } from "./bloqueo.ts";
 import { avisar } from "../_shared/telegram.ts";
 import { configLead, enviarEventoLead } from "../_shared/meta_capi.ts";
 import { type DepsLeadMeta, notificarLeadMeta } from "./lead_meta.ts";
@@ -131,6 +132,16 @@ export function depsReales(opciones: { leadMeta?: boolean } = {}): Deps {
     },
 
     avisar: (texto, botones, opts) => avisar(texto, botones, opts),
+
+    // 20-11: lista de bloqueo de pedidos falsos (config.bloqueo_pedidos). Si no se puede leer, lista vacía (no bloquea).
+    async leerBloqueo() {
+      const { data, error } = await sb.from("config").select("valor").eq("clave", CLAVE_CONFIG_BLOQUEO).maybeSingle();
+      return error ? listaBloqueoDesde(null) : listaBloqueoDesde(data?.valor ?? null);
+    },
+    async cancelarPorBloqueo(gid, nota) {
+      const r = await cancelarPedido(gid, nota);
+      return r.ok ? { ok: true } : { ok: false, error: r.error };
+    },
 
     async reservarAvisoUnaVez(clave) {
       // 13-10: candado en eventos_crudos (mismo patrón que pedidos-trabados): ya procesado, nadie lo reprocesa.

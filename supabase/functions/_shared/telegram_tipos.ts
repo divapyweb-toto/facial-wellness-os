@@ -33,6 +33,8 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   mejora_mensual_propuesta: { titulo: "Mejora mensual: propuesta", ruta: "inmediato", inventario: "#80 (se aprueba solo con los botones)" },
   // 04-11: casos de envíos ya despachados, listos para pegar en el WhatsApp del courier (pedidos-trabados/casos_courier_envio.ts).
   casos_courier: { titulo: "Casos para el courier (08:30 y 14:00)", ruta: "inmediato", inventario: "nuevo 04-11 (reemplaza derivar el chat)" },
+  // 20-11: pedido en la lista de bloqueo (shopify-webhook/bloqueo.ts): cancelado solo; 1 por día.
+  pedido_bloqueado: { titulo: "Pedido falso bloqueado", ruta: "inmediato", inventario: "nuevo 20-11 (1 por día)" },
   casos_courier_urgente: { titulo: "Caso urgente para el courier", ruta: "inmediato", inventario: "nuevo 04-11" },
   // 16-11: pagado por adelantado con guía a cobrar (pedidos-trabados/pagados_con_cobro.ts): en camino o posible doble cobro.
   pagado_con_cobro: { titulo: "Pagado con guía a cobrar: texto para el courier", ruta: "inmediato", inventario: "nuevo 16-11 (uno por pedido y caso)" },

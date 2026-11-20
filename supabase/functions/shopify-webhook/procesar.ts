@@ -26,6 +26,7 @@ import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import { verificarHmacShopify } from "../_shared/shopify.ts";
 import { claveOfertaPrioridad, motivoSinOfertaPrioridad, pedidoPagado, PLANTILLA_PAGO_PRIORIDAD } from "../_shared/pago_anticipado.ts";
 import { CONFIG_DEFECTO, envioTerminal, PLANTILLA_ENTREGA_MANANA } from "../procesar-envios/procesar.ts";
+import { coincideBloqueo, LISTA_VACIA, type ListaBloqueo, TAG_BLOQUEADO, textoNotaBloqueo } from "./bloqueo.ts";
 
 export const TAG_BORRADOR_RELEASIT = "abandoned_checkout_releasit_cod_form";
 
@@ -195,11 +196,15 @@ export interface Deps {
    * orders/updated de un pedido preparado lo repetiría).
    */
   reservarAvisoUnaVez?(clave: string): Promise<boolean>;
+  /** 20-11: lista de bloqueo de pedidos falsos (config.bloqueo_pedidos, bloqueo.ts). Opcional: sin esto no se bloquea nada. */
+  leerBloqueo?(): Promise<ListaBloqueo>;
+  /** 20-11: cancela en Shopify (sin avisar al cliente, devuelve stock) con la nota de por qué. */
+  cancelarPorBloqueo?(gid: string, nota: string): Promise<{ ok: boolean; error?: string }>;
 }
 
 export type ResultadoProceso = {
   shopifyOrderId: number;
-  accion: "borrador_guardado" | "programado" | "actualizado" | "sin_telefono";
+  accion: "borrador_guardado" | "programado" | "actualizado" | "sin_telefono" | "bloqueado";
   telefono: string | null;
   estadoConfirmacion?: string;
   enviosProgramados: number;
@@ -656,6 +661,36 @@ export async function procesarPedido(ped: PedidoNormalizado, deps: Deps): Promis
   }
 
   const existente = await deps.buscarPedido(ped.shopifyOrderId);
+
+  // 20-11 (pedidos falsos de la noche del 19-11): si el teléfono, la IP o el prefijo IPv6 está en la lista de bloqueo, se
+  // cancela solo en Shopify y no sigue nada: ni confirmación por WhatsApp, ni evento a Meta, ni despacho. Un Telegram por día.
+  const lista = deps.leerBloqueo && !ped.cancelado ? await deps.leerBloqueo().catch(() => LISTA_VACIA) : LISTA_VACIA;
+  const bloqueo = ped.cancelado ? null : coincideBloqueo(ped.raw, lista, deps.ahora(), deps.normalizarTelefono);
+  if (bloqueo) {
+    fila.tags = [...new Set([...ped.tags, TAG_BLOQUEADO])];
+    await deps.upsertPedido(fila);
+    if (existente) await deps.cancelarEnviosPendientes(ped.shopifyOrderId, { incluirAvisos: true });
+    const nota = textoNotaBloqueo(bloqueo);
+    const r = deps.cancelarPorBloqueo
+      ? await deps.cancelarPorBloqueo(ped.gid, nota).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+      : { ok: false, error: "sin cancelarPorBloqueo" };
+    const que = bloqueo.por === "telefono" ? `teléfono …${bloqueo.valor.replace(/\D/g, "").slice(-4)}` : bloqueo.por === "ip" ? `IP ${bloqueo.valor}` : `red IPv6 ${bloqueo.valor}`;
+    await deps.avisar?.(
+      `🚫 <b>Pedido bloqueado</b> ${ped.nombre ?? ped.shopifyOrderId} (${que}): ${r.ok ? "cancelado en Shopify" : `NO se pudo cancelar en Shopify (${r.error}): cancelalo a mano`}. ` +
+        "Sin WhatsApp, sin Meta y sin despacho. Si entran más hoy se cancelan igual sin avisarte (quedan con la etiqueta " + TAG_BLOQUEADO + ").",
+      undefined,
+      { tipo: "pedido_bloqueado", destino: "enrique", pedido: ped.nombre ?? null, clave: "dia", unaVezPorDia: true },
+    )?.catch?.(() => {});
+    return {
+      shopifyOrderId: ped.shopifyOrderId,
+      accion: "bloqueado",
+      telefono,
+      estadoConfirmacion: existente?.estado_confirmacion ?? "pendiente",
+      enviosProgramados: 0,
+      enviosCancelados: !!existente,
+    };
+  }
+
   const estadoTag = estadoDesdeTags(ped.tags);
   // Un pedido cancelado en Shopify sin tag no cambia estado_confirmacion: solo frena los envíos.
   if (estadoTag && estadoTag !== existente?.estado_confirmacion) fila.estado_confirmacion = estadoTag;
