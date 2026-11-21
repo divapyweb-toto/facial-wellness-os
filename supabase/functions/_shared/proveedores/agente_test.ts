@@ -390,3 +390,15 @@ Deno.test("modo simulado de llamarClaude: respuesta determinista y sin costo", a
     _configurarClaude();
   }
 });
+
+// 21-11: prueba real con Gmail: "Carton: 100 units, 8 kg" se guardó como 8000 g por unidad (la pantalla lo multiplica por
+// las unidades: flete ×100). Ahora peso_bruto_g es siempre por unidad.
+Deno.test("peso por unidad: el peso de la caja se divide por las unidades de la caja", async () => {
+  const { normalizarCotizacion, pesoPorUnidad } = await import("./agente.ts");
+  assertEquals(pesoPorUnidad({ peso_caja_kg: 8, unidades_por_caja: 100 }), 80);
+  assertEquals(pesoPorUnidad({ peso_unidad_g: 85, peso_caja_kg: 8, unidades_por_caja: 100 }), 85);
+  assertEquals(pesoPorUnidad({ peso_caja_kg: 8 }), null);
+  const c = normalizarCotizacion({ moneda: "USD", escalones: [{ cantidad: 1000, precio_unit: 1.2 }], moq: 500, peso_unidad_g: null, peso_caja_kg: 8, unidades_por_caja: 100, medidas_caja_cm: "50x40x35", plazo_dias: 7, costo_muestra: null, incoterm: null });
+  assertEquals(c?.peso_bruto_g, 80);
+  assertEquals(c?.completa, true);
+});
