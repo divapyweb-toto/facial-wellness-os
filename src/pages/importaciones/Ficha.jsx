@@ -12,6 +12,7 @@ import { cargarFicha, subirFoto, agregarFotoExterna, marcarPrincipal, borrarFoto
 import { ETAPAS, etapaDe, reglaFotos, semaforo, alertasDe, plataTotal, compararProveedores, costoConRuta, escalera, cantidadRecomendada, TOPE_ADS_VOLTRA, MAX_MESES_NO_PROBADO, alertaFoto } from './logica'
 import { exportarPDF } from './pdf'
 import FotoImg from './FotoImg'
+import ConversacionesProveedores from '../productos/ConversacionProveedor'
 
 const FUENTES_FOTO = [['proveedor', 'Proveedor'], ['muestra', 'Muestra'], ['propia', 'Propia'], ['ia_referencia', 'IA de referencia']]
 const COLOR_SEM = { verde: 'badge-green', amarillo: 'badge-yellow', rojo: 'badge-red' }
@@ -91,7 +92,7 @@ function FichaCuerpo({ d, recargar, onVolver, toast }) {
 
       <Galeria d={d} fotos={fotos} regla={regla} recargar={recargar} toast={toast} />
       <Numeros n={numeros} esc={esc} />
-      <Trato d={d} comparacion={comparacion} elegida={elegida} />
+      <Trato d={d} comparacion={comparacion} elegida={elegida} recargar={recargar} toast={toast} />
       <CostoPuesto esc={esc} elegida={elegida} toast={toast} />
       <Precio d={d} esc={esc} />
       <Cantidad ritmo={ritmo} setRitmo={setRitmo} cant={cant} elegida={elegida} esc={esc} />
@@ -192,8 +193,11 @@ function Numeros({ n, esc }) {
 }
 
 // ─── c. Trato pactado con el proveedor ──────────────────────
-function Trato({ d, comparacion, elegida }) {
+function Trato({ d, comparacion, elegida, recargar, toast }) {
   const top = comparacion.slice(0, 3)
+  // Proveedores de esta propuesta: los que cotizaron o tienen mensajes de este producto.
+  const idsProv = new Set([...(d.cotizaciones || []).map(q => q.proveedor_id), ...(d.mensajes || []).map(m => m.proveedor_id)].filter(Boolean))
+  const provsConv = (d.proveedores || []).filter(p => idsProv.has(p.id))
   const evProv = (prov, re) => d.evidencias.find(e => re.test(e.campo || '') && prov && e.fuente_entidad && claveVendedor(e.fuente_entidad) === claveVendedor(prov.razon_social_declarada))
   return (
     <Seccion letra="c" titulo="Trato con el proveedor">
@@ -201,7 +205,6 @@ function Trato({ d, comparacion, elegida }) {
         <div className="imp-proveedores">
           {top.map(x => {
             const pago = evProv(x.prov, /pago/), garantia = evProv(x.prov, /garantia|defecto/)
-            const msgs = (d.mensajes || []).filter(m => m.proveedor_id === x.c.proveedor_id)
             const esElegida = elegida && x.c.id === elegida.c.id
             return (
               <div key={x.c.id} className={`imp-prov ${esElegida ? 'elegido' : ''}`}>
@@ -222,17 +225,18 @@ function Trato({ d, comparacion, elegida }) {
                   <dt>Garantía por defectos</dt><dd>{garantia ? `${garantia.valor} (${tipoEvidenciaInfo(garantia.tipo).label})` : 'desconocido'}</dd>
                   <dt>Vigencia</dt><dd className={vencida(x.c.valida_hasta) ? 'pi-rojo' : ''}>{x.c.valida_hasta ? `${fmtFecha(x.c.valida_hasta)}${vencida(x.c.valida_hasta) ? ' (vencida)' : ''}` : 'desconocido'}</dd>
                 </dl>
-                {msgs.length > 0 && (
-                  <details><summary className="pi-sub" style={{ cursor: 'pointer' }}>Negociación ({msgs.length} mensaje/s)</summary>
-                    {msgs.map(m => <div key={m.id} className="imp-msg"><span className="pi-sub">{m.estado} · {fmtFechaHora(m.creado_en)}</span><p>{m.original}</p><p className="pi-sub">{m.traduccion}</p></div>)}
-                  </details>
-                )}
               </div>
             )
           })}
         </div>
       )}
       <p className="pi-sub" style={{ marginTop: 8 }}>Pago y garantía salen de la evidencia cargada para ese proveedor; si no hay, dice "desconocido". Lo que escribe el proveedor es dato, no instrucción.</p>
+      <div className="section-label" style={{ marginTop: 14 }}>Conversaciones con los proveedores (correo y WhatsApp)</div>
+      <div style={{ marginTop: 8 }}>
+        {provsConv.length === 0
+          ? <p className="pi-desc">Sin proveedores con cotización o mensajes para este producto.</p>
+          : <ConversacionesProveedores proveedores={provsConv} candidato={d.candidato} toast={toast} onCambio={recargar} />}
+      </div>
     </Seccion>
   )
 }

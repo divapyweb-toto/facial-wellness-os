@@ -14,6 +14,7 @@ import { ETAPAS, armarTarjetas } from './logica'
 import Ficha from './Ficha'
 import FotoImg from './FotoImg'
 import PermisoGeneral from '../productos/PermisoGeneral'
+import { ResumenProveedoresMes } from '../productos/ConversacionProveedor'
 import '../productos/productos.css'
 import './importaciones.css'
 
@@ -44,6 +45,7 @@ export default function ImportacionesPage() {
           <span><b>Modo DEMO:</b> productos, fotos y números inventados; nada se guarda en la base.</span>
         </div>
       )}
+      <ResumenProveedoresMes />
       {!candidatoId && <PermisoGeneral />}
       {candidatoId
         ? <Ficha candidatoId={candidatoId} onVolver={() => abrir(null)} />

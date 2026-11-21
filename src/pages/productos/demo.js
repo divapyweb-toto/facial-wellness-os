@@ -6,6 +6,7 @@
 
 const ahora = Date.now()
 const dias = (n) => new Date(ahora + n * 86400000).toISOString()
+const horas = (n) => new Date(ahora + n * 3600000).toISOString()
 const C1 = 'demo-cand-0001'
 const C2 = 'demo-cand-0002'
 const P1 = 'demo-prov-0001'
@@ -46,9 +47,9 @@ export const DEMO = {
     base('demo-of-3', { candidato_id: C1, vendedor: 'Bazar DEMO C', vendedor_clave: 'bazardemoc', comparacion: 'equivalente', zona: 'GRAN_ASUNCION', precio_minor: 129000, moneda: 'PYG', tipo_precio: 'minorista promo', incluye_envio: false, url: 'https://ejemplo.invalid/c', observado_en: dias(-2), evidencia_id: null }),
   ],
   pi_proveedores: [
-    base(P1, { plataforma: 'local', id_externo: 'DEMO-LOCAL-1', razon_social_declarada: 'Mayorista DEMO CDE', url: null, riesgos: 'DEMO: precio más alto, lote chico', notas: null }),
-    base(P2, { plataforma: 'alibaba', id_externo: 'DEMO-ALI-1', razon_social_declarada: 'Proveedor DEMO 1', url: 'https://ejemplo.invalid/p1', riesgos: 'DEMO: certificado no verificado', notas: null }),
-    base(P3, { plataforma: '1688', id_externo: 'DEMO-1688-1', razon_social_declarada: 'Fábrica DEMO 2', url: 'https://ejemplo.invalid/p2', riesgos: 'DEMO: necesita agente de compra', notas: null }),
+    base(P1, { plataforma: 'local', id_externo: 'DEMO-LOCAL-1', razon_social_declarada: 'Mayorista DEMO CDE', url: null, riesgos: 'DEMO: precio más alto, lote chico', notas: null, whatsapp: null, email: null, wechat: null, canal_preferido: null, no_contactar: true, idioma: 'es' }),
+    base(P2, { plataforma: 'alibaba', id_externo: 'DEMO-ALI-1', razon_social_declarada: 'Proveedor DEMO 1', url: 'https://ejemplo.invalid/p1', riesgos: 'DEMO: certificado no verificado', notas: null, whatsapp: null, email: 'ventas@proveedor-demo-1.invalid', wechat: null, canal_preferido: 'email', no_contactar: false, idioma: 'en' }),
+    base(P3, { plataforma: '1688', id_externo: 'DEMO-1688-1', razon_social_declarada: 'Fábrica DEMO 2', url: 'https://ejemplo.invalid/p2', riesgos: 'DEMO: necesita agente de compra', notas: null, whatsapp: '860000000002', email: null, wechat: 'demo_fabrica_2', canal_preferido: 'whatsapp', no_contactar: false, idioma: 'zh' }),
   ],
   pi_cotizaciones: [
     base('demo-cot-1', { candidato_id: C1, proveedor_id: P1, ficha_version: 2, variante: 'blanca', moneda: 'PYG', escalones: [{ cantidad: 10, precio_unit_minor: 45000 }, { cantidad: 50, precio_unit_minor: 40000 }], moq: 10, incoterm: null, lugar: 'CDE', incluye_envio: 'retiro en CDE', plazo_dias: 1, valida_hasta: dias(5), costo_muestra_minor: 45000, peso_bruto_g: 180, unidades_por_caja: 50, medidas_caja_cm: '40×30×30', tipo: 'firme', evidencia_id: null }),
@@ -73,6 +74,12 @@ export const DEMO = {
   pi_mensajes: [
     base('demo-msg-2', { politica_id: 'demo-pol-general', candidato_id: C1, proveedor_id: P3, estado: 'DRAFT', idempotencia: 'demo-pol-general:demo-cand-0001:demo-prov-0003:v1:rfq', original: 'Hello, could you quote 50/100 units in white, with individual box? Evaluation quantities, not a commitment. (DEMO)', traduccion: 'Hola, ¿podés cotizar 50/100 unidades en blanco, con caja individual? Cantidades de evaluación, no un compromiso. (DEMO)', idioma: 'en' }),
     base('demo-msg-1', { politica_id: 'demo-pol-1', proveedor_id: P2, estado: 'DRAFT', idempotencia: 'demo-pol-1:demo-prov-0002:v1:rfq', original: 'Hello, we would like a quotation for 20/50/100 units of the attached spec (v2). These are evaluation quantities, not a commitment. (DEMO)', traduccion: 'Hola, quisiéramos cotización para 20/50/100 unidades de la ficha adjunta (v2). Son cantidades de evaluación, no un compromiso. (DEMO)', idioma: 'en' }),
+    // Charla 24/7 DEMO (correo con el Proveedor DEMO 1, WhatsApp con la Fábrica DEMO 2). Todo inventado.
+    { id: 'demo-msg-c1', creado_en: horas(-50), actualizado_en: horas(-50), politica_id: 'demo-pol-general', candidato_id: C1, proveedor_id: P2, canal: 'email', direccion: 'out', estado: 'SENT_CONFIRMED', autor: 'agente', hilo: 'demo-hilo-1', asunto: 'Quotation request: clip reading light (DEMO)', id_externo: 'demo-gmail-1', costo_usd: 0.0021, idempotencia: 'email:out:demo-prov-0002:primer:1', original: 'Hello, could you quote 50/100/300 units of a clip reading light in white? Evaluation quantities, not a commitment. (DEMO)', traduccion: 'Hola, ¿pueden cotizar 50/100/300 unidades de una lámpara de lectura con clip en blanco? Cantidades de evaluación, no un compromiso. (DEMO)', idioma: 'en' },
+    { id: 'demo-msg-c2', creado_en: horas(-30), actualizado_en: horas(-30), politica_id: null, candidato_id: C1, proveedor_id: P2, canal: 'email', direccion: 'in', estado: 'RECEIVED', autor: 'proveedor', hilo: 'demo-hilo-1', asunto: 'Re: Quotation request: clip reading light (DEMO)', id_externo: 'demo-gmail-2', costo_usd: 0.0012, idempotencia: 'email:in:demo-gmail-2', original: 'Dear friend, 50 pcs USD 3.20, 100 pcs USD 2.80. Box of 100 pcs, 50x40x35 cm. 15 days. (DEMO)', traduccion: 'Estimado, 50 u a USD 3,20, 100 u a USD 2,80. Caja de 100 u, 50×40×35 cm. 15 días. (DEMO)', idioma: 'en' },
+    { id: 'demo-msg-c3', creado_en: horas(-29.9), actualizado_en: horas(-29.9), politica_id: 'demo-pol-general', candidato_id: C1, proveedor_id: P2, canal: 'email', direccion: 'out', estado: 'SENT_CONFIRMED', autor: 'agente', hilo: 'demo-hilo-1', asunto: 'Re: Quotation request: clip reading light (DEMO)', id_externo: 'demo-gmail-3', costo_usd: 0.0034, idempotencia: 'email:out:demo-hilo-1:demo-msg-c2:1', original: 'Thank you! Could you do USD 2.60 at 100 pcs? Also, what is the gross weight per unit? (DEMO)', traduccion: '¡Gracias! ¿Pueden hacer USD 2,60 en 100 u? Y ¿cuál es el peso bruto por unidad? (DEMO)', idioma: 'en' },
+    { id: 'demo-msg-c4', creado_en: horas(-8), actualizado_en: horas(-8), politica_id: null, candidato_id: C1, proveedor_id: P3, canal: 'whatsapp', direccion: 'in', estado: 'RECEIVED', autor: 'proveedor', hilo: '860000000002', asunto: null, id_externo: 'demo-wamid-1', costo_usd: 0.0009, idempotencia: 'whatsapp:in:demo-wamid-1', original: '你好，100个起订，每个16.5元。（DEMO）', traduccion: 'Hola, pedido mínimo 100 unidades, 16,5 yuanes cada una. (DEMO)', idioma: 'zh' },
+    { id: 'demo-msg-c5', creado_en: horas(-7.9), actualizado_en: horas(-7.9), politica_id: 'demo-pol-general', candidato_id: C1, proveedor_id: P3, canal: 'whatsapp', direccion: 'out', estado: 'SENT_CONFIRMED', autor: 'agente', hilo: '860000000002', asunto: null, id_externo: 'demo-wamid-2', costo_usd: 0.0027, idempotencia: 'whatsapp:out:860000000002:demo-msg-c4:1', original: '谢谢！请问单个毛重和外箱尺寸是多少？（DEMO）', traduccion: '¡Gracias! ¿Cuál es el peso bruto por unidad y la medida de la caja? (DEMO)', idioma: 'zh' },
   ],
   pi_ordenes_compra: [
     base('demo-oc-1', { candidato_id: C1, proveedor_id: P1, cotizacion_id: 'demo-cot-1', plataforma: 'local', variante: 'blanca', cantidad: 10, precio_unit_minor: 45000, envio_minor: 0, total_minor: 450000, moneda: 'PYG', deposito_destino: 'retiro en CDE', forwarder: null, estado: 'BORRADOR', confirmada_texto: null, confirmada_en: null, tracking: null, notas: 'DEMO: orden propuesta, nadie la confirmó' }),
@@ -94,4 +101,6 @@ export const DEMO = {
   pi_tasa_acierto: [
     { candidatos_total: 2, candidatos_por_estado: { INVESTIGAR: 1, SOLICITAR_COTIZACION: 1 }, pruebas_total: 1, pruebas_en_curso: 0, pruebas_cerradas: 0, ganadores: 0, no_ganadores: 0, cerradas_sin_dato: 0, acierto_pct: null, pruebas_por_mes: [], criterio_ganador: '>=30 confirmados en 30 dias a <=35.000 PYG por confirmado' },
   ],
+  // config.proveedores DEMO (en la base es texto JSON en la tabla config).
+  config_proveedores: '{"activo": false, "tope_ia_usd_mes": 10, "tope_plantillas_mes": 30, "modelo": "claude-haiku-4-5", "direccion_deposito": null, "firma": "Voltra (Paraguay)"}',
 }

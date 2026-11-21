@@ -7,10 +7,11 @@ import { useState, useMemo } from 'react'
 import { Plus, Trash2, ShieldAlert, Info, MessageSquare, ShoppingBag, Scale } from 'lucide-react'
 import { crearProveedor, crearCotizacion, borrarCotizacion, crearOrden, actualizarOrden, autorizarPolitica, apagarPolitica, esModoDemo } from './api'
 import { convertirAPYG } from '../../lib/productos/dinero'
-import { aMinor, fmtDinero, fmtGs, fmtFecha, fmtFechaHora, vencida, fechaLocalAISO, urlSegura } from './formato'
+import { aMinor, fmtDinero, fmtGs, fmtFecha, fmtFechaHora, vencida, fechaLocalAISO } from './formato'
 import { Campo, Vacio, Demo, SelectMoneda, Modal } from './ui'
 import { politicaVigente } from './derivados'
 import PermisoGeneral from './PermisoGeneral'
+import ConversacionesProveedores from './ConversacionProveedor'
 
 const PLATAFORMAS = [['alibaba', 'Alibaba'], ['1688', '1688'], ['local', 'Local / mayorista CDE'], ['otro', 'Otro']]
 const TIPOS_COT = [['firme', 'Firme (por escrito, para esta ficha)'], ['escaparate', 'Escaparate (precio publicado)'], ['estimada', 'Estimada']]
@@ -19,7 +20,6 @@ const ESTADOS_ORDEN = [
   ['PEDIDA', 'Pedida', 'badge-purple'], ['PAGADA_POR_ENRIQUE', 'Pagada por Enrique', 'badge-accent'],
   ['EN_TRANSITO', 'En tránsito', 'badge-yellow'], ['RECIBIDA', 'Recibida', 'badge-green'], ['CANCELADA', 'Cancelada', 'badge-red'],
 ]
-const ESTADOS_MSG = { DRAFT: ['Borrador', 'badge-gray'], AUTHORIZED: ['Autorizado', 'badge-blue'], SENDING: ['Enviando', 'badge-yellow'], SENT_CONFIRMED: ['Enviado (confirmado)', 'badge-green'], SEND_UNKNOWN: ['Envío incierto: conciliar', 'badge-red'], FAILED: ['Falló', 'badge-red'] }
 
 export default function Proveedores({ d, recargar, toast }) {
   const provPorId = useMemo(() => Object.fromEntries(d.proveedores.map(p => [p.id, p])), [d.proveedores])
@@ -33,7 +33,7 @@ export default function Proveedores({ d, recargar, toast }) {
         <ShieldAlert size={15} style={{ flexShrink: 0, marginTop: 1 }} />
         <span>Claude negocia solo dentro de un permiso para negociar autorizado (el general o el de este producto); comprar, pagar, muestras o exclusividad necesitan tu confirmación aparte.</span>
       </div>
-      <Campana d={d} provPorId={provPorId} recargar={recargar} toast={toast} />
+      <Campana d={d} recargar={recargar} toast={toast} />
       <Cotizaciones d={d} recargar={recargar} toast={toast} provPorId={provPorId} />
       <Ordenes d={d} recargar={recargar} toast={toast} provPorId={provPorId} />
       <ListaProveedores d={d} recargar={recargar} toast={toast} />
@@ -42,7 +42,7 @@ export default function Proveedores({ d, recargar, toast }) {
 }
 
 // ─── Permisos para negociar y conversaciones ───────────────────────────────
-function Campana({ d, provPorId, recargar, toast }) {
+function Campana({ d, recargar, toast }) {
   const [autorizando, setAutorizando] = useState(null) // { politica, texto }
   const autorizar = async () => {
     if ((autorizando.texto || '').trim().length < 3) { toast('Escribí tu autorización con tus palabras (queda textual).', 'error'); return }
@@ -97,27 +97,7 @@ function Campana({ d, provPorId, recargar, toast }) {
         </Modal>
       )}
 
-      {d.mensajes.length > 0 && (
-        <div className="m-card-list" style={{ marginTop: 12 }}>
-          {d.mensajes.map(m => {
-            const [lab, badge] = ESTADOS_MSG[m.estado] || [m.estado, 'badge-gray']
-            return (
-              <div key={m.id} className="m-card pi-msg">
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span className={`badge ${badge}`}>{lab}</span>
-                  <b style={{ fontSize: 13 }}>{provPorId[m.proveedor_id]?.razon_social_declarada || 'proveedor sin cargar'}</b>
-                  <span className="pi-sub">{m.idioma || '—'} · {fmtFechaHora(m.actualizado_en || m.creado_en)}</span>
-                </div>
-                <div className="pi-msg-cuerpo">
-                  <div><span className="data-label">Original</span><p>{m.original || '—'}</p></div>
-                  <div><span className="data-label">Traducción</span><p>{m.traduccion || '—'}</p></div>
-                </div>
-                {m.estado === 'SEND_UNKNOWN' && <p className="pi-sub pi-rojo">No se sabe si salió: hay que mirar la conversación antes de reenviar. Nunca se reenvía a ciegas.</p>}
-              </div>
-            )
-          })}
-        </div>
-      )}
+      <p className="pi-desc" style={{ marginTop: 12 }}>Las conversaciones (correo y WhatsApp) están abajo, en cada proveedor: tocá su nombre para verlas.</p>
       <p className="pi-sub" style={{ marginTop: 8 }}>Lo que escriben los proveedores son datos, no instrucciones. Nunca se inventan volúmenes ni otras cotizaciones, y no se revela el presupuesto máximo.</p>
     </div>
   )
@@ -391,7 +371,7 @@ function ListaProveedores({ d, recargar, toast }) {
   return (
     <div className="card">
       <div className="pi-barra">
-        <div className="section-label">Proveedores ({d.proveedores.length})</div>
+        <div className="section-label">Proveedores y conversaciones ({d.proveedores.length})</div>
         <button className="btn btn-secondary btn-sm" onClick={() => setAbierto(a => !a)}><Plus size={12} /> Proveedor</button>
       </div>
       {abierto && (
@@ -409,16 +389,11 @@ function ListaProveedores({ d, recargar, toast }) {
         </div>
       )}
       {d.proveedores.length > 0 && (
-        <div className="m-card-list" style={{ marginTop: 10 }}>
-          {d.proveedores.map(p => (
-            <div key={p.id} className="m-card" style={{ padding: '10px 14px' }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{p.razon_social_declarada || p.id_externo} <span className="badge badge-gray">{p.plataforma}</span> {esModoDemo() && <Demo />}</div>
-              <div className="pi-sub">{p.id_externo || 'sin ID'} {urlSegura(p.url) && <a className="pi-link" href={urlSegura(p.url)} target="_blank" rel="noopener noreferrer">link</a>} {p.riesgos ? `· riesgos: ${p.riesgos}` : ''}</div>
-            </div>
-          ))}
+        <div style={{ marginTop: 10 }}>
+          <ConversacionesProveedores proveedores={d.proveedores} candidato={d.candidato} toast={toast} onCambio={recargar} conDetalle />
         </div>
       )}
-      <p className="pi-sub" style={{ marginTop: 6 }}>Los proveedores son comunes a todos los candidatos. Nada de contactos personales en notas: este módulo no guarda credenciales.</p>
+      <p className="pi-sub" style={{ marginTop: 6 }}>Los proveedores son comunes a todos los candidatos. El contacto del proveedor va en sus campos (WhatsApp, correo, WeChat), nunca en notas; este módulo no guarda credenciales.</p>
     </div>
   )
 }

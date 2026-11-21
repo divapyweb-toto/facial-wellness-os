@@ -44,3 +44,17 @@
 }
 .pi-col .data-row .data-col { min-width: 120px; }
 .pi-col .data-col .data-label, .pi-col .data-col .data-value { display: block; }
+/* Charla con proveedores 24/7 (ConversacionProveedor.jsx) */
+.pi-conv-resumen { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--text-secondary); }
+.pi-conv { padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.pi-conv-cabeza { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: none; border: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.pi-conv-cuerpo { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; border-top: 1px solid var(--border-subtle); padding-top: 10px; }
+.pi-conv-acciones { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pi-conv-lista { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.pi-conv-msg { border: 1px solid var(--border); border-left-width: 3px; border-radius: var(--radius-sm); padding: 8px 10px; background: var(--bg-surface); display: flex; flex-direction: column; gap: 4px; max-width: 92%; }
+.pi-conv-msg.entra { align-self: flex-start; border-left-color: var(--purple, var(--accent)); }
+.pi-conv-msg.sale { align-self: flex-end; border-left-color: var(--accent); }
+.pi-conv-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pi-conv-texto { margin: 0; font-size: 13px; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
+.pi-conv-trad { color: var(--text-secondary); border-top: 1px dashed var(--border-subtle); padding-top: 4px; }
+@media (max-width: 768px) { .pi-conv-msg { max-width: 100%; } }

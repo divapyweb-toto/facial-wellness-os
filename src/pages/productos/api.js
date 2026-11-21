@@ -26,6 +26,8 @@ function errorLegible(error, tabla) {
     ? `La tabla o vista "${tabla}" todavía no existe en la base (migración del módulo sin aplicar). Podés ver la pantalla con datos DEMO.`
     : `No se pudo leer/guardar en ${tabla}: ${msg}`)
   e.faltaTabla = faltaTabla
+  // Columna que todavía no existe (migración de canales 20261124000001 sin aplicar): la pantalla lo avisa sin romperse.
+  e.faltaColumna = error?.code === '42703' || error?.code === 'PGRST204' || /Could not find the '[^']+' column|column .+ does not exist/i.test(msg)
   e.original = error
   return e
 }
@@ -237,3 +239,37 @@ export async function probarFamiliaProducto(nombre) {
   }
   return { ok: false, aviso: `No se pudo llamar a familia_producto (${ultimo?.message || 'sin permiso'}). Verificar con FUNCIONES.` }
 }
+
+// ── Charla con proveedores 24/7 (contrato FUNCIONES 21-11) ──
+// Esta pantalla no envía nada: lo manda el agente. Acá se leen las conversaciones, se editan los datos de
+// contacto y se deja en cola el primer contacto por correo (fila AUTHORIZED que arma conversacion.js).
+// Todo con select('*'): si la migración de canales no está aplicada, las columnas nuevas no vienen y la pantalla sigue.
+export async function listarMensajesDeProveedores(ids) {
+  const lista = [...new Set((ids || []).filter(Boolean))]
+  if (!lista.length) return []
+  if (modoDemo) return memTabla('pi_mensajes').filter(m => lista.includes(m.proveedor_id))
+  const { data, error } = await supabase.from('pi_mensajes').select('*').in('proveedor_id', lista).order('creado_en', { ascending: true }).limit(1000)
+  if (error) throw errorLegible(error, 'pi_mensajes')
+  return data || []
+}
+
+// Mensajes desde una fecha (para el gasto del mes; se pide un día antes para ver la ventana de 24 h de WhatsApp).
+export async function listarMensajesDesde(iso) {
+  if (modoDemo) return memTabla('pi_mensajes').filter(m => m.creado_en >= iso)
+  const { data, error } = await supabase.from('pi_mensajes').select('*').gte('creado_en', iso).order('creado_en', { ascending: true }).limit(5000)
+  if (error) throw errorLegible(error, 'pi_mensajes')
+  return data || []
+}
+
+// config.proveedores (texto JSON). null si no existe o no se puede leer: la pantalla usa los topes por defecto.
+export async function leerConfigProveedores() {
+  if (modoDemo) return DEMO.config_proveedores || null
+  try {
+    const { data, error } = await supabase.from('config').select('valor').eq('clave', 'proveedores').maybeSingle()
+    if (error) return null
+    return data?.valor ?? null
+  } catch { return null }
+}
+
+export const actualizarContactoProveedor = (id, cambios) => actualizar('pi_proveedores', id, cambios)
+export const pedirPrimerContacto = (fila) => insertar('pi_mensajes', fila)

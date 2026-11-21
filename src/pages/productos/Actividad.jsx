@@ -8,6 +8,7 @@ import { useToast } from '../../lib/toast'
 import { listarTrabajos, crearTrabajo, actualizarTrabajo, listarMensajes, listarPoliticas, listarCandidatos, esModoDemo } from './api'
 import { fmtFechaHora } from './formato'
 import { politicaVigente } from './derivados'
+import { ESTADOS_MSG, direccionDe, etiquetaCanal } from './conversacion'
 import { Campo, Vacio, ErrorCaja, Demo, Modal } from './ui'
 
 const ESTADOS_TRABAJO = {
@@ -16,7 +17,6 @@ const ESTADOS_TRABAJO = {
   FAILED: ['Falló', 'badge-red'], CANCELLED: ['Cancelado', 'badge-gray'],
 }
 const TIPOS_TRABAJO = [['investigar_py', 'Investigar en Paraguay'], ['buscar_proveedores', 'Buscar proveedores'], ['cotizar', 'Pedir cotizaciones (borradores)'], ['analizar', 'Analizar evidencia']]
-const ESTADOS_MSG = { DRAFT: ['Borrador', 'badge-gray'], AUTHORIZED: ['Autorizado', 'badge-blue'], SENDING: ['Enviando', 'badge-yellow'], SENT_CONFIRMED: ['Enviado (confirmado)', 'badge-green'], SEND_UNKNOWN: ['Envío incierto: conciliar', 'badge-red'], FAILED: ['Falló', 'badge-red'] }
 
 export default function Actividad({ onAbrir, onActivarDemo }) {
   const { toast } = useToast()
@@ -144,7 +144,9 @@ function Mensajes({ mensajes, politicas, nombreCand }) {
               <div key={m.id} className="m-card pi-msg">
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span className={`badge ${badge}`}>{lab}</span>
-                  <span className={`badge ${vigente ? 'badge-green' : 'badge-gray'}`}>{vigente ? (p?.candidato_id == null ? 'permiso general vigente' : 'permiso para negociar vigente') : 'sin permiso para negociar vigente: solo borrador'}</span>
+                  {direccionDe(m) === 'in'
+                    ? <span className="badge badge-purple">entrante · {etiquetaCanal(m.canal)}</span>
+                    : <span className={`badge ${vigente ? 'badge-green' : 'badge-gray'}`}>{vigente ? (p?.candidato_id == null ? 'permiso general vigente' : 'permiso para negociar vigente') : 'sin permiso para negociar vigente: solo borrador'}</span>}
                   <span className="pi-sub">{nombreCand[m.candidato_id || p?.candidato_id] || ''} · {fmtFechaHora(m.actualizado_en || m.creado_en)}</span>
                   {esModoDemo() && <Demo />}
                 </div>
