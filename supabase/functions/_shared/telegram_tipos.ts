@@ -38,6 +38,10 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   // 20-11: pedido en la lista de bloqueo (shopify-webhook/bloqueo.ts): cancelado solo; 1 por día.
   pedido_bloqueado: { titulo: "Pedido falso bloqueado", ruta: "inmediato", inventario: "nuevo 20-11 (1 por día)" },
   casos_courier_urgente: { titulo: "Caso urgente para el courier", ruta: "inmediato", inventario: "nuevo 04-11" },
+  // 21-11: proveedores 24/7 (_shared/proveedores/io.ts). Un proveedor pide compra, pago, muestra paga, exclusividad,
+  // firmar o datos de cuenta (lo confirma Enrique); o se llegó al tope de IA del mes. Uno por hilo/clave y día.
+  proveedor_frena: { titulo: "Proveedor pide algo que confirma el dueño", ruta: "inmediato", inventario: "nuevo 21-11 (1 por hilo y día)" },
+  proveedor_tope_ia: { titulo: "Proveedores: tope de IA del mes alcanzado", ruta: "inmediato", inventario: "nuevo 21-11 (1 por día)" },
   // 16-11: pagado por adelantado con guía a cobrar (pedidos-trabados/pagados_con_cobro.ts): en camino o posible doble cobro.
   pagado_con_cobro: { titulo: "Pagado con guía a cobrar: texto para el courier", ruta: "inmediato", inventario: "nuevo 16-11 (uno por pedido y caso)" },
   // 05-11: pedido confirmado que a las 48 h no sale por un motivo que el cliente no puede resolver (seguimiento-chat/pedidos_48h.ts).
@@ -101,6 +105,7 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   sync_meta_ads_fallo: { titulo: "Sync Meta Ads falló", ruta: "admin", inventario: "#78" },
   recuperacion_frenada_calidad: { titulo: "Recuperación frenada por calidad", ruta: "admin", inventario: "#77" },
   pago_verificado_auto: { titulo: "Pago verificado solo (correo del banco)", ruta: "admin", inventario: "nuevo 27-10" },
+  proveedor_cotizacion: { titulo: "Proveedor: cotización completa", ruta: "admin", inventario: "nuevo 21-11 (resumen para administración)" },
 
   // BORRAR (no sale ni se guarda; vuelven con "todos")
   sin_cobertura_avisado: { titulo: "Sin cobertura: cliente avisado", ruta: "descartar", inventario: "#49-51 BORRAR" },
