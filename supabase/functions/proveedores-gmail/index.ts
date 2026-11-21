@@ -15,7 +15,8 @@ Deno.serve(conServiceRole(async (req: Request) => {
     if (!cfg.activo && !simular) return Response.json({ ok: true, activo: false });
     const deps = depsReales();
     if (!deps) {
-      await ioGmail.avisarAdministracion("⚠️ Correo de proveedores: faltan los secretos GMAIL_* (correr scripts/gmail-autorizar.mjs).", { tipo: "proveedor_frena", clave: "gmail_secretos" }).catch(() => null);
+      // Simular solo lee: nunca avisa (21-11: una simulación a mano mandó este Telegram).
+      if (!simular) await ioGmail.avisarAdministracion("⚠️ Correo de proveedores: faltan los secretos GMAIL_* (correr scripts/gmail-autorizar.mjs).", { tipo: "proveedor_frena", clave: "gmail_secretos" }).catch(() => null);
       return Response.json({ ok: false, error: "faltan los secretos GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN" }, { status: 500 });
     }
     const r = await procesarCorrida(deps, { simular });
