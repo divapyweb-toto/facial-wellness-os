@@ -29,6 +29,8 @@ export const TIPOS_AVISO: Record<string, TipoAviso> = {
   pago_qr_recibido: { titulo: "Pago QR recibido: texto para el courier", ruta: "inmediato", inventario: "#59" },
   pago_qr_monto_distinto: { titulo: "Pago QR con monto distinto", ruta: "inmediato", inventario: "#59 (plata: decide Enrique)" },
   pago_courier_no_cobrar: { titulo: "Pagado: texto para el courier", ruta: "inmediato", inventario: "#56" },
+  // 21-11 (caso #1248): pagó con la guía ya cargada con monto → editarla a ₲0 en el sistema del courier.
+  editar_guia_cero: { titulo: "Pagado: editar la guía a ₲0", ruta: "inmediato", inventario: "nuevo 21-11" },
   whatsapp_canal_sordo: { titulo: "WhatsApp caído / calidad del número", ruta: "inmediato", inventario: "#67 (máx. 1 cada 6 h)" },
   mejora_mensual_propuesta: { titulo: "Mejora mensual: propuesta", ruta: "inmediato", inventario: "#80 (se aprueba solo con los botones)" },
   // 04-11: casos de envíos ya despachados, listos para pegar en el WhatsApp del courier (pedidos-trabados/casos_courier_envio.ts).

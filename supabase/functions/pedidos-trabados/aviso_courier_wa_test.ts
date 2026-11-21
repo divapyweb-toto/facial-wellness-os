@@ -127,12 +127,12 @@ Deno.test("pagados en camino: apagado = Telegram igual que antes; prendido = Wha
   assertStringIncludes(x.tg[0].t, "pedile a Lucero");
 });
 
-Deno.test("pagados cobrado (posible doble cobro) sigue SOLO por Telegram aunque esté prendido", async () => {
+Deno.test("pagados cobrado (doble cobro) sigue SOLO por Telegram aunque esté prendido", async () => {
   const e = enviarFalso();
   const x = depsPagados({ activo: true, enviar: e.enviar });
   await procesarPagadosConCobro([F({ categoria: "entregado", cobrado: 158000, fechaEntrega: "2026-11-17" })], AHORA, configPagadoCobro(null), x.d);
   assertEquals([e.enviados.length, x.tg.length], [0, 1]);
-  assertStringIncludes(x.tg[0].t, "posible doble cobro");
+  assertStringIncludes(x.tg[0].t, "Doble cobro");
 });
 
 // ── cancelaciones ──

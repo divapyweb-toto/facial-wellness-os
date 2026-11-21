@@ -3,7 +3,10 @@
 // de bajar la planilla, la guía salió con monto (8 casos, ₲1.176.000 al 16-11). Dos casos, un Telegram por pedido y caso
 // (candado auto_pagado_cobro:<caso>:<ref> en eventos_crudos, mismo avisarUnaVez de entregas_actuar.ts):
 //   · en_camino: todavía no entregado y la guía tiene monto → "pedile a <courier> que la guía pase a ₲0" + texto listo.
-//   · cobrado: ya entregado con monto/cobrado > 0 → "posible doble cobro, confirmar con <courier>".
+//   · cobrado: ya entregado con monto/cobrado > 0 → 21-11: "Doble cobro #N: devolver ₲X al cliente" (queda en Rendición →
+//     Devoluciones por doble cobro, vista devoluciones_doble_cobro, hasta que Enrique la marque devuelta).
+//   · en_reparto (21-11, caso #1248: el aviso solo no alcanzó): el día que la guía pasa a reparto (Lucero "En camino",
+//     PaP "Asignado a ruta") y todavía figura con monto, se repite el aviso al courier, una vez.
 // Primera corrida (sin candado base): los entregados hace más de `diasResumen` días van en UN solo resumen.
 // Interruptor: config.alerta_pagados_cobro (sin fila = prendido; "apagado" o {"activo": false} lo apaga).
 import { escaparHtml, formatearGuaranies } from "../_shared/telegram_formato.ts";
@@ -18,6 +21,8 @@ export interface FilaPagadoCobro {
   ref: string; courier: string; categoria: string; importe: number; cobrado: number;
   guia: string | null; ciudad: string | null; fechaEntrega: string | null;
   senal: SenalPago | null; saldo: number | null;
+  /** 21-11: estado del courier (entregas.estado_pap): para repetir el aviso el día del reparto. */
+  estadoCourier?: string | null;
 }
 export interface HechoPagadoCobro { ref: string; caso: CasoPagadoCobro; monto: number; resultado: string }
 export interface CfgPagadoCobro { activo: boolean; desde: string; diasResumen: number }
@@ -30,7 +35,14 @@ export type DepsPagadoCobro = DepsActuar & {
 
 export const CLAVE_CFG_PAGADOS_COBRO = "alerta_pagados_cobro";
 export const CANDADO_BASE_PAGADO_COBRO = "auto_pagado_cobro_base";
-export const claveCandadoPagadoCobro = (caso: CasoPagadoCobro, ref: string) => `auto_pagado_cobro:${caso}:${ref}`;
+export const claveCandadoPagadoCobro = (caso: CasoPagadoCobro | "en_reparto", ref: string) => `auto_pagado_cobro:${caso}:${ref}`;
+/** 21-11: la guía salió a reparto (Lucero "En camino", PaP "Asignado a ruta" o "En reparto"). */
+export const enReparto = (estado: string | null | undefined) => /en camino|asignado a ruta|en reparto/i.test(String(estado ?? ""));
+/** 21-11: cuánto hay que devolverle al cliente: lo cobrado, o lo cobrado de más sobre el saldo si el pago era parcial. */
+export const montoADevolver = (f: FilaPagadoCobro) => {
+  const cobrado = f.cobrado || f.importe || 0;
+  return f.senal === "parcial" && f.saldo != null ? Math.max(cobrado - f.saldo, 0) : cobrado;
+};
 const CFG_DEFECTO: CfgPagadoCobro = { activo: true, desde: "2026-10-07", diasResumen: 14 };
 
 /** config.valor (texto) → interruptor. Sin fila o ilegible = prendido (decisión de Enrique 16-11). */
@@ -84,6 +96,7 @@ export interface EntregaCruda {
   nro_guia_pap: string | null; guia_transportadora: string | null; transportadora: string | null; categoria: string | null;
   importe: number | null; cobrado: number | null; fecha_entrega: string | null; ciudad: string | null;
   n_referencia: string | null; venta_id: string | null; created_at: string | null; tienda: string | null;
+  estado_pap?: string | null;
 }
 export interface VentaCruda { id: string; n_referencia: string | null; pago_anticipado: boolean | null; deleted_at: string | null }
 export interface PedidoCrudo { nombre: string; tags: unknown; financiero: string | null }
@@ -111,6 +124,7 @@ export function armarFilas(entregas: EntregaCruda[], ventas: VentaCruda[], pedid
       ciudad: e.ciudad ?? null, fechaEntrega: e.fecha_entrega ?? null,
       senal: senalPago({ tags, financiero: p?.financiero ?? null, pagoAnticipado: v?.pago_anticipado ?? null }),
       saldo: saldoTag ? Number(saldoTag[1]) : null,
+      estadoCourier: e.estado_pap ?? null,
     });
   }
   return filas;
@@ -146,11 +160,25 @@ export function textoEnCamino(f: FilaPagadoCobro): string {
 export function textoCobrado(f: FilaPagadoCobro): string {
   const n = escaparHtml(pedidoDeRef(f.ref)), c = nombreCourier(f.courier), monto = montoDe(f), fecha = fechaLinda(f.fechaEntrega);
   const guiaCorta = f.guia ? ` (guía ${escaparHtml(f.guia)})` : "";
-  const parcial = f.senal === "parcial" && f.saldo != null ? ` Pago parcial: el saldo era ${formatearGuaranies(f.saldo)}.` : "";
-  return `⚠️ ${n} ${queEs(f)} y figura cobrado ${formatearGuaranies(monto)} (${c}${guiaCorta}, entregado el ${fecha}): ` +
-    `posible doble cobro, confirmar con ${c}.${parcial} Si lo cobró: que lo descuente en la rendición o devolvele la transferencia al cliente. ` +
-    `Reenviale esto a ${c}:\n\nHola, consulto por el pedido ${n}${guiaCorta}, entregado el ${fecha}. El cliente ya había pagado por transferencia ` +
-    `antes de la entrega. ¿Cobraron ${gs(monto)} al entregar? Si lo cobraron, por favor descuéntenlo en la próxima rendición. Gracias.`;
+  const devolver = montoADevolver(f);
+  const parcial = f.senal === "parcial" && f.saldo != null ? ` Era pago parcial: el saldo era ${formatearGuaranies(f.saldo)}, se devuelve lo cobrado de más.` : "";
+  // 21-11 (caso #1248): sin vueltas, qué hacer y cuánto.
+  return `💸 <b>Doble cobro</b> ${n}: devolver ${formatearGuaranies(devolver)} al cliente. Pagó por transferencia y ${c}${guiaCorta} ` +
+    `igual cobró ${formatearGuaranies(monto)} al entregar el ${fecha}.${parcial} Queda en Voltra OS → Rendición → "Devoluciones por doble cobro" ` +
+    "hasta que la marques devuelta.";
+}
+
+/** 21-11: aviso al courier el día del reparto (texto plano). */
+export function textoCourierReparto(f: FilaPagadoCobro, esc: (s: string) => string = (s) => s): string {
+  const n = esc(pedidoDeRef(f.ref)), guiaCorta = f.guia ? ` (guía ${esc(f.guia)})` : "";
+  return f.senal === "parcial"
+    ? `Hola, el pedido ${n}${guiaCorta} ya está en camino al cliente y está pagado en parte por transferencia: NO cobrar ${gs(montoDe(f))}${f.saldo != null ? `, cobrar solo ${gs(f.saldo)}` : ""}. Por favor avisen al repartidor. Gracias.`
+    : `Hola, el pedido ${n}${guiaCorta} ya está en camino al cliente y está pagado por transferencia: entregar SIN COBRAR (Gs 0). Por favor avisen al repartidor. Gracias.`;
+}
+export function textoReparto(f: FilaPagadoCobro): string {
+  const n = escaparHtml(pedidoDeRef(f.ref)), c = nombreCourier(f.courier);
+  return `💸 ${n} ya está en camino al cliente con ${c} y la guía todavía figura a cobrar ${formatearGuaranies(montoDe(f))}: recordale que entregue SIN COBRAR. ` +
+    `Reenviale esto a ${c}:\n\n${textoCourierReparto(f, escaparHtml)}`;
 }
 
 export function textoResumenInicial(fs: FilaPagadoCobro[]): string {
@@ -200,6 +228,7 @@ export async function procesarPagadosConCobro(
   }
 
   const hechos: HechoPagadoCobro[] = [];
+  const avisadosAhora = new Set<string>();
   for (const { f, caso } of casos) {
     const monto = montoDe(f);
     if (viejos.has(f.ref) && caso === "cobrado") { hechos.push({ ref: f.ref, caso, monto, resultado: resultadoResumen }); continue; }
@@ -216,7 +245,23 @@ export async function procesarPagadosConCobro(
     const dd: DepsActuar = caso === "en_camino" && d.canalCourier?.activo
       ? { ...d, avisar: avisarPorCourier(d.canalCourier, d.avisar, { courier: f.courier, ref: f.ref, textoCourier: textoCourierEnCamino(f), clave: claveAvisoCourier(f.ref, "pagado_no_cobrar", ahora), plazoLecturaH: 3 }) }
       : d;
-    hechos.push({ ref: f.ref, caso, monto, resultado: await avisarUnaVez(dd, id, { ref: f.ref, caso, monto }, texto, simular, opts(f.ref)) });
+    const resultado = await avisarUnaVez(dd, id, { ref: f.ref, caso, monto }, texto, simular, opts(f.ref));
+    if (resultado === "avisado") avisadosAhora.add(f.ref);
+    hechos.push({ ref: f.ref, caso, monto, resultado });
+  }
+  // 21-11 (caso #1248): el día del reparto se repite el aviso al courier si la guía sigue con monto. Una vez por pedido.
+  // Si el primer aviso salió en esta misma corrida, no se repite enseguida (se toma el candado y listo).
+  for (const { f, caso } of casos) {
+    if (caso !== "en_camino" || !enReparto(f.estadoCourier)) continue;
+    const id = claveCandadoPagadoCobro("en_reparto", f.ref), monto = montoDe(f);
+    if (avisadosAhora.has(f.ref)) {
+      if (!simular) await d.tomarCandado(id, { ref: f.ref, caso: "en_reparto", junto_con_el_primero: true });
+      continue;
+    }
+    const dd: DepsActuar = d.canalCourier?.activo
+      ? { ...d, avisar: avisarPorCourier(d.canalCourier, d.avisar, { courier: f.courier, ref: f.ref, textoCourier: textoCourierReparto(f), clave: claveAvisoCourier(f.ref, "pagado_reparto", ahora), plazoLecturaH: 3 }) }
+      : d;
+    hechos.push({ ref: f.ref, caso: "en_camino", monto, resultado: `reparto: ${await avisarUnaVez(dd, id, { ref: f.ref, caso: "en_reparto", monto }, textoReparto(f), simular, opts(f.ref))}` });
   }
   return hechos;
 }

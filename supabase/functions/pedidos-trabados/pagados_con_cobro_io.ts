@@ -19,7 +19,7 @@ async function leerCfg() {
 export async function leerFilas(desde: string) {
   const s = db();
   const { data: es, error } = await s.from("entregas")
-    .select("nro_guia_pap,guia_transportadora,transportadora,categoria,importe,cobrado,fecha_entrega,ciudad,n_referencia,venta_id,created_at,tienda")
+    .select("nro_guia_pap,guia_transportadora,transportadora,categoria,importe,cobrado,fecha_entrega,ciudad,n_referencia,venta_id,created_at,tienda,estado_pap")
     .eq("tienda", "voltra").in("categoria", ["en_proceso", "entregado"]).gte("created_at", `${desde}T00:00:00Z`)
     .or("importe.gt.0,cobrado.gt.0");
   if (error) throw new Error(`entregas: ${error.message}`);

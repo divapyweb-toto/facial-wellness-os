@@ -221,6 +221,17 @@ export function dependencias(chatId: string): Dependencias {
     avisar: (html, botones, opts) => avisar(html, botones, opts),
     // 18-11: aviso directo a la transportadora (config_wa.transportadoras.avisos_por_whatsapp; apagado = Telegram de siempre).
     canalCourier: () => leerCanalCourier(),
+    // 21-11: guía ya cargada (entregas de Voltra por VT-n), para pedir que se edite a ₲0 si tiene monto.
+    guiaDePedido: async (ref) => {
+      const { data } = await db().from("entregas").select("guia_transportadora,nro_guia_pap,importe,transportadora,categoria")
+        .eq("tienda", "voltra").eq("n_referencia", ref).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (!data || data.categoria === "entregado" || data.categoria === "devuelto") return null;
+      const propia = String(data.nro_guia_pap ?? "").trim();
+      return {
+        guia: String(data.guia_transportadora ?? "").trim() || (propia && !/^L-VT-/i.test(propia) ? propia : null) || propia || null,
+        importe: Number(data.importe) || 0, courier: data.transportadora ?? null,
+      };
+    },
     // 29-10: "Recibido" / "Es este" (y pago-verificado, que reusa estas deps) → factura al cobrar.
     facturarAlCobrar: (id) => facturarEnSegundoPlano(id),
     // 12-10: "Recibido" → la venta (VT-<n>) queda como pago anticipado: Despacho "Desde Ventas" sale con cobro 0 y la

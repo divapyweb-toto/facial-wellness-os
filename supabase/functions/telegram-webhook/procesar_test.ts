@@ -471,6 +471,29 @@ Deno.test("Recibido en camino con avisos por WhatsApp: prendido → texto plano 
   assertEquals([f.avisos.length, llamado], [1, false]);
 });
 
+// 21-11 (caso #1248): la guía ya tenía monto → además del aviso al courier, Telegram a Enrique para editarla a ₲0.
+Deno.test("Recibido con la guía ya cargada con monto: Telegram 'Editá la guía a ₲0' con el número; con ₲0 o sin guía, no", async () => {
+  const pedido = () => pedidoBase({ tags: ["CONFIRMADO", "OFERTA_PAGO_ANTICIPADO"], telefono: "+595981000000", raw: RAW_PREPARADO, courier: "lucero" });
+  let f = fakesRecibido(pedido());
+  f.deps.guiaDePedido = (ref) => Promise.resolve(ref === "VT-1001" ? { guia: "77001", importe: 158000, courier: "lucero" } : null);
+  await procesarUpdate(updateFoto(), f.deps);
+  assertEquals(f.avisos.length, 2);
+  assertStringIncludes(f.avisos[1], "Editá la guía a ₲0");
+  assertStringIncludes(f.avisos[1], "la guía <b>77001</b> de Lucero todavía figura a cobrar ₲158.000");
+  assertEquals(f.opciones[1], { tipo: "editar_guia_cero", destino: "enrique", pedido: "#1001" });
+  assertStringIncludes(f.leyendas[0].html, "editarla a ₲0");
+  // guía con ₲0: solo el aviso de siempre
+  f = fakesRecibido(pedido());
+  f.deps.guiaDePedido = () => Promise.resolve({ guia: "77001", importe: 0, courier: "lucero" });
+  await procesarUpdate(updateFoto(), f.deps);
+  assertEquals(f.avisos.length, 1);
+  // sin guía cargada: igual
+  f = fakesRecibido(pedido());
+  f.deps.guiaDePedido = () => Promise.resolve(null);
+  await procesarUpdate(updateFoto(), f.deps);
+  assertEquals(f.avisos.length, 1);
+});
+
 Deno.test("Recibido con el pedido ya ENTREGADO: no hay texto para el courier ni se toca la venta; avisa que puede haber pagado dos veces", async () => {
   const f = fakesRecibido(pedidoBase({ estado_envio: "ENTREGADO", raw: RAW_PREPARADO }));
   await procesarUpdate(updateFoto(), f.deps);

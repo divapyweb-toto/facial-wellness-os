@@ -135,6 +135,8 @@ export interface Dependencias {
   avisar?(textoHtml: string, botones?: BotonTelegram[][], opts?: OpcionesAviso): Promise<unknown>;
   /** 18-11: aviso directo a la transportadora por WhatsApp (config_wa.transportadoras.avisos_por_whatsapp). Sin esto = Telegram. */
   canalCourier?(): Promise<CanalCourier>;
+  /** 21-11 (caso #1248): guía ya cargada del pedido (entregas por VT-n): número, monto a cobrar y courier. null = sin guía. */
+  guiaDePedido?(ref: string): Promise<{ guia: string | null; importe: number; courier: string | null } | null>;
   /** 12-10: la venta del pedido (VT-<n>) queda como pago anticipado; devuelve cuántas filas cambió. */
   marcarVentaPagada?(pedido: PedidoContexto): Promise<number>;
   /**
@@ -476,6 +478,20 @@ export async function procesarCallback(update: TgUpdate, deps: Dependencias): Pr
               : t.ok === false
               ? `No pude mandarte el texto para el courier (${t.error ?? "error"}): avisale que NO cobre.`
               : "Ya estaba preparado o en la planilla del courier: te mandé el texto para el courier (YA PAGADO, cobrar 0).");
+            // 21-11 (caso #1248: el aviso solo no alcanzó y el repartidor cobró igual): si la guía ya tiene monto, hay que
+            // editarla a ₲0 en el sistema del courier. Eso solo lo puede hacer Enrique: Telegram con el número de guía.
+            const g = deps.guiaDePedido ? await deps.guiaDePedido(ref).catch(() => null) : null;
+            if (g && g.importe > 0) {
+              const c = g.courier === "pap" ? "Punto a Punto" : g.courier === "lucero" ? "Lucero" : quien;
+              await base(
+                `✏️ <b>Editá la guía a ₲0</b> · ${pedido.nombre ?? ref}: ya está pagado y la guía ${g.guia ? `<b>${g.guia}</b> ` : ""}de ${c} ` +
+                  `todavía figura a cobrar ₲${g.importe.toLocaleString("es-PY").replace(/,/g, ".")}. Entrá al sistema de ${c} y pasala a ₲0: ` +
+                  "con el aviso solo, el repartidor a veces cobra igual (pasó con #1239 y #1248).",
+                undefined,
+                { tipo: "editar_guia_cero", destino: "enrique", pedido: pedido.nombre ?? String(pedido.shopify_order_id) },
+              );
+              notas.push(`La guía ${g.guia ?? ""} ya tenía monto: te mandé un Telegram para editarla a ₲0 en el sistema del courier.`.replace("  ", " "));
+            }
           } catch (e) {
             notas.push(`No pude mandarte el texto para el courier (${e instanceof Error ? e.message : e}): avisale que NO cobre.`);
           }

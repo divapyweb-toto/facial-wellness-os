@@ -13,6 +13,7 @@ import { Truck, Clock, AlertTriangle, TrendingUp, CheckCircle, Wallet, CalendarC
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts'
 import { hoyLocal } from '../../lib/fechas'
 import { normalizarRef } from '../../lib/referencias'
+import DevolucionesDobleCobro from './DevolucionesDobleCobro'
 
 const formatGs = (n) => Math.round(n || 0).toLocaleString('es-PY') + ' Gs.'
 // 14-10: "2026-10-12" se leía como medianoche UTC y en Paraguay (UTC−3) mostraba el día anterior: se arma la fecha local.
@@ -527,6 +528,9 @@ export default function RendicionPage() {
           {' '}Viendo {NOMBRE_TRANSP[vista]}: {stats.nRendidos} rendidas · {stats.nSinRendir} por cobrar.
         </p>
       </div>
+
+      {/* 21-11: pagados por transferencia que el courier igual cobró (doble cobro): devolver y marcar. Arriba de todo. */}
+      <DevolucionesDobleCobro className="ultra-o2" />
 
       {/* Selector de transportadora: cada una tiene un ciclo de cobro distinto,
           mezclarlas en un solo número no describe a ninguna de las dos. */}

@@ -83,9 +83,10 @@ Deno.test("textos: guía, courier, monto y texto listo para reenviar; sin datos 
   assertStringIncludes(t, "Reenviale esto a Lucero");
   assertStringIncludes(t, "ya está pagado por transferencia: entregar SIN COBRAR (Gs 0)");
   const c = textoCobrado(F({ categoria: "entregado", cobrado: 188000, fechaEntrega: "2026-11-06", courier: "pap", guia: "99887766" }));
-  assertStringIncludes(c, "#9001 pagado y figura cobrado ₲188.000");
-  assertStringIncludes(c, "posible doble cobro, confirmar con Punto a Punto");
-  assertStringIncludes(c, "entregado el 06/11/2026");
+  // 21-11: "Doble cobro: devolver ₲X al cliente" y dónde queda anotado.
+  assertStringIncludes(c, "<b>Doble cobro</b> #9001: devolver ₲188.000 al cliente");
+  assertStringIncludes(c, "Punto a Punto (guía 99887766) igual cobró ₲188.000 al entregar el 06/11/2026");
+  assertStringIncludes(c, "Devoluciones por doble cobro");
   assert(!/Luque|Ana|0981/.test(c), c); // la ciudad solo va en el texto de en camino; nunca nombre ni teléfono
   const p = textoEnCamino(F({ senal: "parcial", saldo: 52000, importe: 112000 }));
   assertStringIncludes(p, "pago parcial");
@@ -118,7 +119,7 @@ Deno.test("primera corrida: entregados de +14 días van en UN resumen; los recie
   assertEquals(telegram.length, 3);
   assertStringIncludes(telegram[0].t, "2 pedidos");
   assert(telegram.every((x) => x.tipo === "pagado_con_cobro"));
-  assertStringIncludes(telegram[1].t, "#9012 pagado y figura cobrado ₲158.000");
+  assertStringIncludes(telegram[1].t, "#9012: devolver ₲158.000 al cliente");
   assertStringIncludes(telegram[2].t, "#9013 pagado: pedile a Lucero");
   assert(candados.has(CANDADO_BASE_PAGADO_COBRO));
   for (const r of ["VT-9010", "VT-9011", "VT-9012"]) assert(candados.has(claveCandadoPagadoCobro("cobrado", r)), r);
@@ -131,14 +132,14 @@ Deno.test("primera corrida: entregados de +14 días van en UN resumen; los recie
   // el que estaba en camino se entrega y figura cobrado: segundo caso, un aviso más
   await procesarPagadosConCobro([F({ ref: "VT-9013", categoria: "entregado", cobrado: 158000, fechaEntrega: "2026-11-16" })], AHORA, CFG, d);
   assertEquals(telegram.length, 4);
-  assertStringIncludes(telegram[3].t, "posible doble cobro");
+  assertStringIncludes(telegram[3].t, "Doble cobro");
 });
 
 Deno.test("después de la primera corrida, un entregado viejo nuevo sale solo (no en resumen)", async () => {
   const { d, telegram } = deps({ base: true });
   await procesarPagadosConCobro([F({ ref: "VT-9020", categoria: "entregado", cobrado: 99000, fechaEntrega: "2026-10-01" })], AHORA, CFG, d);
   assertEquals(telegram.length, 1);
-  assertStringIncludes(telegram[0].t, "#9020 pagado y figura cobrado");
+  assertStringIncludes(telegram[0].t, "#9020: devolver ₲99.000 al cliente");
 });
 
 Deno.test("en camino ya avisado al verificar el pago (pago_courier_no_cobrar): no se repite, queda el candado", async () => {
@@ -167,4 +168,34 @@ Deno.test("Telegram caído: el resumen no toma candados (se reintenta en 10 min)
   assertEquals(telegram.length, 0);
   assertEquals(candados.size, 0);
   assert(h.every((x) => x.resultado.startsWith("error")), JSON.stringify(h));
+});
+
+// 21-11 (caso #1248): cuánto se devuelve y el aviso repetido el día del reparto.
+Deno.test("monto a devolver: lo cobrado; con pago parcial, lo cobrado de más sobre el saldo", async () => {
+  const { montoADevolver } = await import("./pagados_con_cobro.ts");
+  assertEquals(montoADevolver(F({ categoria: "entregado", cobrado: 158000 })), 158000);
+  assertEquals(montoADevolver(F({ categoria: "entregado", cobrado: 112000, senal: "parcial", saldo: 52000 })), 60000);
+  assertStringIncludes(textoCobrado(F({ categoria: "entregado", cobrado: 112000, senal: "parcial", saldo: 52000, fechaEntrega: "2026-11-12" })), "devolver ₲60.000 al cliente");
+});
+
+Deno.test("reparto: se repite el aviso UNA vez cuando la guía pasa a 'En camino' / 'Asignado a ruta'; no en la misma corrida del primero", async () => {
+  const { enReparto } = await import("./pagados_con_cobro.ts");
+  assert(enReparto("En camino") && enReparto("Asignado a ruta") && !enReparto("Aceptado") && !enReparto(null));
+  const { d, telegram, candados } = deps({ base: true });
+  // día 1: aceptado → primer aviso
+  await procesarPagadosConCobro([F({ estadoCourier: "Aceptado" })], AHORA, CFG, d);
+  assertEquals(telegram.length, 1);
+  // día 2: sale a reparto → se repite
+  await procesarPagadosConCobro([F({ estadoCourier: "En camino" })], AHORA, CFG, d);
+  assertEquals(telegram.length, 2);
+  assertStringIncludes(telegram[1].t, "ya está en camino al cliente con Lucero");
+  assertStringIncludes(telegram[1].t, "entregar SIN COBRAR (Gs 0)");
+  assert(candados.has(claveCandadoPagadoCobro("en_reparto", "VT-9001")));
+  // sigue en camino al otro día: no se repite más
+  await procesarPagadosConCobro([F({ estadoCourier: "En camino" })], AHORA, CFG, d);
+  assertEquals(telegram.length, 2);
+  // otro pedido que aparece directamente en reparto: un solo aviso (no dos seguidos)
+  await procesarPagadosConCobro([F({ ref: "VT-9002", estadoCourier: "Asignado a ruta", courier: "pap" })], AHORA, CFG, d);
+  assertEquals(telegram.length, 3);
+  assert(candados.has(claveCandadoPagadoCobro("en_reparto", "VT-9002")));
 });
