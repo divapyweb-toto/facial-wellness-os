@@ -6,16 +6,17 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { llamarClaude } from "../claude.ts";
 import { db } from "../db.ts";
 import { avisar } from "../telegram.ts";
-import { type Canal, type ConfigProveedores, configProveedoresDesde, type Cotizacion, type DepsAgente, type EntradaAgente, type Idioma } from "./agente.ts";
+import { type Canal, type ConfigProveedores, configProveedoresDesde, type Cotizacion, type DepsAgente, type EntradaAgente, type EnvioAvisado, type Idioma, type PagoPedido, type TipoCambio } from "./agente.ts";
+export { textoAvisoPago, type TipoCambio } from "./agente.ts";
 
 type ClienteDb = Pick<SupabaseClient, "from">;
 type Avisar = (texto: string, botones?: undefined, opts?: Record<string, unknown>) => Promise<unknown>;
 
-const porDefecto = { cliente: (): ClienteDb => db(), avisar: avisar as unknown as Avisar };
+const porDefecto = { cliente: (): ClienteDb => db(), avisar: avisar as unknown as Avisar, fetch: (u: string, i?: RequestInit) => fetch(u, i) };
 let entorno = { ...porDefecto };
 
 /** Solo para pruebas: reemplaza la base y/o el aviso. Sin argumentos vuelve a lo real. */
-export function _configurarIo(parcial?: { cliente?: () => ClienteDb; avisar?: Avisar }): void {
+export function _configurarIo(parcial?: { cliente?: () => ClienteDb; avisar?: Avisar; fetch?: (u: string, i?: RequestInit) => Promise<Response> }): void {
   entorno = parcial ? { ...porDefecto, ...parcial } : { ...porDefecto };
 }
 
@@ -247,6 +248,132 @@ export async function cargarCotizacion(
   }).select("id").single();
   if (error) throw new Error(`cargarCotizacion: ${error.message}`);
   return String((data as { id: unknown }).id);
+}
+
+// ---------- 25-11: orden de compra por link de pago, seguimiento y tipo de cambio ----------
+// Proceso de Enrique (25-11): negociar → dirección del depósito → link de Alipay → paga Enrique. La base (trigger
+// pi_ordenes_compra_solo_enrique) deja que el sistema cree y cambie órdenes en BORRADOR; confirmar, marcar pagada o
+// cambiar montos de una orden confirmada es solo de Enrique. Acá nunca se abre el link ni se paga.
+
+export interface OrdenProveedor {
+  id: string; estado: string; candidato_id: string; proveedor_id: string | null; moneda: string; total_minor: number | null;
+  cantidad: number; tracking: string | null; forwarder: string | null; deposito_destino: string | null; notas: string | null; actualizado_en: string;
+}
+const COLS_ORDEN = "id, estado, candidato_id, proveedor_id, moneda, total_minor, cantidad, tracking, forwarder, deposito_destino, notas, actualizado_en";
+const PLATAFORMAS_ORDEN = new Set(["alibaba", "1688", "local", "otro"]);
+const horaPY = (d: Date) => new Date(d.getTime() - 3 * 3600_000).toISOString().slice(5, 16).replace("T", " ").replace(/^(\d\d)-(\d\d)/, "$2-$1");
+const sumarNota = (viejas: string | null, linea: string) => [viejas?.trim(), linea].filter(Boolean).join("\n").slice(-4000);
+
+async function ordenAbierta(proveedorId: string, candidatoId: string | null, estados: string[]): Promise<OrdenProveedor | null> {
+  let q = base().from("pi_ordenes_compra").select(COLS_ORDEN).eq("proveedor_id", proveedorId).in("estado", estados);
+  if (candidatoId) q = q.eq("candidato_id", candidatoId);
+  const { data, error } = await q.order("actualizado_en", { ascending: false }).limit(1);
+  if (error) throw new Error(`pi_ordenes_compra: ${error.message}`);
+  return ((data ?? []) as OrdenProveedor[])[0] ?? null;
+}
+
+/**
+ * Link o pedido de pago del proveedor → orden en BORRADOR (nueva o la abierta de ese producto y proveedor) con monto,
+ * moneda, cantidad y el link en las notas. Una orden ya confirmada por Enrique solo suma la nota (los montos no se tocan).
+ */
+export async function registrarPagoPedido(r: {
+  proveedorId: string; candidatoId: string; pago: PagoPedido; canal: Canal; mensajeId: string | null; plataforma: string | null; ahora?: Date;
+}): Promise<{ id: string; estado: string; nueva: boolean }> {
+  const ahora = r.ahora ?? new Date();
+  const p = r.pago;
+  const monto = p.monto_minor != null && p.moneda ? `${(p.monto_minor / 100).toFixed(2)} ${p.moneda}` : "monto sin leer";
+  const nota = `[${horaPY(ahora)}] Pedido de pago por ${r.canal === "email" ? "correo" : "WhatsApp"}: ${monto}${p.link ? ` · link ${p.link} (${p.alipay ? "Alipay" : `dominio ${p.dominio ?? "?"}, NO es Alipay`})` : " · sin link"}${r.mensajeId ? ` · mensaje ${r.mensajeId}` : ""}. Lo paga Enrique; el sistema no abre el link.`;
+  const abierta = await ordenAbierta(r.proveedorId, r.candidatoId, ["BORRADOR", "CONFIRMADA_POR_ENRIQUE", "PEDIDA", "PAGADA_POR_ENRIQUE"]);
+  if (abierta) {
+    const cambios: Record<string, unknown> = { notas: sumarNota(abierta.notas, nota) };
+    if (abierta.estado === "BORRADOR") {
+      if (p.monto_minor != null && p.moneda) Object.assign(cambios, { total_minor: p.monto_minor, moneda: p.moneda });
+      if (p.cantidad) cambios.cantidad = p.cantidad;
+    }
+    const { error } = await base().from("pi_ordenes_compra").update(cambios).eq("id", abierta.id);
+    if (error) throw new Error(`registrarPagoPedido (actualizar): ${error.message}`);
+    return { id: abierta.id, estado: abierta.estado, nueva: false };
+  }
+  const { data, error } = await base().from("pi_ordenes_compra").insert({
+    candidato_id: r.candidatoId,
+    proveedor_id: r.proveedorId,
+    plataforma: r.plataforma && PLATAFORMAS_ORDEN.has(r.plataforma) ? r.plataforma : null,
+    cantidad: p.cantidad ?? 1,
+    total_minor: p.monto_minor,
+    moneda: p.moneda ?? "CNY",
+    estado: "BORRADOR",
+    notas: p.cantidad ? nota : `${nota} Cantidad a confirmar (no vino en el mensaje).`,
+  }).select("id").single();
+  if (error) throw new Error(`registrarPagoPedido (crear): ${error.message}`);
+  return { id: String((data as { id: unknown }).id), estado: "BORRADOR", nueva: true };
+}
+
+/** Número de seguimiento → la orden abierta del proveedor (la pagada primero). Pagada pasa a EN_TRANSITO. null = sin orden. */
+export async function cargarTracking(r: { proveedorId: string; candidatoId: string | null; envio: EnvioAvisado; canal: Canal; ahora?: Date }): Promise<{ id: string; estado: string } | null> {
+  const ahora = r.ahora ?? new Date();
+  const orden = (await ordenAbierta(r.proveedorId, r.candidatoId, ["PAGADA_POR_ENRIQUE"]))
+    ?? (await ordenAbierta(r.proveedorId, r.candidatoId, ["PEDIDA", "CONFIRMADA_POR_ENRIQUE"]))
+    ?? (r.candidatoId ? await ordenAbierta(r.proveedorId, null, ["PAGADA_POR_ENRIQUE"]) : null);
+  if (!orden) return null;
+  if (orden.tracking === r.envio.tracking) return { id: orden.id, estado: orden.estado };
+  const estado = orden.estado === "PAGADA_POR_ENRIQUE" ? "EN_TRANSITO" : orden.estado;
+  const nota = `[${horaPY(ahora)}] Seguimiento por ${r.canal === "email" ? "correo" : "WhatsApp"}: ${r.envio.tracking}${r.envio.empresa ? ` (${r.envio.empresa})` : ""}.`;
+  const { error } = await base().from("pi_ordenes_compra").update({ tracking: r.envio.tracking, estado, notas: sumarNota(orden.notas, nota) }).eq("id", orden.id);
+  if (error) throw new Error(`cargarTracking: ${error.message}`);
+  return { id: orden.id, estado };
+}
+
+export type TipoAvisoOrden = "direccion" | "postpago";
+export interface OrdenParaAvisar { orden: OrdenProveedor; tipo: TipoAvisoOrden; via: "maritimo" | "aereo"; hilo: string | null }
+/** Vía de la orden: aérea solo si el forwarder o el destino lo dicen; si no, marítima (config: aéreo solo si se indica). */
+export const viaDeOrden = (o: Pick<OrdenProveedor, "forwarder" | "deposito_destino">): "maritimo" | "aereo" =>
+  /a[eé]re|\bair\b|avi[oó]n/i.test(`${o.forwarder ?? ""} ${o.deposito_destino ?? ""}`) ? "aereo" : "maritimo";
+
+/**
+ * Órdenes de los últimos 30 días que piden un mensaje fijo al proveedor por `canal` (el del último mensaje con ese
+ * proveedor): confirmada/pedida/pagada → dirección; pagada sin seguimiento → "pago hecho, pasá el seguimiento".
+ * Cada mensaje sale una sola vez por orden (lo asegura la idempotencia del canal, no esta lista).
+ */
+export async function ordenesParaAvisar(canal: Canal, ahora: Date = new Date()): Promise<OrdenParaAvisar[]> {
+  const desde = new Date(ahora.getTime() - 30 * 86_400_000).toISOString();
+  const { data, error } = await base().from("pi_ordenes_compra").select(COLS_ORDEN)
+    .in("estado", ["CONFIRMADA_POR_ENRIQUE", "PEDIDA", "PAGADA_POR_ENRIQUE"]).gte("actualizado_en", desde).order("actualizado_en", { ascending: true }).limit(50);
+  if (error) throw new Error(`ordenesParaAvisar: ${error.message}`);
+  const out: OrdenParaAvisar[] = [];
+  for (const o of (data ?? []) as OrdenProveedor[]) {
+    if (!o.proveedor_id) continue;
+    const m = await base().from("pi_mensajes").select("canal, hilo").eq("proveedor_id", o.proveedor_id).order("creado_en", { ascending: false }).limit(1);
+    if (m.error) throw new Error(`ordenesParaAvisar (mensajes): ${m.error.message}`);
+    const ultimo = ((m.data ?? []) as Array<{ canal: string; hilo: string | null }>)[0];
+    if (!ultimo || ultimo.canal !== canal) continue;
+    const via = viaDeOrden(o);
+    out.push({ orden: o, tipo: "direccion", via, hilo: ultimo.hilo });
+    if (o.estado === "PAGADA_POR_ENRIQUE" && !o.tracking) out.push({ orden: o, tipo: "postpago", via, hilo: ultimo.hilo });
+  }
+  return out;
+}
+
+/** USD→₲ de tipo_cambio (última fila) y USD→CNY de la fuente pública currency-api (la misma que usa la web). */
+export async function tipoCambioHoy(): Promise<TipoCambio> {
+  let usd_pyg: number | null = null, cny_por_usd: number | null = null;
+  try {
+    const { data } = await base().from("tipo_cambio").select("usd_pyg").order("fecha", { ascending: false }).limit(1);
+    const n = Number(((data ?? []) as Array<{ usd_pyg: unknown }>)[0]?.usd_pyg);
+    usd_pyg = Number.isFinite(n) && n > 0 ? n : null;
+  } catch (e) { console.error("tipo_cambio:", e instanceof Error ? e.message : e); }
+  for (const u of ["https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json", "https://latest.currency-api.pages.dev/v1/currencies/usd.json"]) {
+    try {
+      const r = await entorno.fetch(u, { signal: AbortSignal.timeout(6000) });
+      if (!r.ok) continue;
+      const j = await r.json() as { usd?: Record<string, unknown> };
+      const cny = Number(j.usd?.cny);
+      const pyg = Number(j.usd?.pyg);
+      if (Number.isFinite(cny) && cny > 0) cny_por_usd = cny;
+      if (usd_pyg == null && Number.isFinite(pyg) && pyg > 0) usd_pyg = pyg;
+      if (cny_por_usd) break;
+    } catch { /* la otra fuente */ }
+  }
+  return { usd_pyg, cny_por_usd };
 }
 
 // ---------- avisos ----------

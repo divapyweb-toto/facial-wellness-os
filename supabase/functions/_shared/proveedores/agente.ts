@@ -9,6 +9,7 @@
 //   4. Nada de datos reales en el prompt fijo: el depósito y la firma vienen de config, en la parte variable.
 // Repo PÚBLICO: ningún proveedor, contacto, precio ni dirección real en este archivo.
 import { type PedidoClaude, type RespuestaClaude, textoDe } from "../claude.ts";
+import { escaparHtml } from "../telegram_formato.ts";
 
 // ---------- interfaz FIJA (contrato interno 21-11) ----------
 
@@ -47,7 +48,18 @@ export interface SalidaAgente {
   modelo: string;
   /** Extra: el texto que escribió el modelo y frenó el doble freno (para que administración lo vea; NO se manda). */
   texto_bloqueado?: string | null;
+  /** 25-11 extra: el proveedor mandó un link de pago (Alipay u otro) o pidió pagar. Frena siempre; NUNCA se abre ni se paga. */
+  pago?: PagoPedido | null;
+  /** 25-11 extra: el proveedor pasó el número de seguimiento del envío. */
+  envio?: EnvioAvisado | null;
+  /** 25-11 extra: el proveedor pidió la dirección de envío (el texto fijo del depósito va al final de `texto`). */
+  pide_direccion?: boolean;
 }
+/** Link de pago o pedido de pago del proveedor. monto_minor = centavos (CNY/USD). */
+export interface PagoPedido { link: string | null; dominio: string | null; alipay: boolean; monto_minor: number | null; moneda: "CNY" | "USD" | null; cantidad: number | null }
+export interface EnvioAvisado { tracking: string; empresa: string | null }
+/** Depósito en China en partes (config.proveedores.deposito): dirección en inglés y en chino + marcas por vía. */
+export interface DepositoChina { en: string; zh: string; marca_maritimo: string; marca_aereo: string | null }
 export interface ConfigProveedores {
   activo: boolean;
   tope_ia_usd_mes: number;
@@ -55,6 +67,8 @@ export interface ConfigProveedores {
   modelo: string;
   direccion_deposito: string | null;
   firma: string;
+  /** 25-11: dirección en partes para el texto fijo. Sin esto no se manda ninguna dirección por texto fijo. */
+  deposito?: DepositoChina | null;
 }
 export interface DepsAgente {
   llamar(p: PedidoClaude): Promise<RespuestaClaude>; // llamarClaude real
@@ -102,7 +116,16 @@ export function configProveedoresDesde(valor: unknown): ConfigProveedores {
     modelo: txt(o.modelo) ?? MODELO_POR_DEFECTO,
     direccion_deposito: txt(o.direccion_deposito),
     firma: txt(o.firma) ?? CONFIG_POR_DEFECTO.firma,
+    ...(depositoDesde(o.deposito) ? { deposito: depositoDesde(o.deposito) } : {}),
   };
+}
+
+function depositoDesde(x: unknown): DepositoChina | null {
+  if (!x || typeof x !== "object" || Array.isArray(x)) return null;
+  const o = x as Record<string, unknown>;
+  const t = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const en = t(o.en), zh = t(o.zh), mar = t(o.marca_maritimo);
+  return en && zh && mar ? { en, zh, marca_maritimo: mar, marca_aereo: t(o.marca_aereo) } : null;
 }
 
 // ---------- doble freno sobre lo que SALE ----------
@@ -126,10 +149,10 @@ const PATRONES_SALIDA: Array<[string, RegExp]> = [
   ["terminos", /(签合同|签约|签署|签字|接受条款|同意条款)/],
   ["terminos", /(acepto|aceptamos|confirmo|confirmamos).{0,30}(t[ée]rminos|condiciones|contrato)|\b(firmamos|firmaremos|firmo|vamos a firmar)\b/i],
   ["pago", /\b(we will|we'll|i will|i'll)\s+(pay|transfer|wire|send the (payment|deposit|money))\b/i],
-  ["pago", /\b(payment|deposit|transfer|money)\s+(has been\s+|was\s+|is\s+)?(sent|made|done|paid|today|transferred)\b/i],
+  ["pago", /\b(payment|deposit|transfer|money)\s+(has been\s+|was\s+|is\s+)?(sent|made|done|paid|today|transferred|completed?|finished)\b/i],
   ["pago", /\b(we|i)\s+(have\s+)?(paid|transferred|wired)\b/i],
   ["pago", /(付款|已付|定金|订金|转账|汇款|打款)/],
-  ["pago", /\b(pagamos|pagaremos|pagar[eé]|ya pagamos|transferimos|transferiremos|te transfiero|depositamos)\b|(dep[oó]sito|transferencia|pago)\s+(enviad[oa]|hech[oa]|realizad[oa])/i],
+  ["pago", /\b(pagamos|pagaremos|pagar[eé]|ya pagamos|transferimos|transferiremos|te transfiero|depositamos)\b|(dep[oó]sito|transferencia|pago)\s+(enviad[oa]|hech[oa]|realizad[oa]|completad[oa])|\bcomplet(?:[eéoó]|amos)\s+el\s+(pago|dep[oó]sito)/i],
   ["compra", /\b(we|i)\s+(accept|confirm|agree to)\b.{0,40}\b(order|purchase|deal)/i],
   ["compra", /\b(place|placing)\s+(the|an|our)?\s*order\b/i],
   ["compra", /\b(we will|we'll|i will|i'll)\s+(buy|purchase|order|take)\b/i],
@@ -176,6 +199,149 @@ export function detectarPedidoProveedor(texto: string): MotivoPedido | null {
   if (typeof texto !== "string" || !texto.trim()) return null;
   for (const [motivo, re] of PATRONES_ENTRADA) if (re.test(texto)) return motivo;
   return null;
+}
+
+// ---------- 25-11: pago por link, seguimiento y dirección (proceso de Enrique: negociar → dirección → link de Alipay) ----------
+// Enrique (25-11): "SE NEGOCIA CON EL PROVEEDOR POR GMAIL O WHATSAPP Y SE LE MANDA LA UBICACION Y SE PAGA POR LINK DE
+// ALIPAY ASI NOMAS ES". El agente nunca abre un link ni paga: lo detecta, frena y se lo pasa a Enrique.
+
+const URL_RE = /https?:\/\/[^\s<>"'()\[\]{}，。、！？]+/gi;
+const DOMINIOS_ALIPAY = ["alipay.com", "alipay.cn", "alipay.hk", "alipayplus.com", "alipayhk.com"];
+const PALABRAS_LINK_PAGO = /(^|[./?=&_-])(pay|payment|checkout|cashier|invoice|alipay|paypal)([./?=&_-]|$)/i;
+const MONTO = String.raw`(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?`;
+const MONTOS: Array<[RegExp, "CNY" | "USD"]> = [
+  [new RegExp(String.raw`(?:¥|￥|\bRMB|\bCNY)\s*` + MONTO, "gi"), "CNY"],
+  [new RegExp(MONTO + String.raw`\s*(?:元|块|\bRMB\b|\bCNY\b|\byuan\b)`, "gi"), "CNY"],
+  [new RegExp(String.raw`(?:US\$|\bUSD|(?<![A-Za-z])\$)\s*` + MONTO, "gi"), "USD"],
+  [new RegExp(MONTO + String.raw`\s*(?:\bUSD\b|\bdollars?\b|美元|美金)`, "gi"), "USD"],
+];
+const CERCA_TOTAL = /(total|deposit|pay|amount|balance|sum|定金|订金|总|合计|共计|付款|支付|金额|尾款)/i;
+
+function dominioDe(url: string): string | null {
+  try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+}
+const esAlipay = (dom: string | null) => !!dom && DOMINIOS_ALIPAY.some((d) => dom === d || dom.endsWith(`.${d}`));
+
+/** Monto pedido (el que está cerca de total/deposit/定金…; si no, el último con moneda). */
+export function montoPedido(texto: string): { monto_minor: number; moneda: "CNY" | "USD" } | null {
+  const hallados: Array<{ i: number; minor: number; moneda: "CNY" | "USD"; cerca: boolean }> = [];
+  for (const [re, moneda] of MONTOS) {
+    for (const m of texto.matchAll(re)) {
+      const entero = Number(m[1].replace(/,/g, ""));
+      if (!Number.isFinite(entero)) continue;
+      const minor = entero * 100 + Number((m[2] ?? "").padEnd(2, "0") || 0);
+      if (minor <= 0) continue;
+      const i = m.index ?? 0;
+      hallados.push({ i, minor, moneda, cerca: CERCA_TOTAL.test(texto.slice(Math.max(0, i - 40), i + m[0].length + 20)) });
+    }
+  }
+  if (!hallados.length) return null;
+  const elegido = [...hallados].sort((a, b) => Number(b.cerca) - Number(a.cerca) || b.i - a.i)[0];
+  return { monto_minor: elegido.minor, moneda: elegido.moneda };
+}
+
+/** Cantidad de unidades si el mensaje la dice ("500 pcs", "500个"). */
+function cantidadDe(texto: string): number | null {
+  const m = texto.match(/\b(\d{1,3}(?:,\d{3})+|\d{2,7})\s*(?:pcs|pieces|units|sets|pairs|个|件|套|只|对|unidades|pares)\b/i)
+    ?? texto.match(/(\d{2,7})\s*(?:个|件|套|只|对)/);
+  const n = m ? Number(m[1].replace(/,/g, "")) : NaN;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * ¿El proveedor mandó un link para pagar o pidió el pago? Link de Alipay (o cualquier link con pay/checkout/cashier),
+ * "支付宝" con link o pedido de pago, o un pedido de pago ("please pay the deposit"). Mencionar Alipay como forma de pago
+ * en una cotización NO cuenta. El link se devuelve como texto: nadie lo abre.
+ */
+export function detectarPago(texto: string): PagoPedido | null {
+  if (typeof texto !== "string" || !texto.trim()) return null;
+  const links = [...texto.matchAll(URL_RE)].map((m) => m[0].replace(/[.,;:!?]+$/, ""));
+  const conDominio = links.map((l) => ({ l, d: dominioDe(l) }));
+  const deAlipay = conDominio.find((x) => esAlipay(x.d));
+  const dePago = deAlipay ?? conDominio.find((x) => x.d && PALABRAS_LINK_PAGO.test(x.l.slice(x.l.indexOf(x.d) )));
+  const pidePago = detectarPedidoProveedor(texto) === "pago" || /支付宝.{0,12}(链接|付款|支付|扫码)|(链接|扫码).{0,8}(付款|支付)/.test(texto);
+  if (!dePago && !pidePago) return null;
+  const monto = montoPedido(texto);
+  return {
+    link: dePago?.l ?? null,
+    dominio: dePago?.d ?? null,
+    alipay: !!deAlipay,
+    monto_minor: monto?.monto_minor ?? null,
+    moneda: monto?.moneda ?? null,
+    cantidad: cantidadDe(texto),
+  };
+}
+
+const EMPRESAS_ENVIO: Array<[RegExp, string]> = [
+  [/顺丰|\bSF\b|S\.F\.? express/i, "SF Express"], [/圆通|\bYTO\b/i, "YTO"], [/中通|\bZTO\b/i, "ZTO"], [/申通|\bSTO\b/i, "STO"],
+  [/韵达|\byunda\b/i, "Yunda"], [/京东|\bJD\b/i, "JD"], [/极兔|J&T/i, "J&T"], [/\bEMS\b|邮政/i, "EMS"],
+  [/\bDHL\b/i, "DHL"], [/fedex/i, "FedEx"], [/\bUPS\b/i, "UPS"], [/德邦|deppon/i, "Deppon"],
+];
+const CLAVE_TRACKING = /(tracking|track(?:ing)?\s*(?:no|number|#|code)|waybill|logistics\s*(?:no|number)|运单号|快递单号|物流单号|单号|物流信息|n[uú]mero de (?:seguimiento|gu[ií]a)|gu[ií]a)/i;
+
+/** Número de seguimiento que pasa el proveedor ("tracking number: SF1234567890123", "快递单号 YT…"). */
+export function detectarTracking(texto: string): EnvioAvisado | null {
+  if (typeof texto !== "string") return null;
+  const k = CLAVE_TRACKING.exec(texto);
+  if (!k) return null;
+  const despues = texto.slice(k.index + k[0].length, k.index + k[0].length + 80);
+  const m = despues.match(/\b([A-Z]{0,4}\d{8,22}[A-Z]{0,3})\b/i);
+  if (!m) return null;
+  const empresa = EMPRESAS_ENVIO.find(([re]) => re.test(texto))?.[1] ?? null;
+  return { tracking: m[1].toUpperCase(), empresa };
+}
+
+/** ¿El proveedor pregunta a dónde mandar? */
+export function pideDireccion(texto: string): boolean {
+  return typeof texto === "string" && /(shipping|delivery|warehouse|receiving|your)\s+address|address\s+(to|for)\s+(ship|shipping|delivery|send)|where\s+(should|shall|can|do|to)\s+(we|i)?\s*(ship|send|deliver)|收货地址|收件地址|仓库地址|发到哪|寄到哪|地址发|地址给|direcci[oó]n\s+(de\s+env[ií]o|del?\s+(dep[oó]sito|almac[eé]n))|a\s+d[oó]nde\s+(enviamos|mandamos|lo\s+mandamos|lo\s+enviamos)/i.test(texto);
+}
+
+/** Texto FIJO con la dirección del depósito y la marca de la caja (marítimo por defecto; aéreo solo si se pide). */
+export function textoDireccion(dep: DepositoChina, idioma: Idioma, via: "maritimo" | "aereo" = "maritimo"): string {
+  const marca = via === "aereo" && dep.marca_aereo ? dep.marca_aereo : dep.marca_maritimo;
+  if (idioma === "zh") return `请发到我们在中国的仓库：\n${dep.zh}\n唛头（请写在外箱上）：${marca}\n谢谢！`;
+  if (idioma === "es") return `Por favor envíen a nuestro almacén en China:\n${dep.en}\nMarca en la caja: ${marca}\nGracias.`;
+  return `Please ship to our warehouse in China:\n${dep.en}\nShipping mark (please write it on the carton): ${marca}\nThank you.`;
+}
+
+/** Texto FIJO después de que Enrique pagó (la base solo deja marcar PAGADA_POR_ENRIQUE a Enrique). Lo manda el sistema,
+ *  no la IA: el doble freno no deja que la IA diga "ya pagamos". */
+export function textoPostPago(idioma: Idioma, canal: Canal, firma: string): string {
+  const t = idioma === "zh" ? "您好，已通过支付宝链接完成付款。发货后请尽快把物流单号发给我们，谢谢！"
+    : idioma === "es" ? "Hola, ya se completó el pago por el link de Alipay. Cuando despachen, por favor pásennos el número de seguimiento. ¡Gracias!"
+    : "Hello, the payment has been completed through the Alipay link. Once the goods are shipped, please send us the tracking number. Thank you!";
+  return conFirma(t, canal, firma);
+}
+
+export interface TipoCambio { usd_pyg: number | null; cny_por_usd: number | null }
+/** Aviso a Enrique (HTML escapado): monto en ¥/USD/₲, link como texto, dominio a la vista y la orden en borrador. */
+export function textoAvisoPago(a: { proveedor: string | null; producto: string | null; canal: Canal; pago: PagoPedido; tc: TipoCambio; orden: { id: string; estado: string; nueva: boolean } | null }): string {
+  const p = a.pago;
+  const n = (x: number, dec = 2) => x.toLocaleString("es-PY", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  let monto = "monto: no lo pude leer, miralo en el link";
+  if (p.monto_minor != null && p.moneda) {
+    const v = p.monto_minor / 100;
+    const usd = p.moneda === "USD" ? v : a.tc.cny_por_usd ? v / a.tc.cny_por_usd : null;
+    const partes = [p.moneda === "CNY" ? `¥${n(v)}` : `USD ${n(v)}`];
+    if (p.moneda === "CNY") partes.push(usd != null ? `≈ USD ${n(usd)}` : "USD: sin tipo de cambio");
+    partes.push(usd != null && a.tc.usd_pyg ? `≈ ₲${n(Math.round(usd * a.tc.usd_pyg / 1000) * 1000, 0)}` : "₲: sin tipo de cambio");
+    monto = partes.join(" ");
+  }
+  const link = p.link
+    ? `Link: <code>${escaparHtml(p.link)}</code>\nDominio: <b>${escaparHtml(p.dominio ?? "?")}</b> ${p.alipay ? "✅ es de Alipay" : "⚠️ NO es de Alipay: no pagues sin revisar"}`
+    : "Sin link (pide pagar por otro medio).";
+  const orden = a.orden
+    ? a.orden.estado === "BORRADOR"
+      ? `Orden ${a.orden.nueva ? "creada" : "actualizada"} en BORRADOR: si coincide con lo negociado, confirmala en Voltra OS → Importaciones y pagá vos.`
+      : `La orden ya estaba ${a.orden.estado}: sumé la nota, no toqué montos.`
+    : "No pude crear la orden (no sé de qué producto es): asignale el producto en Importaciones.";
+  return [
+    `💳 <b>Pedido de pago</b> de ${escaparHtml(a.proveedor ?? "proveedor")} (${a.canal === "email" ? "correo" : "WhatsApp"})${a.producto ? ` · ${escaparHtml(a.producto)}` : ""}`,
+    escaparHtml(monto) + (p.cantidad ? ` · ${p.cantidad} u` : ""),
+    link,
+    orden,
+    "El sistema no abre el link ni paga. Al proveedor se le contestó que lo confirma el dueño.",
+  ].join("\n");
 }
 
 // ---------- idioma ----------
@@ -284,7 +450,9 @@ function parteVariable(canal: Canal, idioma: Idioma, candidato: EntradaAgente["c
     `Canal: ${canal === "email" ? "correo" : "WhatsApp"}. Idioma de la respuesta: ${NOMBRE_IDIOMA[idioma]}.`,
     candidato ? `Producto en negociación: ${candidato.nombre}.` : "Producto: desconocido (contestá igual, sin prometer nada).",
     ficha ? `Ficha del producto: ${ficha}` : null,
-    cfg.direccion_deposito ? `Depósito de Voltra en China (para despacho): ${cfg.direccion_deposito}` : "Depósito: no cargado (no des ninguna dirección).",
+    cfg.deposito
+      ? "Depósito: la dirección y la marca de la caja las agrega el sistema solo cuando el proveedor las pide; NO las escribas vos."
+      : cfg.direccion_deposito ? `Depósito de Voltra en China (para despacho): ${cfg.direccion_deposito}` : "Depósito: no cargado (no des ninguna dirección).",
     canal === "email" ? `Firmá con: ${cfg.firma}` : "Sin firma (es WhatsApp).",
   ].filter(Boolean).join("\n");
 }
@@ -499,6 +667,40 @@ function cerrarConTexto(out: SalidaAgente, s: SalidaModelo, conProducto: boolean
 
 /** Respuesta al último mensaje de un proveedor. Nunca tira excepción por la IA: ante cualquier duda, no responde y frena. */
 export async function responderProveedor(e: EntradaAgente, deps?: DepsAgente): Promise<SalidaAgente> {
+  const d = deps ?? await depsPorDefecto();
+  const s = await responderProveedorBase(e, d);
+  const leerCfg = async () => { try { return configProveedoresDesde(await d.config()); } catch { return { ...CONFIG_POR_DEFECTO }; } };
+  // 25-11: pago, seguimiento y dirección se detectan por regla (sin IA, también con el tope o el interruptor).
+  const pago = detectarPago(e.texto);
+  const envio = detectarTracking(e.texto);
+  const pide = pideDireccion(e.texto);
+  const out: SalidaAgente = { ...s, pago, envio, pide_direccion: pide };
+  if (pago && s.motivo !== "apagado") {
+    // Link o pedido de pago: SIEMPRE frena (aunque el modelo no lo haya visto) y se contesta el neutro si hay producto.
+    const yaNeutro = s.frena && MOTIVOS_PEDIDO.includes(s.motivo as MotivoPedido);
+    if (!yaNeutro && !["tope_ia", "gasto_desconocido"].includes(String(s.motivo))) {
+      const cfg = await leerCfg();
+      const conProducto = e.candidato !== null;
+      return { ...out, frena: true, motivo: "pago", responder: conProducto, texto: conProducto ? textoNeutro(s.idioma, e.canal, cfg.firma) : null,
+        traduccion_es: conProducto ? textoNeutro("es", e.canal, cfg.firma) : null };
+    }
+    return { ...out, frena: true, motivo: s.motivo ?? "pago" };
+  }
+  if (pide && out.responder && out.texto && !out.frena) {
+    const cfg = await leerCfg();
+    if (cfg.deposito) {
+      const dir = textoDireccion(cfg.deposito, out.idioma);
+      // En correo la firma va al final: la dirección entra antes de la firma.
+      const firma = e.canal === "email" && cfg.firma && out.texto.endsWith(cfg.firma) ? cfg.firma : "";
+      const cuerpo = firma ? out.texto.slice(0, -firma.length).trimEnd() : out.texto;
+      out.texto = `${cuerpo}\n\n${dir}${firma ? `\n\n${firma}` : ""}`;
+      out.traduccion_es = `${out.traduccion_es ?? ""}\n\n${textoDireccion(cfg.deposito, "es")}`.trim();
+    }
+  }
+  return out;
+}
+
+async function responderProveedorBase(e: EntradaAgente, deps?: DepsAgente): Promise<SalidaAgente> {
   const d = deps ?? await depsPorDefecto();
   const idioma = elegirIdioma(e.proveedor, e.texto);
   const base = {

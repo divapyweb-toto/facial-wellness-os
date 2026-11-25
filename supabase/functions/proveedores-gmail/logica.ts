@@ -10,6 +10,7 @@
 //   3. Recordatorio: 48 h sin respuesta → uno solo; nunca más de 3 salientes seguidos sin respuesta.
 //   4. Primeros contactos que carga administración: solo en horario de China (08–20 China = 21–09 Paraguay).
 import { armarCorreo, armarRespuesta, adjuntosDe, base64url, type ClienteGmail, direccionDe, encabezado, extraerTexto, type MensajeGmail } from "./gmail.ts";
+import { type DepositoChina, type EnvioAvisado, type PagoPedido, type TipoCambio, textoAvisoPago, textoDireccion, textoPostPago } from "../_shared/proveedores/agente.ts";
 
 // ─── Tipos del agente (mismos campos que la interfaz FIJA de _shared/proveedores/agente.ts) ──────────────────
 export type Idioma = "zh" | "en" | "es";
@@ -40,8 +41,12 @@ export interface SalidaAgente {
   cotizacion: Cotizacion | null;
   costo_usd: number;
   modelo: string;
+  /** 25-11 (extras del agente común): link o pedido de pago, seguimiento, pidió la dirección. */
+  pago?: PagoPedido | null;
+  envio?: EnvioAvisado | null;
+  pide_direccion?: boolean;
 }
-export interface ConfigProveedores { activo: boolean; tope_ia_usd_mes: number; tope_plantillas_mes: number; modelo: string; direccion_deposito: string | null; firma: string }
+export interface ConfigProveedores { activo: boolean; tope_ia_usd_mes: number; tope_plantillas_mes: number; modelo: string; direccion_deposito: string | null; firma: string; deposito?: DepositoChina | null }
 
 // ─── Lo que la lógica necesita de afuera ────────────────────────────────────
 export interface ProveedorGmail extends ProveedorRef { email: string | null; no_contactar: boolean }
@@ -87,6 +92,16 @@ export interface IoGmail {
   tomarParaEnviar(id: string): Promise<boolean>; // AUTHORIZED → SENDING solo si sigue AUTHORIZED
   cargarCotizacion(c: Cotizacion, ref: { candidatoId: string; proveedorId: string; mensajeId: string; canal: "email" }): Promise<void>;
   avisarAdministracion(texto: string, o: { tipo: TipoAviso; clave: string }): Promise<void>; // una vez por día por clave
+  // 25-11: proceso de compra (negociar → dirección → link de Alipay → paga Enrique).
+  registrarPagoPedido(r: { proveedorId: string; candidatoId: string; pago: PagoPedido; canal: "email"; mensajeId: string; plataforma: string | null }): Promise<OrdenRef>;
+  cargarTracking(r: { proveedorId: string; candidatoId: string | null; envio: EnvioAvisado; canal: "email" }): Promise<{ id: string; estado: string } | null>;
+  ordenesParaAvisar(): Promise<OrdenAviso[]>; // órdenes cuyo último mensaje con el proveedor fue por correo
+  tipoCambio(): Promise<TipoCambio>;
+}
+export interface OrdenRef { id: string; estado: string; nueva: boolean }
+export interface OrdenAviso {
+  orden: { id: string; estado: string; candidato_id: string; proveedor_id: string | null; tracking: string | null };
+  tipo: "direccion" | "postpago"; via: "maritimo" | "aereo"; hilo: string | null;
 }
 export interface AgenteGmail {
   responder(e: EntradaAgente): Promise<SalidaAgente>;
@@ -134,7 +149,7 @@ export function textoRecordatorio(idioma: Idioma | null, firma: string): string 
 }
 
 // ─── La corrida ─────────────────────────────────────────────────────────────
-export interface Hecho { paso: "entrante" | "respuesta" | "recordatorio" | "primer_contacto"; accion: string; proveedor_id?: string; hilo?: string; mensaje_id?: string; estado?: string; motivo?: string; error?: string }
+export interface Hecho { paso: "entrante" | "respuesta" | "recordatorio" | "primer_contacto" | "orden"; accion: string; proveedor_id?: string; hilo?: string; mensaje_id?: string; estado?: string; motivo?: string; error?: string }
 export interface Resultado { activo: boolean; simulado: boolean; revisados: number; ignorados: number; hechos: Hecho[]; error?: string }
 
 const err = (e: unknown) => e instanceof Error ? e.message : String(e);
@@ -220,11 +235,40 @@ export async function procesarCorrida(deps: Deps, opciones: { simular: boolean }
         await avisar(resumenCotizacion(prov, candidato, salida.cotizacion), "proveedor_cotizacion", `email:cot:${idIn}`);
       }
     }
+    // 25-11: link o pedido de pago → orden en BORRADOR + aviso a Enrique con el monto (nadie abre el link ni paga).
+    if (salida.pago) {
+      let orden: OrdenRef | null = null;
+      if (candidato) {
+        try {
+          orden = await io.registrarPagoPedido({ proveedorId: prov.id, candidatoId: candidato.id, pago: salida.pago, canal: "email", mensajeId: idIn, plataforma: prov.plataforma });
+        } catch (e) {
+          res.hechos.push({ paso: "respuesta", accion: "orden por pago falló", hilo, error: err(e) });
+        }
+      }
+      const tc = await io.tipoCambio().catch(() => ({ usd_pyg: null, cny_por_usd: null }));
+      await avisar(textoAvisoPago({ proveedor: prov.nombre, producto: candidato?.nombre ?? null, canal: "email", pago: salida.pago, tc, orden }), "proveedor_frena", `email:pago:${idIn}`);
+      res.hechos.push({ paso: "respuesta", accion: "pedido de pago", hilo, motivo: orden ? `orden ${orden.id} ${orden.estado}` : "sin orden" });
+    }
+    // 25-11: número de seguimiento → se carga en la orden pagada (pasa a EN_TRANSITO).
+    if (salida.envio) {
+      let o: { id: string; estado: string } | null = null;
+      try {
+        o = await io.cargarTracking({ proveedorId: prov.id, candidatoId: candidato?.id ?? null, envio: salida.envio, canal: "email" });
+      } catch (e) {
+        res.hechos.push({ paso: "respuesta", accion: "seguimiento falló", hilo, error: err(e) });
+      }
+      const empresa = salida.envio.empresa ? ` (${salida.envio.empresa})` : "";
+      await avisar(o
+        ? `📦 Seguimiento de ${prov.nombre ?? "proveedor"} (correo): ${salida.envio.tracking}${empresa}. Cargado en la orden (${o.estado}).`
+        : `📦 ${prov.nombre ?? "Proveedor"} (correo) mandó el seguimiento ${salida.envio.tracking}${empresa}, pero no encontré una orden confirmada o pagada. Revisalo en Importaciones.`,
+        "proveedor_cotizacion", `email:envio:${idIn}`);
+      res.hechos.push({ paso: "respuesta", accion: "seguimiento", hilo, motivo: o ? `orden ${o.id} ${o.estado}` : "sin orden" });
+    }
     // Doble freno sobre lo que saldría (aunque el agente diga que responde).
     const compromete = salida.responder && salida.texto ? agente.compromete(salida.texto) : null;
     const frena = salida.frena || !!compromete;
     const motivo = compromete ?? salida.motivo;
-    if (frena) {
+    if (frena && !(salida.pago && motivo !== "tope_ia")) { // el pedido de pago ya avisó arriba con el detalle
       const tope = motivo === "tope_ia";
       await avisar(tope
         ? "⛔ Proveedores: se llegó al tope de IA del mes. El agente dejó de responder solo."
@@ -288,6 +332,41 @@ export async function procesarCorrida(deps: Deps, opciones: { simular: boolean }
       } catch (e) {
         res.hechos.push({ paso: "recordatorio", accion: "error", hilo, error: err(e) });
       }
+    }
+  }
+
+  // ── 3b. 25-11: mensajes fijos por orden (cualquier hora: es la respuesta a una compra en curso) ──
+  // Enrique confirmó la orden → dirección del depósito con la marca (marítima salvo que la orden diga aérea).
+  // Enrique la marcó pagada → "pago hecho, pásennos el seguimiento". Uno solo de cada uno por orden (idempotencia).
+  for (const a of await io.ordenesParaAvisar().catch((e) => { res.hechos.push({ paso: "orden", accion: "error", error: err(e) }); return [] as OrdenAviso[]; })) {
+    if (envios >= MAX_ENVIOS_POR_CORRIDA) break;
+    if (!a.hilo || !a.orden.proveedor_id) continue;
+    try {
+      const prov = await io.proveedorPorId(a.orden.proveedor_id);
+      if (!prov || prov.no_contactar) continue;
+      if (a.tipo === "direccion" && !cfg.deposito) {
+        await avisar(`🏷️ Orden confirmada de ${prov.nombre ?? "proveedor"}: no mandé la dirección porque config.proveedores.deposito no está cargado.`, "proveedor_frena", `email:orden:${a.orden.id}:sin_deposito`);
+        continue;
+      }
+      const idioma = prov.idioma ?? "en";
+      const texto = a.tipo === "direccion" ? `${textoDireccion(cfg.deposito!, idioma, a.via)}\n\n${cfg.firma}` : textoPostPago(idioma, "email", cfg.firma);
+      const traduccion = a.tipo === "direccion" ? textoDireccion(cfg.deposito!, "es", a.via) : textoPostPago("es", "email", cfg.firma);
+      const idem = `email:out:orden:${a.orden.id}:${a.tipo}`;
+      if (simular) { res.hechos.push({ paso: "orden", accion: `mandaría ${a.tipo}`, proveedor_id: prov.id, hilo: a.hilo }); continue; }
+      const th = await gmail.hilo(a.hilo);
+      const ultimo = th.messages?.[th.messages.length - 1];
+      if (!ultimo) continue;
+      const resp = armarRespuesta({ ...ultimo, threadId: a.hilo }, texto, miCorreo || null);
+      const idOut = await io.guardarMensaje({
+        canal: "email", direccion: "out", estado: "AUTHORIZED", autor: "agente", proveedor_id: prov.id, candidato_id: a.orden.candidato_id,
+        politica_id: await politicaId(), idempotencia: idem, id_externo: null, hilo: a.hilo,
+        asunto: resp.asunto, original: texto, traduccion, idioma, costo_usd: 0,
+      });
+      if (!idOut) continue; // ya salió antes
+      const r = await mandar(idOut, resp.raw, a.hilo);
+      res.hechos.push({ paso: "orden", accion: a.tipo, proveedor_id: prov.id, hilo: a.hilo, mensaje_id: idOut, estado: r.estado, ...(r.error ? { error: r.error } : {}) });
+    } catch (e) {
+      res.hechos.push({ paso: "orden", accion: "error", hilo: a.hilo ?? undefined, error: err(e) });
     }
   }
 

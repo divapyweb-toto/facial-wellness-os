@@ -6,6 +6,12 @@ import {
   avisarAdministracion,
   candidatoDeHilo,
   cargarCotizacion,
+  cargarTracking,
+  ordenesParaAvisar,
+  registrarPagoPedido,
+  textoAvisoPago,
+  tipoCambioHoy,
+  viaDeOrden,
   configProveedores,
   gastoMesUsd,
   guardarMensaje,
@@ -195,4 +201,72 @@ Deno.test("avisarAdministracion: una vez por día por clave, con el destino de c
 Deno.test("los 3 tipos de aviso de proveedores están registrados", async () => {
   const { TIPOS_AVISO } = await import("../telegram_tipos.ts");
   for (const t of ["proveedor_frena", "proveedor_cotizacion", "proveedor_tope_ia"]) assert(TIPOS_AVISO[t], t);
+});
+
+// ─── 25-11: orden por link de pago, seguimiento, mensajes por orden, tipo de cambio ───
+const PAGO = { link: "https://qr.alipay.com/demo1", dominio: "qr.alipay.com", alipay: true, monto_minor: 72000, moneda: "CNY" as const, cantidad: 100 };
+const AHORA = new Date("2026-11-25T18:00:00Z");
+
+Deno.test("registrarPagoPedido: sin orden abierta crea BORRADOR con monto, cantidad y link en notas", async () => {
+  const c = baseFalsa((_t, ops) => tiene(ops, "single") ? { data: { id: "o-nueva" }, error: null } : { data: [], error: null });
+  const r = await registrarPagoPedido({ proveedorId: "p1", candidatoId: "c1", pago: PAGO, canal: "email", mensajeId: "m1", plataforma: "1688", ahora: AHORA });
+  assertEquals(r, { id: "o-nueva", estado: "BORRADOR", nueva: true });
+  const ins = c[1].ops.find((o) => o[0] === "insert")![1] as Record<string, unknown>;
+  assertEquals([ins.estado, ins.cantidad, ins.total_minor, ins.moneda, ins.plataforma], ["BORRADOR", 100, 72000, "CNY", "1688"]);
+  assert(String(ins.notas).includes("https://qr.alipay.com/demo1") && String(ins.notas).includes("25-11 15:00"));
+  _configurarIo();
+});
+
+Deno.test("registrarPagoPedido: BORRADOR abierto se actualiza; confirmada por Enrique solo suma la nota", async () => {
+  const fila = (estado: string) => ({ id: "o1", estado, candidato_id: "c1", proveedor_id: "p1", moneda: "USD", total_minor: 1, cantidad: 5, tracking: null, forwarder: null, deposito_destino: null, notas: "vieja", actualizado_en: "x" });
+  let c = baseFalsa((_t, ops) => tiene(ops, "update", undefined) ? { data: null, error: null } : { data: ops.some((o) => o[0] === "update") ? null : [fila("BORRADOR")], error: null });
+  assertEquals((await registrarPagoPedido({ proveedorId: "p1", candidatoId: "c1", pago: PAGO, canal: "whatsapp", mensajeId: null, plataforma: null, ahora: AHORA })).nueva, false);
+  let upd = c[1].ops.find((o) => o[0] === "update")![1] as Record<string, unknown>;
+  assertEquals([upd.total_minor, upd.moneda, upd.cantidad], [72000, "CNY", 100]);
+  assert(String(upd.notas).startsWith("vieja\n"));
+  c = baseFalsa((_t, ops) => ({ data: ops.some((o) => o[0] === "update") ? null : [fila("CONFIRMADA_POR_ENRIQUE")], error: null }));
+  await registrarPagoPedido({ proveedorId: "p1", candidatoId: "c1", pago: PAGO, canal: "email", mensajeId: "m2", plataforma: null, ahora: AHORA });
+  upd = c[1].ops.find((o) => o[0] === "update")![1] as Record<string, unknown>;
+  assertEquals(Object.keys(upd), ["notas"]);
+  _configurarIo();
+});
+
+Deno.test("cargarTracking: pagada → EN_TRANSITO con el número; sin orden → null; mismo número no reescribe", async () => {
+  const fila = { id: "o1", estado: "PAGADA_POR_ENRIQUE", candidato_id: "c1", proveedor_id: "p1", moneda: "CNY", total_minor: 1, cantidad: 1, tracking: null, forwarder: null, deposito_destino: null, notas: null, actualizado_en: "x" };
+  let c = baseFalsa((_t, ops) => ({ data: ops.some((o) => o[0] === "update") ? null : [fila], error: null }));
+  assertEquals(await cargarTracking({ proveedorId: "p1", candidatoId: "c1", envio: { tracking: "SF123456789012", empresa: "SF Express" }, canal: "email", ahora: AHORA }), { id: "o1", estado: "EN_TRANSITO" });
+  const upd = c[1].ops.find((o) => o[0] === "update")![1] as Record<string, unknown>;
+  assertEquals([upd.tracking, upd.estado], ["SF123456789012", "EN_TRANSITO"]);
+  baseFalsa(() => ({ data: [], error: null }));
+  assertEquals(await cargarTracking({ proveedorId: "p1", candidatoId: "c1", envio: { tracking: "X12345678", empresa: null }, canal: "email" }), null);
+  c = baseFalsa(() => ({ data: [{ ...fila, tracking: "SF123456789012" }], error: null }));
+  await cargarTracking({ proveedorId: "p1", candidatoId: null, envio: { tracking: "SF123456789012", empresa: null }, canal: "email" });
+  assert(!c.some((q) => q.ops.some((o) => o[0] === "update")));
+  _configurarIo();
+});
+
+Deno.test("ordenesParaAvisar: solo las del canal del último mensaje; pagada sin seguimiento suma post-pago; vía aérea", async () => {
+  const o = (id: string, estado: string, prov: string, forwarder: string | null = null) => ({ id, estado, candidato_id: "c1", proveedor_id: prov, moneda: "CNY", total_minor: 1, cantidad: 1, tracking: null, forwarder, deposito_destino: null, notas: null, actualizado_en: "x" });
+  baseFalsa((tabla, ops) => tabla === "pi_ordenes_compra" ? { data: [o("o1", "CONFIRMADA_POR_ENRIQUE", "pE"), o("o2", "PAGADA_POR_ENRIQUE", "pE", "Easybox aéreo"), o("o3", "PEDIDA", "pW")], error: null }
+    : { data: [{ canal: tiene(ops, "eq", "proveedor_id", "pW") ? "whatsapp" : "email", hilo: "t1" }], error: null });
+  const r = await ordenesParaAvisar("email", AHORA);
+  assertEquals(r.map((x) => `${x.orden.id}:${x.tipo}:${x.via}`), ["o1:direccion:maritimo", "o2:direccion:aereo", "o2:postpago:aereo"]);
+  assertEquals(viaDeOrden({ forwarder: null, deposito_destino: "Easybox marítimo" }), "maritimo");
+  _configurarIo();
+});
+
+Deno.test("tipoCambioHoy: ₲ de tipo_cambio y ¥ de la fuente pública; si la fuente cae, null", async () => {
+  baseFalsa(() => ({ data: [{ usd_pyg: "6400.5" }], error: null }));
+  _configurarIo({ cliente: () => ({ from: () => { const q: Record<string, unknown> = {}; for (const m of ["select", "order", "limit"]) q[m] = () => q; q.then = (ok: (r: unknown) => unknown) => Promise.resolve({ data: [{ usd_pyg: "6400.5" }], error: null }).then(ok); return q; } }) as never,
+    fetch: () => Promise.resolve(new Response(JSON.stringify({ usd: { cny: 7.21, pyg: 6500 } }))) });
+  assertEquals(await tipoCambioHoy(), { usd_pyg: 6400.5, cny_por_usd: 7.21 });
+  _configurarIo({ cliente: () => ({ from: () => { const q: Record<string, unknown> = {}; for (const m of ["select", "order", "limit"]) q[m] = () => q; q.then = (ok: (r: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(ok); return q; } }) as never,
+    fetch: () => Promise.reject(new Error("sin red")) });
+  assertEquals(await tipoCambioHoy(), { usd_pyg: null, cny_por_usd: null });
+  _configurarIo();
+});
+
+Deno.test("textoAvisoPago: dominio falso marcado; sin tipo de cambio lo dice; escapa HTML", () => {
+  const t = textoAvisoPago({ proveedor: "Demo <b>", producto: "Prod", canal: "whatsapp", pago: { ...PAGO, link: "https://alipay.com.demo.xyz/p?a=1&b=2", dominio: "alipay.com.demo.xyz", alipay: false }, tc: { usd_pyg: null, cny_por_usd: null }, orden: null });
+  assert(t.includes("NO es de Alipay") && t.includes("USD: sin tipo de cambio") && t.includes("Demo &lt;b&gt;") && t.includes("&amp;b=2"));
 });

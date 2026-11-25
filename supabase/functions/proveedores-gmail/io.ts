@@ -103,6 +103,10 @@ export const ioGmail: IoGmail = {
   async avisarAdministracion(texto, o) {
     await comun.avisarAdministracion(texto, o);
   },
+  registrarPagoPedido: (r) => comun.registrarPagoPedido(r),
+  cargarTracking: (r) => comun.cargarTracking(r),
+  ordenesParaAvisar: () => comun.ordenesParaAvisar("email"),
+  tipoCambio: () => comun.tipoCambioHoy(),
 };
 
 export const agenteGmail: AgenteGmail = {

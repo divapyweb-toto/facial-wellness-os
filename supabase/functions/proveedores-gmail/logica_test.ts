@@ -3,7 +3,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { base64url, bytesDeBase64url, type ClienteGmail, type MensajeGmail, type ResultadoEnvio } from "./gmail.ts";
 import {
   type AgenteGmail, type CandidatoRef, type ConfigProveedores, type Deps, enHorarioChina, type FilaMensaje, type IoGmail, type MensajeBase,
-  type PrimerContacto, procesarCorrida, type ProveedorGmail, type SalidaAgente, salientesSeguidos, tocaRecordatorio,
+  type OrdenAviso, type PrimerContacto, procesarCorrida, type ProveedorGmail, type SalidaAgente, salientesSeguidos, tocaRecordatorio,
 } from "./logica.ts";
 import { redactarPrimerContacto, responderProveedor, textoCompromete } from "../_shared/proveedores/agente.ts";
 import { simularRespuesta } from "../_shared/claude.ts";
@@ -40,6 +40,9 @@ interface Escenario {
   agenteFalla?: boolean;
   envio?: ResultadoEnvio;
   compromete?: string | null;
+  ordenes?: OrdenAviso[];
+  ordenFalla?: boolean;
+  trackingOrden?: { id: string; estado: string } | null;
 }
 
 function armar(e: Escenario = {}) {
@@ -52,6 +55,8 @@ function armar(e: Escenario = {}) {
   const proveedores = e.proveedores ?? [PROV];
   const bandeja = e.bandeja ?? [];
   const yaAvisado = new Set<string>();
+  const pagos: unknown[] = [];
+  const trackings: unknown[] = [];
   let n = 0;
 
   const gmail: ClienteGmail = {
@@ -109,12 +114,22 @@ function armar(e: Escenario = {}) {
       if (!yaAvisado.has(k)) { yaAvisado.add(k); avisos.push({ texto, ...o }); }
       return Promise.resolve();
     },
+    registrarPagoPedido: (r) => { pagos.push(r); return e.ordenFalla ? Promise.reject(new Error("base caída")) : Promise.resolve({ id: "orden-1", estado: "BORRADOR", nueva: true }); },
+    cargarTracking: (r) => { trackings.push(r); return Promise.resolve(e.trackingOrden === undefined ? { id: "orden-1", estado: "EN_TRANSITO" } : e.trackingOrden); },
+    ordenesParaAvisar: () => Promise.resolve(e.ordenes ?? []),
+    tipoCambio: () => Promise.resolve({ usd_pyg: 6400, cny_por_usd: 7.2 }),
   };
-  return { filas, enviados, avisos, cotizaciones, llamadasAgente, leidos, deps: (ahora = EN_CHINA): Deps => ({ gmail, agente, io, ahora: () => ahora }) };
+  return { filas, enviados, avisos, cotizaciones, llamadasAgente, leidos, pagos, trackings, deps: (ahora = EN_CHINA): Deps => ({ gmail, agente, io, ahora: () => ahora }) };
 }
 
 const DEL_PROV = mensajeGmail("m1", "t1", "Demo Factory <Proveedor@Example.com>", "单价1.2美元\n\nOn Mon, Nov 23, 2026 Voltra wrote:\n> price?");
 const decRaw = (raw: string) => new TextDecoder().decode(bytesDeBase64url(raw));
+/** Cuerpo del correo armado (MIME con el texto en base64). */
+const cuerpo = (raw: string) => {
+  const mime = decRaw(raw);
+  const b64 = mime.slice(mime.search(/\r?\n\r?\n/)).replace(/\s+/g, "");
+  return new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+};
 
 // ─── reglas puras ───
 Deno.test("horario de China: 08–20 China = 21–09 Paraguay", () => {
@@ -385,4 +400,76 @@ Deno.test("agente real: tope de IA alcanzado → no sale nada, aviso de tope", a
   await procesarCorrida(conAgenteReal(t, 10), { simular: false });
   assertEquals(t.enviados.length, 0);
   assertEquals(t.avisos.map((a) => a.tipo), ["proveedor_tope_ia"]);
+});
+
+// ─── 25-11: proceso de compra (pago por link de Alipay, seguimiento, dirección y post-pago) ───
+const DEP = { en: "Demo Warehouse, 1 Demo Road, Shenzhen", zh: "深圳演示路1号", marca_maritimo: "DEMO-MAR", marca_aereo: "DEMO-AIR" };
+const PAGO = { link: "https://qr.alipay.com/demo1", dominio: "qr.alipay.com", alipay: true, monto_minor: 72000, moneda: "CNY" as const, cantidad: 100 };
+
+Deno.test("pago por link: orden en BORRADOR + UN aviso a Enrique con ¥/USD/₲ y el link; contesta el neutro", async () => {
+  const t = armar({ bandeja: [DEL_PROV], salida: { frena: true, motivo: "pago", responder: true, texto: "谢谢。这部分需要老板确认。", pago: PAGO } });
+  const r = await procesarCorrida(t.deps(), { simular: false });
+  assertEquals(t.pagos.length, 1);
+  assertEquals((t.pagos[0] as { candidatoId: string; mensajeId: string }).candidatoId, "cand-1");
+  assertEquals(t.avisos.length, 1); // no se suma el aviso genérico de "frena"
+  assertEquals(t.avisos[0].tipo, "proveedor_frena");
+  assertStringIncludes(t.avisos[0].texto, "¥720,00");
+  assertStringIncludes(t.avisos[0].texto, "≈ USD 100,00");
+  assertStringIncludes(t.avisos[0].texto, "≈ ₲640.000");
+  assertStringIncludes(t.avisos[0].texto, "<code>https://qr.alipay.com/demo1</code>");
+  assertStringIncludes(t.avisos[0].texto, "BORRADOR");
+  assertEquals(t.enviados.length, 1); // el neutro sale en el hilo
+  assert(r.hechos.some((h) => h.accion === "pedido de pago"));
+});
+
+Deno.test("pago por link sin producto: no crea orden pero avisa igual; si la base falla, avisa igual", async () => {
+  const t = armar({ bandeja: [DEL_PROV], candidato: null, salida: { frena: true, motivo: "pago", responder: false, texto: null, pago: PAGO } });
+  await procesarCorrida(t.deps(), { simular: false });
+  assertEquals([t.pagos.length, t.avisos.length], [0, 1]);
+  assertStringIncludes(t.avisos[0].texto, "No pude crear la orden");
+  const f = armar({ bandeja: [DEL_PROV], ordenFalla: true, salida: { frena: true, motivo: "pago", pago: PAGO } });
+  const r = await procesarCorrida(f.deps(), { simular: false });
+  assertEquals(f.avisos.length, 1);
+  assert(r.hechos.some((h) => h.accion === "orden por pago falló"));
+});
+
+Deno.test("seguimiento: se carga en la orden y avisa a administración; sin orden, avisa que falta", async () => {
+  const t = armar({ bandeja: [DEL_PROV], salida: { envio: { tracking: "SF1234567890123", empresa: "SF Express" } } });
+  await procesarCorrida(t.deps(), { simular: false });
+  assertEquals(t.trackings.length, 1);
+  assertEquals(t.avisos.map((a) => a.tipo), ["proveedor_cotizacion"]);
+  assertStringIncludes(t.avisos[0].texto, "EN_TRANSITO");
+  const s = armar({ bandeja: [DEL_PROV], trackingOrden: null, salida: { envio: { tracking: "SF1234567890123", empresa: null } } });
+  await procesarCorrida(s.deps(), { simular: false });
+  assertStringIncludes(s.avisos[0].texto, "no encontré una orden");
+});
+
+const ORDEN = (estado: string, tipo: "direccion" | "postpago", via: "maritimo" | "aereo" = "maritimo"): OrdenAviso =>
+  ({ orden: { id: "orden-9", estado, candidato_id: "cand-1", proveedor_id: "prov-1", tracking: null }, tipo, via, hilo: "t9" });
+
+Deno.test("orden confirmada → dirección (marítima) una sola vez; aérea si la orden lo dice; post-pago después de pagar", async () => {
+  const t = armar({ cfg: { deposito: DEP }, ordenes: [ORDEN("CONFIRMADA_POR_ENRIQUE", "direccion")] });
+  await procesarCorrida(t.deps(FUERA_CHINA), { simular: false }); // cualquier hora
+  assertEquals(t.enviados.length, 1);
+  const txt = cuerpo(t.enviados[0].raw);
+  assert(txt.includes("DEMO-MAR") && !txt.includes("DEMO-AIR"));
+  assertEquals(t.enviados[0].threadId, "t9");
+  assertEquals(t.filas.at(-1)?.idempotencia, "email:out:orden:orden-9:direccion");
+  await procesarCorrida(t.deps(FUERA_CHINA), { simular: false });
+  assertEquals(t.enviados.length, 1); // no repite
+  const a = armar({ cfg: { deposito: DEP }, ordenes: [ORDEN("PEDIDA", "direccion", "aereo"), ORDEN("PAGADA_POR_ENRIQUE", "postpago")] });
+  await procesarCorrida(a.deps(), { simular: false });
+  assertEquals(a.enviados.length, 2);
+  assert(cuerpo(a.enviados[0].raw).includes("DEMO-AIR"));
+  assert(cuerpo(a.enviados[1].raw).includes("物流单号")); // proveedor en chino
+});
+
+Deno.test("orden confirmada sin depósito cargado: no manda dirección y avisa; simular no manda nada", async () => {
+  const t = armar({ ordenes: [ORDEN("CONFIRMADA_POR_ENRIQUE", "direccion")] });
+  await procesarCorrida(t.deps(), { simular: false });
+  assertEquals([t.enviados.length, t.avisos.length], [0, 1]);
+  const s = armar({ cfg: { deposito: DEP }, ordenes: [ORDEN("CONFIRMADA_POR_ENRIQUE", "direccion")] });
+  const r = await procesarCorrida(s.deps(), { simular: true });
+  assertEquals(s.enviados.length, 0);
+  assert(r.hechos.some((h) => h.accion === "mandaría direccion"));
 });
