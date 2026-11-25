@@ -328,7 +328,19 @@ export async function cargarTracking(r: { proveedorId: string; candidatoId: stri
 export async function viaParaCompra(proveedorId: string, candidatoId: string | null): Promise<"maritimo" | "aereo"> {
   if (!candidatoId) return "maritimo";
   const o = await ordenAbierta(proveedorId, candidatoId, ["BORRADOR", "CONFIRMADA_POR_ENRIQUE", "PEDIDA", "PAGADA_POR_ENRIQUE", "EN_TRANSITO"]);
-  return o ? viaDeOrden(o) : "maritimo";
+  if (o && viaDeOrden(o) === "aereo") return "aereo";
+  // 25-11: administración también puede marcarlo en el producto: "VIA: AEREO" en las notas del candidato.
+  const c = await base().from("pi_candidatos").select("notas").eq("id", candidatoId).maybeSingle();
+  if (c.error) throw new Error(`viaParaCompra (candidato): ${c.error.message}`);
+  return viaMarcadaEnNotas((c.data as { notas?: string | null } | null)?.notas ?? null) ?? "maritimo";
+}
+
+/** "VIA: AEREO" / "vía aérea" / "envío aéreo" en las notas → aéreo; "VIA: MARITIMO" → marítimo; nada → null. */
+export function viaMarcadaEnNotas(notas: string | null): "maritimo" | "aereo" | null {
+  const t = String(notas ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (/\b(via|envio)\s*:?\s*aere[ao]\b/.test(t)) return "aereo";
+  if (/\b(via|envio)\s*:?\s*maritim[ao]\b/.test(t)) return "maritimo";
+  return null;
 }
 
 export type TipoAvisoOrden = "postpago";

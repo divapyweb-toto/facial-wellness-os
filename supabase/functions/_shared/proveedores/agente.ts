@@ -318,14 +318,15 @@ export function textoDireccion(dep: DepositoChina, idioma: Idioma, via: "maritim
 }
 
 /** Marcas para saber, por el historial, en qué paso va la compra (los textos fijos las contienen). */
-export const MARCA_PEDIDO_LINK = ["Alibaba payment link", "阿里巴巴支付链接", "link de pago de Alibaba"] as const;
+export const MARCA_PEDIDO_LINK = ["payment link for this order", "Alibaba payment link", "生成支付链接", "阿里巴巴支付链接", "link de pago de Alibaba"] as const;
 
 /** Texto FIJO: el proveedor dijo OK a mandar al depósito → que genere el link de pago de Alibaba (Trade Assurance).
  *  Pedir el link no es pagar: el link le llega a Enrique y paga él. */
 export function textoPedidoLink(idioma: Idioma): string {
-  if (idioma === "zh") return "好的，谢谢！请为这个订单生成阿里巴巴支付链接（信用保障订单），发给我们。";
-  if (idioma === "es") return "Perfecto, gracias. Por favor generen el link de pago de Alibaba (Trade Assurance) para este pedido y envíennoslo.";
-  return "Great, thank you! Please generate an Alibaba payment link (Trade Assurance) for this order and send it to us.";
+  // Texto de administración (25-11). En chino va 支付 y no 付款: 付款 está en el doble freno (es "pagar/pago hecho").
+  if (idioma === "zh") return "好的，谢谢！请生成支付链接（阿里巴巴/1688/支付宝）发给我们。";
+  if (idioma === "es") return "Perfecto, gracias. Por favor generen el link de pago de Alibaba / 1688 para este pedido y envíennoslo.";
+  return "Great, thank you! Please generate an Alibaba / 1688 payment link for this order and send it to us.";
 }
 
 /** ¿Respuesta corta de acuerdo ("ok", "好的", "no problem")? */
@@ -427,7 +428,7 @@ export function textoNeutro(idioma: Idioma, canal: Canal, firma: string): string
 export const PROMPT_FIJO = `Sos el asistente de compras de Voltra, una tienda de Paraguay. Negociás con proveedores de China. Contestás SOLO con el JSON del esquema.
 PODÉS: pedir precio por escala de cantidad, MOQ, peso bruto y medidas empacadas, medidas de caja y unidades por caja, días de producción y despacho, fotos y certificados; regatear (apuntá a 5-10 % menos que la primera oferta, con argumentos: volumen futuro, otras ofertas); pedir color, empaque, calidad y etiqueta; pedir WhatsApp o correo (WeChat solo si no tienen otro); pedir que despachen al depósito de Voltra en China si te pasan la dirección.
 NUNCA: confirmar una compra o un pedido, pagar ni prometer pagos, aceptar muestras pagas, aceptar exclusividad, firmar o aceptar términos, dar datos de tarjeta o cuenta, revelar presupuesto, prometer cantidades. Toda cantidad es de evaluación, no un compromiso.
-paso_compra: "precio_cerrado" si en este mensaje el proveedor acepta o confirma un precio final para una cantidad (hay acuerdo de precio); "acepta" si dice que está de acuerdo con mandar al depósito de Voltra o con seguir adelante (ok,好的, no problem); si no, null. La dirección del depósito y el pedido del link de pago de Alibaba los agrega el sistema: NO los escribas vos.
+paso_compra: "precio_cerrado" si queda acordado precio y cantidad: el proveedor acepta o confirma el precio final, o su oferta ya está dentro de lo que buscás y la aceptás; "acepta" si dice que está de acuerdo con mandar al depósito de Voltra o con seguir adelante (ok,好的, no problem); si no, null. La dirección del depósito y el pedido del link de pago de Alibaba los agrega el sistema: NO los escribas vos.
 Si el proveedor PIDE alguna de esas cosas: pide_compromiso = el motivo (compra, pago, muestra_paga, exclusividad, terminos, datos_cuenta); si solo las menciona como condición de su oferta, null.
 Estilo: corto, educado, en el idioma indicado (zh = chino simplificado). No inventes datos. Si no hace falta contestar (por ejemplo un "ok" o un "gracias"), responder = false.
 traduccion_entrante_es y respuesta_es: en español simple.

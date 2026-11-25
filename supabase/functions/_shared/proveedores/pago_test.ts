@@ -144,8 +144,10 @@ Deno.test("textoAvisoPago: dominio raro lleva el aviso exacto de administración
 
 Deno.test("textos fijos del pedido de link: no frenan el doble freno; esOkCorto", () => {
   for (const i of ["en", "zh", "es"] as const) assertEquals(textoCompromete(textoPedidoLink(i)), null);
-  assert(textoPedidoLink("en").includes("Alibaba payment link (Trade Assurance)"));
-  assert(textoPedidoLink("zh").includes("阿里巴巴支付链接"));
+  assert(textoPedidoLink("en").includes("Please generate an Alibaba / 1688 payment link for this order"));
+  assert(textoPedidoLink("zh").includes("请生成支付链接（阿里巴巴/1688/支付宝）"));
+  // La versión con 付款 que se propuso SÍ chocaría con el doble freno: por eso va 支付.
+  assertEquals(textoCompromete("请生成付款链接（阿里巴巴/1688/支付宝）"), "pago");
   for (const t of ["ok", "OK!", "好的", "可以", "No problem", "Sure, we can ship there"]) assert(esOkCorto(t), t);
   for (const t of ["", "The price is USD 1.2 for 500 units, ok?".repeat(2)]) assert(!esOkCorto(t), t);
 });
@@ -164,7 +166,7 @@ Deno.test("guía: precio cerrado → manda SOLO la dirección (marítima) sin qu
 Deno.test("guía: después de la dirección, OK del proveedor → pide el link de pago de Alibaba (aunque el modelo no conteste)", async () => {
   const s = await responderProveedor(ent("ok", { historial: histDir }), deps({ texto: conPaso(null, "", false) }).d);
   assertEquals([s.responder, s.paso_compra], [true, "pidio_link"]);
-  assert(s.texto!.includes("Alibaba payment link (Trade Assurance)") && s.texto!.endsWith("Voltra (Paraguay)"));
+  assert(s.texto!.includes("Alibaba / 1688 payment link for this order") && s.texto!.endsWith("Voltra (Paraguay)"));
   const zh = await responderProveedor(ent("好的，没问题", { proveedor: { id: "p", nombre: "D", idioma: "zh", plataforma: "1688" }, historial: histDir, canal: "whatsapp" }), deps({ texto: conPaso("acepta", "", false) }).d);
   assert(zh.texto === textoPedidoLink("zh"));
   // ya pedido: no se repite
@@ -182,4 +184,10 @@ Deno.test("guía: sin producto, con freno o sin depósito cargado → no agrega 
   assertEquals(sinDep.paso_compra, null);
   const freno = await responderProveedor(ent("Final price ok, please confirm the order"), deps({ texto: conPaso("precio_cerrado") }).d);
   assertEquals([freno.frena, freno.paso_compra], [true, null]);
+});
+
+Deno.test("dominios: subdominios reales de alipay/alibaba/1688 ✅; imitaciones ⚠️", () => {
+  const d = (url: string) => detectarPago(`payment link: ${url}`)?.dominio_ok;
+  for (const u of ["https://qr.alipay.com/x", "https://biz.alibaba.com/ta/x", "https://trade.1688.com/order/pay.htm", "https://alibaba.com/pay/x", "https://m.1688.com/pay/x"]) assertEquals(d(u), true, u);
+  for (const u of ["https://alipay.com.algo.xyz/pay", "https://alibaba-pay.com/x", "https://my1688.com/pay", "https://1688.com.cn.demo.top/pay", "https://fakealipay.com/pay"]) assertEquals(d(u), false, u);
 });

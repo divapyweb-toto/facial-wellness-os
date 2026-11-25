@@ -10,6 +10,7 @@ import {
   ordenesParaAvisar,
   registrarPagoPedido,
   viaParaCompra,
+  viaMarcadaEnNotas,
   textoAvisoPago,
   tipoCambioHoy,
   viaDeOrden,
@@ -260,9 +261,12 @@ Deno.test("ordenesParaAvisar: solo pagadas sin seguimiento del canal del último
 Deno.test("viaParaCompra: orden abierta con aéreo → aéreo; sin orden o sin producto → marítimo", async () => {
   baseFalsa(() => ({ data: [{ id: "o", estado: "BORRADOR", candidato_id: "c1", proveedor_id: "p1", moneda: "USD", total_minor: null, cantidad: 1, tracking: null, forwarder: "aéreo urgente", deposito_destino: null, notas: null, actualizado_en: "x" }], error: null }));
   assertEquals(await viaParaCompra("p1", "c1"), "aereo");
-  baseFalsa(() => ({ data: [], error: null }));
+  baseFalsa((tabla) => ({ data: tabla === "pi_candidatos" ? { notas: "probar rápido. VÍA: AÉREO" } : [], error: null }));
+  assertEquals(await viaParaCompra("p1", "c1"), "aereo"); // marcado en el producto
+  baseFalsa((tabla) => ({ data: tabla === "pi_candidatos" ? { notas: null } : [], error: null }));
   assertEquals(await viaParaCompra("p1", "c1"), "maritimo");
   assertEquals(await viaParaCompra("p1", null), "maritimo");
+  assertEquals([viaMarcadaEnNotas("envio aereo"), viaMarcadaEnNotas("Via: maritimo"), viaMarcadaEnNotas("aereo es caro"), viaMarcadaEnNotas(null)], ["aereo", "maritimo", null, null]);
   _configurarIo();
 });
 
