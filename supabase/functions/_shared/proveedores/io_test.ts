@@ -9,6 +9,7 @@ import {
   cargarTracking,
   ordenesParaAvisar,
   registrarPagoPedido,
+  viaParaCompra,
   textoAvisoPago,
   tipoCambioHoy,
   viaDeOrden,
@@ -204,7 +205,7 @@ Deno.test("los 3 tipos de aviso de proveedores están registrados", async () => 
 });
 
 // ─── 25-11: orden por link de pago, seguimiento, mensajes por orden, tipo de cambio ───
-const PAGO = { link: "https://qr.alipay.com/demo1", dominio: "qr.alipay.com", alipay: true, monto_minor: 72000, moneda: "CNY" as const, cantidad: 100 };
+const PAGO = { link: "https://qr.alipay.com/demo1", dominio: "qr.alipay.com", dominio_ok: true, monto_minor: 72000, moneda: "CNY" as const, cantidad: 100 };
 const AHORA = new Date("2026-11-25T18:00:00Z");
 
 Deno.test("registrarPagoPedido: sin orden abierta crea BORRADOR con monto, cantidad y link en notas", async () => {
@@ -245,13 +246,23 @@ Deno.test("cargarTracking: pagada → EN_TRANSITO con el número; sin orden → 
   _configurarIo();
 });
 
-Deno.test("ordenesParaAvisar: solo las del canal del último mensaje; pagada sin seguimiento suma post-pago; vía aérea", async () => {
-  const o = (id: string, estado: string, prov: string, forwarder: string | null = null) => ({ id, estado, candidato_id: "c1", proveedor_id: prov, moneda: "CNY", total_minor: 1, cantidad: 1, tracking: null, forwarder, deposito_destino: null, notas: null, actualizado_en: "x" });
-  baseFalsa((tabla, ops) => tabla === "pi_ordenes_compra" ? { data: [o("o1", "CONFIRMADA_POR_ENRIQUE", "pE"), o("o2", "PAGADA_POR_ENRIQUE", "pE", "Easybox aéreo"), o("o3", "PEDIDA", "pW")], error: null }
+Deno.test("ordenesParaAvisar: solo pagadas sin seguimiento del canal del último mensaje; vía aérea", async () => {
+  const o = (id: string, prov: string, forwarder: string | null = null) => ({ id, estado: "PAGADA_POR_ENRIQUE", candidato_id: "c1", proveedor_id: prov, moneda: "CNY", total_minor: 1, cantidad: 1, tracking: null, forwarder, deposito_destino: null, notas: null, actualizado_en: "x" });
+  const c = baseFalsa((tabla, ops) => tabla === "pi_ordenes_compra" ? { data: [o("o1", "pE"), o("o2", "pE", "Easybox aéreo"), o("o3", "pW")], error: null }
     : { data: [{ canal: tiene(ops, "eq", "proveedor_id", "pW") ? "whatsapp" : "email", hilo: "t1" }], error: null });
   const r = await ordenesParaAvisar("email", AHORA);
-  assertEquals(r.map((x) => `${x.orden.id}:${x.tipo}:${x.via}`), ["o1:direccion:maritimo", "o2:direccion:aereo", "o2:postpago:aereo"]);
+  assertEquals(r.map((x) => `${x.orden.id}:${x.tipo}:${x.via}`), ["o1:postpago:maritimo", "o2:postpago:aereo"]);
+  assert(tiene(c[0].ops, "eq", "estado", "PAGADA_POR_ENRIQUE") && tiene(c[0].ops, "is", "tracking", null));
   assertEquals(viaDeOrden({ forwarder: null, deposito_destino: "Easybox marítimo" }), "maritimo");
+  _configurarIo();
+});
+
+Deno.test("viaParaCompra: orden abierta con aéreo → aéreo; sin orden o sin producto → marítimo", async () => {
+  baseFalsa(() => ({ data: [{ id: "o", estado: "BORRADOR", candidato_id: "c1", proveedor_id: "p1", moneda: "USD", total_minor: null, cantidad: 1, tracking: null, forwarder: "aéreo urgente", deposito_destino: null, notas: null, actualizado_en: "x" }], error: null }));
+  assertEquals(await viaParaCompra("p1", "c1"), "aereo");
+  baseFalsa(() => ({ data: [], error: null }));
+  assertEquals(await viaParaCompra("p1", "c1"), "maritimo");
+  assertEquals(await viaParaCompra("p1", null), "maritimo");
   _configurarIo();
 });
 
@@ -267,6 +278,6 @@ Deno.test("tipoCambioHoy: ₲ de tipo_cambio y ¥ de la fuente pública; si la f
 });
 
 Deno.test("textoAvisoPago: dominio falso marcado; sin tipo de cambio lo dice; escapa HTML", () => {
-  const t = textoAvisoPago({ proveedor: "Demo <b>", producto: "Prod", canal: "whatsapp", pago: { ...PAGO, link: "https://alipay.com.demo.xyz/p?a=1&b=2", dominio: "alipay.com.demo.xyz", alipay: false }, tc: { usd_pyg: null, cny_por_usd: null }, orden: null });
-  assert(t.includes("NO es de Alipay") && t.includes("USD: sin tipo de cambio") && t.includes("Demo &lt;b&gt;") && t.includes("&amp;b=2"));
+  const t = textoAvisoPago({ proveedor: "Demo <b>", producto: "Prod", canal: "whatsapp", pago: { ...PAGO, link: "https://alipay.com.demo.xyz/p?a=1&b=2", dominio: "alipay.com.demo.xyz", dominio_ok: false }, tc: { usd_pyg: null, cny_por_usd: null }, orden: null });
+  assert(t.includes("⚠️ link que no es de Alipay: no pagar sin revisar") && t.includes("USD: sin tipo de cambio") && t.includes("Demo &lt;b&gt;") && t.includes("&amp;b=2"));
 });

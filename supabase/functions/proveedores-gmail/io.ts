@@ -106,6 +106,7 @@ export const ioGmail: IoGmail = {
   registrarPagoPedido: (r) => comun.registrarPagoPedido(r),
   cargarTracking: (r) => comun.cargarTracking(r),
   ordenesParaAvisar: () => comun.ordenesParaAvisar("email"),
+  viaParaCompra: (p, c) => comun.viaParaCompra(p, c),
   tipoCambio: () => comun.tipoCambioHoy(),
 };
 

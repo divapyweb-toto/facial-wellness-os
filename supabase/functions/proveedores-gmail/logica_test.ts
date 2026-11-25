@@ -43,6 +43,7 @@ interface Escenario {
   ordenes?: OrdenAviso[];
   ordenFalla?: boolean;
   trackingOrden?: { id: string; estado: string } | null;
+  via?: "maritimo" | "aereo";
 }
 
 function armar(e: Escenario = {}) {
@@ -117,6 +118,7 @@ function armar(e: Escenario = {}) {
     registrarPagoPedido: (r) => { pagos.push(r); return e.ordenFalla ? Promise.reject(new Error("base caída")) : Promise.resolve({ id: "orden-1", estado: "BORRADOR", nueva: true }); },
     cargarTracking: (r) => { trackings.push(r); return Promise.resolve(e.trackingOrden === undefined ? { id: "orden-1", estado: "EN_TRANSITO" } : e.trackingOrden); },
     ordenesParaAvisar: () => Promise.resolve(e.ordenes ?? []),
+    viaParaCompra: () => Promise.resolve(e.via ?? "maritimo"),
     tipoCambio: () => Promise.resolve({ usd_pyg: 6400, cny_por_usd: 7.2 }),
   };
   return { filas, enviados, avisos, cotizaciones, llamadasAgente, leidos, pagos, trackings, deps: (ahora = EN_CHINA): Deps => ({ gmail, agente, io, ahora: () => ahora }) };
@@ -404,7 +406,7 @@ Deno.test("agente real: tope de IA alcanzado → no sale nada, aviso de tope", a
 
 // ─── 25-11: proceso de compra (pago por link de Alipay, seguimiento, dirección y post-pago) ───
 const DEP = { en: "Demo Warehouse, 1 Demo Road, Shenzhen", zh: "深圳演示路1号", marca_maritimo: "DEMO-MAR", marca_aereo: "DEMO-AIR" };
-const PAGO = { link: "https://qr.alipay.com/demo1", dominio: "qr.alipay.com", alipay: true, monto_minor: 72000, moneda: "CNY" as const, cantidad: 100 };
+const PAGO = { link: "https://qr.alipay.com/demo1", dominio: "qr.alipay.com", dominio_ok: true, monto_minor: 72000, moneda: "CNY" as const, cantidad: 100 };
 
 Deno.test("pago por link: orden en BORRADOR + UN aviso a Enrique con ¥/USD/₲ y el link; contesta el neutro", async () => {
   const t = armar({ bandeja: [DEL_PROV], salida: { frena: true, motivo: "pago", responder: true, texto: "谢谢。这部分需要老板确认。", pago: PAGO } });
@@ -444,32 +446,30 @@ Deno.test("seguimiento: se carga en la orden y avisa a administración; sin orde
   assertStringIncludes(s.avisos[0].texto, "no encontré una orden");
 });
 
-const ORDEN = (estado: string, tipo: "direccion" | "postpago", via: "maritimo" | "aereo" = "maritimo"): OrdenAviso =>
-  ({ orden: { id: "orden-9", estado, candidato_id: "cand-1", proveedor_id: "prov-1", tracking: null }, tipo, via, hilo: "t9" });
+const ORDEN = (via: "maritimo" | "aereo" = "maritimo"): OrdenAviso =>
+  ({ orden: { id: "orden-9", estado: "PAGADA_POR_ENRIQUE", candidato_id: "cand-1", proveedor_id: "prov-1", tracking: null }, tipo: "postpago", via, hilo: "t9" });
 
-Deno.test("orden confirmada → dirección (marítima) una sola vez; aérea si la orden lo dice; post-pago después de pagar", async () => {
-  const t = armar({ cfg: { deposito: DEP }, ordenes: [ORDEN("CONFIRMADA_POR_ENRIQUE", "direccion")] });
-  await procesarCorrida(t.deps(FUERA_CHINA), { simular: false }); // cualquier hora
+Deno.test("orden pagada por Enrique → 'pago hecho, pasá el seguimiento' una sola vez, en el hilo, a cualquier hora", async () => {
+  const t = armar({ ordenes: [ORDEN()] });
+  await procesarCorrida(t.deps(FUERA_CHINA), { simular: false });
   assertEquals(t.enviados.length, 1);
-  const txt = cuerpo(t.enviados[0].raw);
-  assert(txt.includes("DEMO-MAR") && !txt.includes("DEMO-AIR"));
   assertEquals(t.enviados[0].threadId, "t9");
-  assertEquals(t.filas.at(-1)?.idempotencia, "email:out:orden:orden-9:direccion");
+  assert(cuerpo(t.enviados[0].raw).includes("物流单号")); // proveedor en chino
+  assertEquals(t.filas.at(-1)?.idempotencia, "email:out:orden:orden-9:postpago");
   await procesarCorrida(t.deps(FUERA_CHINA), { simular: false });
   assertEquals(t.enviados.length, 1); // no repite
-  const a = armar({ cfg: { deposito: DEP }, ordenes: [ORDEN("PEDIDA", "direccion", "aereo"), ORDEN("PAGADA_POR_ENRIQUE", "postpago")] });
-  await procesarCorrida(a.deps(), { simular: false });
-  assertEquals(a.enviados.length, 2);
-  assert(cuerpo(a.enviados[0].raw).includes("DEMO-AIR"));
-  assert(cuerpo(a.enviados[1].raw).includes("物流单号")); // proveedor en chino
-});
-
-Deno.test("orden confirmada sin depósito cargado: no manda dirección y avisa; simular no manda nada", async () => {
-  const t = armar({ ordenes: [ORDEN("CONFIRMADA_POR_ENRIQUE", "direccion")] });
-  await procesarCorrida(t.deps(), { simular: false });
-  assertEquals([t.enviados.length, t.avisos.length], [0, 1]);
-  const s = armar({ cfg: { deposito: DEP }, ordenes: [ORDEN("CONFIRMADA_POR_ENRIQUE", "direccion")] });
+  const s = armar({ ordenes: [ORDEN()] });
   const r = await procesarCorrida(s.deps(), { simular: true });
   assertEquals(s.enviados.length, 0);
-  assert(r.hechos.some((h) => h.accion === "mandaría direccion"));
+  assert(r.hechos.some((h) => h.accion === "mandaría postpago"));
+});
+
+Deno.test("la vía que marcó administración llega al agente", async () => {
+  const t = armar({ bandeja: [DEL_PROV], via: "aereo" });
+  const vias: unknown[] = [];
+  const d = t.deps();
+  const original = d.agente.responder;
+  d.agente.responder = (en) => { vias.push(en.via); return original(en); };
+  await procesarCorrida(d, { simular: false });
+  assertEquals(vias, ["aereo"]);
 });

@@ -282,7 +282,7 @@ export async function registrarPagoPedido(r: {
   const ahora = r.ahora ?? new Date();
   const p = r.pago;
   const monto = p.monto_minor != null && p.moneda ? `${(p.monto_minor / 100).toFixed(2)} ${p.moneda}` : "monto sin leer";
-  const nota = `[${horaPY(ahora)}] Pedido de pago por ${r.canal === "email" ? "correo" : "WhatsApp"}: ${monto}${p.link ? ` · link ${p.link} (${p.alipay ? "Alipay" : `dominio ${p.dominio ?? "?"}, NO es Alipay`})` : " · sin link"}${r.mensajeId ? ` · mensaje ${r.mensajeId}` : ""}. Lo paga Enrique; el sistema no abre el link.`;
+  const nota = `[${horaPY(ahora)}] Pedido de pago por ${r.canal === "email" ? "correo" : "WhatsApp"}: ${monto}${p.link ? ` · link ${p.link} (${p.dominio_ok ? `dominio ${p.dominio}` : `⚠️ dominio ${p.dominio ?? "?"}: no es Alibaba/1688/Alipay`})` : " · sin link"}${r.mensajeId ? ` · mensaje ${r.mensajeId}` : ""}. Lo paga Enrique; el sistema no abre el link.`;
   const abierta = await ordenAbierta(r.proveedorId, r.candidatoId, ["BORRADOR", "CONFIRMADA_POR_ENRIQUE", "PEDIDA", "PAGADA_POR_ENRIQUE"]);
   if (abierta) {
     const cambios: Record<string, unknown> = { notas: sumarNota(abierta.notas, nota) };
@@ -323,7 +323,15 @@ export async function cargarTracking(r: { proveedorId: string; candidatoId: stri
   return { id: orden.id, estado };
 }
 
-export type TipoAvisoOrden = "direccion" | "postpago";
+/** Vía que marcó administración para la compra de ese producto con ese proveedor: la orden abierta (cualquier estado
+ *  salvo cancelada/recibida) con "aéreo" en forwarder o destino. Sin orden o sin marca = marítimo. */
+export async function viaParaCompra(proveedorId: string, candidatoId: string | null): Promise<"maritimo" | "aereo"> {
+  if (!candidatoId) return "maritimo";
+  const o = await ordenAbierta(proveedorId, candidatoId, ["BORRADOR", "CONFIRMADA_POR_ENRIQUE", "PEDIDA", "PAGADA_POR_ENRIQUE", "EN_TRANSITO"]);
+  return o ? viaDeOrden(o) : "maritimo";
+}
+
+export type TipoAvisoOrden = "postpago";
 export interface OrdenParaAvisar { orden: OrdenProveedor; tipo: TipoAvisoOrden; via: "maritimo" | "aereo"; hilo: string | null }
 /** Vía de la orden: aérea solo si el forwarder o el destino lo dicen; si no, marítima (config: aéreo solo si se indica). */
 export const viaDeOrden = (o: Pick<OrdenProveedor, "forwarder" | "deposito_destino">): "maritimo" | "aereo" =>
@@ -331,13 +339,13 @@ export const viaDeOrden = (o: Pick<OrdenProveedor, "forwarder" | "deposito_desti
 
 /**
  * Órdenes de los últimos 30 días que piden un mensaje fijo al proveedor por `canal` (el del último mensaje con ese
- * proveedor): confirmada/pedida/pagada → dirección; pagada sin seguimiento → "pago hecho, pasá el seguimiento".
- * Cada mensaje sale una sola vez por orden (lo asegura la idempotencia del canal, no esta lista).
+ * proveedor): pagada por Enrique sin seguimiento → "pago hecho, pasá el seguimiento". (La dirección ya no sale acá:
+ * la manda el agente al cerrar el precio, antes de que exista la orden.) Una sola vez por orden (idempotencia del canal).
  */
 export async function ordenesParaAvisar(canal: Canal, ahora: Date = new Date()): Promise<OrdenParaAvisar[]> {
   const desde = new Date(ahora.getTime() - 30 * 86_400_000).toISOString();
   const { data, error } = await base().from("pi_ordenes_compra").select(COLS_ORDEN)
-    .in("estado", ["CONFIRMADA_POR_ENRIQUE", "PEDIDA", "PAGADA_POR_ENRIQUE"]).gte("actualizado_en", desde).order("actualizado_en", { ascending: true }).limit(50);
+    .eq("estado", "PAGADA_POR_ENRIQUE").is("tracking", null).gte("actualizado_en", desde).order("actualizado_en", { ascending: true }).limit(50);
   if (error) throw new Error(`ordenesParaAvisar: ${error.message}`);
   const out: OrdenParaAvisar[] = [];
   for (const o of (data ?? []) as OrdenProveedor[]) {
@@ -346,9 +354,7 @@ export async function ordenesParaAvisar(canal: Canal, ahora: Date = new Date()):
     if (m.error) throw new Error(`ordenesParaAvisar (mensajes): ${m.error.message}`);
     const ultimo = ((m.data ?? []) as Array<{ canal: string; hilo: string | null }>)[0];
     if (!ultimo || ultimo.canal !== canal) continue;
-    const via = viaDeOrden(o);
-    out.push({ orden: o, tipo: "direccion", via, hilo: ultimo.hilo });
-    if (o.estado === "PAGADA_POR_ENRIQUE" && !o.tracking) out.push({ orden: o, tipo: "postpago", via, hilo: ultimo.hilo });
+    if (o.estado === "PAGADA_POR_ENRIQUE" && !o.tracking) out.push({ orden: o, tipo: "postpago", via: viaDeOrden(o), hilo: ultimo.hilo });
   }
   return out;
 }
