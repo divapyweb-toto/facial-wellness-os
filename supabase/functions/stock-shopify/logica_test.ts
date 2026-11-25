@@ -52,3 +52,13 @@ Deno.test("27-10: stock bajo va a administración, 1 por día por familia", () =
   assertEquals(o, { tipo: "stock_bajo", destino: "admin", unaVezPorDia: true, clave: "Tiras" });
   assertEquals(decidirRuta(null, o), "admin");
 });
+
+Deno.test("25-11 regalo BF: pedido sin descontar con REGALO_INHALADOR reserva 1 inhalador más", async () => {
+  const { lineasPendiente } = await import("./logica.ts");
+  const l = lineasPendiente([{ title: "Raspador de Lengua", quantity: 2 }], ["REGALO_INHALADOR"]);
+  assertEquals(l, [{ titulo: "Raspador de Lengua", cantidad: 2 }, { titulo: "Inhalador de menta", cantidad: 1 }]);
+  assertEquals(familia(l[1].titulo), "Inhalador");
+  assertEquals(lineasPendiente([{ name: "Raspador", quantity: 1 }], ["PRIORIDAD"]).length, 1);
+  const prods = [{ id: "i", nombre: "Inhalador de menta", stock: 10, esCombo: false, componentes: [] }];
+  assertEquals(stockReal(prods, [{ lineas: l }]).get("Inhalador")?.real, 9);
+});

@@ -1,6 +1,7 @@
 // stock-shopify · I/O: Supabase (lectura de stock y pedidos), Shopify (inventario), Telegram (alerta de stock bajo).
 import { db } from "../_shared/db.ts";
 import { gql } from "../_shared/shopify.ts";
+import { lineasPendiente } from "./logica.ts";
 import type { PedidoPendiente, Producto } from "./logica.ts";
 
 type Obj = Record<string, unknown>;
@@ -36,7 +37,7 @@ export async function pendientesSinDescontar(): Promise<Array<PedidoPendiente & 
   }
   return validos.filter((p: Obj) => !conVenta.has(`VT-${String(p.nombre).replace(/^#/, "")}`)).map((p: Obj) => ({
     nombre: String(p.nombre),
-    lineas: ((p.line_items ?? []) as Obj[]).map((l) => ({ titulo: String(l.title ?? l.name ?? ""), cantidad: Number(l.quantity) || 1 })),
+    lineas: lineasPendiente((p.line_items ?? []) as Obj[], (p.tags ?? []) as string[]),
   }));
 }
 

@@ -186,3 +186,12 @@ Deno.test("05-11: PAGO_ANTICIPADO_REQUERIDO sin pago no sale (espera pago antici
   const pagado = armarLista([ped(96, "CONFIRMADO, PAGO_ANTICIPADO_REQUERIDO, PAGADO", [["Raspador", 1]], { financial_status: "paid" })], [], new Set(), AHORA);
   assertEquals([...pagado.porCourier.values()].flat().map((p) => p.nombre), ["#96"]);
 });
+
+Deno.test("25-11 regalo BF: REGALO_INHALADOR suma la nota de armado del regalo (una vez) y nada sin la etiqueta", () => {
+  const conRegalo = armarLista([ped(1301, "CONFIRMADO, REGALO_INHALADOR", [["Raspador de Lengua", 1]])], [], new Set(), AHORA);
+  const sinRegalo = armarLista([ped(1302, "CONFIRMADO", [["Raspador de Lengua", 1]])], [], new Set(), AHORA);
+  const todos = (l: ReturnType<typeof armarLista>) => [...l.porCourier.values()].flat();
+  assertEquals(todos(conRegalo).map((p) => p.armado), [["🎁 + 1 Inhalador de Menta (regalo)"]]);
+  assertEquals(todos(sinRegalo).map((p) => p.armado), [[]]);
+  assert((textoLista(conRegalo, AHORA) ?? "").includes("<b>🎁 + 1 Inhalador de Menta (regalo)</b>"));
+});

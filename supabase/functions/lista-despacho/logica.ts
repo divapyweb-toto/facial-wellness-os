@@ -10,6 +10,7 @@
 // (rpc sugerir_courier, misma normalización y alias que la base); una ciudad que la tabla no reconoce NO es "sin
 // cobertura" sino "faltan datos: ciudad" (#1150).
 import { escaparHtml, notaArmado } from "../_shared/telegram_formato.ts";
+import { regalosDe } from "../_shared/regalos.ts";
 import { sugerirTransportadora } from "../_shared/transportadoras.js";
 import { decidirSalida, direccionUtilizable, esCancelado, esConfirmado } from "../_shared/sale_hoy.js";
 
@@ -121,7 +122,9 @@ function aPedido(f: PedidoShopify, venta: VentaDespacho | undefined, ciudadElegi
   const ciudadEnvio = String(dir.city ?? "").trim();
   const ciudad = ciudadElegida ?? (tiene(tags, "ciudad_por_pin") && ciudadEnvio ? ciudadEnvio : (atributo(raw, /^ciudad$/i) ?? ciudadEnvio));
   const pagado = pagadoAntes(raw, tags);
-  const armado = [...new Set(lineas.flatMap((l) => [esKit(l.nombre) ? NOTA_ARMADO_KIT : "", notaArmado(l.nombre, l.cantidad)]).filter(Boolean))];
+  // 25-11: regalo por etiqueta (REGALO_INHALADOR, Black Friday): va en la nota de armado, no como línea.
+  const armado = [...new Set([...lineas.flatMap((l) => [esKit(l.nombre) ? NOTA_ARMADO_KIT : "", notaArmado(l.nombre, l.cantidad)]),
+    ...regalosDe(tags).map((r) => r.nota)].filter(Boolean))];
   const forzado = productoRuteo(lineas);
   const total = Math.round(Number(raw.total_price ?? 0)) || 0;
   // 16-11: sin courier en Ventas → el motor (si está activo). Sin respuesta del motor → lista de respaldo, marcado.

@@ -3,6 +3,7 @@
 // Un Pack sin descontar consume sus componentes. El Pack en Shopify vale lo que alcancen sus componentes.
 // Voltra OS manda: la sincronización reescribe en Shopify este número (nunca menos de 0).
 import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
+import { regalosDe } from "../_shared/regalos.ts";
 
 export type Familia = "Inhalador" | "Kit Deporte" | "Raspador" | "Tiras" | "Parches" | "Pack" | "JawFlex" | "Botella" | "Bebird" | "Otros";
 export function familia(texto: string): Familia {
@@ -23,6 +24,15 @@ export function familia(texto: string): Familia {
 
 export interface Producto { id: string; nombre: string; stock: number; esCombo: boolean; componentes: Array<{ id: string; qty: number }> }
 export interface PedidoPendiente { lineas: Array<{ titulo: string; cantidad: number }> }
+
+/** 25-11: líneas que consume un pedido sin descontar: las de Shopify + el regalo por etiqueta (REGALO_INHALADOR, sin
+ *  línea a ₲0 porque SIFEN rechaza precio 0). Así Shopify no vende el inhalador que ya está prometido de regalo. */
+export function lineasPendiente(lineItems: ReadonlyArray<Record<string, unknown>>, tags: readonly string[]): PedidoPendiente["lineas"] {
+  return [
+    ...lineItems.map((l) => ({ titulo: String(l.title ?? l.name ?? ""), cantidad: Number(l.quantity) || 1 })),
+    ...regalosDe(tags).map((r) => ({ titulo: r.titulo, cantidad: r.cantidad })),
+  ];
+}
 
 export interface StockReal { familia: Familia; stockActual: number | null; sinDescontar: number; real: number }
 
