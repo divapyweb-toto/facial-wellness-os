@@ -21,16 +21,19 @@ export default function Ficha({ candidatoId, onVolver }) {
   const { toast } = useToast()
   const [d, setD] = useState(null)
   const [error, setError] = useState(null)
+  const pedido = useRef(0)
   const cargar = useCallback(async () => {
+    const n = ++pedido.current // 26-11: una respuesta vieja que llega tarde no pisa la ficha nueva
     setError(null)
-    try { setD(await cargarFicha(candidatoId)) } catch (e) { setError(e) }
+    try { const r = await cargarFicha(candidatoId); if (n === pedido.current) setD(r) } catch (e) { if (n === pedido.current) setError(e) }
   }, [candidatoId])
   useEffect(() => { cargar() }, [cargar])
 
   if (error) return <div className="pi-col"><button className="btn btn-ghost btn-sm pi-volver" onClick={onVolver}><ArrowLeft size={13} /> Tablero</button><ErrorCaja error={error} onReintentar={cargar} /></div>
   if (!d) return <div className="pi-col"><div className="skeleton skeleton-title" /><div className="skeleton" style={{ height: 320, borderRadius: 'var(--radius)' }} /></div>
   if (!d.candidato) return <div className="pi-col"><button className="btn btn-ghost btn-sm pi-volver" onClick={onVolver}><ArrowLeft size={13} /> Tablero</button><p className="pi-desc">No encontramos esta propuesta.</p></div>
-  return <FichaCuerpo d={d} recargar={cargar} onVolver={onVolver} toast={toast} />
+  // key: si los datos son de otro producto, las secciones (precio, peso, ritmo) arrancan de cero (26-11).
+  return <FichaCuerpo key={d.candidato.id} d={d} recargar={cargar} onVolver={onVolver} toast={toast} />
 }
 
 function FichaCuerpo({ d, recargar, onVolver, toast }) {

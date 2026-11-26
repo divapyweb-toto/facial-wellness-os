@@ -48,7 +48,9 @@ export default function ImportacionesPage() {
       <ResumenProveedoresMes />
       {!candidatoId && <PermisoGeneral />}
       {candidatoId
-        ? <Ficha candidatoId={candidatoId} onVolver={() => abrir(null)} />
+        // 26-11: key = producto. Pasar de una ficha a otra cambiando ?c= reusaba la ficha y sus secciones guardaban el
+        // valor inicial del producto anterior ("e · Precio de venta", peso, ritmo). Con key se arma de cero.
+        ? <Ficha key={candidatoId} candidatoId={candidatoId} onVolver={() => abrir(null)} />
         : <Tablero onAbrir={abrir} onActivarDemo={!demo ? alternarDemo : null} />}
     </div>
   )
