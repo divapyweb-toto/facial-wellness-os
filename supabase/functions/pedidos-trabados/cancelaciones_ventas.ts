@@ -47,7 +47,7 @@ export async function avisarCancelacion(
 ): Promise<string> {
   const ref = f.ref || f.nombre;
   const mandar = f.clase === "cancelado_en_courier" && canal?.activo
-    ? avisarPorCourier(canal, d.avisar, { courier: f.courier, ref, textoCourier: textoCourierCancelado(f), clave: claveAvisoCourier(ref, "cancelado_en_courier", ahora) })
+    ? avisarPorCourier(canal, d.avisar, { courier: f.courier, ref, textoCourier: textoCourierCancelado(f), clave: claveAvisoCourier(ref, "cancelado_en_courier", ahora), tipo: "cancelacion" })
     : d.avisar;
   let ultimo = "";
   for (let i = 0; i < 3; i++) {

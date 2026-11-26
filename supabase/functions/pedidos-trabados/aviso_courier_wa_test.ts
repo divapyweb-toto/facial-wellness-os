@@ -147,7 +147,7 @@ Deno.test("cancelado ya en el courier: apagado = Telegram de siempre; prendido =
   t = telegramFalso();
   r = await avisarCancelacion(f, { avisar: t.avisar, esperar: () => Promise.resolve() }, { activo: true, enviar: e.enviar }, AHORA);
   assertEquals([r, t.tg.length, e.enviados.length], ["", 0, 1]);
-  assertEquals(e.enviados[0], { courier: "lucero", ref: "VT-9091", texto: textoCourierCancelado(f), clave: "cancelado_en_courier:VT-9091:2026-11-18" });
+  assertEquals(e.enviados[0] as unknown, { courier: "lucero", ref: "VT-9091", texto: textoCourierCancelado(f), clave: "cancelado_en_courier:VT-9091:2026-11-18", tipo: "cancelacion" });
   const mal = enviarFalso({ falla: true });
   t = telegramFalso();
   r = await avisarCancelacion(f, { avisar: t.avisar, esperar: () => Promise.resolve() }, { activo: true, enviar: mal.enviar }, AHORA);
@@ -198,4 +198,17 @@ Deno.test("casos para el courier: apagado = Telegram con el bloque copiable; pre
   h = await enviarCasos([ENVIO], new Map(), [], AHORA, x.d);
   assertEquals([h[0].resultado, x.tg.length], ["enviado", 1]);
   assertStringIncludes(x.tg[0].t, "Copiá y pegá");
+});
+
+Deno.test("26-11 avisarPorCourier: pasa el tipo a WhatsApp API; no_esencial → Telegram de siempre; sin tipo, no manda el campo", async () => {
+  const vistos: Array<Record<string, unknown>> = [];
+  const enviar: EnviarACourier = (a) => { vistos.push(a); return Promise.resolve(a.tipo === "otro" ? { ok: false, error: "no_esencial" } : { ok: true }); };
+  const tg: string[] = [];
+  const base = (t: string) => { tg.push(t); return Promise.resolve({ ok: true }); };
+  const ok = await avisarPorCourier({ activo: true, enviar }, base, { courier: "lucero", ref: "VT-7001", textoCourier: "x", clave: "k1", tipo: "cancelacion" })("para Enrique");
+  assertEquals([ok.via, vistos[0].tipo], ["whatsapp", "cancelacion"]);
+  const no = await avisarPorCourier({ activo: true, enviar }, base, { courier: "lucero", ref: "VT-7002", textoCourier: "x", clave: "k2", tipo: "otro" })("para Enrique 2");
+  assertEquals([no.via, no.errorWhatsapp, tg], ["telegram", "no_esencial", ["para Enrique 2"]]);
+  await avisarPorCourier({ activo: true, enviar }, base, { courier: "pap", ref: "VT-7003", textoCourier: "x", clave: "k3" })("y");
+  assert(!("tipo" in vistos[2]));
 });

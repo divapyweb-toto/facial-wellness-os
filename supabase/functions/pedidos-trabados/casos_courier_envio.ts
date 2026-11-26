@@ -15,7 +15,7 @@ import {
 import { escaparHtml, LIMITE_TEXTO_TELEGRAM } from "../_shared/telegram_formato.ts";
 import type { OpcionesAviso } from "../_shared/telegram_politica.ts";
 import { type DepsActuar, diaPy, diasDesde, horaPy, normEstado, pedidoDeRef } from "./entregas_actuar.ts";
-import { avisarPorCourier, type CanalCourier } from "../_shared/aviso_courier_wa.ts";
+import { avisarPorCourier, type CanalCourier, type TipoAvisoCourier } from "../_shared/aviso_courier_wa.ts";
 import { diasHabilesDesde, estadoPlazoPap, type FilaPlazoPap, umbralPlazoPap } from "./plazo_pap.ts";
 
 export type Franja = "am" | "pm";
@@ -56,6 +56,45 @@ export const sinEstadoALucero = (courier: CourierCaso) => LUCERO_SOLO_INCIDENCIA
 const sinTildes = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "");
 const ddmm = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
 const porFecha = (a: CasoCourier, b: CasoCourier) => a.creado_en.localeCompare(b.creado_en);
+
+// ── 26-11: tipo de aviso (Enrique: "a lucero del este no escribirle demasiado por privado solo para lo sumamente
+// esencial"). WhatsApp API deja pasar a Lucero solo cancelación, dirección, pagado sin cobro y reclamo vencido; el resto
+// devuelve ok=false y sale el Telegram a administración. El lote de Lucero se parte por tipo (un aviso por tipo).
+/** Un reclamo ("no le llegó") a Lucero es esencial recién con más de estos días hábiles desde el ingreso sin entregar. */
+export const DIAS_HABILES_RECLAMO_LUCERO = 3;
+const RE_CANCELACION = /cancel|anul|no (lo )?(entreg|mand|envi)|devolv|ya no (lo )?quiere/;
+const RE_PAGADO = /pagad|ya pag|sin cobrar|no cobr|cobrar 0|cobrar cero/;
+const RE_DIRECCION = /direcci|ubicaci|domicilio|\bcalle\b|barrio|otra ciudad|cambi[oóa].{0,25}(ciudad|casa|lugar)|tel[eé]fono|celular|otro n[uú]mero|nuevo n[uú]mero|\bpin\b/;
+
+/**
+ * Tipo de aviso de un caso. Orden: cancelación > pagado sin cobro > dirección > reclamo vencido > otro. Reclamo vencido =
+ * caso 'reclamo' con más de 3 días hábiles desde el ingreso al courier, todavía sin entregar, y sin otro reclamo de ese
+ * pedido ya mandado (`yaReclamados`).
+ */
+export function tipoAvisoCaso(c: CasoCourier, d: DatosPedidoCaso | undefined, ahora: Date, yaReclamados: ReadonlySet<string> = new Set()): TipoAvisoCourier {
+  const t = sinTildes(`${c.pide ?? ""} ${c.referencia ?? ""}`).toLowerCase();
+  if (RE_CANCELACION.test(t)) return "cancelacion";
+  if (RE_PAGADO.test(t)) return "pagado_sin_cobro";
+  if (RE_DIRECCION.test(t)) return "direccion";
+  if (c.tipo === "reclamo" && !yaReclamados.has(c.ref) && !/entregad/.test(String(d?.categoria ?? "").toLowerCase())) {
+    const dias = diasHabilesDesde(d?.fechaIngreso ?? null, ahora);
+    if (dias != null && dias > DIAS_HABILES_RECLAMO_LUCERO) return "reclamo_vencido";
+  }
+  return "otro";
+}
+
+/** Casos de un envío agrupados por tipo de aviso (orden fijo). Un mismo pedido no lleva dos reclamos vencidos. */
+export function agruparPorTipo(casos: CasoCourier[], datos: Map<string, DatosPedidoCaso>, ahora: Date, yaReclamados: ReadonlySet<string> = new Set()): Array<{ tipo: TipoAvisoCourier; casos: CasoCourier[] }> {
+  const reclamados = new Set(yaReclamados);
+  const grupos = new Map<TipoAvisoCourier, CasoCourier[]>();
+  for (const c of casos) {
+    const tipo = tipoAvisoCaso(c, datos.get(c.ref), ahora, reclamados);
+    if (tipo === "reclamo_vencido") reclamados.add(c.ref);
+    grupos.set(tipo, [...(grupos.get(tipo) ?? []), c]);
+  }
+  const orden: TipoAvisoCourier[] = ["cancelacion", "pagado_sin_cobro", "direccion", "reclamo_vencido", "otro"];
+  return orden.filter((t) => grupos.has(t)).map((tipo) => ({ tipo, casos: grupos.get(tipo)! }));
+}
 
 // ── horario ──
 /** Franja vigente: la última cuya hora ya pasó hoy (lun–sáb). null = domingo o antes de las 08:30. `corte` en ISO UTC. */
@@ -291,12 +330,14 @@ export interface DepsCasos extends Pick<DepsActuar, "tomarCandado" | "soltarCand
   marcarEnviados(casos: CasoCourier[], lote: (c: CasoCourier) => string, ahora: Date): Promise<void>;
   /** 18-11: aviso directo a la transportadora por WhatsApp. Sin canal = Telegram de siempre. */
   canalCourier?: CanalCourier;
+  /** 26-11: pedidos con un reclamo ya mandado a Lucero (últimos 14 días): no vuelven a salir como reclamo vencido. */
+  yaReclamados?: ReadonlySet<string>;
 }
 export interface HechoEnvio { lote: string; courier: CourierCaso; casos: string[]; resultado: string; textos?: string[] }
 
-async function mandar(d: DepsCasos, texto: string, opts: OpcionesAviso, courier?: { courier: CourierCaso; ref: string; texto: string; clave: string }): Promise<string | null> {
+async function mandar(d: DepsCasos, texto: string, opts: OpcionesAviso, courier?: { courier: CourierCaso; ref: string; texto: string; clave: string; tipo?: TipoAvisoCourier }): Promise<string | null> {
   const avisar = courier && d.canalCourier?.activo
-    ? avisarPorCourier(d.canalCourier, d.avisar, { courier: courier.courier, ref: courier.ref, textoCourier: courier.texto, clave: courier.clave })
+    ? avisarPorCourier(d.canalCourier, d.avisar, { courier: courier.courier, ref: courier.ref, textoCourier: courier.texto, clave: courier.clave, ...(courier.tipo ? { tipo: courier.tipo } : {}) })
     : d.avisar;
   let ultimo = "";
   for (let i = 0; i < 3; i++) {
@@ -314,20 +355,23 @@ export async function enviarCasos(
 ): Promise<HechoEnvio[]> {
   const hechos: HechoEnvio[] = [];
   for (const e of envios) {
-    const partes = partesEnvio(e, lineasDe(e.casos, datos), rendiciones);
+    // 26-11: Lucero, un aviso por tipo (los no esenciales los frena WhatsApp API y salen por Telegram). PaP, como antes.
+    const grupos = e.courier === "lucero" ? agruparPorTipo(e.casos, datos, ahora, d.yaReclamados) : [{ tipo: undefined, casos: e.casos }];
+    const partes = grupos.flatMap((g) => partesEnvio({ ...e, casos: g.casos }, lineasDe(g.casos, datos), rendiciones)
+      .map((p, i) => ({ ...p, tipo: g.tipo, clave: g.tipo ? `casos:${e.lote}:${g.tipo}:${i + 1}` : `casos:${e.lote}:${i + 1}` })));
     const h: HechoEnvio = { lote: e.lote, courier: e.courier, casos: e.casos.map((c) => c.ref), resultado: "" };
     hechos.push(h);
     if (simular) {
       h.resultado = (await d.existeCandado(e.clave)) ? "ya_enviado" : "simulado";
-      h.textos = partes.map((p) => p.texto);
+      h.textos = partes.map((p) => (p.tipo ? `[${p.tipo}] ${p.texto}` : p.texto));
       continue;
     }
     if (!(await d.tomarCandado(e.clave, { lote: e.lote, casos: h.casos }))) { h.resultado = "ya_enviado"; continue; }
     const opts = e.urgente ? opcionesUrgente(e.casos[0].ref) : OPCIONES_CASOS;
     h.resultado = "enviado";
-    for (const [i, p] of partes.entries()) {
-      // 18-11: clave estable = lote (día:franja:courier o urgente:<id>) + n.º de parte.
-      const error = await mandar(d, p.texto, opts, { courier: e.courier, ref: e.casos[0]?.ref ?? e.lote, texto: p.textoCourier, clave: `casos:${e.lote}:${i + 1}` });
+    for (const p of partes) {
+      // 18-11: clave estable = lote (día:franja:courier o urgente:<id>) + n.º de parte; 26-11 Lucero: + tipo.
+      const error = await mandar(d, p.texto, opts, { courier: e.courier, ref: p.casos[0]?.ref ?? e.casos[0]?.ref ?? e.lote, texto: p.textoCourier, clave: p.clave, ...(p.tipo ? { tipo: p.tipo } : {}) });
       if (error) {
         await d.soltarCandado(e.clave);
         h.resultado = `error: Telegram: ${error}`;

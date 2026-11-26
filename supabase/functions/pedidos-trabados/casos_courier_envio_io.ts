@@ -25,6 +25,14 @@ async function leerCasos(filtro: { estado?: string; origen?: string }): Promise<
   return (data ?? []).map((x: Obj) => ({ ...x, shopify_order_id: Number(x.shopify_order_id), urgente: x.urgente === true }) as CasoCourier);
 }
 
+/** 26-11: pedidos con un reclamo ('reclamo') ya mandado a Lucero en los últimos 14 días. */
+async function reclamosLuceroRecientes(ahora: Date): Promise<Set<string>> {
+  const { data, error } = await db().from("casos_courier").select("ref").eq("courier", "lucero").eq("tipo", "reclamo").eq("estado", "enviado")
+    .gte("enviado_en", new Date(ahora.getTime() - 14 * 86_400_000).toISOString());
+  if (error) throw new Error(`casos_courier reclamos: ${error.message}`);
+  return new Set((data ?? []).map((x: Obj) => String(x.ref)));
+}
+
 /** Entregas de Voltra por ref (la más nueva si hubiera dos). */
 async function entregasPorRef(refs: string[]): Promise<Map<string, Obj>> {
   const m = new Map<string, Obj>();
@@ -163,7 +171,8 @@ export async function casosParaCourier(ahora: Date, simular: boolean) {
     if (!plan.length) return [];
     const refs = plan.flatMap((e) => e.casos.map((c) => c.ref));
     const canalCourier = await leerCanalCourier(); // 18-11: aviso directo a la transportadora (apagado = Telegram de siempre)
-    return await enviarCasos(plan, await datosPedidos(refs), rend, ahora, { ...depsCasosReales, canalCourier }, simular);
+    const yaReclamados = await reclamosLuceroRecientes(ahora).catch(() => new Set<string>()); // 26-11: no repetir reclamos
+    return await enviarCasos(plan, await datosPedidos(refs), rend, ahora, { ...depsCasosReales, canalCourier, yaReclamados }, simular);
   })().catch(atrapar("casos_envio"));
   return { sistema, envios };
 }

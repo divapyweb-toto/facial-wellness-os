@@ -10,7 +10,11 @@ import type { OpcionesAviso } from "./telegram_politica.ts";
 const diaPy = (d: Date) => new Date(d.getTime() - 3 * 3_600_000).toISOString().slice(0, 10);
 
 export type CourierWa = "lucero" | "pap";
-export type EnviarACourier = (a: { courier: CourierWa; ref: string; texto: string; clave: string; plazoLecturaH?: number }) =>
+/** 26-11 (Enrique: "a lucero del este no escribirle demasiado por privado solo para lo sumamente esencial"): qué tipo de
+ *  aviso es. WhatsApp API (config_wa.transportadoras.solo_esencial) deja pasar a Lucero solo los esenciales; el resto
+ *  devuelve ok=false ("no_esencial") y sale el Telegram de siempre. Sin tipo = como antes. */
+export type TipoAvisoCourier = "cancelacion" | "direccion" | "pagado_sin_cobro" | "reclamo_vencido" | "otro";
+export type EnviarACourier = (a: { courier: CourierWa; ref: string; texto: string; clave: string; plazoLecturaH?: number; tipo?: TipoAvisoCourier }) =>
   Promise<{ ok: boolean; wamid?: string; error?: string }>;
 
 /**
@@ -47,14 +51,14 @@ export const claveAvisoCourier = (ref: string, tipo: string, ahora: Date) => `${
  */
 export function avisarPorCourier(
   canal: CanalCourier | undefined, base: Avisar,
-  a: { courier: string; ref: string; textoCourier: string; clave: string; /** horas hábiles hasta el respaldo por "no leído" (WA3; sin dato = 4) */ plazoLecturaH?: number },
+  a: { courier: string; ref: string; textoCourier: string; clave: string; /** horas hábiles hasta el respaldo por "no leído" (WA3; sin dato = 4) */ plazoLecturaH?: number; tipo?: TipoAvisoCourier },
 ) {
   return async (textoEnrique: string, botones?: undefined, opts?: OpcionesAviso): Promise<ResultadoAvisoCourier> => {
     const courier = courierWa(a.courier);
     let errorWhatsapp: string | undefined;
     if (canal?.activo && canal.enviar && courier) {
       try {
-        const r = await canal.enviar({ courier, ref: a.ref, texto: a.textoCourier, clave: a.clave, ...(a.plazoLecturaH ? { plazoLecturaH: a.plazoLecturaH } : {}) });
+        const r = await canal.enviar({ courier, ref: a.ref, texto: a.textoCourier, clave: a.clave, ...(a.plazoLecturaH ? { plazoLecturaH: a.plazoLecturaH } : {}), ...(a.tipo ? { tipo: a.tipo } : {}) });
         if (r.ok) return { ok: true, via: "whatsapp" };
         errorWhatsapp = r.error ?? "WhatsApp falló";
       } catch (e) {

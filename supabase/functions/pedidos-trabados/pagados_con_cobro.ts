@@ -243,7 +243,7 @@ export async function procesarPagadosConCobro(
     // 18-11: "en camino" puede ir directo a la transportadora por WhatsApp (si falla o está apagado, el Telegram de siempre).
     // "cobrado" (posible doble cobro) siempre a Enrique: es plata y rendición.
     const dd: DepsActuar = caso === "en_camino" && d.canalCourier?.activo
-      ? { ...d, avisar: avisarPorCourier(d.canalCourier, d.avisar, { courier: f.courier, ref: f.ref, textoCourier: textoCourierEnCamino(f), clave: claveAvisoCourier(f.ref, "pagado_no_cobrar", ahora), plazoLecturaH: 3 }) }
+      ? { ...d, avisar: avisarPorCourier(d.canalCourier, d.avisar, { courier: f.courier, ref: f.ref, textoCourier: textoCourierEnCamino(f), clave: claveAvisoCourier(f.ref, "pagado_no_cobrar", ahora), plazoLecturaH: 3, tipo: "pagado_sin_cobro" }) }
       : d;
     const resultado = await avisarUnaVez(dd, id, { ref: f.ref, caso, monto }, texto, simular, opts(f.ref));
     if (resultado === "avisado") avisadosAhora.add(f.ref);
@@ -259,7 +259,7 @@ export async function procesarPagadosConCobro(
       continue;
     }
     const dd: DepsActuar = d.canalCourier?.activo
-      ? { ...d, avisar: avisarPorCourier(d.canalCourier, d.avisar, { courier: f.courier, ref: f.ref, textoCourier: textoCourierReparto(f), clave: claveAvisoCourier(f.ref, "pagado_reparto", ahora), plazoLecturaH: 3 }) }
+      ? { ...d, avisar: avisarPorCourier(d.canalCourier, d.avisar, { courier: f.courier, ref: f.ref, textoCourier: textoCourierReparto(f), clave: claveAvisoCourier(f.ref, "pagado_reparto", ahora), plazoLecturaH: 3, tipo: "pagado_sin_cobro" }) }
       : d;
     hechos.push({ ref: f.ref, caso: "en_camino", monto, resultado: `reparto: ${await avisarUnaVez(dd, id, { ref: f.ref, caso: "en_reparto", monto }, textoReparto(f), simular, opts(f.ref))}` });
   }
